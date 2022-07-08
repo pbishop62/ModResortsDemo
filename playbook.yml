@@ -1,0 +1,141 @@
+# CICS application deployment
+---
+- hosts: localhost
+  gather_facts: yes
+
+###########################################################
+# Tasks to be exectuted on the control node including
+# cloning the GitHub repository and checking for CMCI
+# prereqs
+###########################################################
+  tasks:
+
+  # TODO - the following tasks are not needed when using Tekton
+  # - name: Create temp directory to clone repository
+  #   tempfile:
+  #     state: directory
+  #     path: "{{ playbook_dir }}"
+  #     prefix: tmp_repo
+  #   register: tmp_repo_dir
+
+  # - name: set clone directory
+  #   set_fact:
+  #     CLONE_DEST: "{{ tmp_repo_dir.path }}"
+
+  # - name: pull application code from git to control node
+  #   import_role:
+  #     name: ansible-git-clone
+
+  # - name: ls -la directory contents
+  #   shell:
+  #     cmd: ls -la {{ tmp_repo_dir.path }}
+  #   register: repo_contents
+
+  # - name: print repo directory contents
+  #   debug:
+  #     var: repo_contents
+
+  # Install cmci_action module dependencies
+  # performed here under the play against localhost
+  - name: Make sure CMCI module dependencies are installed
+    pip:
+      name:
+        - requests
+        - xmltodict
+        - typing
+      extra_args: --user
+      # executable: "{{ pip_executable }}"
+
+
+###########################################################
+# Tasks to be executed against the z/OS managed node such
+# as copying and deploying the cobol application to CICS.
+###########################################################
+- hosts: zsystem
+  gather_facts: no
+  collections:
+    - ibm.ibm_zos_core
+    - stewartfrancis.ibm_zos_cics
+  environment: '{{ system_environment }}'
+
+
+  tasks:
+  - block:
+    # - name: copy application source to target zos libraries
+    #   zos_copy:
+    #     src: "{{ playbook_dir }}/SDFHSAMP/DFH0XVRC"
+    #     dest: CICSTS.CICS.SDFHSAMP(DFH0XVRC)
+    #     force: true
+    
+    - name: create target zOS USS directory
+      file:
+        path: "{{ ansible_remote_tmp }}/SDFHSAMP"
+        state: directory
+
+    - name: copy application source to target zOS USS directory
+      copy:
+        src: "{{ playbook_dir }}/SDFHSAMP/DFH0XVRC"
+        dest: "{{ ansible_remote_tmp }}/SDFHSAMP/DFH0XVRC"
+        force: true
+
+    - name: convert encoding
+      zos_encode:
+        src: "{{ ansible_remote_tmp }}/SDFHSAMP/DFH0XVRC"
+        from_encoding: ISO8859-1
+        to_encoding: IBM-1047
+
+    - name: delete old application source
+      zos_data_set:
+        name: CICSTS.CICS.SDFHSAMP(DFH0XVRC)
+        state: absent
+        type: MEMBER
+
+    - name: copy application source from USS to MVS dataset
+      shell: 
+        cmd: cp {{ ansible_remote_tmp }}/SDFHSAMP/DFH0XVRC "//'CICSTS.CICS.SDFHSAMP(DFH0XVRC)'"
+      register: cp_result
+      until: cp_result.rc == 0
+      retries: 4
+      delay: 2
+
+
+    - name: perform compile and link
+      zos_job_submit:
+        src: "{{ playbook_dir }}/files/LDTSO1CO.jcl"
+        location: LOCAL
+        wait: true
+        return_output: true
+      register: compile_output
+
+    # - name: print compile and link results
+    #   debug:
+    #     var: compile_output
+
+    # Install new module
+    # - name: PHASEIN PROGRAM in CICS
+    #   delegate_to: localhost
+    #   cmci_action:
+    #     context: '{{ context }}'
+    #     scope: '{{ scope }}'
+    #     cmci_host: '{{ cmci_host }}'
+    #     cmci_port: '{{ cmci_port | int }}'
+    #     scheme: '{{ scheme }}'
+    #     action_name: PHASEIN
+    #     type: CICSProgram
+    #     resources:
+    #       filter:
+    #         program: '{{ program }}'
+    #     timeout: 60
+
+    # perform phasein using operator command
+    - name: Issue Operator command to PHASEIN PROGRAM in CICS
+      zos_operator:
+        cmd: 'F CICSOCP1,CEMT SET PROGRAM(DFH0XVDS) PHASEIN' 
+
+
+    # always:
+    # - name: Delete the cloned repo directory
+    #   file:
+    #     path: "{{ hostvars['localhost']['CLONE_DEST'] }}"
+    #     state: absent
+    #   delegate_to: localhost
