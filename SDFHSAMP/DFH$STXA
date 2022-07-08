@@ -1,0 +1,229 @@
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$STXA                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (SAMPLES) Statistics Extract sample     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 2002, 2003"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  DFH$STXA is a skeleton sample program for use with the statistics  *
+*  utility program DFHSTUP EXTRACT function. Also provided is a cobol *
+*  equivalent of this skeleton program called DFH0STXC and a full     *
+*  function working cobol extract exit sample called DFH0STXR.        *
+*                                                                     *
+*  This program is provided for the user to modify as required        *
+*  and shows the format and structure of the interface between        *
+*  the DFHSTUP utility program and the EXTRACT user program. It       *
+*  describes the type of processing that could be performed by        *
+*  the program for each type of call from DFHSTUP and also shows      *
+*  the use of the various copy members provided by CICS that          *
+*  can be used to map the SMF record headers and statistics           *
+*  records.                                                           *
+*                                                                     *
+*  A DFHSTUP extract exit must run with Language Environment (LE) and *
+*  this skeleton shows the required LE macros to be used to generate  *
+*  the required prologue and epilogue code.                           *
+*                                                                     *
+*  Following the prologue code, Register 1 contains the address of a  *
+*  parameter list (mapped by DSECT EXTRACT_PLIST) passed from DFHSTUP *
+*  as follows:                                                        *
+*                                                                     *
+*  R1 ---> Exit_function_code_ptr --> one byte indicating call type   *
+*          Exit_work_area_ptr     --> fullword anchor area            *
+*          Smf_record_ptr         --> A copy of CICS SMF 110 record   *
+*          Statistics_record_ptr  --> A copy of CICS stats record     *
+*          parm_data_ptr          --> report date mmddyyyy            *
+*                                     report time hhmmss              *
+*                                     lines per page default = 60     *
+*                                     CICS release number n.n.n       *
+*                                     case setting M = Mixed (default)*
+*                                                  U = upper          *
+*                                                                     *
+*  The exit_work_area_ptr addresses a fullword into which the exit    *
+*  may store the address of any user defined workarea getmained. The  *
+*  value is returned on subsequent invocations of the exit for the    *
+*  same extract command.                                              *
+*                                                                     *
+*  The parm data addressed by parm_data_ptr is mapped by DSECT        *
+*  EXTRACT_PARM_DATA listed below.                                    *
+*                                                                     *
+*  The exit may set a return code to be returned to DFHSTUP. Any non  *
+*  zero return code will cause the current extract command to be      *
+*  terminated. No further exit invocations will occur for this        *
+*  command. DFHSTUP will issue message DFHST0234 showing the return   *
+*  code set in the exit.                                              *
+*                                                                     *
+*  N.B This program must be linked AMODE(31) RMODE(24)                *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*    $MOD(DFH$STXA),COMP(SAMPLES),PROD(CICS TS ):                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $D0= I07099 630 020320 HD2GJST: DFHSTUP EXTRACT function         *
+*    $P1= D06949 630 030320 HD2GJST: Correct typos                    *
+*                                                                     *
+***********************************************************************
+         DFHREGS ,                   Define symbolic registers
+         COPY  DFHSMFDS              CICS SMF 110 record layout
+         COPY  DFHSTIDS              CICS statistics record identifiers
+*
+EXTRACT_PLIST DSECT                  Parmlist passed to extract exit
+EXIT_FUNCTION_CODE_PTR   DS    A     Ptr. to exit call identifier
+INITIAL_CALL             EQU   X'00' Initial call
+APPLID_START_CALL        EQU   X'04' Start of processing for an applid
+STATISTICS_RECORD        EQU   X'08' Stats record being processed
+APPLID_END_CALL          EQU   X'0C' End of processing for an applid
+FINAL_CALL               EQU   X'10' Final call
+EXIT_WORK_AREA_PTR       DS    A     Ptr. to fullword anchor area
+SMF_RECORD_PTR           DS    A     Ptr. to SMF record
+STATISTICS_RECORD_PTR    DS    A     Ptr. to statistics record
+PARM_DATA_PTR            DS    A     Ptr. to parm data
+         EJECT
+*
+EXTRACT_PARM_DATA DSECT              Parm data structure
+REPORT_DATE              DS    CL8   Report date mmddyyyy
+REPORT_TIME              DS    CL6   Report time hhmmss
+LINES_PER_PAGE           DS    XL2   Lines per page (default 60)
+RELEASE_NO               DS    CL5   CICS Release n.n.n
+CASE_SETTING             DS    CL1   Case M (mixed) or U (upper)
+FILLER                   DS    CL2   Reserved
+*
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*          M A I N L I N E  C O D E  S T A R T S  H E R E             *
+*          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~             *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+DFH$STXA CEEENTRY PPA=PPA,               LE conforming prologue        *
+               AUTO=AUTOSIZE,            Size of automatic stg required*
+               BASE=R4,                  Set R4 as base register       *
+               MAIN=NO                   only prologue code is required
+*
+         LR    PLISTPTR,R1               Est. addressability to plist
+         USING EXTRACT_PLIST,PLISTPTR
+         L     PARMPTR,PARM_DATA_PTR     Get addr std report parms
+         USING EXTRACT_PARM_DATA,PARMPTR set addressability
+*
+         XC    RETCODE,RETCODE           Clear return code
+*
+         L     R3,EXIT_FUNCTION_CODE_PTR Get address of function code
+         CLI   1(R3),INITIAL_CALL        Initial call ?
+         BE    PROCESS_INITIAL_CALL      Yes, branch
+         CLI   1(R3),APPLID_START_CALL   Start of applid call ?
+         BE    PROCESS_APPLID_START_CALL Yes, branch
+         CLI   1(R3),STATISTICS_RECORD   Stats record call ?
+         BE    PROCESS_STATS_RECORD_CALL Yes, branch
+         CLI   1(R3),APPLID_END_CALL     End of applid call ?
+         BE    PROCESS_APPLID_END_CALL   Yes, branch
+         CLI   1(R3),FINAL_CALL          Final call ?
+         BE    PROCESS_FINAL_CALL        Yes, branch
+         B     EXITPROC                  unknown call, branch to exit
+*
+PROCESS_INITIAL_CALL      DS 0H
+*
+*
+*        Add code here to perform initial processing, eg opening files
+*
+*
+*
+         B     EXITPROC                  Branch to exit
+         EJECT
+PROCESS_APPLID_START_CALL DS 0H
+         L     SMFPTR,SMF_RECORD_PTR     Load SMF record base
+         USING DFHSMFDS,SMFPTR           Set addressability
+*
+*
+*        Add code here to perform processing associated with the
+*        start of processing for a CICS applid, eg initializing
+*        counts and outputting header information.
+*
+*
+*
+         B     EXITPROC                  Branch to exit
+         DROP  SMFPTR                    Drop SMF record base
+         EJECT
+PROCESS_STATS_RECORD_CALL DS 0H
+         L     SMFPTR,SMF_RECORD_PTR     Load SMF record base
+         USING DFHSMFDS,SMFPTR           Set addressability
+         L     STATSPTR,STATISTICS_RECORD_PTR Get stats record base
+         USING DFHSTIDS,STATSPTR         Set addressability
+*
+*
+*        Add code here to perform processing for each CICS stats
+*        record encountered
+*
+*
+*
+         B     EXITPROC                  Branch to exit
+         DROP  SMFPTR,STATSPTR           Drop SMF & stats base
+         EJECT
+PROCESS_APPLID_END_CALL   DS 0H
+*
+*
+*        Add code here to perform processing associated with the
+*        end of processing for a CICS applid, eg process any
+*        accumulated data
+*
+*
+*
+         B     EXITPROC                  Branch to exit
+         EJECT
+PROCESS_FINAL_CALL        DS 0H
+*
+*
+*        Add code here to perform final processing eg closing files
+*
+*
+*
+         B     EXITPROC                  Branch to exit
+         EJECT
+EXITPROC DS    0H
+*        Any non zero return code will cause the extract command to
+*        be terminated.
+         L     R15,RETCODE        Get return code value
+         CEETERM RC=(R15)         LE conforming epilogue
+         DROP  PLISTPTR,PARMPTR   Drop addressability
+* ******************************************************************* *
+*                                                                     *
+*           E N D  O F  E X E C U T A B L E  C O D E                  *
+*                                                                     *
+*                                                                     *
+*          D A T A  D E F I N I T I O N  S T A R T S  H E R E         *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+PLISTPTR EQU   R5                 EXTRACT_PLIST base register
+SMFPTR   EQU   R6                 SMF record base register
+STATSPTR EQU   R7                 stats record base register
+PARMPTR  EQU   R8                 parm area base
+PPA      CEEPPA ,                 CEE constants
+         LTORG
+*
+         CEEDSA ,                 Mapping of automatic
+RETCODE  DS    F                  Return code
+ENDAUTO  DS    0D                 end of automatic
+AUTOSIZE EQU   ENDAUTO-CEEDSA     length of automatic
+         CEECAA ,                 Mapping of common anchor area
+* ****************************************************************** *
+*                    E N D  O F  P R O G R A M                       *
+* ****************************************************************** *
+         END

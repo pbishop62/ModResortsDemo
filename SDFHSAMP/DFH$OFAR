@@ -1,0 +1,394 @@
+/* REXX **************************************************************/
+/*                                                                   */
+/*                                                                   */
+/*                                                                   */
+/*      Licensed Materials - Property of IBM                         */
+/*                                                                   */
+/*      "Restricted Materials of IBM"                                */
+/*                                                                   */
+/*      5655-Y04                                                     */
+/*                                                                   */
+/*      (C) Copyright IBM Corp. 1996"                                */
+/*                                                                   */
+/*                                                                   */
+/*                                                                   */
+/*                                                                   */
+/*  STATUS = 7.2.0                                                   */
+/*                                                                   */
+/*  CHANGE ACTIVITY :                                                */
+/*                                                                   */
+/*  $MOD(DFH$OFAR),COMP(SAMPLES),PROD(CICS TS )                      */
+/*                                                                   */
+/*   PN= REASON REL YYMMDD HDXXIII : REMARKS                         */
+/*  $L0= Base   510 96     HD9SHGP : Base                            */
+/*                                                                   */
+/*********************************************************************/
+/******************************************************************* */
+/*                                                                   */
+/* MODULE NAME    DFH$OFAR                                           */
+/*                                                                   */
+/*                                                                   */
+/*                                                                   */
+/* ***************************************************************** */
+/*                                                                   */
+/* Title                                                             */
+/*    OFfsite Automatic Reply program (OFAR)                         */
+/*                                                                   */
+/* Summary                                                           */
+/*    This program is a NetView EXEC that keeps track of the CICS    */
+/*    regions that have issued the messages DFHFC0574 and DFHFC0575. */
+/*    When all CICS regions registered in the control file have done */
+/*    so, this program generates an automatic reply to each message  */
+/*    issued.                                                        */
+/*                                                                   */
+/* Function                                                          */
+/*    Background:                                                    */
+/*                                                                   */
+/*    For CICS 5.1 there is some special logic which is needed to    */
+/*    to perform disaster recovery of a CICSplex when datasets have  */
+/*    been used in RLS mode.                                         */
+/*                                                                   */
+/*    This is needed because the RLS record locks, which preserve    */
+/*    data integrity are not available at the remote site.           */
+/*                                                                   */
+/*    The new code is executed if OFFSITE=YES (and RLS=YES) have     */
+/*    been specified as system initialisation overrides.             */
+/*                                                                   */
+/*    It causes each CICS system to issue message DFHFC0574 to       */
+/*    indicate that RLS offsite recovery is being performed,         */
+/*    followed by  a WTOR message, DFHFC0575, when it has completed  */
+/*    recovery of all RLS data sets which that CICS had updated.     */
+/*                                                                   */
+/*    The operator is required to wait until every CICS in the       */
+/*    CICSplex has issued the message, and only then reply to the    */
+/*    DFHFC0575 messages.                                            */
+/*                                                                   */
+/*    This mechanism protects the RLS data sets from being accessed  */
+/*    by new work until all the recovery work in the CICSplex has    */
+/*    been  completed.                                               */
+/*                                                                   */
+/*    External view:                                                 */
+/*                                                                   */
+/*    A unique control file should exist before this program is run, */
+/*    which should be accessible from any participating MVS image    */
+/*    within the sysplex.                                            */
+/*                                                                   */
+/*    The control file of this program should contain a record for   */
+/*    each participating CICS region.                                */
+/*                                                                   */
+/*    Each participating MVS image in the Sysplex should have        */
+/*    NetView configured so that when it catches any CICS region     */
+/*    issuing the messages DFHFC0574 or DFHFC0575, this program is   */
+/*    called.                                                        */
+/*                                                                   */
+/*    This program extracts the relevant input parameters from the   */
+/*    tokenized message passed in.    These parameters are the       */
+/*    message id, CICS id ( its APPLID), and the message reply       */
+/*    number.                                                        */
+/*                                                                   */
+/*    If the message id is DFHFC0574 then this program updates all   */
+/*    entries that are not 'message issued' state to 'message        */
+/*    waiting'.   Otherwise the existing state is preserved.         */
+/*                                                                   */
+/*    If the message id is DFHFC0575 then this program updates the   */
+/*    record for the CICS entry, denoted by the input CICS id, to    */
+/*    'message issued'.   If this is not in the control file, it     */
+/*    is ignored.   All other entries that are not in  'message      */
+/*    issued ' state are set to 'message waiting'.   Otherwise the   */
+/*    existing state is preserved.                                   */
+/*                                                                   */
+/*    When all entries in the control file are in 'message issued'   */
+/*    state, this program generates an automatic reply to each       */
+/*    DFHFC0575 message issued.                                      */
+/*                                                                   */
+/* Control file definition                                           */
+/*    The control file (SYS1.NETVIEW.DFH$OFAR.CONTROL) should have   */
+/*    a data set organisation of PS, record format of FB, and record */
+/*    length of 80.                                                  */
+/*                                                                   */
+/*    This control file should be accessible from any MVS image that */
+/*    runs a participating CICS.                                     */
+/*                                                                   */
+/*    This control file should be initialized to a list of CICS      */
+/*    APPLIDs that are taking part.   See example below.             */
+/*                                                                   */
+/*                                                                   */
+/* Netview configuration                                             */
+/*    Update the SYS1.PARMLIB member MPFLSTxx ( where xx is the      */
+/*    current suffix in use) to include the line;                    */
+/*       DFHFC057*,AUTO(YES)                                         */
+/*                                                                   */
+/*    This tells MVS to invoke Netview whenever it sees a message    */
+/*    issued that is prefixed with DFHFC057.                         */
+/*                                                                   */
+/*    Add the following entry to DS1PARM, the Netview message table; */
+/*       IF MSGID = 'DFHFC057'. & TEXT = MSG                         */
+/*          THEN EXEC(CMD('DFH$OFAR' MSG) ROUTE(ONE *));             */
+/*                                                                   */
+/*    This tells Netview to invoke this program whenever it sees a   */
+/*    message issued that is prefixed with DFHFC057, passing the     */
+/*    message text as input parameters.                              */
+/*                                                                   */
+/* Control file typical setting                                      */
+/*    The following are typical settings of the control data set     */
+/*    that have been included to help illustrate the usage of this   */
+/*    program.                                                       */
+/*                                                                   */
+/*    1. After initial setting by user                               */
+/*       CICS0001                                                    */
+/*       CICS0002                                                    */
+/*       CICS0003                                                    */
+/*                                                                   */
+/*    2. After CICS0003 has issued the message DFHFC0574 (following  */
+/*       1 or 5)                                                     */
+/*       CICS0001 MSGWAITING                                         */
+/*       CICS0002 MSGWAITING                                         */
+/*       CICS0003 MSGWAITING                                         */
+/*                                                                   */
+/*    3. After CICS0003 has issued the message DFHFC0575             */
+/*       CICS0001 MSGWAITING                                         */
+/*       CICS0002 MSGWAITING                                         */
+/*       CICS0003 MSGISSUED 76                                       */
+/*                                                                   */
+/*       Note: The '76' respresents a typical message reply number   */
+/*                                                                   */
+/*    4. After all except CICS0002 have issued the message DFHFC0575 */
+/*       CICS0001 MSGISSUED 79                                       */
+/*       CICS0002 MSGWAITING                                         */
+/*       CICS0003 MSGISSUED 76                                       */
+/*                                                                   */
+/*    5. After all CICS regions have issued the message DFHFC0575    */
+/*       CICS0001 MSGREPLIED                                         */
+/*       CICS0002 MSGREPLIED                                         */
+/*       CICS0003 MSGREPLIED                                         */
+/*                                                                   */
+/* Program failures                                                  */
+/*    All exceptions are returned to the caller with the return code */
+/*    set to one of the following;-                                  */
+/*                                                                   */
+/*    rc = 11   Control data set allocation exceeded 100 attempts    */
+/*    rc = 12   Control data set reading failed                      */
+/*    rc = 13   Control data set writing failed                      */
+/*    rc = 14   Message reply failure                                */
+/*                                                                   */
+/* ***************************************************************** */
+DFH$OFAR:
+  arg msg_token1 msg_token2 msg_token3 ignore
+
+  call Get_message_parameters
+
+  call Allocate_control_file
+
+  select
+    when msg_id = 'DFHFC0574' then
+      call Update_control_file_waiting
+
+    when msg_id = 'DFHFC0575' then
+      call Update_control_file(cics_in msg_reply_no)
+
+    otherwise
+      /* Ignore it */
+
+  end
+
+  call Deallocate_control_file
+
+  exit(0)
+
+
+
+/* ***************************************************************** */
+/* Get_message_parameters                                            */
+/*                                                                   */
+/* Extracts the relevant input parameters from the tokenized message */
+/* ***************************************************************** */
+Get_message_parameters:
+  if datatype(msg_token1) = 'NUM' then
+    do
+      msg_id = substr(msg_token2,1,9)
+      cics_in = msg_token3
+      msg_reply_no = msg_token1
+    end
+  else
+    do
+      msg_id = substr(msg_token1,1,9)
+      cics_in = ''
+      msg_reply_no = ''
+    end
+return
+
+/* ***************************************************************** */
+/* Allocate_control_file                                             */
+/*                                                                   */
+/* Dynamically allocates the control file of this program to the     */
+/* current job.                                                      */
+/*                                                                   */
+/* If the control file is already in use by another job then this    */
+/* program waits for 2 seconds before re-attempting the allocation   */
+/* request.                                                          */
+/*                                                                   */
+/* The allocation is attempted a maximum of 99 times. If this is     */
+/* exceeded this program returns a failure code.                     */
+/* ***************************************************************** */
+Allocate_control_file: procedure expose dfh$ofar.
+  control_file = 'SYS1.NETVIEW.DFH$OFAR.CONTROL'
+  loop_count = 0
+  do until rc = 0
+    'ALLOCATE DSN('''control_file''') DDNAME('dfh$ofar') OLD KEEP'
+    if rc <> 0 then
+      /* The control data set is in use by another task. */
+      /* Wait 2 seconds before retrying */
+      do
+        loop_count = loop_count + 1
+        if loop_count < 100 then
+          do
+            'WAIT 2'
+            rc = 11
+          end
+        else
+          /* The allocate retry threshold has been exceeded. */
+          exit(11)
+      end
+  end
+return
+
+/* ***************************************************************** */
+/* Deallocate_control_file                                           */
+/*                                                                   */
+/* Dynamically de-allocates the control file of this program from    */
+/* the current job.                                                  */
+/*                                                                   */
+/* The control file must be de-allocated otherwise other jobs        */
+/* running instances of this program  will fail.                     */
+/* ***************************************************************** */
+Deallocate_control_file: procedure expose dfh$ofar.
+  'FREE DDNAME('dfh$ofar')'
+return
+
+/* ***************************************************************** */
+/* Update_control_file                                               */
+/*                                                                   */
+/* Updates the status for the CICS region identified by the input    */
+/* parameter 'cics_in' to 'message issued'                           */
+/*                                                                   */
+/* Checks and updates the status of all CICS regions, held in the    */
+/* control file.                                                     */
+/*                                                                   */
+/* If the CICS status is not 'message issued', it is updated to      */
+/* 'message waiting', otherwise it is left unchanged.                */
+/* ***************************************************************** */
+Update_control_file: procedure expose dfh$ofar line.
+  arg cics_in msg_reply_no
+
+  yes = 'Y'
+  no = 'N'
+  msg_waiting = 'MSGWAITING'
+  msg_issued = 'MSGISSUED'
+  msg_replied = 'MSGREPLIED'
+
+  call Read_control_file
+
+  reply = yes
+  do i = 1 to line.0
+    parse upper var line.i  cics_id msg_status msg_reply_num ignore.
+
+    if (cics_id = cics_in) then
+      do
+        line.i = cics_id||' '||msg_issued||' '||msg_reply_no
+      end
+    else
+      do
+        if msg_status <> msg_issued then
+          do
+            line.i = cics_id||' '||msg_waiting
+            if reply = yes then reply = no
+          end
+      end
+  end
+
+  call Write_control_file
+
+  if reply = yes then call Reply_all_msgs
+return
+
+/* ***************************************************************** */
+/* Reply_all_msgs                                                    */
+/*                                                                   */
+/* This procedure is called when all CICS regions have the status    */
+/* 'message issued'.                                                 */
+/*                                                                   */
+/* This procedure issues a reply, and updates the status to 'message */
+/* replied' for each entry in control file.                          */
+/* ***************************************************************** */
+Reply_all_msgs: procedure expose dfh$ofar
+  call Read_control_file
+  do i = 1 to line.0
+    parse upper var line.i  cics_id msg_status msg_reply_no ignore.
+    call Reply_msg(msg_reply_no)
+    line.i = cics_id||' '||msg_replied
+  end
+  call Write_control_file
+return
+
+/* ***************************************************************** */
+/* Reply_msg                                                         */
+/*                                                                   */
+/* Replies to a message                                              */
+/* ***************************************************************** */
+Reply_msg: procedure
+  arg msg_reply_num
+
+  'MVS REPLY '||msg_reply_num||',GO'
+  if rc <> 0 then
+    /* Message reply failure */
+    exit(14)
+return
+
+/* ***************************************************************** */
+/* Update_control_file_waiting                                       */
+/*                                                                   */
+/* Checks and updates the status of all CICS regions, held in the    */
+/* control file.                                                     */
+/*                                                                   */
+/* If the CICS status is not 'message issued', it is updated to      */
+/* 'message waiting', otherwise it is left unchanged.                */
+/* ***************************************************************** */
+Update_control_file_waiting: procedure expose dfh$ofar
+  msg_waiting = 'MSGWAITING'
+  msg_replied = 'MSGREPLIED'
+  msg_issued = 'MSGISSUED'
+
+  call Read_control_file
+  do i = 1 to line.0
+    parse upper var line.i  cics_id msg_status msg_reply_no ignore.
+    if msg_status <> msg_issued then
+      do
+        line.i = cics_id||' '||msg_waiting
+      end
+  end
+  call Write_control_file
+return
+
+/* ***************************************************************** */
+/* Read_control_file                                                 */
+/*                                                                   */
+/* Reads the current status held in the control file into 'line'     */
+/* ***************************************************************** */
+Read_control_file: procedure expose dfh$ofar line.
+  address MVS 'EXECIO * DISKR  dfh$ofar  (FINIS STEM LINE.'
+  if rc <> 0 then
+    /* Control file read failure */
+    exit(12)
+return
+
+/* ***************************************************************** */
+/* Write_control_file                                                */
+/*                                                                   */
+/* Writes the current status held in 'line' to the control file      */
+/* ***************************************************************** */
+Write_control_file: procedure expose dfh$ofar line.
+  address MVS 'EXECIO ' line.0 ' DISKW dfh$ofar (FINIS STEM LINE.'
+  if rc <> 0 then
+    /* Control file write failure */
+    exit(13)
+return

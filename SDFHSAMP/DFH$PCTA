@@ -1,0 +1,341 @@
+***********************************************************************
+*                                                                     *
+*   MODULE NAME = DFH$PCTA                                            *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  ....                                    *
+*        Sample user exit program for the XPCTA exit.                 *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1991, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*        Enables retry after abend ASRA caused by attempting to       *
+*        overwrite a CICS-key DSA when running in USER key or         *
+*        by attempting to access storage in one of the USER DSAs      *
+*        which the current program does not have access to.           *
+*                                                                     *
+*        The key is changed to CICS-key and the retry branch address  *
+*        is set to continue execution of the program at the failing   *
+*        instruction. The retry space will automatically be set to    *
+*        Base Space if the execution key is CICS. This enables the    *
+*        program to be able to access the task lifetime storage of    *
+*        all other transactions.                                      *
+*                                                                     *
+*        It is intended that this exit be used to identify, without   *
+*        abending, those programs which need to be defined with       *
+*        EXECKEY(CICS), because they intentionally modify a CICS-key  *
+*        DSA. Alternatively it will identify those transactions that  *
+*        need to be defined ISOLATE(NO) because they are sharing      *
+*        USER key task lifetime storage.                              *
+*                                                                     *
+* WARNING                                                             *
+* *******                                                             *
+*        This exit will also circumvent abends caused by programs     *
+*        which modify CICS-key DSA unintentionally, ie COULD ALLOW    *
+*        STORAGE VIOLATIONS TO OCCUR. Therefore it is recommended     *
+*        that this exit program should only be used as a migration    *
+*        aid.                                                         *
+*                                                                     *
+*        Any retry attempts by this exit program should be            *
+*        investigated. Either correct the program that is modifying   *
+*        CICS-key DSA, or redefine the program with EXECKEY(CICS),    *
+*        which ever is appropriate. Alternatively if storage is       *
+*        being accessed in the E/UDSA consider defining the program   *
+*        EXECKEY(CICS) or define the transactions sharing task        *
+*        lifetime storage ISOLATE(NO). The later being the            *
+*        recommended action.                                          *
+*                                                                     *
+*        Refer to the CICS/ESA Problem Determination Guide for        *
+*        further information about diagnosing ASRA abends.            *
+*                                                                     *
+* NOTE   This program must be enabled at the XPCTA exit point and     *
+*        requires a minimum of 256 bytes of Global Work Area. This    *
+*        program is not threadsafe so should be enabled using the     *
+*        QUASIRENT option.                                            *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*    RESTRICTIONS = None                                              *
+*    RESTRICTIONS = None                                              *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* ENTRY POINT = DFH$PCTA                                              *
+*                                                                     *
+*     LINKAGE = Invoked from the XPCTA user exit call.                *
+*                                                                     *
+*     INPUT = Register 1 - address of DFHUEPAR                        *
+*                                                                     *
+*         DFHUEPAR contains the following exit specific parameters    *
+*                                                                     *
+*             UEPPCDS :- Address of DFHPCUE (storage area containing  *
+*                        program and terminal related information).   *
+*             UEPTACB :- Address of DFHABND (the transaction abend    *
+*                        control block (TACB) for this abend).        *
+*                                                                     *
+*     OUTPUT = Register 15 - Return code (UERCNORM or UERCMEA)        *
+*                                                                     *
+*              The following fields within DFHPCUE may be modified    *
+*                   PCUE_BRANCH_ADDRESS - retry address               *
+*                   PCUE_BRANCH_EXECKEY - retry key                   *
+*                                                                     *
+*     EXIT-NORMAL = RETURN (14,12),RC=UERCNORM (continue abend)       *
+*                   RETURN (14,12),RC=UERCMEA  (address modified)     *
+*                                                                     *
+*     EXIT-ERROR = N/A                                                *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+**                                                                    *
+*        $MOD(DFH$PCTA),COMP(PROGRAM),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= 553    330 91     HD2UJAH: Module creation                  *
+*         R31410 680 120412 HDFXAB : Check if resume allowed          *
+*         D55164 680 120816 HDFXAB : AMODE 64 resume                  *
+*                                                                     *
+***********************************************************************
+*
+         EJECT
+***********************************************************************
+* Set up the Global User Exit environment :-                          *
+*     Identify the user exit point                                    *
+*     Copy the DFHPCUE dsect                                          *
+*     Generate the DFHTACB desect                                     *
+*     Declare local dsect to be based on Global Work Area             *
+*     Set up equates for registers                                    *
+***********************************************************************
+*
+         DFHUEXIT TYPE=EP,ID=(XPCTA)
+*
+         COPY  DFHPCUE             Copy PCUE dsect
+*
+         DFHTACB TYPE=DSECT        Generate the DFHABND (TACB) dsect   *
+                                   to be mapped onto address passed
+*
+XPCTAGWA DSECT                     Dsect to map onto GWA
+RETRYWTO DS    CL242               Storage to enable modification of   *
+                                   retry message (WTO)
+PACKED   DS    CL5                 Used for converting retry address
+UNPACKED DS    CL9                 to printable format
+LNGTHGWA EQU   *-XPCTAGWA          Minimum length of GWA required
+*
+PGMWTO   EQU   50                  Offset into WTO for program name
+ADDRWTO  EQU   102                 Offset into WTO for retry address
+*
+R0       EQU   0                   register equates
+R1       EQU   1
+R2       EQU   2                   User exit parm list reg
+R3       EQU   3
+R4       EQU   4                   Used to calculate the
+R5       EQU   5                   failing instruction
+R6       EQU   6                   User exit dependant parm list reg
+R7       EQU   7                   TACB reg
+R8       EQU   8                   Global Work Area reg
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11                  Base reg for program
+R12      EQU   12
+R13      EQU   13                  Register save area address
+R14      EQU   14
+R15      EQU   15
+         EJECT
+*
+***********************************************************************
+* Main line code starts here                                          *
+***********************************************************************
+*
+DFH$PCTA CSECT
+DFH$PCTA AMODE 31
+DFH$PCTA RMODE ANY
+         SAVE  (14,12)             Save REGS
+         LARL  R11,STATIC_AREA     Set up static register
+         USING STATIC_AREA,R11
+*
+         LR    R2,R1               set up addressability to
+         USING DFHUEPAR,R2         user exit parm list
+*
+         L     R6,UEPPCDS          set up addressabilty to
+         USING DFHPCUE,R6          DFHPCUE
+*
+         L     R7,UEPTACB          set up addressability to
+         USING DFHABND,R7          TACB at abend
+*
+         L     R8,UEPGAA           set up addressabilty to
+         USING XPCTAGWA,R8         global work area
+*
+***********************************************************************
+* Check that the Global Work area requested at exit enabling is       *
+* sufficient for the processing involved.                             *
+* If insufficient GWA supplied put out a message and return normal    *
+***********************************************************************
+*
+GWAEXIST DS    0H
+         LTR   R8,R8               Has GWA been defined
+         JZ    GWAERROR            No so go put out error message
+         L     R10,UEPGAL          Load address of length of GWA
+         LH    R9,0(,R10)          Load length of GWA
+         LA    R10,LNGTHGWA        Load minimum length of GWA
+         CLR   R9,R10              Has enough been allocated
+         JNL   PCTACHCK            Yes, go check for ASRA and DSA hit
+GWAERROR DS    0H
+         WTO   ('Global Work Area allocated for exit program DFH$PCTA i*
+               s insufficient.',D),                                    *
+               ('Redefine the exit with at least 256 bytes GWA',DE),   *
+               ROUTCDE=(2),DESC=(6)
+         J     PCTAEXIT            Return normal
+*
+***********************************************************************
+* If abend is an ASRA and valid Registers and PSW then.               *
+*    Do.                                                              *
+*      If it was caused by an GCDSA, ECDSA, CDSA, UDSA or EUDSA then  *
+*            Do.                                                      *
+*              Calculate failing instruction.                         *
+*              Store in alternate branch address.                     *
+*              Set execution key to be CICS key.                      *
+*              Put out a message informing of the retry               *
+*              Return with RC set to indicate modified address.       *
+*            End.                                                     *
+*    End.                                                             *
+* Return normal                                                       *
+***********************************************************************
+*
+***********************************************************************
+* Test if the exit can supply a retry address.                        *
+***********************************************************************
+         TM    PCUE_CONTROL_BITS,PCUE_NO_RESUME Is retry allowed
+         JO    PCTAEXIT                         No so return normal
+***********************************************************************
+* Test for ASRA, valid REGS and PSW in TACB, CDSA, UDSA, ECDSA        *
+* EUDSA or GCDSA hit.                                                 *
+* If not return with a normal RC. Note that if the CDSA, ECDSA or     *
+* GCDSA was hit we MUST have been running in user key.                *
+***********************************************************************
+*
+PCTACHCK DS    0H
+         CLC   ABNDCODE,=C'ASRA'   Is it an ASRA abend
+         JNE   PCTAEXIT            No so return normal
+         TM    ABNDIREG,ABNDREGI   Are the REGS valid
+         JZ    PCTAEXIT            No so return normal
+         LG    R4,ABNDPSW16+8      Get PSW address
+         LTGR  R4,R4               Is PSW address zero
+         JZ    PCTAEXIT            Yes so return normal
+         CLI   ABNDSTG,ABNDCDSA    Is CDSA storage hit
+         JE    PCTACONT            Yes so continue with retry
+         CLI   ABNDSTG,ABNDECDSA   Is ECDSA storage hit
+         JE    PCTACONT            Yes so continue with retry
+         CLI   ABNDSTG,ABNDGCDSA   Is GCDSA storage it
+         JE    PCTACONT            Yes so continue with retry
+         CLI   ABNDSTG,ABNDUDSA    Is UDSA storage hit
+         JE    PCTACONT            Yes so continue with retry
+         CLI   ABNDSTG,ABNDEUDSA   Is EUDSA storage hit
+         JNE   PCTAEXIT            No so return normal
+***********************************************************************
+* If the abend occured while execiting in AMODE(64) check if an       *
+* AMODE(64) retry can be attempted.                                   *
+***********************************************************************
+PCTACONT DS    0H
+         TM    ABNDPSW16+3,X'01'   Check if abend was in AMODE(64)
+         JZ    PCTARETRY           No so continue with retry
+         TM    PCUE_CONTROL_BITS,PCUE_NO_RESUME_AMODE64
+*                                  Check if AMODE(64) retry can be
+*                                  attempted
+         JO    PCTAEXIT            No so return normal
+***********************************************************************
+* Calculate the address of the instruction that caused the ASRA       *
+* Store the address in PCUE_BRANCH_ADDRESS                            *
+* Set the PCUE_BRANCH_ADDRESS AMODE so it matches the PSW AMODE       *
+* Set execution key to CICS key in PCUE_BRANCH_EXECKEY                *
+* This will automatically cause the retry space to be the basespace   *
+* Output a message to inform user that that a retry has taken place   *
+* Return with RC set to indicate modified branch address              *
+***********************************************************************
+*
+PCTARETRY DS  0H
+         IC    R5,ABNDINT+1        Get the instruction length from the *
+                                   additional EC mode information
+         N     R5,=F'6'            Clear all but bits 29 & 30 as these *
+                                   contain the instruction length
+         SLR   R4,R5               Back off to failing instruction
+         ST    R4,PCUE_BRANCH_ADDRESS Set branch address to failing    *
+                                   instruction
+         TM    ABNDPSW16+3,X'01'   Check if AMODE(64) abend
+         JZ    PCTARETRY_AM31      No so check for AMODE(31) abend
+         OI    PCUE_BRANCH_ADDRESS+3,PCUE_BRANCH_AMODE64
+*                                  Set AMODE(64)
+         J     PCTAKEY             Set key
+PCTARETRY_AM31  DS   0H
+         TM    ABNDPSW16+4,X'80'   Check if AMODE(31) abend
+         JZ    PCTARETRY_AM24      No so must be AMODE(24) abend
+         OI    PCUE_BRANCH_ADDRESS,PCUE_BRANCH_AMODE31
+*                                  Set AMODE(31)
+         J     PCTAKEY             Set key
+PCTARETRY_AM24  DS   0H
+PCTAKEY  DS    0H
+         MVI   PCUE_BRANCH_EXECKEY,PCUE_BRANCH_CICS Set retry CICS key
+*
+***********************************************************************
+* Build the WTO informing of retry                                    *
+* The GWA is used to construct the WTO                                *
+***********************************************************************
+*
+         MVC   0(LNGRWTO,R8),RETABND   Move WTO into GWA
+         MVC   PGMWTO(8,R8),PCUE_PROGRAM_NAME    Move the name of the  *
+                                   program that is to be retried
+         MVC   PACKED(4),PCUE_BRANCH_ADDRESS Move in branch address to *
+                                   top 4 bytes of packed field
+         MVI   PACKED+4,X'F0'      Set last byte of packed field to F0
+         UNPK  UNPACKED,PACKED     Unpack the retry address
+         TR    UNPACKED,TRANSLATE_TABLE  Translate to printable hex
+         MVC   ADDRWTO(8,R8),UNPACKED  Move top 8 bytes into the WTO
+         SR    R0,R0               Zero out register 0 for WTO
+         WTO   MF=(E,(8))          Put out message based on register 8
+*
+***********************************************************************
+* Retry address set, exit                                             *
+***********************************************************************
+*
+         L     R13,UEPEPSA         load address of the reg save area
+         RETURN (14,12),RC=UERCMEA Restore regs and return indicating  *
+                                   the branch address has been modified
+*
+***********************************************************************
+* Retry address has not been set, exit                                *
+***********************************************************************
+*
+PCTAEXIT DS    0H
+         L     R13,UEPEPSA         load address of the reg save area
+         RETURN (14,12),RC=UERCNORM Restore regs and return normal
+*
+*
+*
+STATIC_AREA  DS  0D
+RETABND  WTO   'Migration user exit DFH$PCTA retrying program XXXXXXXX *
+               in CICS key at failing instruction address @@@@@@@@',   *
+               ROUTCDE=(2),DESC=(6),MF=L
+LNGRWTO  EQU   *-RETABND           Length of generated WTO
+*
+TRANSLATE_TABLE DS 0H              Translate table used to convert
+                DC (256)X'00'      unpacked decimal offset to printable
+                ORG TRANSLATE_TABLE+X'F0'     hexadecimal characters
+                DC C'0123456789'
+                ORG TRANSLATE_TABLE+X'FA'
+                DC C'ABCDEF'
+*
+         LTORG  ,
+         END DFH$PCTA

@@ -1,0 +1,347 @@
+*ASM XOPTS(CICS,SP)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$STED                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  Sample PLT Program to stagger           *
+*                    End-Of-Day Time.                                 *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1991, 2014"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION = Sample PLT Program to stagger End-Of-Day Time.           *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*    Program should be defined in a PLT prior to CICS Initialization  *
+*                                                                     *
+*    RESTRICTIONS =                                                   *
+*                                                                     *
+*                                                                     *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable,                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*     $MOD(DFH$STED),COMP(STATS),PROD(CICS TS ):                      *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $D0= 5352   321 910125 HD6OAJH: Create                           *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*    $P2= M81202 410 930323 HD4OGB  : Add entry points to Sample pgms *
+*    $P5= M30650 530 981113 HD4OGB  : Fix copyright statements        *
+*    $P6= M15766 610 000927 HD7OPJW : Binder warning messages         *
+*                                                                     *
+***********************************************************************
+* DESCRIPTION                                                         *
+*                                                                     *
+*   DFH$STED    : Program to vary the Statistics End of Day time      *
+*                                                                     *
+*   Background and Purpose:                                           *
+*                                                                     *
+*     Statistics intervals occur simultaneuosly across many CICS/ESA  *
+*     regions in a single CEC and therefore degrade performance.      *
+*     It is neccessary for each region to vary its interval           *
+*     occurrence time. Interval ocurrences are calculated by          *
+*     the forward addition of the current user supplied               *
+*     INTERVAL time to the current user supplied 'logical'            *
+*     ENDOFDAY time. By using this technique of calculating the time  *
+*     of day for intervals to occur, CICS regions will synchronise    *
+*     their statistics intervals if the INTERVAL and ENDOFDAY time    *
+*     settings are the same in those regions. With a sufficient       *
+*     number of CICS regions, a performance degradation will occur    *
+*     across the CEC as each region attempts to write its statistics  *
+*     to SMF.                                                         *
+*     This program will automatically vary the EOD time of each       *
+*     CICS region it is installed in, and thus cause the interval     *
+*     occurrence time of these regions to vary.                       *
+*                                                                     *
+*                                                                     *
+*   Logic overview:                                                   *
+*                                                                     *
+*     DFH$STED will vary the Statistics ENDOFDAY time according to    *
+*     a simple formula. The current time of day is retrieved from     *
+*     MVS, and the time (minutes and seconds) past the hour is        *
+*     converted into a fraction of an hour. This fraction is used     *
+*     to calculate a time 'delta' to add to the current End Of Day    *
+*     time. The time delta will be confined in its range of           *
+*     variation by a user supplied value (see 'Customisation').       *
+*                                                                     *
+*                                                                     *
+*   Installation  :                                                   *
+*                                                                     *
+*     This program should be defined in the 2nd phase PLTPI for       *
+*     your CICS regions.                                              *
+*                                                                     *
+*                                                                     *
+*   Customisation :                                                   *
+*                                                                     *
+*     There are two variations you may wish to make to influence the  *
+*     effect of this program - Drift time and Base time.              *
+*                                                                     *
+*       1. Drift time.                           Default = 10 minutes *
+*          As this program should run in every CICS region, and       *
+*          you may want only a small variation in the interval        *
+*          occurrence time of your regions, you may specify a         *
+*          maximum 'drift' period.                                    *
+*          E.G. if all your CICS regions collect and write their      *
+*          statistics at hourly intervals, and you wish to see stats  *
+*          for the regions over a common period, but without the      *
+*          performance degradation, then specifying a drift time      *
+*          of 5 minutes would only vary the intervals by a maximum    *
+*          of 5 minutes i.e.                                          *
+*                                                                     *
+*                          Region 1 - 11.00.00                        *
+*                          Region 2 - 11.04.10                        *
+*                          Region 3 - 11.01.45                        *
+*                          Region x - 11.00.27                        *
+*                                                                     *
+*          You may specify the maximum drift period in EODDRIFT       *
+*          below. If you specify 60 minutes, this is asking for a     *
+*          region's EOD time to be adjusted by the minutes and        *
+*          seconds of the current time of day.                        *
+*                                                                     *
+*                                                                     *
+EODDRIFT EQU   10                  number of allowable minutes
+*                                  for the EOD times to drift
+*                                                                     *
+*       2. Base time         Default = fixed at midnight              *
+*                                                                     *
+*          You may set the base EOD time to either the current End    *
+*          of Day time or a fixed End Of Day time that you supply.    *
+*          You select current EOD or fixed EOD with EODTIME below.    *
+*                                                                     *
+*                                                                     *
+CURRENT  EQU   X'01'               Basetime = current EOD time
+FIXED    EQU   X'02'               Basetime = user supplied fixed EOD
+EODTIME  EQU   (FIXED)             Basetime choice of above
+*
+*          If you have selected fixed EOD then you will need to       *
+*          supply the fixed EOD time to use as a base. You provide    *
+*          this in EODFIXED below.                                    *
+*                                                                     *
+EODFIXED EQU   X'000000'           If using FIXED as EODTIME then this
+*                                  is the fixed EOD value in packed
+*                                  format HHMMSS. Range 000000-235959
+*                                  000000 = midnight.
+*                                                                     *
+*          If your systems are COLD started, the default EOD setting  *
+*          of the system is 00:00:00 (midnight). If your systems are  *
+*          AUTO started, the previous EOD value of your system is     *
+*          recovered. This means that, if you generally AUTO start    *
+*          and use CURRENT for EODTIME, you will have an accumulated  *
+*          drift, because this program has been used more than once.  *
+*                                                                     *
+***********************************************************************
+         EJECT ,
+***********************************************************************
+*        REGISTER USAGE                                               *
+***********************************************************************
+R0       EQU   0                   Return time for STPCKBIN routine
+R1       EQU   1                   -
+R2       EQU   2                   -
+R3       EQU   3                   Base reg (default)
+R4       EQU   4                   Work register
+R5       EQU   5                   Work register
+R6       EQU   6                   Work register
+R7       EQU   7                   New EOD to set (in seconds)
+R8       EQU   8                   Input parm ptr for STCHKBIN routine
+R9       EQU   9                   -
+R10      EQU   10                  -
+R11      EQU   11                  EIB Base reg (default)
+R12      EQU   12                  -
+R13      EQU   13                  DFHEISTG Base reg (default)
+R14      EQU   14                  -
+R15      EQU   15                  -
+***********************************************************************
+*        DEFINITIONS                                                  *
+***********************************************************************
+DFHEISTG DSECT
+* Automatic variables
+         DS    0F
+BINHOURS DS    F                   EOD Hours in binary
+BINMINS  DS    F                   EOD Minutes in binary
+BINSECS  DS    F                   EOD Seconds in binary
+         DS    0D
+WORKPACK DS    PL8                 Work field for STPCKBIN routine
+DRIFTSS  DS    F                   User specified drift boundary (secs)
+EODSECS  DS    F                   New EOD time to set
+EODDELTA DS    F                   EOD delta to add to basetime/current
+*
+CURRTIME DS    0XL4                Current time (GMT) from MVS
+HH       DS    X                   ..... hours packed
+MM       DS    X                   ..... minutes packed
+SS       DS    X                   ..... seconds packed
+TH       DS    X                   ..... tenths and hundredths
+         EJECT
+***********************************************************************
+* Main                                                                *
+***********************************************************************
+DFH$STED CSECT  ,                                                  @P2C
+DFH$STED AMODE 31                                                  @P6A
+DFH$STED RMODE ANY                                                 @P6A
+         SPACE
+***********************************************************************
+* Calculate the allowable drift for EOD in seconds.                   *
+* User will have supplied minutes in EODDRIFT equate.                 *
+***********************************************************************
+*
+         L     R5,DRIFT            Get Maximum allowable drift mins
+         XR    R4,R4               Clear top word
+         M     R4,=F'60'           Convert to seconds
+         ST    R5,DRIFTSS          Save for later use
+*
+***********************************************************************
+* Get the current time from MVS                                       *
+***********************************************************************
+*
+         TIME DEC,ZONE=GMT
+*
+         ST    R0,CURRTIME         Save current time (GMT)
+*
+***********************************************************************
+* STCDELTA : Calculate the delta to adjust EOD time by.               *
+***********************************************************************
+STCDELTA DS    0H
+*
+         LA    R8,MM               Convert minutes returned from TIME
+         BAL   R14,STPCKBIN        Call conversion routine
+         LR    R5,R0               R5 = binary minutes past hour
+         XR    R4,R4               Clear top word
+         M     R4,=F'60'           Number of seconds in minutes
+         LA    R8,SS               Convert seconds returned from TIME
+         BAL   R14,STPCKBIN        Call conversion routine
+         AR    R5,R0               R5 = binary seconds past hour
+*
+         XR    R4,R4               clear top word
+         M     R4,=F'10000'        Adjust seconds for calculations
+         D     R4,=F'3600'         Divide by seconds in an hour
+         XR    R4,R4               Ignore remainder
+         M     R4,DRIFTSS          Find seconds(x10000) to add to EOD
+         D     R4,=F'10000'        R5= Delta time in seconds to add
+*                                      to current EOD (ignore R4)
+         ST    R5,EODDELTA         Save delta for later
+*
+***********************************************************************
+* STBTEOD : Set new EOD basetime - either fixed or using current EOD  *
+***********************************************************************
+*
+STBTEOD  DS    0H
+*
+         TM    BASETIME,CURRENT    Are we using current EOD as base
+         BC    1,STCEOD            Yes, get current EOD time
+*                                  No, use user supplied fixed base...
+***********************************************************************
+* STFEOD : Use fixed base time supplied by user in EODFIXED equate.   *
+***********************************************************************
+*
+STFEOD   DS    0H
+*
+         LA    R8,FIXTIME          Convert hours supplied in EODFIXED
+         BAL   R14,STPCKBIN        Call conversion routine
+         LR    R7,R0               R7 = binary hours
+         XR    R6,R6               Clear top word
+         M     R6,=F'60'           Convert to minutes
+         LA    R8,FIXTIME+1        Convert minutes supplied in EODFIXED
+         BAL   R14,STPCKBIN        Call conversion routine
+         AR    R7,R0               R7 = binary minutes
+         M     R6,=F'60'           Convert to seconds
+         LA    R8,FIXTIME+2        Convert seconds supplied in EODFIXED
+         BAL   R14,STPCKBIN        Call conversion routine
+         AR    R7,R0               R7 = Fixed EOD in binary seconds
+         A     R7,EODDELTA         R7 = fixed EOD time + delta
+         B     STEODCHK            Check new EOD for validity
+*
+***********************************************************************
+* STCEOD : Use current EOD setting as basetime                        *
+***********************************************************************
+*
+STCEOD   DS   0H
+*
+         EXEC CICS INQUIRE STATISTICS                                  C
+                           ENDOFDAYHRS(BINHOURS)                       C
+                           ENDOFDAYMINS(BINMINS)                       C
+                           ENDOFDAYSECS(BINSECS)
+*
+         XR   R6,R6                clear workreg
+         L    R7,BINHOURS          Load current EOD hours setting
+         M    R6,=F'60'            Convert into minutes
+         A    R7,BINMINS           Add the current EOD minutes setting
+         M    R6,=F'60'            Convert to seconds
+         A    R7,BINSECS           Add the current EOD seconds setting
+         A    R7,EODDELTA          Add the EOD delta calc'd earlier
+*
+***********************************************************************
+* STEODCHK : Check new EOD setting is valid - if not adjust.          *
+***********************************************************************
+*
+STEODCHK DS   0H
+*
+         C    R7,MAXEOD            New EOD > Maximum EOD
+         BC   12,STEODSET          No, set new EOD
+*                                  yes, new EOD has passed midnight so
+         S    R7,MAXEOD            subtract maximum EOD
+*
+***********************************************************************
+* STEODSET : Set the new adjusted EOD time                            *
+***********************************************************************
+*
+STEODSET DS   0H
+*
+         ST   R7,EODSECS           Save new EOD time setting
+*
+         EXEC CICS SET     STATISTICS                                  C
+                           ENDOFDAYSECS(EODSECS)
+*
+         B    STEODEND             Return
+         SPACE
+***********************************************************************
+* STPCKBIN : Convert 1 byte packed to fullword binary                 *
+*            On entry R8 -> 1 byte packed number                      *
+*            On exit  R0 contains binary equivalent                   *
+***********************************************************************
+*
+STPCKBIN DS    0H
+*
+         XR    R0,R0               Clear workreg
+         IC    R0,0(0,R8)          Load field in Packed format
+         SLL   R0,4                Make space for sign
+         O     R0,=X'0000000C'     Move in the sign
+         ST    R0,WORKPACK+4       Save packed proper value
+         CVB   R0,WORKPACK         Convert packed field to binary
+         BR    R14                 Return to caller
+*
+***********************************************************************
+* STEODEND : Program exit point                                       *
+***********************************************************************
+*
+STEODEND DS    0H                           Return to CICS
+         SPACE
+         EXEC CICS RETURN
+         EJECT
+***********************************************************************
+* Constants and literals                                              *
+***********************************************************************
+         DS    0F
+MAXEOD   DC    AL4((23*60*60)+(59*60)+59)   Maximum EOD time in seconds
+DRIFT    DC    AL4(EODDRIFT)                User specified allowable
+*                                           drift in EOD times
+BASETIME DC    AL1(EODTIME)
+FIXTIME  DC    AL3(EODFIXED)
+         LTORG
+         END

@@ -1,0 +1,394 @@
+/* REXX ***************************************************************/
+/*                                                                    */
+/* MODULE NAME    DFH$RING                                            */
+/*                                                                    */
+/* DESCRIPTIVE NAME = CICS TS  (XS) Build KEYRING profiles in RACF    */
+/*                                                                    */
+/*                                                                    */
+/*                                                                    */
+/*     Licensed Materials - Property of IBM                           */
+/*                                                                    */
+/*     "Restricted Materials of IBM"                                  */
+/*                                                                    */
+/*     5655-Y04                                                       */
+/*                                                                    */
+/*     (C) Copyright IBM Corp. 2000, 2015"                            */
+/*                                                                    */
+/*                                                                    */
+/*                                                                    */
+/*                                                                    */
+/* STATUS = 7.2.0                                                     */
+/*                                                                    */
+/* FUNCTION = To build a RACF KEYRING suitable for CICS SSL use       */
+/*                                                                    */
+/* NOTES:                                                             */
+/*  DEPENDENCIES = z/OS Security Server                               */
+/*  MODULE TYPE  = Executable                                         */
+/*  PROCESSOR    = REXX                                               */
+/*  RESTRICTIONS = Requires CONTROL authority to IRR.DIGTCERT.GENCERT,*/
+/*                 UPDATE authority to IRR.DIGTCERT.CONNECT, and      */
+/*                 READ authority to IRR.DIGTCERT.* in the FACILITY   */
+/*                 class. Also requires CONTROL authority to          */
+/*                 IRR.DIGTCERT.ADD on first execution.               */
+/*                 If the FORUSER parameter is used to specify a      */
+/*                 different userid from the issuer, UPDATE authority */
+/*                 to IRR.DIGTCERT.* is required.                     */
+/*                                                                    */
+/*--------------------------------------------------------------------*/
+/*                                                                    */
+/* DESCRIPTION                                                        */
+/*                                                                    */
+/*  This REXX exec will build a KEYRING in the RACF database that     */
+/*  is suitable for use in a CICS region that is supporting           */
+/*  inbound SSL connections for HTTP                                  */
+/*                                                                    */
+/*  It intended just to get you started. For serious production use   */
+/*  you will almost certainly want to control the labels and contents */
+/*  of the certificates much more closely, and then you would issue   */
+/*  customer-specific versions of the RACDCERT commands below.        */
+/*                                                                    */
+/*--------------------------------------------------------------------*/
+/* CHANGE ACTIVITY :                                                  */
+/*      $MOD(DFH$RING),COMP(SECURITY),PROD(CICS TS ):                 */
+/*                                                                    */
+/*   PN= REASON REL YYMMDD HDXXIII : REMARKS                          */
+/*  $L0= 795    610 000603 HD2JPEH : Change KEYFILE to KEYRING        */
+/*  $P1= M18391 610 010212 HD2JPEH : Lowercase translation error      */
+/*  $P2= D08203 630 030701 HD2JPEH : Modernize date ranges            */
+/*  $P3= D11551 640 050104 HD2JPEH : Modernize date ranges again      */
+/*  $P4= D17688 650 070315 HD0EGMA : Enhance for IPCONNs              */
+/*  $P5= D21956 660 080904 HD2JPEH : Remove hard date values          */
+/*       D44466 680 120125 HDLVDNM : Remove EJB-Container             */
+/*       R74967 690 130906 HDLGJCH : Add Stronger certificates        */
+/*       D98235 700 150209 HD0EGMA : Update non-strong key sizes      */
+/*      D100301 700 150923 HD0EGMA : Add comments and simplify logic  */
+/*      D149836 720 180917 HDDLCRP : Update to size 2048              */
+/*                                                                    */
+/**********************************************************************/
+
+/**********************************************************************/
+/*                                                                    */
+/* Customize the following seven variables for your installation:     */
+/*                                                                    */
+organization = 'Leading Edge CICS Enterprise'
+department   = 'CICS Test Department'
+certifier    = 'CICS-Sample-Certification'
+strongcertifier = 'CICS-2048-Sample-Certification'          /*@R74967A*/
+city         = 'Gotham City'
+state        = 'Xanadu'
+country      = 'US'
+/*                                                                    */
+/**********************************************************************/
+
+
+/*--------------------------------------------------------------------*/
+/* Get input parameter values                                         */
+/*--------------------------------------------------------------------*/
+Parse upper arg,
+      firstname lastname hostname other 'FORUSER' '(' foruser ')'
+Parse upper source . . cmd .
+If cmd='?' | cmd='' then cmd='DFH$RING'
+
+Do while(firstname = "" | lastname = "" | hostname = "" | other ^= "")
+  Say "Enter your personal name and your web-server host name:" /*@P5C*/
+  Say " "
+  Say "  firstname lastname servername FORUSER(userid)"
+  Say " "
+  Say "   (firstname, lastname, and servername are required."
+  Say "    FORUSER(userid) is optional, but should be used if you are"
+  Say "    building a key ring for a different userid than yourself;"
+  Say "    for example, for a CICS region userid that is not the same"
+  Say "    as the current TSO userid.)"
+  Say " "
+  Say "A keyring will be built with name 'firstname.lastname'"
+  Say "and owned by the userid specified in FORUSER."
+  Say "(Any existing ring with that name will be replaced.)"
+  Parse upper pull,
+        firstname lastname hostname other 'FORUSER' '(' foruser ')'
+End
+
+/*--------------------------------------------------------------------*/
+/* Using input parameters 'firstname' and 'lastname', build key ring  */
+/* name in the variable 'ringname' with format 'firstname.lastname'   */
+/* translated to uppercase.                                           */
+/*--------------------------------------------------------------------*/
+lowercase = "abcdefghijklmnopqrstuvwxyz"
+uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"                        /*@P1C*/
+firstname = left(firstname,1) ||,
+   translate(substr(firstname,2),lowercase,uppercase)
+lastname  = left(lastname, 1) ||,
+   translate(substr(lastname, 2),lowercase,uppercase)
+ringname  = firstname"."lastname
+
+/*--------------------------------------------------------------------*/
+/* Set username made from 'firstname' and 'lastname' input parameters */
+/*--------------------------------------------------------------------*/
+username  = firstname lastname
+
+/*--------------------------------------------------------------------*/
+/* Translate the following input parameters to uppercase:             */
+/*  - servername in variable 'hostname'                               */
+/*  - userid in variable 'foruser'                                    */
+/*--------------------------------------------------------------------*/
+hostname  = translate(hostname,lowercase,uppercase)             /*@P5C*/
+if foruser = "" then foruser=USERID()
+upper foruser
+
+/*--------------------------------------------------------------------*/
+/* List CICS sample certification authority certificates that have the*/
+/* label for your installation coded in the variable 'certifier'      */
+/*--------------------------------------------------------------------*/
+parse value date('S') with 1 yyyy +4 5 mm + 2 7 dd +2           /*@P5A*/
+start  = yyyy||'-'||mm||'-01'          /* Start of current month  @P5A*/
+
+certifier = "'"certifier"'"
+"RACDCERT CERTAUTH LIST( LABEL("certifier")"
+If RC^=0 then
+  Do
+    zzzz   = yyyy+20                   /* Get 20 years hence      @P5A*/
+    finish = zzzz||'-12-31'            /* Year end in 20 years    @P5A*/
+    Say " "
+    Say "The CICS sample certification authority certificate"
+    Say "with label" certifier "does not appear to exist,"
+    Say "but it is required for" cmd"."
+    Say "The command will attempt to create this certificate."
+    "RACDCERT CERTAUTH GENCERT",
+    " SUBJECTSDN(CN('CICS Sample Certification Authority' ) ",
+                "OU('"department"'                        ) ",
+                "O ('"organization"'                      ) ",
+                "L ('"city"'                              ) ",
+                "SP('"state"'                             ) ",
+                "C ('"country"'                           ))",
+    " NOTBEFORE(DATE("start")  TIME(00:00:00)              )",  /*@P5C*/
+    " NOTAFTER (DATE("finish") TIME(23:59:59)              )",  /*@P5C*/
+    " WITHLABEL("certifier"                                )",
+    " SIZE     (2048                                     )" /*@D149836*/
+    If RC^=0 then
+      Do
+       Say " "
+       Say "The CICS sample certification authority certificate does"
+       Say "not exist, and" USERID() "is unable to create it, so the"
+       Say cmd "command cannot continue. Please ensure that the"
+       Say "first user to execute" cmd " is authorized to create"
+       Say "Certificate Authority certificates. This requires CONTROL"
+       Say "authority to IRR.DIGTCERT.ADD and IRR.DIGTCERT.GENCERT"
+       Say "profiles in the FACILITY class."
+       Exit 16
+      End
+  End
+
+/*--------------------------------------------------------------------*/
+/* List CICS sample certification authority certificates that         */
+/* that have the label for your installation coded in the variable    */
+/* 'strongcertifier'                                                  */
+/*--------------------------------------------------------------------*/
+strongcertifier = "'"strongcertifier"'"                     /*@R74967A*/
+"RACDCERT CERTAUTH LIST( LABEL("strongcertifier")"          /*@R74967A*/
+If RC^=0 then                                               /*@R74967A*/
+  Do                                                        /*@R74967A*/
+    zzzz   = yyyy+20                   /* Get 20 years hence  @R74967A*/
+    finish = zzzz||'-12-31'            /* Year end in 20 years@R74967A*/
+    Say " "                                                 /*@R74967A*/
+    Say "The CICS sample certification authority certificate"
+    Say "with label" strongcertifier "does not appear to exist,"
+    Say "but it is required for" cmd"."
+    Say "The command will attempt to create this certificate."
+    "RACDCERT CERTAUTH GENCERT",                            /*@R74967A*/
+    " SUBJECTSDN(CN('CICS 2048 Sample Certification Authority' ) ",
+                "OU('"department"'                        ) ",
+                "O ('"organization"'                      ) ",
+                "L ('"city"'                              ) ",
+                "SP('"state"'                             ) ",
+                "C ('"country"'                           ))",
+    " NOTBEFORE(DATE("start")  TIME(00:00:00)              )",
+    " NOTAFTER (DATE("finish") TIME(23:59:59)              )",
+    " WITHLABEL("strongcertifier"                          )",
+    " SIZE     (2048                                       )"
+                                                            /*@R74967A*/
+    If RC^=0 then                                           /*@R74967A*/
+      Do                                                    /*@R74967A*/
+       Say " "                                              /*@R74967A*/
+       Say "The CICS sample certification authority certificate does"
+       Say "not exist, and" USERID() "is unable to create it, so the"
+       Say cmd "command cannot continue. Please ensure that the"
+       Say "first user to execute" cmd " is authorized to create"
+       Say "Certificate Authority certificates. This requires CONTROL"
+       Say "authority to IRR.DIGTCERT.ADD and IRR.DIGTCERT.GENCERT"
+       Say "profiles in the FACILITY class."
+       Exit 16                                              /*@R74967A*/
+      End                                                   /*@R74967A*/
+  End                                                       /*@R74967A*/
+
+/*--------------------------------------------------------------------*/
+/* Create label names for certificates that will be created           */
+/*--------------------------------------------------------------------*/
+certlabel_web_server = lastname'-Web-Server'               /*@D100301A*/
+certlabel_ip_connection = lastname'-IP-Connection'         /*@D100301A*/
+certlabel_2048_certificate = lastname'-2048-Certificate'   /*@D100301A*/
+certlabel_default_certificate  = lastname'-Default-Certificate'
+                                                           /*@D100301A*/
+
+/*--------------------------------------------------------------------*/
+/* Delete existing certificates that have the same name as those      */
+/* that will be created.                                              */
+/*--------------------------------------------------------------------*/
+"RACDCERT ID("foruser")                                    /*@D100301C*/
+          DELETE(LABEL('"certlabel_web_server"'))"         /*@D100301C*/
+"RACDCERT ID("foruser")                                    /*@D100301C*/
+          DELETE(LABEL('"certlabel_ip_connection"'))"      /*@D100301C*/
+"RACDCERT ID("foruser")                                    /*@D100301C*/
+          DELETE(LABEL('"certlabel_2048_certificate"'))"   /*@D100301C*/
+"RACDCERT ID("foruser")                                    /*@D100301C*/
+          DELETE(LABEL('"certlabel_default_certificate"'))"/*@D100301C*/
+
+/*--------------------------------------------------------------------*/
+/* Generate sample certificate "lastname"-WEB-Server                  */
+/*--------------------------------------------------------------------*/
+zzzz   = yyyy+10                       /* Get 10 years hence      @P5A*/
+finish = zzzz||'-12-31'                /* Year end in 10 years    @P5A*/
+certlabel = certlabel_web_server                           /*@D100301C*/
+Say "Generating certificate with label" certlabel "for user" foruser"."
+"RACDCERT ID("foruser") GENCERT",
+" SUBJECTSDN(CN('"hostname"'                          ) ",      /*@P5C*/
+            "T ('"username"''s Web Server'            ) ",
+            "OU('"department"'                        ) ",
+            "O ('"organization"'                      ) ",
+            "L ('"city"'                              ) ",
+            "SP('"state"'                             ) ",
+            "C ('"country"'                           ))",
+" NOTBEFORE(DATE("start")  TIME(00:00:00)              )",      /*@P5C*/
+" NOTAFTER (DATE("finish") TIME(23:59:59)              )",      /*@P5C*/
+" SIGNWITH (CERTAUTH LABEL("certifier")                )",
+" WITHLABEL('"certlabel"'                              )", /*@D100301C*/
+" SIZE     (2048                                      )"    /*@D149836*/
+
+/*--------------------------------------------------------------------*/
+/* Generate sample certificate "lastname"-IP-Connection               */
+/*--------------------------------------------------------------------*/
+certlabel = certlabel_ip_connection                        /*@D100301C*/
+Say "Generating certificate with label" certlabel "for user" foruser"."
+"RACDCERT ID("foruser") GENCERT",                               /*@P4A*/
+" SUBJECTSDN(CN('"hostname"'                          ) ",      /*@P5C*/
+            "T ('"username"''s IP Connection'         ) ",      /*@P4A*/
+            "OU('"department"'                        ) ",      /*@P4A*/
+            "O ('"organization"'                      ) ",      /*@P4A*/
+            "L ('"city"'                              ) ",      /*@P4A*/
+            "SP('"state"'                             ) ",      /*@P4A*/
+            "C ('"country"'                           ))",      /*@P4A*/
+" NOTBEFORE(DATE("start")  TIME(00:00:00)              )",      /*@P5C*/
+" NOTAFTER (DATE("finish") TIME(23:59:59)              )",      /*@P5C*/
+" SIGNWITH (CERTAUTH LABEL("certifier")                )",      /*@P4A*/
+" WITHLABEL('"certlabel"'                              )", /*@D100301C*/
+" SIZE     (2048                                      )"    /*@D149836*/
+
+/*--------------------------------------------------------------------*/
+/* Generate sample certificate "lastname"-2048-Certificate            */
+/*--------------------------------------------------------------------*/
+certlabel = certlabel_2048_certificate                     /*@D100301C*/
+Say "Generating certificate with label" certlabel "for user" foruser"."
+"RACDCERT ID("foruser") GENCERT",                           /*@R74967A*/
+" SUBJECTSDN(CN('"hostname"'                          ) ",  /*@R74967A*/
+            "T ('"username"''s 2048 Certificate'      ) ",  /*@R74967A*/
+            "OU('"department"'                        ) ",  /*@R74967A*/
+            "O ('"organization"'                      ) ",  /*@R74967A*/
+            "L ('"city"'                              ) ",  /*@R74967A*/
+            "SP('"state"'                             ) ",  /*@R74967A*/
+            "C ('"country"'                           ))",  /*@R74967A*/
+" NOTBEFORE(DATE("start")  TIME(00:00:00)              )",  /*@R74967A*/
+" NOTAFTER (DATE("finish") TIME(23:59:59)              )",  /*@R74967A*/
+" SIGNWITH (CERTAUTH LABEL("strongcertifier")          )",  /*@R74967A*/
+" WITHLABEL('"certlabel"'                              )", /*@D100301C*/
+" SIZE     (2048                                       )"   /*@R74967A*/
+
+/*--------------------------------------------------------------------*/
+/* Generate sample certificate "lastname"-Default-Certificate         */
+/*--------------------------------------------------------------------*/
+certlabel = certlabel_default_certificate                  /*@D100301C*/
+Say "Generating certificate with label" certlabel "for user" foruser"."
+"RACDCERT ID("foruser") GENCERT",
+" SUBJECTSDN(CN('"hostname"'                          ) ",      /*@P5C*/
+            "T ('"username"''s Default Certificate'   ) ",
+            "OU('"department"'                        ) ",
+            "O ('"organization"'                      ) ",
+            "L ('"city"'                              ) ",
+            "SP('"state"'                             ) ",
+            "C ('"country"'                           ))",
+" NOTBEFORE(DATE("start")  TIME(00:00:00)              )",      /*@P5C*/
+" NOTAFTER (DATE("finish") TIME(23:59:59)              )",      /*@P5C*/
+" SIGNWITH (CERTAUTH LABEL("certifier")                )",
+" WITHLABEL('"certlabel"'                              )", /*@D100301C*/
+" SIZE     (2048                                      )"    /*@D149836*/
+
+/*--------------------------------------------------------------------*/
+/* Add the following to the above certificate definitions     @D149836*/
+/* if required by your browser                                @D149836*/
+/*--------------------------------------------------------------------*/
+/*
+" ALTNAME(DOMAIN('www.widgits.com'))",
+*/
+
+/*--------------------------------------------------------------------*/
+/* Replace existing keyring whose name is in variable 'ringname'      */
+/*--------------------------------------------------------------------*/
+Say "Replacing ring" ringname "for user" foruser"."
+"RACDCERT ID("foruser") DELRING("ringname")"
+"RACDCERT ID("foruser") ADDRING("ringname")"
+
+/*--------------------------------------------------------------------*/
+/* Connect certificate authority certificates to the keyring          */
+/* whose name is in variable 'ringname'                               */
+/*--------------------------------------------------------------------*/
+"RACDCERT ID("foruser")                                  ",
+         "CONNECT( RING("ringname"                     ) ",
+                 " LABEL('Verisign Class 1 Primary CA' ) ",
+                 " CERTAUTH                              ",
+                 " USAGE(CERTAUTH)                       )"
+
+"RACDCERT ID("foruser")                                  ",
+         "CONNECT( RING("ringname"                     ) ",
+                 " LABEL('Verisign Class 2 Primary CA' ) ",
+                 " CERTAUTH                              ",
+                 " USAGE(CERTAUTH)                       )"
+
+"RACDCERT ID("foruser")                                  ",
+         "CONNECT( RING("ringname"                     ) ",
+                 " LABEL('IBM World Registry CA'       ) ",
+                 " CERTAUTH                              ",
+                 " USAGE(CERTAUTH)                       )"
+
+"RACDCERT ID("foruser")                                  ",
+         "CONNECT( RING("ringname"                     ) ",
+                 " LABEL("certifier"                   ) ",
+                 " CERTAUTH                              ",
+                 " USAGE(CERTAUTH)                      )"
+
+"RACDCERT ID("foruser")                                  ", /*@R74967A*/
+         "CONNECT( RING("ringname"                     ) ", /*@R74967A*/
+                 " LABEL("strongcertifier"             ) ", /*@R74967A*/
+                 " CERTAUTH                              ", /*@R74967A*/
+                 " USAGE(CERTAUTH)                      )"  /*@R74967A*/
+
+/*--------------------------------------------------------------------*/
+/* Connect sample certificates to the keyring whose name              */
+/* is in variable 'ringname'                                          */
+/*--------------------------------------------------------------------*/
+"RACDCERT ID("foruser") CONNECT( RING("ringname"              ) ",
+              " LABEL('"certlabel_web_server"'        ))"  /*@D100301C*/
+"RACDCERT ID("foruser") CONNECT( RING("ringname"              ) ",
+              " LABEL('"certlabel_ip_connection"'     ))"  /*@D100301C*/
+"RACDCERT ID("foruser") CONNECT( RING("ringname"              ) ",
+              " LABEL('"certlabel_2048_certificate"'  ))"  /*@D100301C*/
+"RACDCERT ID("foruser") CONNECT( RING("ringname"              ) ",
+              " LABEL('"certlabel_default_certificate"') ",/*@D100301C*/
+                      " DEFAULT                                )"
+
+/*--------------------------------------------------------------------*/
+/* For userid in variable 'foruser' list all certificates             */
+/*--------------------------------------------------------------------*/
+"RACDCERT ID("foruser") LIST"
+
+/*--------------------------------------------------------------------*/
+/* For userid in variable 'foruser' list the keyring                  */
+/* whose name is in variable 'ringname'                               */
+/*--------------------------------------------------------------------*/
+"RACDCERT ID("foruser") LISTRING("ringname")"

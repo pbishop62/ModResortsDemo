@@ -1,0 +1,110 @@
+DFH$IQXR TITLE 'CICS INTERCOMMUNICATION SAMPLE - QUEUE TRANSFER - REMOT*
+               E PROCESSING'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$IQXR                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = 'Queue Transfer' Remote Processing Sample        *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1985, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*      INPUTS TO THIS PROGRAM            NAME OF TRANSFERRED Q        *
+*      ( FROM PROGRAM IQXL  )            TS Q RECORDS                 *
+*                                                                     *
+*      OUTPUTS FROM THIS PROGRAM         NONE                         *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$IQXR),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= Z30    170 85     HD1XIC : CREATE BASE SOURCE               *
+*    $P0= M60198 320 9002   HD1SMMC: PROGRAM RESTRUCTURED             *
+*    $P1= M61451 320 9004   HDAQJV : ALLOW SYNCPOINTING TO TAKE PLACE *
+*    $P2= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH$IQXR CSECT
+*
+***********************************************************************
+*        RECEIVE THE QUEUE NAME, PASSED TO THIS TRANSACTION           *
+*        BY IQXL. SAVE EIB FIELDS AND THEN TEST THEM TO SEE           *
+*        WHAT TO DO NEXT.                                             *
+***********************************************************************
+         EXEC CICS RECEIVE INTO(QNAME)
+*
+         MVC   XSYNC,EIBSYNC       SAVE EIB FIELDS
+         MVC   XFREE,EIBFREE
+         MVC   XRECV,EIBRECV
+*
+EIBTEST  DS    0H
+         CLI   XSYNC,X'FF'         SYNCPOINT REQUIRED ?            @P1C
+         BNE   TESTFREE            NO, GO TEST IF FREE REQUIRED
+*                                  ISSUE SYNCPOINT
+         EXEC CICS SYNCPOINT
+*
+TESTFREE DS    0H
+         CLI   XFREE,X'FF'         FREE REQUIRED ?
+         BE    TERMNATE            YES, GO ISSUE FREE
+*                                      AND TERMINATE TRANSACTION
+*
+         CLI   XRECV,X'FF'         RECEIVE REQUIRED ?
+         BNE   TERMNATE            NO, GO TERMINATE TRANSACTION
+*
+*                                  RECEIVE TS RECORD PASSED BY IQXL
+         EXEC CICS RECEIVE SET(R9) LENGTH(TSLEN)
+*
+         MVC   XSYNC,EIBSYNC       SAVE EIB FIELDS
+         MVC   XFREE,EIBFREE
+         MVC   XRECV,EIBRECV
+         CLC   TSLEN,=H'0'         ANY DATA RECEIVED ?
+         BE    EIBTEST             NO, SO GO TEST EIB IMMEDIATELY
+*
+*                  DATA WAS RECEIVED, SO WRITE RECORD TO NAMED QUEUE
+         EXEC CICS WRITEQ TS QUEUE(QNAME) FROM(0(R9))                  *
+               LENGTH(TSLEN)
+*
+         B     EIBTEST             GO AND TEST EIB
+*
+*
+***********************************************************************
+*        TRANSACTION TERMINATION                                      *
+***********************************************************************
+TERMNATE DS    0H
+         EXEC CICS FREE
+*
+         EXEC CICS RETURN
+*
+*
+         LTORG
+*
+         DFHREGS                   REGISTER EQUATES
+*
+***********************************************************************
+*        WORKING STORAGE                                              *
+***********************************************************************
+DFHEISTG DSECT
+XSYNC    DS    C                   IF SET, EXECUTE SYNCPOINT
+XFREE    DS    C                   IF SET, FREE TERMINAL / LU
+XRECV    DS    C                   IF SET, EXECUTE RECEIVE
+*
+QNAME    DS    CL8
+TSLEN    DS    H
+*
+         END

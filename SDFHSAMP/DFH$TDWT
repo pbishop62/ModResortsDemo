@@ -1,0 +1,152 @@
+TDWT     TITLE 'DFH$TDWT TRANSIENT DATA AUTO INIT TASK WRITE TO L86P L3X
+               286 PRINTER'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$TDWT                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Sample Trigger Transaction                       *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1984, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION :                                                       *
+*                                                                     *
+*    DFH$TDWT provides a sample trigger transaction - TDWT.           *
+*                                                                     *
+*    The associated sample TDQUEUE L86P for which TDWT is the trigger *
+*    transaction can be found in the CSD file, group DFH$UTIL         *
+*                                                                     *
+*    TDWT assumes a trigger level of 1.                               *
+*                                                                     *
+*    TDWT is triggered each time a record is written to queue L86P.   *
+*                                                                     *
+*    TDWT reads the record from the queue and outputs it to an L86P   *
+*    L3286 printer.                                                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$TDWT),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 841016 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFHEISTG DSECT
+QNAME    DS    CL4                     QUEUE NAME BEING SERVICED
+RESP     DS    F                       RESPONSES TO CICS COMMANDS
+TDADDR   DS    F                       ADDRESS OF TD QUEUE ENTRY
+WRTADDR  DS    F                       ADDRESS OF OUTPUT RECORD
+TDLEN    DS    H                       LENGTH OF TD QUEUE ENTRY
+WRTLEN   DS    H                       LENGTH OF OUTPUT RECORD
+         EJECT
+WRTAREA  DSECT                         DSECT TO PROVIDE DUMMY
+*                                      OUTPUT AREA
+         USING *,WRTPTR
+         DS    0H
+         DFHREGS
+WRTPTR   EQU   R2                      REGISTER POINTING TO OUTPUT
+TDPTR    EQU   R4                      REGISTER POINTING TO TD RECORD
+BASEREG  EQU   R6                      BASE REGISTER
+*                                      REGISTER 3 REQUIRED BY MVCL
+*                                      REGISTER 5 REQUIRED BY MVCL
+*                                      REGISTER 7 - WORK REGISTER
+         EJECT
+DFH$TDWT DFHEIENT CODEREG=BASEREG
+*
+***********************************************************************
+* Get name of the queue to read                                       *
+***********************************************************************
+*
+         EXEC CICS ASSIGN QNAME(QNAME) RESP(RESP)
+*
+         CLC   RESP,DFHRESP(INVREQ)    TEST FOR ERROR
+         BE    END
+*
+***********************************************************************
+* Read the queue and set Register 4 to address of record              *
+***********************************************************************
+*
+         EXEC CICS READQ TD QUEUE(QNAME) SET(TDPTR) RESP(RESP)         X
+              LENGTH(TDLEN)
+*
+         CLC   RESP,DFHRESP(NORMAL)    CHECK FOR NORMAL RESPONSE
+         BNE   END                     EXIT IF ANY ERROR FOUND
+*
+***********************************************************************
+* Add two to record length to get record length plus control chars    *
+***********************************************************************
+*
+         LH    R7,TDLEN                LOAD INPUT LENGTH
+         LA    R7,2(R7)                CALC OUTPUT LEN (DATA+NL+EOM)
+         STH   R7,WRTLEN               STORE OUTPUT LEN
+*
+***********************************************************************
+* Get area to use for output - address of area set in Register 2      *
+***********************************************************************
+*
+         EXEC CICS GETMAIN SET(WRTPTR) LENGTH(WRTLEN) INITIMG('0')
+*
+         ST    TDPTR,TDADDR            SAVE POINTER REGISTERS
+         ST    WRTPTR,WRTADDR
+*
+***********************************************************************
+* Copy the record to the getmained area                               *
+***********************************************************************
+*
+         SR    R3,R3                   CLEAR R3 INSERT PAD CHAR
+         LH    R3,TDLEN                LOAD INPUT LENGTH
+         LR    R5,R3                   COPY TO OUTPUT LENGTH
+         MVCL  WRTPTR,TDPTR            MOVE INPUT TO OUTPUT
+*
+***********************************************************************
+* Set Output Register (R2) to point to the end of the record          *
+***********************************************************************
+*
+         L     WRTPTR,WRTADDR          RESTORE OUTPUT ADDRESS
+         SR    R3,R3                   CLEAR R3
+         LH    R3,TDLEN                RELOAD INPUT LENGTH
+         AR    WRTPTR,R3               POINT OUTPUT REG TO END OF DATA
+*
+***********************************************************************
+* Move control characters into output area at the end of the record   *
+***********************************************************************
+*
+         MVI   0(WRTPTR),X'15'         INSERT NL CHARACTER
+         MVI   1(WRTPTR),X'19'         INSERT EOM CHARACTER
+*
+***********************************************************************
+* Restore output address                                              *
+***********************************************************************
+*
+         L     WRTPTR,WRTADDR          RESTORE OUTPUT ADDRESS
+*
+***********************************************************************
+* Write output record                                                 *
+***********************************************************************
+*
+         EXEC CICS SEND FROM(WRTAREA) LENGTH(WRTLEN) WAIT ERASE        X
+              CTLCHAR('H')
+*
+***********************************************************************
+* Return                                                              *
+***********************************************************************
+*
+END      EXEC CICS RETURN
+         LTORG
+         END

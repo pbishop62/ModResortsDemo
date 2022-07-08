@@ -1,0 +1,206 @@
+         TITLE 'DFH$STCN - CONVERT S/370 FORMAT TOD TO DATE AND TIME'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$STCN                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Convert S/370 TOD to Date and Time Sample        *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1990, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION :                                                       *
+*                                                                     *
+* This program is part of a set of sample programs which illustrate   *
+* the use of CICS/ESA INQUIRE and COLLECT STATISTICS commands.        *
+* This program is called from the main program DFH0STAT.              *
+*                                                                     *
+* This routine is taken from the sample DFH$MOLS and only the         *
+* stopwatch and time calculation parts are relevant to the statistics *
+* sample                                                              *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$STCN),COMP(SAMPLES),PROD(CICS/ESA)                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 311 900612 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         EJECT
+***********************************************************************
+*                                                                     *
+* ENTRY NAME - DFH$STCN                                               *
+*                                                                     *
+* FUNCTION - CONVERT A S/370 FORMAT TOD TO EBCDIC DATE AND TIME.      *
+*                                                                     *
+* CALLS TO OTHER ROUTINES - NONE                                      *
+*                                                                     *
+* OPERATION - CONVERT TIME AND DATE AND EDIT INTO USER SUPPLIED       *
+*             FIELD.                                                  *
+*                                                                     *
+* ENTRY -  R1 = ADDRESS OF CALLER'S PARAMETER LIST, 64 BYTES IN       *
+*               LENGTH, OF THE FOLLOWING INITIAL FORMAT:              *
+*                                                                     *
+*   DS   XL4   First byte contains clock-type (S or T)                *
+*   DS   XL8   8 bytes containing time to be converted                *
+*   DS   XL30  30 bytes for output                                    *
+*                 10 - mm/dd/yyyy                                     *
+*                 17 - hhhh:mm:ss.thmiju                              *
+*                               t = tenths of seconds                 *
+*                               h = hundredths of seconds             *
+*                               m = milliseconds                      *
+*                               i = ten-thousandths of seconds        *
+*                               j = hundred-thousandths of seconds.   *
+*                               u = microseconds.                     *
+*                  3 - ddd                                            *
+*   DS   XL22  Reserved for future use                                *
+*                                                                     *
+*                                                                     *
+* EXIT - DATE AND TIME HAVE BEEN GENERATED AND MOVED TO THE           *
+*        SPECIFIED OUTPUT AREA.                                       *
+*                                                                     *
+* RESPONSES - NONE                                                    *
+*                                                                     *
+* ERROR MESSAGES - NONE                                               *
+*                                                                     *
+***********************************************************************
+         EJECT ,
+CLOCK_FIELDS DSECT                 Callers input/output parameters
+CLOCK_TYPE             DS XL1      Clock type to be converted
+                       DS XL3
+CLOCK_FIELD            DS XL8      STCK field to be converted
+CLOCK_OUTPUT           DS 0XL30    Output area date/time
+CLOCK_OUTPUT_DATE      DS XL10     Output area date
+CLOCK_OUTPUT_TIME      DS 0XL17    Output area time in various formats
+                       DS XL2
+CLOCK_OUTPUT_STOPWATCH DS XL15     hh:mm:ss.thmiju format
+CLOCK_OUTPUT_DAYS      DS XL3      Output area days
+                       DS XL22     Reserved for future use
+         SPACE 2
+DFHEISTG DSECT
+CVDWORK  DS    D                   Doubleword workarea
+IPPARMS  DC    2F'0'               Date & Time conversion input
+TODOP    DC    16C' '              Date & Time conversion output
+TIMEWORK DC    16C' '              Date & Time conversion output
+DATEWORK DC    11C' '              Date & Time conversion output
+SAVE_CLOCK_FIELD DC D'0'                                       @BA67523
+         SPACE ,
+STCKPARM STCKCONV MF=L             STCKCONV Plist
+         EJECT ,
+DFH$STCN DFHEIENT CODEREG=(R12)
+DFH$STCN AMODE 31
+DFH$STCN RMODE ANY
+***********************************************************************
+*   Get callers parameters, passed via commarea                       *
+*   If clock type not Stopwatch 'S', or Timestamp 'T'                 *
+*      then return to the caller.                                     *
+*   Convert STCK using MVS STCKCONV service                           *
+*   Edit converted date/time and move to output area                  *
+*   Return to caller                                                  *
+***********************************************************************
+         L     R1,DFHEICAP             GET ADDRESS OF COMMAREA
+         LR    R4,R1                   CALLERS PARAMETERS
+         USING CLOCK_FIELDS,R4         Addressability
+         MVI   CLOCK_OUTPUT,C' '       Initialise clock output area
+         MVC   CLOCK_OUTPUT+1(29),CLOCK_OUTPUT
+         SPACE ,
+         CLI   CLOCK_TYPE,C'S'         CLOCK TYPE = STOPWATCH format?
+         BE    FLDCLPRT                YES, BRANCH
+         CLI   CLOCK_TYPE,C'T'         CLOCK TYPE = TIMESTAMP format?
+         BE    FLDCLDBL                YES, BRANCH
+         B     RETURN                  NO, RETURN TO CALLER
+         EJECT ,
+***********************************************************************
+* Type 'S' stopwatch. For this type we are primarily concerned with   *
+* the time which is returned in hhhh:mm:ss.nnnnnn format.      @BA67523
+* The maximum value returned is 9999:59:59:999999.             @BA67523
+* In addition, the number of days is also returned.            @BA67523
+***********************************************************************
+FLDCLPRT DS    0H
+         MVC   SAVE_CLOCK_FIELD,CLOCK_FIELD Save Clock Field   @BA67523
+         CLC   SAVE_CLOCK_FIELD,=X'020BDE7363FFFFFF' Too big ? @BA67523
+         BNH   ORIGINAL_TIME                         No        @BA67523
+         MVC   SAVE_CLOCK_FIELD,=X'020BDE7363FFFFFF' Yes, Max  @BA67523
+ORIGINAL_TIME DS 0H                                            @BA67523
+         STCKCONV STCKVAL=SAVE_CLOCK_FIELD,CONVVAL=TODOP,              X
+               TIMETYPE=DEC,MF=(E,STCKPARM)                    @BA67523
+         MVC   TIMEWORK(16),=X'F021207A20207A20204B202020202020'
+         ED    TIMEWORK(16),TODOP      EDIT CONVERTED TIME
+         MVC   CLOCK_OUTPUT+12(15),TIMEWORK+1  MOVE TO OUTPUT FIELD
+         SPACE ,
+         LM    R2,R3,SAVE_CLOCK_FIELD  Use saved Clock Field   @BA67523
+         SRDL  R2,12                   Convert TOD unit to microsecs
+         SPACE
+         D     R2,=F'1000000'          Convert to seconds
+         SR    R2,R2                   Clear out remainder
+         D     R2,=F'3600'             Convert to hours
+         CVD   R3,CVDWORK              Convert to packed decimal form
+         UNPK  TIMEWORK(4),CVDWORK     Convert to character hours
+         OI    TIMEWORK+3,X'F0'        Make sure sign is ok
+         MVC   CLOCK_OUTPUT_TIME(4),TIMEWORK  hhhh's in here
+         SPACE ,
+         B     RETURN                  And return to the caller
+         SPACE ,
+***********************************************************************
+* Type 'T' timestamp                                                  *
+***********************************************************************
+FLDCLDBL DS    0H
+         STCKCONV STCKVAL=CLOCK_FIELD,CONVVAL=TODOP,DATETYPE=MMDDYYYY, X
+               TIMETYPE=DEC,MF=(E,STCKPARM)
+         MVC   DATEWORK(11),=X'F021206120206120202020'
+         ED    DATEWORK(11),TODOP+8    EDIT CONVERTED DATE
+         MVC   CLOCK_OUTPUT_DATE(10),DATEWORK+1 MOVE TO OUTPUT FIELD
+         MVC   TIMEWORK(16),=X'F021207A20207A20204B202020202020'
+         ED    TIMEWORK(16),TODOP      EDIT CONVERTED TIME
+         MVC   CLOCK_OUTPUT+12(15),TIMEWORK+1  MOVE TO OUTPUT FIELD
+         B     RETURN                  AND RETURN TO THE CALLER
+         SPACE ,
+RETURN   DS    0H                      RETURN TO THE CALLER
+         EXEC CICS RETURN
+         SPACE ,
+         DS    0D                      TOD CONSTANTS IN STCK UNITS
+MICSEC   DC    XL8'0000000000001000'   1 microsecond
+MILLISEC DC    XL8'00000000003E8000'   1 millisecond
+SECOND   DC    XL8'00000000F4240000'   1 second
+MINUTE   DC    XL8'0000003938700000'   1 minute
+HOUR     DC    XL8'00000D693A400000'   1 hour
+DAY      DC    XL8'000141DD76000000'   1 day
+YEAR     DC    XL8'01CAE8C13E000000'   365 days
+LEAPYEAR DC    XL8'01CC2A9EB4000000'   366 days
+         DS    0D
+         SPACE ,
+         LTORG ,
+         SPACE ,
+         END

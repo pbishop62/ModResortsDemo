@@ -1,0 +1,169 @@
+DFH$IQRR TITLE 'CICS INTERCOMMUNICATION SAMPLE - TS RECORD RETRIEVAL - *
+               REMOTE READ TS'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$IQRR                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Remote READ TS Sample Program                    *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1985, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*        INPUTS TO THIS PROGRAM         KEY OF RECORD REQUIRED        *
+*        ( RECEIVED FROM IQRL )         TS Q NAME TO SEARCH           *
+*                                       DRIVER TRANSACTIONS APPLID    *
+*                                       USERS TERMINAL ID             *
+*                                       RETURN TRANSACTION ID         *
+*                                                                     *
+*        OUTPUTS FROM THIS PROGRAM      REQUIRED RECORD ( + KEY )     *
+*        ( PASSED TO PROGRAM IQRD )       OR ERROR MESSAGE            *
+*                                       TS Q NAME REQUESTED           *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$IQRR),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= Z30    170 85     HD1XIC : CREATE BASE SOURCE               *
+*    $P0= M60198 320 900211 HD1SSMC: PROGRAM RESTRUCTURED             *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH$IQRR CSECT
+*
+***********************************************************************
+*        RETRIEVE THE DATA PASSED BY START FROM IQRL                  *
+***********************************************************************
+         EXEC CICS RETRIEVE INTO(DATAIN) RTRANSID(TRANIN)              *
+               RTERMID(TERMIN) QUEUE(QNAMEIN)
+*
+***********************************************************************
+*        TO OBTAIN THE SYSID TO RETURN TO, WE WILL USE THE 'EXTRACT   *
+*        TCT' COMMAND. WE SPECIFY THE NETNAME AS BEING THE APPLID     *
+*        THAT WAS PASSED TO US. THIS WILL YIELD THE SYSID THAT WE     *
+*        ASSOCIATE WITH THE RECEIVED APPLID.                          *
+***********************************************************************
+*
+         EXEC CICS EXTRACT TCT NETNAME(APPLIN) SYSID(SYSBK)
+*
+***********************************************************************
+*        FIND THE REQUIRED RECORD BY READING THROUGH THE QUEUE,       *
+*        AND COMPARING THE RECORD'S KEY WITH THE KEY SUPPLIED.        *
+***********************************************************************
+         XC    QRECNUM,QRECNUM          INITIALIZE TS Q ITEM NO.
+*
+READNEXT DS    0H
+         LH    R5,QRECNUM               INCREMENT TS Q ITEM NO.
+         LA    R5,1(R5)
+         STH   R5,QRECNUM
+*
+         EXEC CICS READQ TS QUEUE(QNAMEIN) SET(R6) LENGTH(RECLEN)      *
+               ITEM(QRECNUM) RESP(RESP)
+*
+         CLC   RESP,DFHRESP(NORMAL)     GOT A RECORD ?
+         BNE   CHKITEM                  NO, GO CHECK REASON ?
+*
+         CLC   KEYIN,0(R6)              IS THIS THE RIGHT RECORD ?
+         BNE   READNEXT                 NO, SO GO READ THE NEXT RECORD.
+         B     STARTBK                  YES, SO GO START TRANS.
+*
+***********************************************************************
+*        HANDLE NON NORMAL RESPONSE FROM READQ.                       *
+***********************************************************************
+CHKITEM  DS    0H
+         CLC   RESP,DFHRESP(ITEMERR)    GOOD Q ID, BUT REC. NOT FOUND ?
+         BNE   CHKQID                   NO, GO CHECK FOR BAD Q ID
+         MVC   EMESSAGE(L'NOTFDMSG),NOTFDMSG   SET UP ERROR MESSAGE
+         MVC   EMNFKEY,KEYIN                   INSERT KEY INTO MSG.
+         MVC   RECLEN,NFMLEN                   SET UP MSG. LENGTH
+         B     SENDERR
+*
+CHKQID   DS    0H
+         CLC   RESP,DFHRESP(QIDERR)           UNKNOWN QUEUE NAME ?
+         BNE   READQERR                       NO, GO SET BAD READQ MSG.
+         MVC   EMESSAGE(L'QIDERMSG),QIDERMSG   SET UP ERROR MESSAGE
+         MVC   EMBADQ,QNAMEIN                  INSERT Q NAME IN MSG.
+         MVC   RECLEN,QEMLEN                   SET UP MSG. LENGTH
+         B     SENDERR
+*
+READQERR DS    0H
+         MVC   EMESSAGE(L'RDQERMSG),RDQERMSG   SET UP ERROR MESSAGE
+         MVC   RECLEN,RDQMLEN                  SET UP MSG. LENGTH
+*
+SENDERR  DS    0H
+         MVC   EMKEY,KEYIN              MOVE KEY
+         LA    R6,ERRORMSG              ADDRESS DATA TO BE PASSED
+*
+***********************************************************************
+*        ISSUE START BACK TO USERS SYSTEM PASSING THE                 *
+*        REQUIRED RECORD OR EXPLANATORY ERROR MESSAGE.                *
+***********************************************************************
+STARTBK  DS    0H
+         EXEC CICS START TRANSID(TRANIN) TERMID(TERMIN) SYSID(SYSBK)   *
+               FROM(0(R6)) LENGTH(RECLEN) QUEUE(QNAMEIN)
+*
+***********************************************************************
+*        TERMINATE TRANSACTION.                                       *
+***********************************************************************
+         EXEC CICS RETURN
+         EJECT
+***********************************************************************
+*        CONSTANTS                                                    *
+***********************************************************************
+NOTFDMSG DC    C'RECORD WITH KEY ...... NOT FOUND'
+QIDERMSG DC    C'QUEUE NAME ........ IS NOT KNOWN'
+RDQERMSG DC    C'BAD RESPONSE TO READQ TS IN REMOTE IQRR TRANSACTION'
+NFMLEN   DC    AL2(L'EMKEY+L'NOTFDMSG)
+QEMLEN   DC    AL2(L'EMKEY+L'QIDERMSG)
+RDQMLEN  DC    AL2(L'EMKEY+L'RDQERMSG)
+*
+         LTORG
+         EJECT
+***********************************************************************
+*        EQUATES                                                      *
+***********************************************************************
+         DFHREGS                   REGISTER EQUATES
+         EJECT
+***********************************************************************
+*        WORKING STORAGE                                              *
+***********************************************************************
+DFHEISTG DSECT
+RESP     DS    F                   RESPONSES TO CICS COMMANDS
+*
+DATAIN   DS    0CL14               DATA RECEIVED FROM IQRL
+KEYIN    DS    CL6                 RECORD KEY RECEIVED
+APPLIN   DS    CL8                 APPLID PASSED TO FIND
+*
+TRANIN   DS    CL4                 TRANID TO START BACK TO
+TERMIN   DS    CL4                 TERMID TO PASS BACK
+QNAMEIN  DS    CL8                 QUEUE NAME TO BE SEARCHED
+SYSBK    DS    CL4                 SYSID TO RETURN TO
+*
+QRECNUM  DS    H                   NUMBER OF RECORD WITHIN QUEUE
+RECLEN   DS    H                   LENGTH OF DATA TO SEND
+*
+ERRORMSG DS    0CL80               ERROR MESSAGE
+EMKEY    DS    CL6                 RECORD KEY
+EMESSAGE DS    CL74                MESSAGE TEXT
+         ORG   EMESSAGE+16
+EMNFKEY  DS    CL6                 KEY OF NOT FOUND RECORD
+         ORG   EMESSAGE+11
+EMBADQ   DS    CL8                 NAME OF BAD Q ID
+         ORG
+*
+         END

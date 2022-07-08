@@ -1,0 +1,248 @@
+***********************************************************************
+*                                                                     *
+*   MODULE NAME = DFH$SXP2                                            *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (RDO) Sample Exit Program 2             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1989, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*        Provides a sample user exit suppressing a message by         *
+*        console route code.                                          *
+*                                                                     *
+*        This sample shows how to suppress messages from certain      *
+*        destinations, in this case, it suppresses messages from      *
+*        all destinations with route code 11.                         *
+*                                                                     *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*        None.                                                        *
+*                                                                     *
+*    RESTRICTIONS =                                                   *
+*        None.                                                        *
+*                                                                     *
+*    MODULE TYPE = Executable | Table                                 *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable, <Authorized>          *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* DESCRIPTION                                                         *
+*        See Title and Comments in code.                              *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFH$SXP2),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= 507    320 890811 HD5EISR: Implicit flag.                   *
+*    $L1= 807    650 050721 HD4PALS: Pass product id on XMEOUT exit   *
+*    $P1= M62307 320 900602 HD3BADW: Use UERCNORM and UERCBYP RC's    *
+*    $P2= M96433 510 960205 HD4PALS : Make RMODE ANY                  *
+*        R132499 710 161010 HD2GJST: Set rc in UEPCRCA if highest     *
+*                                                                     *
+***********************************************************************
+*/*(   Start of ABSTRACT commenting                     */
+**********************************************************
+* This instruction sets up the Sample user exit point.   *
+**********************************************************
+*
+         DFHUEXIT TYPE=EP,ID=XMEOUT
+*
+**********************************************************
+* The following DSECT maps a storage area you can use to *
+* make the exit program reentrant by storing the address *
+* of the storage you acquire in the first four bytes of  *
+* the 260-byte area provided by the user exit handler    *
+* (DFHUEH) and addressed by UEPXSTOR.                    *
+**********************************************************
+*
+TRANSTOR DSECT
+*
+**********************************************************
+* Register Equates                                       *
+**********************************************************
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+PMNTD    EQU   R3                  Number of TD Queues
+PMNRC    EQU   R4                  Number of route codes
+PMROU    EQU   R5                  Array of route codes
+ROUI     EQU   R6                  Work reg. to scan route code array
+COUNTER  EQU   R7                  Used as a counter in loops
+WKREG01  EQU   R8
+WKREG02  EQU   R9
+*
+**********************************************************
+* The next seven instructions form the normal start of a *
+* Sample user exit program, setting the addressing mode  *
+* to 31-bit, saving the calling program's registers,     *
+* establishing base addressing, and establishing the     *
+* addressing of the user exit parameter list             *
+**********************************************************
+DFH$SXP2 CSECT
+DFH$SXP2 AMODE 31
+DFH$SXP2 RMODE ANY                                                 @P2A
+         SAVE  (14,12)             SAVE REGISTERS
+         LR    R11,R15
+         USING DFH$SXP2,R11        SET UP PROGRAM BASE REGISTER
+         LR    R2,R1
+         USING DFHUEPAR,R2         ADDRESS USER EXIT PARAMETER LIST
+*
+**********************************************************
+* <<<<<< Section to be Modified by the Users.     >>>>>> *
+*                        START.                          *
+**********************************************************
+*
+**********************************************************         @L1A
+*/*|   Is the product ID 'DFH'? (is it a CICS message?) */         @L1A
+*/*|   If no, then we have no work to do, and exit      */         @L1A
+*/*|            Return code NORMAL                      */         @L1A
+**********************************************************         @L1A
+         L     R3,UEPCPID                                          @L1A
+         CLC   0(3,R3),=C'DFH'     Check Product Id                @L1A
+         BNE   RCNORMAL            If not DFH, then ret code normal@L1A
+**********************************************************
+*/*|   Is the number of route codes zero ?  NRC = 0 ?   */
+*/*|   If yes, then we have no work to do, and exit     */
+*/*|            Return code NORMAL                      */
+**********************************************************
+         L     PMNRC,UEPMNRC
+         CLC   0(2,PMNRC),=H'0'
+         BE    RCNORMAL
+**********************************************************
+*/*|   Set up route code array, and counter             */
+*/*|            a=ROU()    , i=1 , j=1 & b=length ROU(i)*/
+**********************************************************
+         L     PMROU,UEPMROU       Get address of Route code array
+         LR    ROUI,PMROU          Copy into work register
+         LA    COUNTER,1
+**********************************************************
+*/*|   Is current route code ROU(i) equal to 11?        */
+*/*|   If it is, we've found what we want               */
+*/*|   Otherwise...                                     */
+*/*|     Increase the counter, i=i+j                    */
+*/*|     Find next entry in array, a=a+b                */
+*/*|     Check for last entry in array                  */
+*/*|     ...and if not, check this entry                */
+**********************************************************
+SCANROU  DS    0H
+         CLI   0(ROUI),X'0B'                                       @P2C
+         BE    UPDATE
+         LA    COUNTER,1(COUNTER)
+         LA    ROUI,1(ROUI)
+         CH    COUNTER,0(PMNRC)
+         BNH   SCANROU
+         B     RCNORMAL
+**********************************************************
+*/*|   Now, check if it's the last entry of the array   */
+*/*|            ie    is i = NRC ?                      */
+*/*|   If it is, we dont need to move the entry         */
+*/*|   If not, we copy the last entry into the entry    */
+*/*|            we've found ie ROU(i) = ROU(NRC)        */
+**********************************************************
+UPDATE   DS    0H
+         CH    COUNTER,0(PMNRC)
+         BE    LAST
+         LH    WKREG01,0(PMNRC)
+         BCTR  WKREG01,0
+         LR    WKREG02,PMROU
+         AR    WKREG02,WKREG01
+         MVC   0(1,ROUI),0(WKREG02)
+**********************************************************
+*/*|   Decrease the number of route codes in the route  */
+*/*|            code array by one. NRC = NRC - 1        */
+**********************************************************
+LAST     DS    0H
+         LH    WKREG01,0(PMNRC)
+         BCTR  WKREG01,0
+         STH   WKREG01,0(PMNRC)
+**********************************************************
+*/*|   Is the number of route codes now zero ? NRC = 0 ?*/
+*/*|   If not, exit, return code NORMAL                 */
+*/*|   If yes, then we have 0 route codes,              */
+*/*|           so exit, return code BYPASS              */
+**********************************************************
+         CLC   0(2,PMNRC),=H'0'
+         BNE   RCNORMAL
+         BE    RCBYPASS
+**********************************************************
+*/*)   Otherwise, exit, return code NORMAL              */
+**********************************************************
+*
+**********************************************************
+*                         END.                           *
+* <<<<<< Section to be Modified by the Users.     >>>>>> *
+**********************************************************
+*
+**********************************************************
+*   RCNORMAL will set the return code to UERCNORM        *
+**********************************************************
+*
+RCNORMAL DS    0H
+         LA    R15,UERCNORM            Set Normal RC          @R132499C
+         B     STEND
+*
+**********************************************************
+*   RCBYPASS will set the return code to UERCBYP         *
+**********************************************************
+*
+RCBYPASS DS    0H
+         LA    R15,UERCBYP             Set Bypass RC          @R132499C
+         B     STEND
+*
+STEND    DS    0H
+**********************************************************
+* Compare my RC (R15) with previous RC.                  *
+* IF my RC = previous, send it.                          *
+* IF my RC < previous, send previous.                    *
+* IF my RC > previous, send mine, and update previous    *
+* to mine.                                               *
+**********************************************************
+         ICM   R14,15,UEPCRCA          Load previous RC addr  @R132499A
+         BZ    STEND2                  None - send my rc      @R132499A
+         CH    R15,0(,R14)             Compare RC with prev   @R132499A
+         BE    STEND2                  Equal - send mine      @R132499A
+         BL    STEND1                  Mine low - send prev   @R132499A
+         STH   R15,0(,R14)             Mine high set previous @R132499A
+         B     STEND2                  Go exit                @R132499A
+STEND1   DS    0H
+         LH    R15,0(,R14)             Get previous RC        @R132499A
+STEND2   DS    0H
+**********************************************************
+* Restore registers, set return code, and return to user *
+* exit handler.                                          *
+**********************************************************
+         L     R13,UEPEPSA
+         RETURN (14,12),RC=(15)
+         LTORG
+         END   DFH$SXP2

@@ -1,0 +1,410 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$PPLA                                           */
+ /*                                                                  */
+ /* Descriptive Name = Lookaside Query Sample Program                */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1984, 2012"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /*   CICS/VS BMS PARTITION SUPPORT SAMPLE PROGRAM                   */
+ /*                                                                  */
+ /*                                                                  */
+ /*   THIS PROGRAM DEMONSTRATES THE IMPLEMENTATION OF A POSSIBLE     */
+ /*   APPLICATION OF PARTITIONS  IN A CICS/VS TRANSACTION.  THE      */
+ /*   PROGRAM  USES  A PARTITION SET  CONTAINING A PARTITION FOR     */
+ /*   DATA-ENTRY  AND A PARTITION FOR LOOK-ASIDE QUERIES, EITHER     */
+ /*   OF WHICH CAN BE ENTERED AT ANY TIME.                           */
+ /*                                                                  */
+ /*                                                                  */
+ /*   PARTITION 'A' IS USED FOR ORDER ENTRY.  IT CONTAINS A          */
+ /*   SINGLE INOUT MAP 'MAPDE'.  THE TERMINAL OPERATOR NORMALLY      */
+ /*   WORKS WITH THIS PARTITION, BUT OCCASIONALLY NEEDS TO MAKE A    */
+ /*   'LOOK ASIDE' QUERY (E.G. ON PART AVAILABILITY OR PRICE) IN     */
+ /*   THE QUERY PARTITION, B.  THIS CONTAINS A SINGLE INOUT MAP      */
+ /*   'MAPQU'.  THE DATA SO FAR ENTERED IN THE ORDER ENTRY PARTITION */
+ /*   REMAINS UNCHANGED, WHILE THE QUERY IS ANSWERED.  AFTER EACH    */
+ /*   QUERY, THE CURSOR IS POSITIONED IN THE ORDER ENTRY             */
+ /*   PARTITION, FOR ORDER COMPLETION.                               */
+ /*                                                                  */
+ /*                                                                  */
+ /*                               PARTNSET: DFH$PS                   */
+ /*                       PARTN: A    PARTN: B    PARTN: P5          */
+ /*                                                                  */
+ /*    MAPSET: DFH$PGP                                               */
+ /*       MAP: MAPDE         X           -           -               */
+ /*       MAP: MAPQU         -           X           -               */
+ /*       MAP: MAPQC1        -           X           -               */
+ /*       MAP: MAPQC2        -           X           -               */
+ /*       MAP: PM01          -           -           X               */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                  DATA ENTRY.     */
+ /*                                                  """" """"""     */
+ /*   TO MAKE THE NEED FOR THIS FACILITY MORE APPARENT, THE ORDER-   */
+ /*   ENTRY MAP ALLOWS THE OPERATOR TO ENTER SEVERAL LINES OF        */
+ /*   ORDERS FOR ONE CUSTOMER ACCOUNT BEFORE SAVING ANYTHING. THE    */
+ /*   CUSTOMER ACCOUNT INFORMATION AND THE FOLLOWING LINE ORDER-     */
+ /*   ITEMS ARE SAVED IN A TEMPORARY STORAGE QUEUE.                  */
+ /*                                                                  */
+ /*                                                  QUERY MAP.      */
+ /*                                                  """"" """"      */
+ /*   ON THE ABOVE MENU, THE ITEMS ORDERED ARE IDENTIFIED BY A       */
+ /*   PART-NUMBER ONLY. FURTHER DETAILS ABOUT ITEMS AND CUSTOMERS    */
+ /*   MUST BE CHECKED BY REFERENCE TO THE QUERY PARTITION.  (THE     */
+ /*   INFORMATION COMES FROM A BOGUS DATA-BASE IN THE FORM OF        */
+ /*   STATIC VARIABLES IN THIS PROGRAM)                              */
+ /*                                                                  */
+ /*                                                                  */
+ /*   OUTPUT = TEMPORARY STORAGE QUEUE 'DFH$PPQ'                     */
+ /*                                                                  */
+ /*   EXTERNAL REFERENCES = PARTITION-SET 'DFH$PS'                   */
+ /*                           AND MAP-SET 'DFH$PGP'                  */
+ /*                                                                  */
+ /*   EXIT = RETURN TO CICS/VS                                       */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /* $SEG(DFH$PPLA),COMP(SAMPLES),PROD(CICS TS )                      */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 170 841030 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $D1= I07267 630 020418 HDHYJB : Compile all samples             */
+ /*       R40551 680 120423 HDLISJH: Remove *PROCESS                 */
+ /*                                                                  */
+ /********************************************************************/
+
+ PPLA: PROC OPTIONS(MAIN);
+ DCL
+   (ADDR, CSTG) BUILTIN,
+    RESPNUM FIXED BIN(15),
+    ERR_FLAG BIT(1) INIT('0'B);  /* ERROR FLAG */
+
+ /* * * * * * * * * * * * * * * * * * * * * */
+ /* LOAD THE PARTITION SET.                 */
+ /* * * * * * * * * * * * * * * * * * * * * */
+
+   EXEC CICS SEND PARTNSET('DFH$PS');
+ /* * * * * * * * * * * * * * * * * * * * * */
+ /* SEND THE ORDER ENTRY MAP                */
+ /* TO THE 'A' PARTITION, AND ACTIVATE IT.  */
+ /* * * * * * * * * * * * * * * * * * * * * */
+
+   DCL ORDER_NUMBER PIC'999999' INIT(0);
+   ORDER_NUMBER = ALLOCNUM('DFH$PPQ');
+
+   CALL NULLIT(ADDR(MAPDEO),CSTG(MAPDEO));
+   DEORDRNO = ORDER_NUMBER;
+   EXEC CICS SEND MAP('MAPDE') MAPSET('DFH$PGP') ERASE
+                     OUTPARTN('A') ACTPARTN('A');
+
+ /* * * * * * * * * * * * * * * * * * * * * */
+ /* SEND THE QUERY MAP TO THE 'B' PARTITION.*/
+ /* THE 'A' PARTITION IS STILL THE ACTIVE   */
+ /* PARTITION.                              */
+ /* * * * * * * * * * * * * * * * * * * * * */
+
+   CALL NULLIT(ADDR(MAPQUO),CSTG(MAPQUO));
+   EXEC CICS SEND MAP('MAPQU') MAPSET('DFH$PGP') ERASE
+                     OUTPARTN('B');
+
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * **/
+ /*THE CURSOR IS POSITIONED IN THE ORDER ENTRY PARTITION. THE APPRO- */
+ /* PRIATE MAPS ARE DISPLAYED IN EACH PARTITION. NOW ISSUE A RECEIVE */
+ /* PARTN TO DETERMINE IN WHICH PARTITION THE TERMINAL OPERATOR      */
+ /* ENTERED DATA.                                                    */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * **/
+
+   DCL LAST BIT(1) INIT('0'B);
+   DO WHILE(^LAST);
+
+     DCL AIP CHAR(2),
+         A1  CHAR(4095),
+         A1L FIXED BIN(15);
+     A1L = CSTG(A1);
+     A1  = '';
+
+     EXEC CICS HANDLE AID PF3(FIN);
+     EXEC CICS RECEIVE PARTN(AIP) INTO(A1) LENGTH(A1L);
+
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * **/
+ /* TEST THE ACTUAL INPUT PARTITION. IF IT WAS THE ORDER ENTRY       */
+ /*PARTITION, THEN PROCESS THE ORDER, AND RESEND THE ORDER ENTRY MAP.*/
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * **/
+
+     DCL WOCODE FIXED BIN(15); /* VALIDITY INDICATOR FOR 'WRITEOUT' */
+     IF AIP = 'A'
+     THEN DO;
+       /* * * * * * * * * * * * * * */
+       /*    PROCESS DATA ENTRY     */
+       /* * * * * * * * * * * * * * */
+
+       EXEC CICS RECEIVE MAP('MAPDE') MAPSET('DFH$PGP')
+                      FROM(A1) RESP(RESPNUM);
+
+  /* CLEAR ERROR PARTITION IF AN ERROR HAS BEEN SENT               */
+       IF ERR_FLAG
+       THEN DO;
+         ERR_FLAG = ^ERR_FLAG;
+         EXEC CICS SEND CONTROL ERASE OUTPARTN('P5');
+       END;
+
+       IF RESPNUM = DFHRESP(MAPFAIL)
+       THEN DO;
+         PMM1O = 'ENTER DATA OR PF3 TO QUIT';
+         EXEC CICS SEND MAP('PM01') MAPSET('DFH$PGP') OUTPARTN('P5');
+         ERR_FLAG = '1'B;      /* SET ERROR FLAG TRUE */
+       END;
+
+       ELSE DO;
+         WOCODE = WRITEOUT('DFH$PPQ',ORDER_NUMBER,
+                           DECUSTAI,ADDR(DEPNUM1L));
+
+         /* * * * * * * * * * * * * * */
+         /* REINITIALISE THE ORDER    */
+         /* ENTRY PARTITION, AND ACT- */
+         /* IVATE IT.                 */
+         /* * * * * * * * * * * * * * */
+
+         ORDER_NUMBER = ALLOCNUM('DFH$PPQ'); /* ASSIGN A NEW NUMBER */
+       END;
+
+       CALL NULLIT(ADDR(MAPDEO),CSTG(MAPDEO));
+       DEORDRNO = ORDER_NUMBER;
+       EXEC CICS SEND MAP('MAPDE') MAPSET('DFH$PGP')
+                         OUTPARTN('A') ACTPARTN('A')
+                         ERASE FREEKB;
+     END; /* IF AIP = 'A' */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * **/
+ /*THE DATA WAS ENTERED FROM THE QUERY PARTITION. PROCESS THE QUERY, */
+ /* DISPLAY THE RESULT, AND ACTIVATE THE ORDER ENTRY PARTITION.      */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * **/
+
+     ELSE /* IF AIP ^= 'A' */
+     DO;
+       /* * * * * * * * * * * * * * */
+       /* OBTAIN THE DATA ENTERED   */
+       /* IN THE QUERY PARTITION    */
+       /* AND REACTIVATE THE DATA-  */
+       /* ENTRY PARTITION.          */
+       /* * * * * * * * * * * * * * */
+
+       EXEC CICS RECEIVE MAP('MAPQU') MAPSET('DFH$PGP')
+                      FROM(A1);
+
+  /* CLEAR ERROR PARTITION IF AN ERROR HAS BEEN SENT               */
+       IF ERR_FLAG
+       THEN DO;
+         ERR_FLAG = ^ERR_FLAG;
+         EXEC CICS SEND CONTROL ERASE OUTPARTN('P5');
+       END;
+
+       EXEC CICS SEND CONTROL WAIT
+                         FREEKB OUTPARTN(AIP)
+                         ACTPARTN('A');
+
+       /* * * * * * * * * * * * * * */
+       /*    PROCESS QUERY:         */
+       /* SEND QUERY RESPONSE AND   */
+       /* ACTIVATE THE DATA ENTRY   */
+       /* PARTITION TO ALLOW THE    */
+       /* OPERATOR TO COMPLETE THE  */
+       /* ORDER. THE OPERATOR MAY,  */
+       /* OF COURSE, JUMP BACK TO   */
+       /* TO THE QUERY PARTITION,   */
+       /* AND ENTER ANOTHER QUERY.  */
+       /* * * * * * * * * * * * * * */
+
+
+       IF QUTYPEI = 'CUST'
+       THEN CALL QCUST(QUNUMBI);
+       ELSE
+         IF QUTYPEI = 'PART'
+         THEN CALL QPART(QUNUMBI);
+         ELSE DO; /* QUTYPEI IS INVALID */
+           PMM1O = 'INVALID QUERY TYPE - ENTER ''PART'' OR ''CUST''';
+           ERR_FLAG = '1'B;
+           EXEC CICS SEND MAP('PM01') MAPSET('DFH$PGP')
+                             OUTPARTN('P5');
+         END; /* QUTYPEI IS INVALID */
+
+       CALL NULLIT(ADDR(MAPQUO),CSTG(MAPQUO));
+       QUTYPEL = -1;
+       EXEC CICS SEND MAP('MAPQU') MAPSET('DFH$PGP')
+                         OUTPARTN('B');
+     END; /* IF AIP ^= 'A' */
+   END; /* DO WHILE(^LAST) */
+
+ FIN:
+    EXEC CICS SEND CONTROL FREEKB ERASE OUTPARTN('A');
+    EXEC CICS SEND CONTROL FREEKB ERASE OUTPARTN('B');
+    EXEC CICS RETURN;
+
+ QPART:
+    PROC(NUMBER);
+      DCL NUMBER CHAR(6);
+      CALL NULLIT(ADDR(MAPQC2O),CSTG(MAPQC2O));
+      QC2PNO        = '987987';
+      QC2WLO        = '22';
+      QC2SU1O(1)       = '678876';
+      QC2SU1O(2)       = '765765';
+      QC2SU1O(3)       = '465768';
+      QC2SU2O(1)       = '876678';
+      QC2SU2O(2)       = '567567';
+      QC2SU2O(3)       = '867564';
+      QC2QUA1O = '100';               QC2PRI1O = '50';
+      QC2QUA2O = '1000';              QC2PRI2O = '45';
+      QC2QUA3O = '10000';             QC2PRI3O = '35';
+      EXEC CICS SEND MAP('MAPQC2') MAPSET('DFH$PGP')
+                        OUTPARTN('B')
+                        ERASE
+                        ;
+    END QPART; /* QUTYPEI = 'PART' */
+
+ QCUST: /* HANDLE A CUSTOMER QUERY */
+    PROC(NUMBER);
+      DCL NUMBER CHAR(6);
+      CALL NULLIT(ADDR(MAPQC1O),CSTG(MAPQC1O));
+
+      QC1NUMO     = '926537';
+      QC1NAMEO = 'BLOGGS INVESTMENTS.';
+      QC1ADD1O = 'CUBIST HOUSE,';
+      QC1ADD2O = 'WRIGHT SQUARE,';
+      QC1ADD3O = 'BLOXHAM,';
+      QC1ADD4O = 'WILTS.';
+      QC1STATO = 'PD';
+      EXEC CICS SEND MAP('MAPQC1') MAPSET('DFH$PGP')
+                        OUTPARTN('B')
+                        ERASE
+                        ;
+    END QCUST;
+
+     DCL
+       1 OUTREC,
+         2 ONUM PIC'999999',
+         2 CNUM CHAR(6),
+         2 PNUM CHAR(6),
+         2 AMNT CHAR(6),
+         2 WNUM CHAR(2);
+
+ ALLOCNUM:
+ /** * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /* ALLOCATE AN ORDER NUMBER.                                        */
+ /** * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+   PROC(QNAME) RETURNS(PIC'999999');
+     DCL
+       QNAME CHAR(8),
+       QNUMBER FIXED BIN(15);
+     QNUMBER = 1;
+     EXEC CICS READQ TS
+                     QUEUE(QNAME)
+                     INTO(OUTREC)
+                     LENGTH(CSTG(OUTREC))
+                     ITEM(QNUMBER)
+                     RESP(RESPNUM)
+                     ;
+     IF RESPNUM = DFHRESP(QIDERR)
+        THEN DO;                  /* CREATE TEMPORARY STORAGE QUEUE */
+             OUTREC.ONUM = 1;
+             EXEC CICS WRITEQ TS
+                             QUEUE(QNAME)
+                             FROM(OUTREC)
+                             LENGTH(CSTG(OUTREC))
+                             ITEM(QNUMBER)
+                             MAIN
+                             ;
+             END;
+        ELSE DO;
+             OUTREC.ONUM = OUTREC.ONUM + 1;
+             EXEC CICS WRITEQ TS
+                             QUEUE(QNAME)
+                             FROM(OUTREC)
+                             LENGTH(CSTG(OUTREC))
+                             ITEM(QNUMBER) REWRITE
+                             MAIN
+                             ;
+             END;
+     RETURN(OUTREC.ONUM);
+   END ALLOCNUM;
+
+ WRITEOUT:
+ /** * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /* EXAMINE THE ORDER ENTRY DATA, AND REJECT IT BY RETURNING '1', OR */
+ /* ACCEPT IT, SAVE THE INDIVIDUAL ORDERS, AND RETURN '0'.           */
+ /** * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+   PROC(QNAME,ONUM,CNUM,ENTRYPTR)
+                   RETURNS(FIXED BIN(15));
+     DCL
+       QNAME CHAR(8),
+       ONUM PIC'999999',
+       CNUM CHAR(6),
+       ENTRYPTR PTR,
+       1 ETABLE BASED(ENTRYPTR) UNAL,
+         2 ENTRY(8),
+           4 DEPNUM,
+             6 LENGTH FIXED BINARY (15,0),
+             6 FLAG CHARACTER (1),
+             6 PARTNUM CHAR(6),
+           4 DENUMB,
+             6 LENGTH FIXED BINARY (15,0),
+             6 FLAG CHARACTER (1),
+             6 AMOUNT CHAR(6),
+           4 DEWKNM,
+             6 LENGTH FIXED BINARY (15,0),
+             6 FLAG CHARACTER (1),
+             6 WNUM CHAR(2);
+     DO I = 1 TO 8 WHILE(ETABLE.DEPNUM.LENGTH(I) ^= 0
+                        &ETABLE.DENUMB.LENGTH(I) ^= 0
+                        &ETABLE.DEWKNM.LENGTH(I) ^= 0);
+       IF ETABLE.PARTNUM(I) = '555555'
+                                 /* CHECK BOGUS FAILURE CONDITION */
+       THEN RETURN(1); /* RETURN ^0 VALUE */
+       OUTREC.ONUM = ONUM; OUTREC.CNUM = CNUM;
+       OUTREC.PNUM = ETABLE.PARTNUM(I);
+       OUTREC.AMNT = ETABLE.AMOUNT(I);
+       OUTREC.WNUM = ETABLE.WNUM(I);
+       EXEC CICS WRITEQ TS
+                       QUEUE(QNAME)
+                       FROM(OUTREC)
+                       LENGTH(CSTG(OUTREC))
+                       MAIN
+                       ;
+     END;
+       /* DO I = 1 TO 8 WHILE(SUBSTR(ETABLE.PARTNUM(I),1,1) ^= ' ') */
+     RETURN(0); /* RETURN 0 */
+
+   END WRITEOUT;
+
+ NULLIT:
+   PROC(@PTR,@LEN);
+     DCL
+       (SUBSTR, LOW) BUILTIN;
+
+     DCL
+       @PTR PTR,
+       @LEN FIXED BIN(15),
+       @DUMM CHAR(256) BASED(@PTR);
+
+     SUBSTR(@DUMM,1,@LEN) = LOW(@LEN);
+
+   END NULLIT;
+
+     %INCLUDE DFH$PGP;
+
+ END PPLA;

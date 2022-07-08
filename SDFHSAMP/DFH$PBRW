@@ -1,0 +1,539 @@
+*PROCESS XOPTS(CICS) SYSTEM(CICS) CSECT LIST;                  /*@P4C*/
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$PBRW                                           */
+ /*                                                                  */
+ /* Descriptive Name = File Browse for Sample Application            */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1984, 2005"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /* $SEG(DFH$PBRW),COMP(SAMPLES),PROD(CICS TS ):                     */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXXIII: REMARKS                         */
+ /*  $P0= Mnnnnn 170 840814 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $P2= D07897 630 030622 HDHYJB : Increase length of STRING       */
+ /*  $P3= D08836 630 031020 HD2JPEH: Change translator options       */
+ /*  $P4= D13298 640 050131 HD6KRAH: pp options in samples           */
+ /*  $D1= I07267 630 020418 HDHYJB : Compile all samples             */
+ /*                                                                  */
+ /********************************************************************/
+ BROWSE:PROC(COMPOINT) OPTIONS(MAIN);
+   %INCLUDE DFHBMSCA;                  /*STANDARD ATTRIBUTE CHARACTERS*/
+   %INCLUDE DFH$PFIL;                  /*FILEA RECORD DESCRIPTION     */
+   %INCLUDE DFH$PGA;                   /*'GENERAL MENU'=MAP'A'        */
+   %INCLUDE DFH$PGC;                   /*'BROWSE FILEA'=MAP'B'        */
+   %INCLUDE DFHAID;                    /*ATTENTION ID. VALUES         */
+
+   DCL                                 /*BUILT IN FUNCTIONS           */
+     (ADDR,
+      HIGH,
+      LOW,
+      STG,
+      SUBSTR,
+      VERIFY) BUILTIN;
+
+   DCL     COMPOINT PTR;
+   DCL 1 COMMAREA BASED(COMPOINT),           /*USED AS COMM. AREA     */
+          2 STATUS CHAR(1),                  /*HI/LO (H/L) END OF FILE*/
+          2 RIDB   PIC '(6)9',               /*FOR BUILDING PREV PAGE*/
+          2 RIDF   PIC '(6)9';               /*FOR BUILDING NEXT PAGE*/
+
+   DCL MESSAGES  CHAR(39)     INIT('');
+   DCL STRING    CHAR(1024)   BASED;                        /* @P2C */
+   DCL CURROP    CHAR(1)      INIT('F');     /*GOING FWD/BCK (F/B)*/
+   DCL RESPONSE  FIXED BIN(31);             /*RESPONSE TO CICS CMDS*/
+   /*                                                                 */
+   /* TRAP UNEXPECTED ERRORS                                          */
+   /*                                                                 */
+   /* AN EXIT IS SET UP TO TRAP ANY UNEXPECTED ERRORS. NOTE THAT ALL  */
+   /* OTHER ERRORS ARE DETECTED EXPLICITLY BY THE PROGRAM BY SPECIFY- */
+   /* ING THE "RESP" OPTION ON "CICS" COMMANDS.                       */
+   /*                                                                 */
+   EXEC CICS HANDLE CONDITION ERROR(OTHER_ERRORS);
+   /*                                                                 */
+   /* THE LENGTH OF THE "COMMAREA" IS TESTED. IF ZERO THEN THIS MUST  */
+   /* BE THE FIRST INVOCATION OF THE PROGRAM AND THE OPERATOR INSTRUC-*/
+   /* TION SCREEN MUST BE RECEIVED, CONTAINING THE ACCOUNT NUMBER.    */
+   /*                                                                 */
+   IF EIBCALEN = 0 THEN DO;                 /*MUST BE FIRST INVOCATION*/
+      ALLOCATE COMMAREA;
+      /*                                                              */
+      /* THIS COMMAND MAPS IN THE ACCOUNT NUMBER FROM THE OPERATOR    */
+      /* INSTRUCTION SCREEN.                                          */
+      /*                                                              */
+      EXEC CICS RECEIVE MAP('DFH$PGA') RESP(RESPONSE);
+      /*                                                              */
+      /* CHECK   RESPONSE  TO COMMAND                                 */
+      /*                                                              */
+      IF RESPONSE = DFHRESP(MAPFAIL) THEN DO;  /* MAPFAIL RESPONSE    */
+         CALL SMSG;
+         EXEC CICS RETURN;
+      END;
+      IF RESPONSE ^= DFHRESP(NORMAL) THEN DO;  /* UNEXPECTED ERROR   */
+         CALL ERRORS;
+         EXEC CICS RETURN;
+      END;
+
+ /*********************************************************************/
+ /*                                    SIMPLE CHECKS OF INPUT DATA    */
+ /*********************************************************************/
+      SELECT(KEYL);
+        WHEN(0)                                   /*DEFAULT=000000  */
+                   /*                                                 */
+                   /* IF NO ACCOUNT NUMBER IS ENTERED, BROWSING BEGINS*/
+                   /* AT THE START OF THE FILE.                       */
+                   /*                                                 */
+                   RIDF=000000;
+        OTHERWISE
+                 DO;
+                   /*                                                 */
+                   /* IF THE FORMAT OF THE ACCOUNT NUMBER IS VALID THE*/
+                   /* NUMBER IS USED TO SET THE PROGRAM'S BROWSE      */
+                   /* POINTERS, OTHERWISE AN ERROR MESSAGE IS DIS-    */
+                   /* PLAYED ON THE OPERATOR INSTRUCTION MENU.        */
+                   /*                                                 */
+                   IF VERIFY(KEYI,'0123456789')=0 THEN
+                     DO;                          /* OK - KEY NUMERIC */
+                       RIDF=KEYI;
+                       RIDB=KEYI;
+                     END;
+                   ELSE
+                     DO;                          /* NON-NUMERIC KEY  */
+                       MESSAGES='ACCOUNT NUMBER MUST BE NUMERIC';
+                       CALL PMNU;
+                       EXEC CICS RETURN;
+                     END;
+                 END;  /* OTHERWISE */
+      END;  /* SELECT */
+      /*                                                              */
+      /* ENTERING THE MAXIMUM VALUE (999999) FOR THE ACCOUNT NUMBER   */
+      /* BEGINS A BACKWARD BROWSE FROM THE END OF THE FILE            */
+      /*                                                              */
+      IF RIDF=999999 THEN DO;             /* TOP END OF FILE-PAGE BACK*/
+         STATUS = 'H';
+         CALL PAGE_BACKWARD;
+      END;
+      ELSE CALL PAGE_FORWARD;
+   END; /* IF EIBCALEN = 0 */
+   /*                                                                 */
+   /* IF THE LENGTH OF THE "COMMAREA" IS NOT ZERO, THEN THE RECORD    */
+   /* DISPLAY MAP (DFH$PGC) MUST BE RECEIVED, AS THIS CONTAINS THE    */
+   /* NEXT OPERATOR INSTRUCTION.                                      */
+   /*                                                                 */
+   ELSE DO;                              /* EIBCALEN /= 0             */
+         EXEC CICS RECEIVE MAP('DFH$PGC') RESP(RESPONSE);
+      /*                                                              */
+      /*  CHECK USER RESPONSE                                         */
+      /*                                                              */
+      SELECT(EIBAID);
+         /*                                                           */
+         /* IF THE "CLEAR" WAS PRESSED THEN THE MENU SCREEN WILL BE   */
+         /* REDISPLAYED AND THE TRANSACTION TERMINATES BY RETURNING   */
+         /* CONTROL TO "CICS". NO "COMMAREA" OR TRANSACTION IDENTI-   */
+         /* FIER IS SPECIFIED.                                        */
+         /*                                                           */
+         WHEN(DFHCLEAR)
+                       /*                                             */
+                       /* CLEAR KEY PRESSED                           */
+                       /*                                             */
+                       DO;
+                         CALL SMSG;
+                         EXEC CICS RETURN;
+                       END;
+         /*                                                           */
+         /* IF PF1 WAS PRESSED THEN THE PROGRAM BROWSES BACK AND      */
+         /* DISPLAYS THE PREVIOUS FOUR RECORDS.                       */
+         /*                                                           */
+         WHEN(DFHPF1)
+                       /*                                             */
+                       /* PF1 KEY PRESSED                             */
+                       /*                                             */
+                       CALL PAGE_FORWARD;
+         /*                                                           */
+         /* IF PF2 WAS PRESSED THEN THE PROGRAM BROWSES FORWARD AND   */
+         /* DISPLAYS THE NEXT FOUR RECORDS.                           */
+         /*                                                           */
+         WHEN(DFHPF2)
+                       /*                                             */
+                       /* PF2 KEY PRESSED                             */
+                       /*                                             */
+                       CALL PAGE_BACKWARD;
+         OTHERWISE
+                       /*                                             */
+                       /* CHECK FOR MAPFAIL, 'F' AND 'B', UNKNOWN KEY */
+                       /*                                             */
+                       /* TYPING "F" OR "B" RESULTS IN A FORWARD OR   */
+                       /* BACKWARD BROWSE RESPECTIVELY. ANY OTHER     */
+                       /* RESPONSE IS IGNORED, AND THE SCREEN REDIS-  */
+                       /* PLAYED. CONTROL IS RETURNED TO CICS ALONG   */
+                       /* WITH A "COMMAREA" AND TRANSACTION IDENTIFIER*/
+                       /* FOR THE NEXT TRANSACTION TO BE RUN AT THIS  */
+                       /* TERMINAL. THE "COMMAREA" CONTAINS THE       */
+                       /* PROGRAM'S BROWSE POINTERS SO THAT NEXT      */
+                       /* INVOCATION OF THE PROGRAM KNOWS WHERE TO    */
+                       /* START THE BROWSE ON THE FILE IN ORDER TO    */
+                       /* BROWSE FORWARD OR BACK FROM THIS POSITION.  */
+                       /*                                             */
+                       DO;
+                         IF RESPONSE = DFHRESP(MAPFAIL) THEN DO;
+                            CALL SMSG;
+                            EXEC CICS RETURN;
+                         END;
+                       IF DIRI='F' THEN CALL PAGE_FORWARD;
+                       ELSE IF DIRI='B' THEN CALL PAGE_BACKWARD;
+                            ELSE DO;
+                                   EXEC CICS SEND MAP('DFH$PGC');
+                                   EXEC CICS RETURN TRANSID(EIBTRNID)
+                                        COMMAREA(COMMAREA) LENGTH(13);
+                            END;
+                       END;
+      END; /* SELECT*/
+   END; /* EIBCALEN /= 0 */
+
+ /***************************************************************/
+ /*   CHECK RESPONSES FROM CICS COMMANDS ISSUED BY PROCEDURES   */
+ /*   READNEXT/READPREV AND PAGE_FORWARD/PAGE_BACKWARD          */
+ /***************************************************************/
+
+   IF RESPONSE^= DFHRESP(NORMAL) THEN
+      SELECT(RESPONSE);
+        /*                                                            */
+        /* THE RESPONSES TO THE CICS COMMANDS ISSUED IN THE PROCEDURES*/
+        /* "READNEXT", "READPREV", "PAGE_FORWARD" AND "PAGE_BACKWARD" */
+        /* ARE TESTED. THESE PROCEDURES EXIT IMMEDIATELY WHEN A CICS  */
+        /* COMMAND RETURNS A RESPONSE OTHER THAN "NORMAL".            */
+        /*                                                            */
+        WHEN(DFHRESP(NOTFND))
+                             /*                                       */
+                             /* RECORD NOT FOUND                      */
+                             /*                                       */
+                             DO;
+                               CALL NOTFOUND;
+                               EXEC CICS RETURN;
+                             END;
+        WHEN(DFHRESP(ENDFILE))
+                               /*                                     */
+                               /* END OF FILE ENCOUNTERED             */
+                               /*                                     */
+                               IF CURROP = 'F' THEN CALL TOOHIGH;
+                               ELSE CALL TOOLOW;
+        OTHERWISE
+                 /*                                                   */
+                 /* AN UNEXPECTED ERROR HAS OCCURRED                  */
+                 /*                                                   */
+                 DO;
+                   CALL ERRORS;
+                   EXEC CICS RETURN;
+                 END;
+      END;
+   /*                                                                 */
+   /* SEND BROWSE MAP AND RETURN CONTROL TO CICS WITH COMM. AREA      */
+   /*                                                                 */
+   /* THE SCREEN IS ERASED AND THE FULL PAGE IS DISPLAYED AT THE      */
+   /* TERMINAL. CONTROL IS RETURNED TO CICS ALONG WITH A "COMMAREA"   */
+   /* CONTAINING THE PROGRAMS BROWSE POINTERS AND A TRANSACTION IDEN- */
+   /* TIFIER FOR THE NEXT TRANSACTION TO BE RUN AT THIS TERMINAL.     */
+   /*                                                                 */
+   EXEC CICS SEND MAP('DFH$PGC') ERASE;
+   EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA) LENGTH(13);
+ /*********************************************************************/
+ /*                                    HANDLE PAGING REQUESTS         */
+ /*********************************************************************/
+ PAGE_FORWARD: PROC;
+   CURROP='F';
+   SUBSTR(ADDR(DFH$PGCO)->STRING,1,STG(DFH$PGCO)) = LOW(STG(DFH$PGCO));
+                                       /*RESET FIELDS + ATTRB IN MAP C*/
+   /*                                                                 */
+   /* START BROWSE AT RECORD 'POINTED' TO BY RIDF                     */
+   /* THE "STARTBR" COMMAND ESTABLISHES THE BROWSE STARTING POINT.    */
+   /*                                                                 */
+   EXEC CICS STARTBR FILE('FILEA') RIDFLD(RIDF) RESP(RESPONSE);
+   /*                                                                 */
+   /* CHECK RESPONSE TO COMMAND - RETURN IF NOT NORMAL                */
+   /*                                                                 */
+   IF RESPONSE ^= DFHRESP(NORMAL) THEN RETURN;
+   /*                                                                 */
+   /* INCLUDE RECORD POINTED TO BY RIDF ON SCREEN IF RIDF IS 000000   */
+   /* OR THIS IS 1ST PROGRAM INVOCATION                               */
+   /*                                                                 */
+   IF RIDF = 000000 | EIBCALEN = 0 THEN DO;
+      /*                                                              */
+      /* IF THIS IS THE FIRST INVOCATION OF THE PROGRAM OR THE BROWSE */
+      /* IS STARTING FROM THE LOW END OF THE FILE, THEN THE PROCEDURE */
+      /* "BUILDNEXT" BUILDS A PAGE FOR DISPLAY.                       */
+      /*                                                              */
+      CALL BUILDNEXT;
+      RETURN;
+   END;
+   /*                                                                 */
+   /* READ AND DISCARD RECORD POINTED TO BY RIDF                      */
+   /*                                                                 */
+   /* THE RECORD WHOSE KEY IS CONTAINED IN "RIDF" IS READ FROM THE    */
+   /* FILE. IT WILL NOT APPEAR ON THE SCREEN WHEN MAP "DFH$PGC" IS    */
+   /* DISPLAYED.                                                      */
+   /*                                                                 */
+   CALL READNEXT;
+   /*                                                                 */
+   /* BUILD NEXT PAGE IF RESPONSE FROM READNEXT IS OK                 */
+   /* THE PROCEDURE "BUILDNEXT" IS CALLED TO BUILD THE NEXT PAGE FOR  */
+   /* DISPLAY.                                                        */
+   /*                                                                 */
+   IF RESPONSE = DFHRESP(NORMAL) THEN CALL BUILDNEXT;
+ END PAGE_FORWARD;
+ PAGE_BACKWARD: PROC;
+   /*                                                                 */
+   /* THE BACKWARD BROWSE PROCEDURE IS SIMILAR TO THE FORWARD BROWSE. */
+   /*                                                                 */
+   CURROP='B';
+   SUBSTR(ADDR(DFH$PGCO)->STRING,1,STG(DFH$PGCO)) = LOW(STG(DFH$PGCO));
+                                       /*RESET FIELDS + ATTRB IN MAP C*/
+   /*                                                                 */
+   /* START BROWSE AT RECORD 'POINTED' TO BY RIDB                     */
+   /*                                                                 */
+   EXEC CICS STARTBR  FILE('FILEA') RIDFLD(RIDB) RESP(RESPONSE);
+   /*                                                                 */
+   /* CHECK RESPONSE TO COMMAND - RETURN IF NOT NORMAL                */
+   /*                                                                 */
+   IF RESPONSE ^= DFHRESP(NORMAL) THEN RETURN;
+   /*                                                                 */
+   /* INCLUDE RECORD POINTED TO BY RIDB ON SCREEN IF TOP END OF FILE  */
+   /* HAS BEEN REACHED                                                */
+   /*                                                                 */
+   IF STATUS = 'H' THEN DO;
+      STATUS = ' ';
+      CALL BUILDPREV;
+      RETURN;
+   END;
+   /*                                                                 */
+   /* READ AND DISCARD RECORD POINTED TO BY RIDB                      */
+   /*                                                                 */
+   CALL READPREV;
+   /*                                                                 */
+   /* BUILD PREVIOUS PAGE IF RESPONSE FROM READPREV IS OK             */
+   /*                                                                 */
+   IF RESPONSE = DFHRESP(NORMAL) THEN CALL BUILDPREV;
+ END PAGE_BACKWARD;
+
+ /*********************************************************************/
+ /*                                    HANDLE END OF FILE CONDITIONS  */
+ /*********************************************************************/
+
+ TOOHIGH: PROC;
+   /*                                                                 */
+   /* IF THE END OF FILE IS REACHED ON A "READNEXT", ANY RECORDS READ */
+   /* TO THAT POINT ARE DISPLAYED TOGETHER WITH A HIGHLIGHTED MESSAGE */
+   /* "HI-END OF FILE".                                               */
+   /*                                                                 */
+   STATUS='H';
+   RIDB  = RIDF;                         /* UPDATE RIDB FIELD */
+   DIRO  = ' ';
+   MSG1O='HI-END OF FILE';
+   MSG1A=DFHBMASB;
+   END TOOHIGH;
+
+ TOOLOW: PROC;
+   /*                                                                 */
+   /* IF THE START OF FILE IS REACHED ON A "READPREV" (BACKWARD       */
+   /* BROWSE) THEN THE "ENDFILE" CONDITION OCCURS AND "TOOLOW" GETS   */
+   /* CONTROL. ANY RECORDS READ UP TO THAT POINT ARE DISPLAYED,       */
+   /* TOGETHER WITH A HIGHLIGHTED MESSAGE "LO-END OF FILE".           */
+   /*                                                                 */
+   STATUS='L';
+   RIDF  = 000000;                       /* UPDATE RIDF FIELD */
+   RIDB  = 000000;                       /* UPDATE RIDB FIELD */
+   DIRO  = ' ';
+   MSG2O='LO-END OF FILE';
+   MSG2A=DFHBMASB;
+   END TOOLOW;
+ /*********************************************************************/
+ /*                                    HANDLE GENERAL CONDITIONS      */
+ /*********************************************************************/
+ NOTFOUND: PROC;
+   /*                                                                 */
+   /* IF THE "NOTFND" CONDITION OCCURS AT THE START BROWSE, THE       */
+   /* MESSAGE "END OF FILE - PLEASE RESTART" IS MOVED TO "MESSAGES"   */
+   /* FOR DISPLAY ON THE OPERATOR INSTRUCTION SCREEN.                 */
+   /*                                                                 */
+   MESSAGES='END OF FILE - PLEASE RESTART';
+   EXEC CICS ENDBR FILE('FILEA');
+   CALL PMNU;
+   END NOTFOUND;
+ SMSG: PROC;
+   /*                                                                 */
+   /* IF THE "CLEAR" KEY ES PRESSED OR WHEN A "MAPFAIL" OCCURS A      */
+   /* MESSAGE "PRESS CLEAR TO EXIT" IS MOVED TO "MESSAGES" FOR DISPLAY*/
+   /* ON THE OPERATOR  INSTRUCTION SCREEN.                            */
+   /*                                                                 */
+   MESSAGES='PRESS CLEAR TO EXIT';
+   CALL PMNU;
+   END SMSG;
+ ERRORS: PROC;                         /* HANDLE GENERAL ERRORS       */
+   /*                                                                 */
+   /* IN SOME ERROR SITUATIONS A DUMP IS TAKEN AND THE MESSAGE        */
+   /* "TRANSACTION TERMINATED" IS MOVED TO "MESSAGES" FOR DISPLAY     */
+   /* ON THE OPERATOR  INSTRUCTION SCREEN.                            */
+   /*                                                                 */
+   EXEC CICS DUMP DUMPCODE('ERRS');
+   MESSAGES='TRANSACTION TERMINATED';
+   CALL PMNU;
+   END ERRORS;
+ OTHER_ERRORS:                         /* HANDLE UNEXPECTED ERRORS    */
+   CALL ERRORS;
+   EXEC CICS RETURN;
+ /*********************************************************************/
+ /*                                     DISPLAY GENERAL MENU          */
+ /*********************************************************************/
+ PMNU: PROC;
+   /*                                                                 */
+   /* THIS CODE DISPLAYS THE OPERATOR INSTRUCTION MENU WITH A MESSAGE */
+   /* WHICH HAS BEEN STORED IN "MESSAGES".                            */
+   /*                                                                 */
+   SUBSTR(ADDR(DFH$PGAO)->STRING,1,STG(DFH$PGAO)) = LOW(STG(DFH$PGAO));
+   MSGA=DFHBMASB;
+   MSGO=MESSAGES;
+   EXEC CICS SEND MAP('DFH$PGA') ERASE;
+ END PMNU;
+
+ /*********************************************************************/
+ /*          BUILDNEXT BUILDS THE NEXT FWD PAGE TO BE DISPLAYED ON THE*/
+ /*          SCREEN, CALLING READNEXT TO GET THE NEXT RECORD FROM THE */
+ /*          FILE.                                                    */
+ /*********************************************************************/
+ BUILDNEXT:PROC;
+     /*                                                               */
+     /* "BUILDNEXT" BROWSES FORWARD THROUGH "FILEA" BUILDING A SCREEN,*/
+     /* OR PAGE, OF ACCOUNTS FOR DISPLAY.                             */
+     /* THE PROCEDURE "READPREV" READS A RECORD FROM THE FILE INTO THE*/
+     /* FILE AREA.                                                    */
+     /*                                                               */
+     CALL READNEXT;                           /*READ 1ST. RECORD*/
+     /*                                                               */
+     /* CHECK RESPONSES                                               */
+     /*                                                               */
+     IF RESPONSE ^= DFHRESP(NORMAL) THEN RETURN;
+     /*                                                               */
+     /* THE ACCOUNT NUMBER, NAME, AND AMOUNT ARE MOVED TO THE FIRST   */
+     /* LINE OF THE BROWSE MAP AREA.                                  */
+     /*                                                               */
+     NUMBER1O = NUMB;
+     NAME1O   = NAME;
+     AMOUNT1O = AMOUNT;
+     RIDB = RIDF;                             /*UPDATE RIDB FIELD*/
+     /*                                                               */
+     /* THE SAME BASIC COMMANDS ARE REPEATED TO READ AND SET UP THE   */
+     /* NEXT THREE LINES. THE SAME FILE AREA IS USED FOR EACH READ.   */
+     /*                                                               */
+     CALL READNEXT;                           /*READ 2ND. RECORD*/
+     /*                                                               */
+     /* CHECK RESPONSES                                               */
+     /*                                                               */
+     IF RESPONSE ^= DFHRESP(NORMAL) THEN RETURN;
+     NUMBER2O = NUMB;
+     NAME2O   = NAME;
+     AMOUNT2O = AMOUNT;
+
+     CALL READNEXT;                           /*READ 3RD. RECORD*/
+     /*                                                               */
+     /* CHECK RESPONSES                                               */
+     /*                                                               */
+     IF RESPONSE ^= DFHRESP(NORMAL) THEN RETURN;
+     NUMBER3O = NUMB;
+     NAME3O   = NAME;
+     AMOUNT3O = AMOUNT;
+
+     CALL READNEXT;                           /* READ 4TH RECORD */
+     /*                                                               */
+     /* CHECK RESPONSES                                               */
+     /*                                                               */
+     IF RESPONSE ^= DFHRESP(NORMAL) THEN RETURN;
+     NUMBER4O = NUMB;
+     NAME4O   = NAME;
+     AMOUNT4O = AMOUNT;
+ END BUILDNEXT;
+ /*********************************************************************/
+ /*  READNEXT READS THE NEXT RECORD AFTER RIDF, FROM THE FILE         */
+ /*********************************************************************/
+ READNEXT:PROC;
+     /*                                                               */
+     /* THIS PROCEDURE READS THE NEXT RECORD OF THE FILE, WITH        */
+     /* RESPECT TO THE KEY IN "RIDF".                                 */
+     /*                                                               */
+     EXEC CICS READNEXT INTO(FILEA) FILE('FILEA') RIDFLD(RIDF)
+          RESP(RESPONSE);
+ END READNEXT;
+ /*********************************************************************/
+ /* BUILDPREV BUILDS THE PREVIOUS PAGE TO DISPLAYED ON THE SCREEN,    */
+ /* CALLING READPREV TO READ THE PREVIOUS RECORD FROM THE FILE        */
+ /*********************************************************************/
+ BUILDPREV:PROC;
+     /*                                                               */
+     /* BACKWARD BROWSING USES THE "READPREV" COMMAND TO READ THE     */
+     /* PREVIOUS RECORD AND STORES RECORDS IN THE MAP AREA STARTING   */
+     /* AT THE BOTTOM LINE                                            */
+     /*                                                               */
+     CALL READPREV;                           /*READ 1ST. RECORD*/
+     /*                                                               */
+     /* CHECK RESPONSES                                               */
+     /*                                                               */
+     IF RESPONSE ^= DFHRESP(NORMAL) THEN RETURN;
+     NUMBER4O = NUMB;
+     NAME4O   = NAME;
+     AMOUNT4O = AMOUNT;
+     RIDF = RIDB;                             /*UPDATE RIDF FIELD*/
+
+     CALL READPREV;                           /*READ 2ND. RECORD*/
+     /*                                                               */
+     /* CHECK RESPONSES                                               */
+     /*                                                               */
+     IF RESPONSE ^= DFHRESP(NORMAL) THEN RETURN;
+     NUMBER3O = NUMB;
+     NAME3O   = NAME;
+     AMOUNT3O = AMOUNT;
+
+     CALL READPREV;                           /*READ 3RD. RECORD*/
+     /*                                                               */
+     /* CHECK RESPONSES                                               */
+     /*                                                               */
+     IF RESPONSE ^= DFHRESP(NORMAL) THEN RETURN;
+     NUMBER2O = NUMB;
+     NAME2O   = NAME;
+     AMOUNT2O = AMOUNT;
+
+     CALL READPREV;                           /*READ 4TH. RECORD*/
+     /*                                                               */
+     /* CHECK RESPONSES                                               */
+     /*                                                               */
+     IF RESPONSE ^= DFHRESP(NORMAL) THEN RETURN;
+     NUMBER1O = NUMB;
+     NAME1O   = NAME;
+     AMOUNT1O = AMOUNT;
+ END BUILDPREV;
+ /*********************************************************************/
+ /*  READPREV READS THE RECORD PREVIOUS TO RIDB, FROM THE FILE        */
+ /*********************************************************************/
+ READPREV:PROC;
+     /*                                                               */
+     /* THIS PROCEDURE READS THE PREVIOUS RECORD OF THE FILE, WITH    */
+     /* RESPECT TO THE KEY IN "RIDB".                                 */
+     /*                                                               */
+    EXEC CICS READPREV INTO(FILEA) FILE('FILEA') RIDFLD(RIDB)
+         RESP(RESPONSE);
+ END READPREV;
+ END BROWSE;

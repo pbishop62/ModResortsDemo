@@ -1,0 +1,195 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$PCOM                                           */
+ /*                                                                  */
+ /* Descriptive Name = Order Entry Queue Print for Sample Application*/
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1984, 2012"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /* $SEG(DFH$PCOM),COMP(SAMPLES),PROD(CICS TS ):                     */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 170 840814 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $P2= D04025 630 020522 HD2WPGK : Correct RC4                    */
+ /*  $D1= I07267 630 020418 HDHYJB  : Compile all samples            */
+ /*       R40551 680 120423 HDLISJH: Remove *PROCESS                 */
+ /*                                                                  */
+ /********************************************************************/
+ QPRINT: PROC OPTIONS(MAIN);
+         %INCLUDE DFH$PFIL;
+         %INCLUDE DFH$PL86;
+         %INCLUDE DFH$PGL;
+         DCL Q_LENGTH FIXED BIN(15) INIT(22);
+         DCL RESPONSE FIXED BIN(31);   /* RESPONSES TO CICS COMMANDS */
+         DCL ATIME    FIXED DEC(15);   /* ABSOLUTE TIME              */
+         DCL 1 LOGORD,
+               2 LOGTIME,
+                 3 LDATE CHAR(8),
+                 3 LTIME CHAR(8),
+               2 LITEM CHAR(22),
+               2 COMMENT CHAR(11) INIT('ORDER ENTRY'),
+               2 FILLER CHAR(51) INIT(' ');
+         DCL CHSTR CHAR(256) BASED;
+   DCL PRESMSG CHAR(20) STATIC
+       INIT('PROCESSING COMPLETED');
+   DCL ERRMSG CHAR(30) STATIC
+       INIT('ERROR - TRANSACTION TERMINATED');
+         /*                                                           */
+         /* AN ERROR EXIT IS SET UP TO TRAP ANY UNEXPECTED ERRORS.    */
+         /* NOTE THAT ALL OTHER ERRORS ARE DETECTED EXPLICITLY BY     */
+         /* THE PROGRAM BY USING THE "RESP" OPTION ON CICS COMMANDS.  */
+         /*                                                           */
+         EXEC CICS HANDLE CONDITION ERROR(OTHER_ERRORS);
+         /*                                                           */
+         /* THE TERMID IS TESTED TO SEE WHETHER THIS TRANSACTION      */
+         /* STARTED FROM A TERMINAL OR AT THE PRINTER.                */
+         /*                                                           */
+         IF EIBTRMID^='L86O' THEN DO;
+            CALL TIME;
+            EXEC CICS SEND TEXT FROM(PRESMSG) ERASE;
+            EXEC CICS SEND CONTROL FREEKB;
+            EXEC CICS RETURN;
+         END;
+         /*                                                           */
+         /* CLEAR MAP                                                 */
+         /*                                                           */
+         SUBSTR(ADDR(DFH$PGLO)->CHSTR,1,STG(DFH$PGLO))
+                  =LOW(STG(DFH$PGLO));
+         /*                                                           */
+         /* A QUEUE ITEM (CUSTOMER ORDER) IS READ INTO THE PROGRAM.   */
+         /*                                                           */
+         EXEC CICS READQ TD INTO(L86O) LENGTH(Q_LENGTH) QUEUE('L86O')
+              RESP(RESPONSE);
+         DO WHILE (RESPONSE = DFHRESP(NORMAL));
+            /*                                                        */
+            /* THE FILE CONTROL "READ" COMMAND READS THE RECORD INTO  */
+            /* A RECORD AREA SO THAT THE AMOUNT MAY BE CHECKED.       */
+            /*                                                        */
+            EXEC CICS READ FILE('FILEA') INTO(FILEA) RIDFLD(CUSTNO);
+            /*                                                        */
+            /* THE AMOUNT (BANK BALANCE) IS TESTED. IF IT IS OVER     */
+            /* $100 THEN THE ORDER IS ACCEPTABLE, OTHERWISE THE ORDER */
+            /* IS REJECTED. THIS TEST IS ONLY A SUGGESTION, A SUITABLE*/
+            /* FORM OF EDITING SHOULD BE INSERTED HERE TO ENSURE VALID*/
+            /* ORDERS ARE SENT TO THE WAREHOUSE.                      */
+            /*                                                        */
+            IF AMOUNT>'$0100.00' THEN DO;
+               /*                                                     */
+               /* THE ORDER DETAILS ARE MOVED TO THE MAP AREA FOR     */
+               /* "DFH$PGL".                                          */
+               /*                                                     */
+               ADDRO  = ADDRX;
+               PARTO  = PARTNO;
+               NAMO   = NAME;
+               NUMBO  = CUSTNO;
+               QUANTO = QUANTITY;
+               /*                                                     */
+               /* THE ORDER MAP IS SENT TO THE PRINTER TERMINAL AT    */
+               /* THE WAREHOUSE.                                      */
+               /*                                                     */
+               EXEC CICS SEND MAP('DFH$PGL') ERASE PRINT L80;
+            END;
+            ELSE DO;
+               /*                                                     */
+               /* BANK BALANCE TOO SMALL - REJECT                     */
+               /*                                                     */
+               /* THE CURRENT DATE AND TIME, AND DETAILS OF THE       */
+               /* REJECTED ORDER ARE MOVED TO A LOG RECORD AREA.      */
+               /*                                                     */
+               EXEC CICS ASKTIME ABSTIME(ATIME);
+               EXEC CICS FORMATTIME ABSTIME(ATIME)
+                                    DATE(LDATE)
+                                    TIME(LTIME)
+                                    DATESEP
+                                    TIMESEP;
+               LITEM = STRING(ITEM);
+               /*                                                     */
+               /* THE "WRITEQ TD" COMMAND WRITES DETAILS OF THE       */
+               /* REJECTED ORDER TO "LOGA", A TRANSIENT DATA QUEUE.   */
+               /*                                                     */
+               EXEC CICS WRITEQ TD QUEUE('LOGA')
+                                   FROM(LOGORD)
+                                   LENGTH(100);
+            END;
+            /*                                                        */
+            /* READ NEXT RECORD FROM QUEUE                            */
+            /*                                                        */
+            /* THE NEXT QUEUE ITEM (CUSTOMER ORDER) IS READ INTO THE  */
+            /* PROGRAM.                                               */
+            /*                                                        */
+            EXEC CICS READQ TD INTO(L86O) LENGTH(Q_LENGTH)
+                 QUEUE('L86O') RESP(RESPONSE);
+         END;
+         IF RESPONSE = DFHRESP(QZERO) THEN DO;
+            /*                                                        */
+            /* WHEN THE QUEUE IS EMPTY, THE MESSAGE "ORDER QUEUE IS   */
+            /* EMPTY" IS MOVED TO THE MAP AREA WHICH IS THEN SENT TO  */
+            /* THE PRINTER TERMINAL AT THE WAREHOUSE.                 */
+            /*                                                        */
+            SUBSTR(ADDR(DFH$PGLO)->CHSTR,1,STG(DFH$PGLO))
+                     =LOW(STG(DFH$PGLO));
+            TITLEO='ORDER QUEUE IS EMPTY';
+            EXEC CICS SEND MAP('DFH$PGL') DATAONLY ERASE PRINT L80;
+            /*                                                        */
+            /* THE MESSAGE "PROCESSING COMPLETED" IS SENT TO THE      */
+            /* TERMINAL ASSOCIATED WITH THIS INVOCATION OF "PORQ",    */
+            /* EITHER THE PRINTER AT THE WAREHOUSE OR THE SCREEN ON   */
+            /* WHICH "PORQ" WAS ENTERED. THE PROGRAM TERMINATES BY    */
+            /* RETURNING CONTOL TO CICS.                              */
+            /*                                                        */
+            EXEC CICS SEND TEXT FROM(PRESMSG) ERASE PRINT;
+            EXEC CICS SEND CONTROL FREEKB;
+         END;
+         ELSE  /* UNEXPECTED ERROR */
+            CALL ERRORS;
+         EXEC CICS RETURN;
+
+ TIME: PROC;
+         /*                                                           */
+         /* THE "START" COMMAND STARTS THE "PORQ" TRANSACTION (THIS   */
+         /* PROGRAM), AFTER A ONE HOUR DELAY, WITH A TERMINAL IDEN-   */
+         /* TIFIER OF L86O. (THE TIME INTERVAL COULD BE CHANGED, FOR  */
+         /* DEMONSTRATION PURPOSES, BY CHANGING THE "INTERVAL" VALUE).*/
+         /* IF THE COMMENT DELIMITERS ARE REMOVED FROM THE TWO NEXT   */
+         /* STATEMENTS, "EIBTIME" IS REFRESHED AND, IF THE TIME IS    */
+         /* BEFORE 1400 HOURS, THE TRANSACTION IS STARTED IN ONE HOUR.*/
+         /* IF COMMENT DELIMITERS ARE NOT REMOVED, THE TRANSACTION IS */
+         /* STARTED UNCONDITIONALLY IN ONE HOUR.                      */
+         /*                                                           */
+     /*  EXEC CICS ASKTIME;       */
+     /*  IF EIBTIME^>140000 THEN  */
+         EXEC CICS START TRANSID('PORQ') INTERVAL(10000) TERMID('L86O');
+ END TIME;
+ ERRORS: PROC;
+         /*                                                           */
+         /* IF THE "ERROR" CONDITION OCCURS ON ANY CICS COMMAND, A    */
+         /* DUMP IS TAKEN AND THE PROGRAM TERMINATES.                 */
+         /*                                                           */
+         EXEC CICS DUMP TRANSACTION DUMPCODE('ERRS');
+         EXEC CICS SEND TEXT FROM(ERRMSG) ERASE NOHANDLE;
+         EXEC CICS SEND CONTROL FREEKB NOHANDLE;
+ END ERRORS;
+ /*                                                                   */
+ /* THIS PROCEDURE HANDLES ANY UNEXPECTED ERRORS.                     */
+ /*                                                                   */
+ OTHER_ERRORS:
+         CALL ERRORS;
+         EXEC CICS RETURN;
+ END;

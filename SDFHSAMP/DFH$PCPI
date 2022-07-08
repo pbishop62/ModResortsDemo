@@ -1,0 +1,407 @@
+*ASM XOPTS(SP)
+***********************************************************************
+*                                                                     *
+*   MODULE NAME = DFH$PCPI                                            *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  ....                                    *
+*        PLTPI program for the sample user exit programs DFH$PCEX     *
+*        and DFH$ZCAT.                                                *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1991, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*        This program enables the sample user exit programs DFH$PCEX  *
+*        and DFH$ZCAT and initialises their global work areas.        *
+*                                                                     *
+*        These sample programs show how to use standard CICS/ESA      *
+*        facilities to enhance the capabilties and function of user   *
+*        exit programs. They show how to access CICS system           *
+*        information (such as Jobname, Applid, and CWA address,       *
+*        using EXEC CICS commands and make that information available *
+*        to user exit programs and system programmer applications.    *
+*                                                                     *
+*        This program has three main parts:-                          *
+*                                                                     *
+*        PART 1. Get and process any 'INITPARM's for this program.    *
+*                                                                     *
+*        Part 2. Enable the DFH$PCEX user exit program, allocating    *
+*        a Global Work Area(GWA). This Global Work Area is then used  *
+*        to contain common system information, such as Jobname,       *
+*        Applid, CWA Address, etc and which can then be shared        *
+*        amongst other user exit programs or be made available to     *
+*        system programmer applications by using the EXEC CICS        *
+*        EXTRACT EXIT PROGRAM command as used in this sample program. *
+*                                                                     *
+*        Part 3. This section of the program shows the use of the     *
+*        common information just built in the Global Work Area of     *
+*        the DFH$PCEX global user exit program by a second global     *
+*        user exit program DFH$ZCAT. It also shows how to overcome    *
+*        the Global Work Area (GWA) size limitation of 32K by using   *
+*        CICS Shared storage. In this sample program an area of 64K   *
+*        is obtained below 16Mb and an area of 128K is obtained       *
+*        above 16Mb. By using this technique a Global Work Area size  *
+*        of only 12 bytes is used by the exit program                 *
+*        DFH$ZCAT.                                                    *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*    RESTRICTIONS = None                                              *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFHEAIx                                               *
+*     PURPOSE = All Functions                                         *
+*     LINKAGE = Can be invoked from PLTPI processing (second phase)   *
+*               or via a user application using EXEC CICS LINK.       *
+*     INPUT = N/A                                                     *
+*     OUTPUT = N/A                                                    *
+*     EXIT-NORMAL = EXEC CICS RETURN                                  *
+*         The following messages can be issued by the module if a     *
+*         response of other than NORMAL is returned from various      *
+*         EXEC CICS xxxxxxxx commands:                                *
+*                                                                     *
+*             DFH$PCPI - ERROR ENABLING EXIT PROGRAM DFH$PCEX         *
+*             DFH$PCPI - ERROR EXTRACTING DFH$PCEX GWA ADDRESS        *
+*             DFH$PCPI - ERROR STARTING EXIT PROGRAM DFH$PCEX         *
+*             DFH$PCPI - ERROR LINKING TO PROGRAM DFH$PCPL            *
+*             DFH$PCPI - ERROR STOPPING EXIT PROGRAM DFH$PCEX         *
+*             DFH$PCPI - ERROR ENABLING EXIT PROGRAM DFH$ZCAT         *
+*             DFH$PCPI - ERROR EXTRACTING DFH$ZCAT GWA ADDRESS        *
+*             DFH$PCPI - GETMAIN ERROR FOR SHARED BELOW 16MB          *
+*             DFH$PCPI - GETMAIN ERROR FOR SHARED ABOVE 16MB          *
+*                                                                     *
+*     EXIT-ERROR = None                                               *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES = None                                          *
+*     ROUTINES = EXEC CICS ASSIGN, EXEC CICS ENABLE PROGRAM, EXEC     *
+*         CICS EXTRACT EXIT, EXEC CICS ASKTIME, EXEC CICS FORMATTIME, *
+*         EXEC CICS INQUIRE SYSTEM, EXEC CICS ADDRESS CWA, EXEC CICS  *
+*         LINK PROGRAM, EXEC CICS DISABLE PROGRAM, EXEC CICS GETMAIN, *
+*         EXEC CICS WRITE OPERATOR.                                   *
+*     DATA AREAS = None                                               *
+*     CONTROL BLOCKS =                                                *
+*         DFH$PCGA - Global Work Area mapping for DFH$PCEX sample     *
+*                    user exit program                                *
+*         DFH$ZCGA - Global Work Area mapping for DFH$ZCAT sample     *
+*                    user exit program                                *
+*     GLOBAL VARIABLES = None                                         *
+* TABLES = None                                                       *
+* MACROS = None                                                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFH$PCPI),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*     D0= I05404 %0G 910112 HD1VCJB: Module creation                  *
+*    $P1= M64696 321 910225 HD9LPSM: UPDATE STATUS FLAG TO XB0G       *
+*    $P2= M92134 330 920416 HD4OGB  : Apar catchup PN14086            *
+*                                                                     *
+***********************************************************************
+         SPACE
+R0       EQU   0                   WORK
+R1       EQU   1                   WORK
+R2       EQU   2                   WORK
+R3       EQU   3                   PROGRAM BASE
+R4       EQU   4                   NOT USED
+R5       EQU   5                   NOT USED
+R6       EQU   6                   XPCFTCH GWA ADDRESS
+R7       EQU   7                   XZCATT GWA ADDRESS
+R8       EQU   8                   NOT USED
+R9       EQU   9                   NOT USED
+R10      EQU   10                  NOT USED
+R11      EQU   11                  DFHEIBR
+R12      EQU   12                  NOT USED
+R13      EQU   13                  DFHEISTG
+R14      EQU   14                  WORK
+R15      EQU   15                  DFHEIPLR
+         EJECT
+         COPY  DFH$PCGA            XPCFTCH GWA DSECT
+         EJECT
+         COPY  DFH$ZCGA            XZCATT GWA DSECT
+         EJECT
+DFHEISTG DSECT
+         EJECT
+ERRMSG   DS    CL60                WRITE OPERATOR ERROR MESSAGE
+         SPACE
+GALEN    DS    H                   GWA LENGTH
+ABSTIME  DS    PL8                 ASKTIME OUTPUT FIELD
+         SPACE
+INITPARM DS    CL60                INITPARM
+PARMLEN  DS    H                   INITPARM LENGTH
+         EJECT
+DFH$PCPI AMODE 31
+DFH$PCPI RMODE ANY
+DFH$PCPI DFHEIENT
+         SPACE
+***********************************************************************
+*** Part 1. Get and process any 'INITPARM's for this program. If    ***
+*** INITPARMLEN is zero, there are no 'INITPARM's for this program. ***
+***********************************************************************
+         SPACE
+         EXEC CICS ASSIGN INITPARM(INITPARM) INITPARMLEN(PARMLEN)      C
+               NOHANDLE
+         CLC   PARMLEN,=H'0'           INITPARM LENGTH = 0?
+         BE    NOPARMS                 YES, NO INITPARMS TO PROCESS
+         SPACE
+***********************************************************************
+*** Process 'INITPARM's.                                            ***
+***********************************************************************
+         SPACE
+NOPARMS  DS    0H
+         EJECT
+***********************************************************************
+*** Part 2. Enable the DFH$PCEX user exit program, allocating a     ***
+*** Global Work Area. This Global Work Area is then used to contain ***
+*** common system information, such as Jobname, Applid, CWA Address ***
+*** etc and which can be shared amongst other user exit programs or ***
+*** be made available to system programmer applications by using    ***
+*** the EXEC CICS EXTRACT EXIT command as used in this program.     ***
+***********************************************************************
+*** Enable the DFH$PCEX global user exit program at the XPCFTCH     ***
+*** exit point and allocate a Global Work Area.                     ***
+***********************************************************************
+         SPACE
+         MVC   GALEN(2),=Y(PCGWALEN)   REQUIRED GWA LENGTH
+         SPACE
+         EXEC CICS ENABLE PROGRAM('DFH$PCEX') EXIT('XPCFTCH')          C
+               GALENGTH(GALEN) GALOCATION(DFHVALUE(LOC31))             C
+               NOHANDLE
+         CLC   EIBRESP,DFHRESP(NORMAL) RESPONSE NORMAL?
+         BNE   ERRRTN1                 NO, GO TO ERROR ROUTINE
+         SPACE
+***********************************************************************
+*** Extract the Global Work Area address for the DFH$PCEX user exit ***
+*** program.                                                        ***
+***********************************************************************
+         SPACE
+         EXEC CICS EXTRACT EXIT PROGRAM('DFH$PCEX')                    C
+               GASET(R6) GALENGTH(GALEN)                               C
+               NOHANDLE
+         CLC   EIBRESP,DFHRESP(NORMAL) RESPONSE NORMAL?
+         BNE   ERRRTN2                 NO, GO TO ERROR ROUTINE
+         USING DFH$PCGA,R6             ADDRESSABILITY
+         EJECT
+***********************************************************************
+*** Update the current date and time. Format it in various forms    ***
+*** and save them in the DFH$PCEX Global Work Area.                 ***
+***********************************************************************
+         SPACE
+         EXEC CICS ASKTIME ABSTIME(ABSTIME)
+         SPACE
+         EXEC CICS FORMATTIME ABSTIME(ABSTIME)                         C
+               YYDDD(YYDDD) YYMMDD(YYMMDD) YYDDMM(YYDDMM)              C
+               DDMMYY(DDMMYY) MMDDYY(MMDDYY)                           C
+               DATE(DATE) DATEFORM(DATEFORM) DATESEP('/')              C
+               DAYCOUNT(DAYCOUNT)                                      C
+               DAYOFWEEK(DAY) DAYOFMONTH(DAYMONTH)                     C
+               MONTHOFYEAR(MONTH) YEAR(YEAR)
+         SPACE
+***********************************************************************
+*** Get various CICS system level information and save their values ***
+*** in the DFH$PCEX Gloval Work Area.                               ***
+***********************************************************************
+         SPACE
+         EXEC CICS INQUIRE SYSTEM                                      C
+               GMMTRANID(GMMTRAN)                                      C
+               JOBNAME(JOBNAME)                                        C
+               OPREL(OPREL) OPSYS(OPSYS) RELEASE(RELEASE)              C
+               STARTUP(STARTUP)
+         SPACE
+***********************************************************************
+*** Get the address of the CWA and store in the Global Work Area.   ***
+***********************************************************************
+         SPACE
+         EXEC CICS ADDRESS CWA(R2)
+         ST    R2,CWAADDR              STORE CWA ADDRESS IN GWA
+         SPACE
+***********************************************************************
+*** Get the Applid and Sysid of this CICS system and save their     ***
+*** values in the Global Work Area for DFH$PCEX.                    ***
+***********************************************************************
+         SPACE
+         EXEC CICS ASSIGN APPLID(APPLID) SYSID(SYSID)
+         EJECT
+***********************************************************************
+*** Start the DFH$PCEX Global User Exit program.                    ***
+***********************************************************************
+         SPACE
+         EXEC CICS ENABLE PROGRAM('DFH$PCEX') START                    C
+               NOHANDLE
+         CLC   EIBRESP,DFHRESP(NORMAL) RESPONSE NORMAL?
+         BNE   ERRRTN3                 NO, GO TO ERROR ROUTINE
+         SPACE
+***********************************************************************
+*** EXEC CICS LINK to a program which will cause our DFH$PCEX exit  ***
+*** program to be invoked so that we can pick up the address of the ***
+*** CSA via that exit program. The CSA address will be stored in    ***
+*** the Global Work Area associated with the DFH$PCEX user exit     ***
+*** program.                                                        ***
+***********************************************************************
+         SPACE
+         EXEC CICS LINK PROGRAM('DFH$PCPL')                            C
+               NOHANDLE
+         CLC   EIBRESP,DFHRESP(NORMAL) RESPONSE NORMAL?
+         BNE   ERRRTN4                 NO, GO TO ERROR ROUTINE
+         SPACE
+***********************************************************************
+*** STOP the DFH$PCEX global user exit program. The Global Work     ***
+*** Area will remain allocated to the DFH$PCEX user exit program.   ***
+***********************************************************************
+         SPACE
+         EXEC CICS DISABLE PROGRAM('DFH$PCEX') STOP                    C
+               NOHANDLE
+         CLC   EIBRESP,DFHRESP(NORMAL) RESPONSE NORMAL?
+         BNE   ERRRTN5                 NO, GO TO ERROR ROUTINE
+         EJECT
+***********************************************************************
+*** Part 3. This section of the program shows the use of the common ***
+*** information just built in the Global Work Area of the DFH$PCEX  ***
+*** user exit program by a second global user exit program DFH$ZCAT.***
+*** It also shows how to overcome the Global Work Area (GWA) size   ***
+*** limitation of 32K by using CICS Shared storage. In this sample  ***
+*** an area of 64K is obtained below 16Mb and an area of 128K is    ***
+*** obtained above 16Mb. By using this technique a Global Work Area ***
+*** of only 12 bytes (below 16Mb) is used by the exit program       ***
+*** DFH$ZCAT.                                                       ***
+***********************************************************************
+         SPACE
+***********************************************************************
+*** Enable the DFH$ZCAT user exit program at exit point XZCATT and  ***
+*** allocate a Global Work Area(GWA).                               ***
+***********************************************************************
+         SPACE
+         MVC   GALEN(2),=Y(ZCGWALEN)   REQUIRED GWA LENGTH
+         SPACE
+         EXEC CICS ENABLE PROGRAM('DFH$ZCAT') EXIT('XZCATT')           C
+               GALENGTH(GALEN) GALOCATION(DFHVALUE(LOC31))             C
+               NOHANDLE
+         CLC   EIBRESP,DFHRESP(NORMAL) RESPONSE NORMAL?
+         BNE   ERRRTN6                 NO, GO TO ERROR ROUTINE
+         SPACE
+***********************************************************************
+*** Extract the Global Work Area address for the DFH$ZCAT user exit ***
+*** program.                                                        ***
+***********************************************************************
+         SPACE
+         EXEC CICS EXTRACT EXIT PROGRAM('DFH$ZCAT')                    C
+               GASET(R7) GALENGTH(GALEN)                               C
+               NOHANDLE
+         CLC   EIBRESP,DFHRESP(NORMAL) RESPONSE NORMAL?
+         BNE   ERRRTN7                 NO, GO TO ERROR ROUTINE
+         USING DFH$ZCGA,R7             ADDRESSABILITY
+         SPACE
+         ST    R6,ZCFTCHGA             NOW SAVE DFH$PCEX'S GWA ADDRESS
+*                                      IN DFH$ZCAT'S GLOBAL WORK AREA
+         EJECT
+***********************************************************************
+*** GETMAIN 64K of CICS Shared storage below 16Mb and store the     ***
+*** address of the Getmained storage in the Global Work Area of the ***
+*** DFH$ZCAT user exit program.                                     ***
+***********************************************************************
+         SPACE
+         EXEC CICS GETMAIN FLENGTH(65536) BELOW INITIMG(X'00')         C
+               SHARED                                                  C
+               SET(R2)                                                 C
+               NOHANDLE
+         CLC   EIBRESP,DFHRESP(NORMAL) RESPONSE NORMAL?
+         BNE   ERRRTN8                 NO, GO TO ERROR ROUTINE
+         ST    R2,ZCSTG                SAVE BELOW 16MB STORAGE ADDRESS
+         SPACE
+***********************************************************************
+*** GETMAIN 128K of CICS Shared storage above 16Mb and store the    ***
+*** address of the Getmained storage in the Global Work Area of the ***
+*** DFH$ZCAT user exit program.                                     ***
+***********************************************************************
+         SPACE
+         EXEC CICS GETMAIN FLENGTH(131072) INITIMG(X'00')              C
+               SHARED                                                  C
+               SET(R2)                                                 C
+               NOHANDLE
+         CLC   EIBRESP,DFHRESP(NORMAL) RESPONSE NORMAL?
+         BNE   ERRRTN9                 NO, GO TO ERROR ROUTINE
+         ST    R2,ZCESTG               SAVE ABOVE 16MB STORAGE ADDRESS
+         SPACE
+         EJECT
+***********************************************************************
+*** Return to CICS.                                                 ***
+***********************************************************************
+         SPACE
+RETURN   DS    0H                      RETURN TO CICS
+         EXEC CICS RETURN
+         SPACE
+***********************************************************************
+*** Error message proceesing routines.                              ***
+***********************************************************************
+         SPACE
+ERRRTN1  DS    0H
+         MVC   ERRMSG,ERRMSG1      SETUP ERROR MESSAGE
+         B     SENDMSG             AND SEND MESSAGE TO OPERATOR
+ERRRTN2  DS    0H
+         MVC   ERRMSG,ERRMSG2      SETUP ERROR MESSAGE
+         B     SENDMSG             AND SEND MESSAGE TO OPERATOR
+ERRRTN3  DS    0H
+         MVC   ERRMSG,ERRMSG3      SETUP ERROR MESSAGE
+         B     SENDMSG             AND SEND MESSAGE TO OPERATOR
+ERRRTN4  DS    0H
+         MVC   ERRMSG,ERRMSG4      SETUP ERROR MESSAGE
+         B     SENDMSG             AND SEND MESSAGE TO OPERATOR
+ERRRTN5  DS    0H
+         MVC   ERRMSG,ERRMSG5      SETUP ERROR MESSAGE
+         B     SENDMSG             AND SEND MESSAGE TO OPERATOR
+ERRRTN6  DS    0H
+         MVC   ERRMSG,ERRMSG6      SETUP ERROR MESSAGE
+         B     SENDMSG             AND SEND MESSAGE TO OPERATOR
+ERRRTN7  DS    0H
+         MVC   ERRMSG,ERRMSG7      SETUP ERROR MESSAGE
+         B     SENDMSG             AND SEND MESSAGE TO OPERATOR
+ERRRTN8  DS    0H
+         MVC   ERRMSG,ERRMSG8      SETUP ERROR MESSAGE
+         B     SENDMSG             AND SEND MESSAGE TO OPERATOR
+ERRRTN9  DS    0H
+         MVC   ERRMSG,ERRMSG9      SETUP ERROR MESSAGE
+         B     SENDMSG             AND SEND MESSAGE TO OPERATOR
+         SPACE
+SENDMSG  DS    0H
+         EXEC CICS WRITE OPERATOR TEXT(ERRMSG) TEXTLENGTH(OPMSGLEN)    C
+               NOHANDLE
+         B     RETURN              AND RETURN TO CICS
+         EJECT
+***********************************************************************
+*** Constants                                                       ***
+***********************************************************************
+         SPACE
+ERRMSG1  DC    CL60'DFH$PCPI - ERROR ENABLING EXIT PROGRAM DFH$PCEX'
+ERRMSG2  DC    CL60'DFH$PCPI - ERROR EXTRACTING DFH$PCEX GWA ADDRESS'
+ERRMSG3  DC    CL60'DFH$PCPI - ERROR STARTING EXIT PROGRAM DFH$PCEX'
+ERRMSG4  DC    CL60'DFH$PCPI - ERROR LINKING TO PROGRAM DFH$PCPL'
+ERRMSG5  DC    CL60'DFH$PCPI - ERROR STOPPING EXIT PROGRAM DFH$PCEX'
+ERRMSG6  DC    CL60'DFH$PCPI - ERROR ENABLING EXIT PROGRAM DFH$ZCAT'
+ERRMSG7  DC    CL60'DFH$PCPI - ERROR EXTRACTING DFH$ZCAT GWA ADDRESS'
+ERRMSG8  DC    CL60'DFH$PCPI - GETMAIN ERROR FOR SHARED BELOW 16MB'
+ERRMSG9  DC    CL60'DFH$PCPI - GETMAIN ERROR FOR SHARED ABOVE 16MB'
+         SPACE
+OPMSGLEN DC    F'60'               WRITE OPERATOR MESSAGE LENGTH
+         SPACE
+         LTORG
+         SPACE
+         END

@@ -1,0 +1,699 @@
+*PROCESS
+  NIS MACRO FLAG(W) SOURCE MARGINS(2,72,1) XREF LIST LANGLVL(SPROG)
+  SYSTEM(MVS);
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1994, 2015"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ DFHPXCC: PROC (PARAM) OPTIONS(MAIN);
+ /********************************************************************/
+ /*                                                                  */
+ /* PROGRAM_NAME : DFH$PXCC                                          */
+ /*                                                                  */
+ /* TITLE :  PLI Sample Batch Client Program.                        */
+ /*                                                                  */
+ /* PROGRAM DESCRIPTION  :  This program will show how to code a     */
+ /*                         simple batch type application using the  */
+ /*                         EXCI call and EXEC level APIs.           */
+ /*                                                                  */
+ /* SPECIAL REQUIREMENTS :  The program must be translated with the  */
+ /*                         EXCI option, and must run AMODE 31 in    */
+ /*                         order to use the External CICS Interface.*/
+ /*                                                                  */
+ /* SYSTEM LEVEL :          CICS V4R1 or higher.                     */
+ /*                                                                  */
+ /* INPUT :                 The target CICS system with which this   */
+ /*                         batch client program communicates can    */
+ /*                         be specified via the JCL PARM statement, */
+ /*                         otherwise it defaults to applid DBDCCICS.*/
+ /*                         The target file is hardcoded as FILEA.   */
+ /*                         The userid for the target system can @P1A*/
+ /*                         now be entered as a parameter.       @P1A*/
+ /*                         The parameters are passed as         @P1A*/
+ /*                             applid,userid                    @P1A*/
+ /*                                                                  */
+ /* OUTPUT :                The whole of the target file will be     */
+ /*                         output to the SYSPRINT log.              */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /* $SEG(DFH$PXCC),COMP(SAMPLES),PROD(CICS TS ):                     */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $01= A53800 410 940523 HDCWNRB: Migrate PN53800 from SPA R410   */
+ /*  $02= A70659 410 950526 HDBGNRB: Migrate PN70659 from SPA R410   */
+ /*  $P1= M27373 530 980815 HD2GJST:  Pass USERID as PARM            */
+ /*  $P3= D14258 650 051207 HD1MA  : correct use of flags            */
+ /*  $L0= 660    410 94     HDELDFG: Created.                        */
+ /*  $D1= I07267 630 020418 HDHYJB : Compile all samples             */
+ /*       R99889 700 150205 HD2GJST: Correct compile warning         */
+ /*                                                                  */
+ /********************************************************************/
+
+ /*==================================================================*/
+ /*  Include return code values                                      */
+ /*==================================================================*/
+ %INCLUDE DFHXCRCL;
+
+ /*==================================================================*/
+ /*  Include Parameter list structure and values                     */
+ /*==================================================================*/
+ %INCLUDE DFHXCPLL;
+
+ DCL RETAREA CHAR(20);
+
+ DCL DPL_RETAREA CHAR(12);
+
+ DCL LINK_RETAREA CHAR(20);
+
+ /*==================================================================*/
+ /*  Initialise target information variables.                        */
+ /*==================================================================*/
+
+ DCL TARGET_FILE            CHAR(8)       INIT('FILEA   ');
+ DCL TARGET_TRANSID         CHAR(4)       INIT('EXCI');
+ DCL TARGET_SYSTEM          CHAR(8)       INIT('        ');
+ DCL TARGET_PROGRAM         CHAR(8)       INIT('DFH$AXCS');
+ DCL TARGET_USERID          CHAR(8)       INIT('        ');  /* @P1A */
+ DCL USERID_PTR             PTR  BASED(ADDR(TARGET_USERID)); /* @P1A */
+
+ /*==================================================================*/
+ /*  Define Call level specific variables.                           */
+ /*==================================================================*/
+
+ DCL APPLICATION            CHAR(8)       INIT('BATCHCLI');
+ DCL NULL_PTR               PTR;
+ DCL USER_TOKEN             FIXED BIN(31) INIT(0);
+ DCL PIPE_TOKEN             FIXED BIN(31) INIT(0);
+
+ /*==================================================================*/
+ /*  Define Commarea struct.                                         */
+ /*==================================================================*/
+
+ DCL 1 COMMAREA,
+      3 CALL                FIXED BIN(31) INIT(0),
+      3 FILE                CHAR(8)       INIT('xxxxxxxx'),
+      3 RID                 CHAR(6)       INIT('000001'),
+      3 RECORD              CHAR(80)      INIT(' ');
+
+ /*==================================================================*/
+ /*  Initialise Commarea length and Data length(in bytes).           */
+ /*==================================================================*/
+
+ DCL COMM_LENGTH            FIXED BIN(31) INIT(98);
+ DCL DATA_LENGTH            FIXED BIN(31) INIT(18);
+ DCL EXEC_COM_LEN           FIXED BIN(15) INIT(18);
+ DCL EXEC_DAT_LEN           FIXED BIN(15) INIT(18);
+
+ /*==================================================================*/
+ /*  Define Server call-type codes.                                  */
+ /*==================================================================*/
+
+ DCL INIT_CALL              FIXED BIN(31) STATIC INIT(1);
+ DCL READ_CALL              FIXED BIN(31) STATIC INIT(2);
+ DCL CLOSE_CALL             FIXED BIN(31) STATIC INIT(3);
+
+ /*==================================================================*/
+ /*  Define Server Return codes.                                     */
+ /*==================================================================*/
+
+ DCL RET_BROWSE             FIXED BIN(31) STATIC INIT(0);
+ DCL RET_NOBRWS             FIXED BIN(31) STATIC INIT(4);
+ DCL RET_EOF                FIXED BIN(31) STATIC INIT(8);
+ DCL RET_NOFILE             FIXED BIN(31) STATIC INIT(12);
+ DCL RET_ERROR              FIXED BIN(31) STATIC INIT(16);
+
+ /*==================================================================*/
+ /*  Declare program specific variables and flags.                   */
+ /*==================================================================*/
+
+ DCL ABORT                  CHAR(3)       INIT('NO ');
+ DCL LINKMSG                CHAR(120)     INIT(' ');
+ DCL CALLMODE               CHAR(1);
+ DCL EXEC_API               CHAR(1)       INIT('E');
+ DCL CALL_LEVEL             CHAR(1)       INIT('C');
+ DCL TARGET_PROGRAM_RETCODE FIXED BIN(31) INIT(0);
+ DCL 1 EXEC_MSG_AREA BASED(EXEC_MSG_PTR),
+      3 EXEC_MSG_TEXT       CHAR(120);
+ DCL 1 EXCI_MSG_AREA  BASED(EXCI_MSG_PTR),
+      3 EXCI_MSG_LEN        FIXED BIN(15),
+      3 FILLER              FIXED BIN(15),
+      3 EXCI_MSG_TEXT       CHAR(116);
+ DCL NULL_VALUE             FIXED BIN(31) BASED(NULL_PTR);
+ DCL BATCH_RETURN_CODE      FIXED BIN(31) INIT(0);
+ DCL PARAM CHAR(17) VARYING;              /*Can be APPLID,USERID @P1C*/
+ DCL PARAM_LENGTH FIXED BINARY(15);
+
+ /*==================================================================*/
+ /*  Program messages for output.                                    */
+ /*==================================================================*/
+
+ DCL    MSG00    CHAR(80) INIT(' ');
+ DCL    MSG01    CHAR(80) INIT('*===================== EXCI Sample Batch
+  Client Program =======================*');
+ DCL    MSG02    CHAR(80) INIT('*
+                                        *');
+ DCL    MSG03    CHAR(80) INIT('*  EXEC Level Processor.
+                                        *');
+ DCL    MSG04    CHAR(80) INIT('*    Setting up the EXEC level call.
+                                        *');
+ DCL    MSG05    CHAR(80) INIT('*    The Link Request has successfully c
+ ompleted.                              *');
+ DCL    MSG06    CHAR(80) INIT('*    Server Response:
+                                        *');
+ DCL    MSG07    CHAR(80) INIT('*      The file is set to a browsable st
+ ate.                                   *');
+ DCL    MSG08    CHAR(80) INIT('*      The file could not be found.
+                                        *');
+ DCL    MSG09    CHAR(80) INIT('*      The file could not be successfull
+ y initialised                          *');
+ DCL    MSG10    CHAR(80) INIT('*      A serious error was detected.
+                                        *');
+ DCL    MSG11    CHAR(80) INIT('*    The Link Request has failed.  Retur
+ n codes are:                           *');
+ DCL    MSG13    CHAR(80) INIT('*    A message was received from the tar
+ get CICS system:                       *');
+ DCL    MSG14    CHAR(80) INIT('*    >>>> Aborting further processing <<
+ <<                                     *');
+ DCL    MSG15    CHAR(80) INIT('*  CALL Level Processor.
+                                        *');
+ DCL    MSG16    CHAR(80) INIT('*    Initialise_User call complete.
+                                        *');
+ DCL    MSG17    CHAR(80) INIT('*    Allocate_Pipe call complete.
+                                        *');
+ DCL    MSG18    CHAR(80) INIT('*    Open_Pipe call complete.
+                                        *');
+ DCL    MSG19    CHAR(80) INIT('*    The connection has been successful.
+                                        *');
+ DCL    MSG20    CHAR(80) INIT('*      The target file follows:
+                                        *');
+ DCL    MSG21    CHAR(80) INIT('*=========================== Top of File
+ =======================================*');
+ DCL    MSG22    CHAR(80) INIT('*=========================== End of File
+ =======================================*');
+ DCL    MSG23    CHAR(80) INIT('*    The connection has been unsuccessfu
+ l.  Return codes are:                  *');
+ DCL    MSG25    CHAR(80) INIT('*      The Dpl request has failed.
+                                        *');
+ DCL    MSG26    CHAR(80) INIT('*      Link return codes are:
+                                        *');
+ DCL    MSG27    CHAR(80) INIT('*      Dpl return codes are:
+                                        *');
+ DCL    MSG28    CHAR(80) INIT('*    Closing Dpl Request has been attemp
+ ted.                                   *');
+ DCL    MSG29    CHAR(80) INIT('*    Close_Pipe call complete.
+                                        *');
+ DCL    MSG30    CHAR(80) INIT('*    Deallocate_Pipe call complete.
+                                        *');
+ DCL    MSG31    CHAR(80) INIT('*=================== End of EXCI Sample
+ Batch Client Program ==================*');
+ DCL    MSG32    CHAR(80) BASED(MSG_PTR);    /* Parameter message@P1A*/
+ DCL    1 MSG_AREA,
+          2 MSG_FILL1    CHAR(25) INIT('*    Parameters:  APPLID='),
+          2 MSG_APPLID   CHAR(8),
+          2 MSG_FILL2    CHAR(11) INIT(' '),
+          2 MSG_USERID   CHAR(8),
+          2 MSG_FILL3    CHAR(28) INIT('                           *');
+ DCL MSG_PTR  POINTER;
+
+ DCL    SPACES   CHAR(6)  INIT('      ');
+
+
+ /*==================================================================*/
+ /*                                                                  */
+ /*          >>>>>>>>>>> MAINLINE CODE <<<<<<<<<<<<<<<               */
+ /*                                                                  */
+ /*==================================================================*/
+                                 /*==================================*/
+ Put Edit(MSG00)(SKIP,A);        /*  Msg= blank                      */
+ Put Edit(MSG01)(SKIP,A);        /*  Msg="*===EXCI Sample ===*"      */
+ Put Edit(MSG02)(SKIP,A);        /*  Msg="*                  *"      */
+
+ /*==================================================================*/
+ /* Get applid of CICS system from PARM statement if specified.      */
+ /* Also get USERID if supplied as a parameter                  @P1A */
+ /*==================================================================*/
+
+ TARGET_SYSTEM = 'DBDCCICS';     /* Set up default SYSTEM        @P1A*/
+ USERID_PTR = PTRVALUE(0);       /* Initialise null pointer value@P1A*/
+
+ IF LENGTH(PARAM) > 0 THEN       /* Parameter provided           @P1C*/
+ DO;                                                         /*  @P1A*/
+   PARAM_LENGTH = MIN(17,LENGTH(PARAM));                     /*  @P1A*/
+   j = Index(PARAM,',');         /* Is there a ','? j=position   @P1A*/
+   Select(j);                                                /*  @P1A*/
+     When(0)                       /* Only Applid supplied       @P1A*/
+     Do;                                                     /*  @P1A*/
+       TARGET_SYSTEM = SUBSTR(PARAM,1,PARAM_LENGTH);         /*  @P1A*/
+       MSG_APPLID = TARGET_SYSTEM;                           /*  @P1A*/
+     End;                                                    /*  @P1A*/
+     When(1)                       /* Only Userid supplied       @P1A*/
+     Do;                                                     /*  @P1A*/
+       TARGET_USERID = SUBSTR(PARAM,2,PARAM_LENGTH - 1);     /*  @P1A*/
+       MSG_USERID = TARGET_USERID;                           /*  @P1A*/
+       MSG_FILL2 = '    USERID=';                           /*  @P1A*/
+       MSG_APPLID = ' ';                                     /*  @P1A*/
+       MSG_FILL1 = '*    Parameters:         ';              /*  @P1A*/
+     End;                                                    /*  @P1A*/
+     Otherwise                     /* Both parameters supplied   @P1A*/
+     Do;                                                     /*  @P1A*/
+       TARGET_SYSTEM = SUBSTR(PARAM,1,j - 1);                /*  @P1A*/
+       MSG_APPLID = TARGET_SYSTEM;                           /*  @P1A*/
+       TARGET_USERID = SUBSTR(PARAM,j+1,PARAM_LENGTH - j);   /*  @P1A*/
+       MSG_USERID = TARGET_USERID;                           /*  @P1A*/
+       MSG_FILL2 = '    USERID=';                            /*  @P1A*/
+     End;                                                    /*  @P1A*/
+   END;                                                      /*  @P1A*/
+   MSG_PTR = ADDR(MSG_AREA);                                 /*  @P1A*/
+   Put Edit(MSG32)(SKIP,A);                                  /*  @P1A*/
+   Put Edit(MSG02)(SKIP,A);                                  /*  @P1A*/
+ End;                                                        /*  @P1A*/
+
+                                 /*==================================*/
+ Do;                             /*                                  */
+ Call SECTION_I;                 /* Initialise the Target file.      */
+ If ABORT='NO' Then              /*                          @R99889C*/
+ Do;                             /*                          @R99889A*/
+   Call SECTION_II;              /* Perform Browse of Target file.   */
+   Call SECTION_III;             /* Perform file backout/close Link. */
+ End;                            /*                          @R99889A*/
+ End;                            /*                                  */
+                                 /*                                  */
+ Put Edit(MSG02)(SKIP,A);        /*  Msg="*                  *"      */
+ Put Edit(MSG31)(SKIP,A);        /*  Msg="*==End of Sample===*"      */
+                                 /*==================================*/
+ /*==================================================================*/
+ /*                                                                  */
+ /*      >>>>>>>>>>>> END OF MAINLINE CODE <<<<<<<<<<<<<             */
+ /*                                                                  */
+ /*==================================================================*/
+ CALL PLIRETC(BATCH_RETURN_CODE); /* Set external return code        */
+ RETURN;
+
+ SECTION_I: PROC;
+ /*==================================================================*/
+ /*                                                                  */
+ /*  SECTION I:   This routine will use an EXEC level EXCI call to   */
+ /*               invoke the program BATCHSER on the target CICS     */
+ /*               system with a call-type of INIT.  The server will  */
+ /*               query the existence of the target file, and attempt*/
+ /*               to initialise it to a browsable state. If the call */
+ /*               or the server program fails in any way, all further*/
+ /*               processing will be aborted.                        */
+ /*                                                                  */
+ /*==================================================================*/
+                                /*===================================*/
+ Put Edit(MSG03)(SKIP,A);       /* Msg="*  Exec processor *"         */
+ Put Edit(MSG04)(SKIP,A);       /* Msg="*  Setting up call*"         */
+                                /*                                   */
+ CALL = INIT_CALL;              /* Put parameters in slots 1 and 2   */
+ FILE = TARGET_FILE;            /* of the Commarea.                  */
+                                /*                                   */
+ EXCI_EXEC_RETURN_CODE_PTR = ADDR(LINK_RETAREA); /* Address retcodes */
+ CALLMODE = EXEC_API;           /* Set EXEC level flag.              */
+                                /*===================================*/
+ /*==================================================================*/
+ /*                                                                  */
+ /*  Perform the EXCI Link request.                                  */
+ /*                                                                  */
+ /*==================================================================*/
+ EXEC CICS LINK PROGRAM(TARGET_PROGRAM)
+                TRANSID(TARGET_TRANSID)
+                APPLID(TARGET_SYSTEM)
+                COMMAREA(COMMAREA)
+                LENGTH(EXEC_COM_LEN)
+                DATALENGTH(EXEC_DAT_LEN)
+                RETCODE(LINK_RETAREA)
+                SYNCONRETURN;
+ /*==================================================================*/
+ /*                                                                  */
+ /*  Check on how successful the call was.                           */
+ /*                                                                  */
+ /*==================================================================*/
+
+ If EXEC_RESP = 0 Then
+     Do;                                   /*========================*/
+     Put Edit(MSG05)(SKIP,A);              /* Msg="* Link Worked *"  */
+     TARGET_PROGRAM_RETCODE = CALL;        /*                        */
+     Put Edit(MSG06)(SKIP,A);              /* Msg="* Server resp *"  */
+     Select(TARGET_PROGRAM_RETCODE);       /*                        */
+     When(RET_BROWSE)                      /*                        */
+              Do;                          /*                        */
+              Put Edit(MSG07)(SKIP,A);     /* Msg="File browsable"   */
+              ABORT = 'NO';                /*                        */
+              End;                         /*                        */
+     When(RET_NOBRWS)                      /*                        */
+              Do;                          /*                        */
+              Put Edit(MSG09)(SKIP,A);     /* Msg="File not brwsble" */
+              Put Edit(MSG14)(SKIP,A);     /* Msg="Aborting..."      */
+              ABORT = 'YES';               /*                        */
+              BATCH_RETURN_CODE = 16;      /* Set RC=16              */
+              End;                         /*                        */
+     When(RET_NOFILE)                      /*                        */
+              Do;                          /*                        */
+              Put Edit(MSG08)(SKIP,A);     /* Msg="File not found"   */
+              Put Edit(MSG14)(SKIP,A);     /* Msg="Aborting..."      */
+              ABORT = 'YES';               /*                        */
+              BATCH_RETURN_CODE = 16;      /* Set RC=16              */
+              End;                         /*                        */
+     When(RET_ERROR)                       /*                        */
+              Do;                          /*                        */
+              Put Edit(MSG10)(SKIP,A);     /* Msg="Serious error"    */
+              Put Edit(MSG14)(SKIP,A);     /* Msg="Aborting..."      */
+              ABORT = 'YES';               /*                        */
+              BATCH_RETURN_CODE = 16;      /* Set RC=16              */
+              End;                         /*                        */
+     End;                                  /*                        */
+     End;                                  /*                        */
+ Else                                      /*                        */
+     Do;                                   /*                        */
+     Put Edit(MSG11)(SKIP,A);              /* Msg="Link failed"      */
+     Call GET_RET;                         /* Output Return codes    */
+     Put Edit(MSG14)(SKIP,A);              /* Msg="Aborting..."      */
+     ABORT = 'YES';                        /*                        */
+     End;                                  /*                        */
+                                           /*========================*/
+ RETURN;
+ /*==================================================================*/
+ /*                                                                  */
+ /*        >>>>>>>>> End of SECTION_I processing. <<<<<<<<<<         */
+ /*                                                                  */
+ /*==================================================================*/
+ END SECTION_I;
+
+ SECTION_II: PROC;
+ /*==================================================================*/
+ /*                                                                  */
+ /*   SECTION II:  This routine will perform a Call level EXCI       */
+ /*                request by setting up a Pipe to the target CICS   */
+ /*                system with Initialise User, Allocate, and Open   */
+ /*                Pipe calls.  It will then perform a series of DPL */
+ /*                calls in succession until the required portion of */
+ /*                the target file has been retrieved.  Each DPL     */
+ /*                request will call the BATCHSER server program     */
+ /*                defined on the target CICS system with the call   */
+ /*                type of READ.  If an 'abort required' situation   */
+ /*                is detected or when the process is complete, then */
+ /*                control will pass to section III.                 */
+ /*                                                                  */
+ /*==================================================================*/
+                                   /*================================*/
+ Put Edit(MSG02)(SKIP,A);          /* Msg="*                *"       */
+ Put Edit(MSG15)(SKIP,A);          /* Msg="*  Call processor*"       */
+ CALLMODE = CALL_LEVEL;            /* Set CALL level flag            */
+ EXCI_RETURN_CODE_PTR = ADDR(RETAREA); /* Set retarea addressibility */
+                                   /*================================*/
+ /*==================================================================*/
+ /*  Set up and perform Initialise User call.                        */
+ /*==================================================================*/
+                                   /*================================*/
+ CALL DFHXCIS(VERSION_1,           /* Version no. of EXCI API        */
+              RETAREA,             /* For Return codes.              */
+              USER_TOKEN,          /* Use this to refer to this User */
+              INIT_USER,           /* Call is an Init_User.          */
+              APPLICATION);        /* Name of this User application  */
+ Put Edit(MSG16)(SKIP,A);          /* Msg='Init_User call complete'  */
+                                   /*================================*/
+ /*==================================================================*/
+ /*  Set up and perform Allocate Pipe call.                          */
+ /*==================================================================*/
+                                   /*================================*/
+ CALL DFHXCIS(VERSION_1,           /* Version no. of EXCI API        */
+              RETAREA,             /* For Return codes.              */
+              USER_TOKEN,          /* Use this to refer to this User */
+              ALLOCATE_PIPE,       /* Call is an Allocate_Pipe.      */
+              PIPE_TOKEN,          /* Use this to refer to this Pipe */
+              TARGET_SYSTEM,       /* The Target CICS to linked to.  */
+              SPECIFIC_PIPE);      /* The Option bit for type of Pipe*/
+ Put Edit(MSG17)(SKIP,A);          /* Msg='Allocate_Pipe complete'   */
+                                   /*================================*/
+ /*==================================================================*/
+ /*  Set up and perform Open Pipe call.                              */
+ /*==================================================================*/
+                                   /*================================*/
+ CALL DFHXCIS(VERSION_1,           /* Version no. of EXCI API        */
+              RETAREA,             /* For Return codes.              */
+              USER_TOKEN,          /* Use this to refer to this User */
+              OPEN_PIPE,           /* Call is an Open_Pipe.          */
+              PIPE_TOKEN);         /* Use this to refer to this Pipe */
+ Put Edit(MSG18)(SKIP,A);          /* Msg='Open_Pipe complete'       */
+                                   /*================================*/
+ /*==================================================================*/
+ /*                                                                  */
+ /*  If the Link has been succesfully set up, continue with Dpl call.*/
+ /*                                                                  */
+ /*==================================================================*/
+
+ If EXCI_RESPONSE = 0 Then              /*===========================*/
+     Do;                                /*                           */
+     Put Edit(MSG19)(SKIP,A);           /* Msg=" Connect was good"   */
+     Put Edit(MSG20)(SKIP,A);           /* Msg="Target file follows" */
+     Put Edit(MSG02)(SKIP,A);           /* Msg="*                *"  */
+     Put Edit(MSG21)(SKIP,A);           /* Msg="*===Top of File===*" */
+     Call DPL_SECTION;                  /*  Get the file.            */
+     End;                               /*                           */
+ Else Do;                               /*                           */
+     Put Edit(MSG23)(SKIP,A);           /* Msg="Connect failed"      */
+     Call GET_RET;                      /* Output return codes       */
+     Put Edit(MSG14)(SKIP,A);           /* Msg="Aborting..."         */
+     End;                               /*                           */
+                                        /*===========================*/
+ RETURN;
+ /*==================================================================*/
+ /*                                                                  */
+ /*     >>>>>>>>>> End of SECTION_II processing. <<<<<<<<<<<         */
+ /*                                                                  */
+ /*==================================================================*/
+ END SECTION_II;
+
+
+ DPL_SECTION: PROC;
+ /*==================================================================*/
+ /*                                                                  */
+ /*  SECTION IIb:  DPL request.  This routine is the multiple DPL    */
+ /*                looping section which will read all records from  */
+ /*                the target file and output them to the SYSPRINT   */
+ /*                log.  It will also make a decision as to whether  */
+ /*                any further calls are required/neccessary/possible*/
+ /*                and call for an abort of processing if this is    */
+ /*                needed.                                           */
+ /*                                                                  */
+ /*==================================================================*/
+
+ Do While (ABORT ^='YES');
+
+ /*==================================================================*/
+ /*                                                                  */
+ /*  Set up and perform DPL request.                                 */
+ /*                                                                  */
+ /*   No Uowid is passed on the call.  This shows how to        @P1C */
+ /*   omit optional parameters. To omit a parameter, the address of  */
+ /*   the parameter must be zero in the parameter list. This is      */
+ /*   achieved by referencing the null_value variable which is based */
+ /*   on a null pointer.                                             */
+ /*                                                                  */
+ /*==================================================================*/
+                                /*===================================*/
+   NULL_PTR = PTRVALUE(0);      /* Initialise null pointer value.    */
+   CALL = READ_CALL;            /* Set up the Server call-type.      */
+   EXCI_DPL_RETAREA_PTR = ADDR(DPL_RETAREA); /* Set addressibility   */
+   CALL DFHXCIS(VERSION_1,      /* Version no. of EXCI API.          */
+                RETAREA,        /* For Return codes (High level)     */
+                USER_TOKEN,     /* Refer to this EXCI user           */
+                DPL_REQUEST,    /* Call is a DPL_REQUEST type        */
+                PIPE_TOKEN,     /* Refer to the Pipe already set up. */
+                TARGET_PROGRAM, /* The CICS-resident Server          */
+                COMMAREA,       /* Contains Server parameters+retarea*/
+                COMM_LENGTH,    /* Length of the whole commarea      */
+                DATA_LENGTH,    /* No of bytes of commarea sent out  */
+                TARGET_TRANSID, /* TransId on Target CICS ->DFHMIRS  */
+                NULL_VALUE,     /* Unit of Work Id is ommitted       */
+                TARGET_USERID,  /* End user's userid            @P1C */
+                DPL_RETAREA,    /* For DPL Return codes (low level)  */
+                SYNCONRETURN);  /* Option bit.  This is mandatory.   */
+                                /*===================================*/
+ /*==================================================================*/
+ /*                                                                  */
+ /*  Check on how successful the call was.  If it works, then we have*/
+ /*  a record in the commarea to be output to the SYSPRINT log.      */
+ /*                                                                  */
+ /*==================================================================*/
+
+     MSG='';
+     If EXCI_RESPONSE = 0 Then
+         Do;                                /*=======================*/
+         If EXCI_DPL_RESP ^= 0 Then         /*                       */
+             Do;                            /*                       */
+             Put Edit(MSG25)(SKIP,A);       /* Msg="Dpl call failed" */
+             Put Edit(MSG27)(SKIP,A);       /* Msg="Dpl return codes */
+             Put Edit('*     Resp, resp2, and Abend code: ',
+             EXCI_DPL_RESP,EXCI_DPL_RESP2,SPACES,EXCI_DPL_ABCODE)
+             (SKIP,A,F(8),F(8),A,A);
+             ABORT='YES';
+             Put Edit(MSG14)(SKIP,A);       /* Msg="Aborting..."     */
+             End;                           /*                       */
+         Else Do;                           /*                       */
+             TARGET_PROGRAM_RETCODE = CALL; /*                       */
+             If TARGET_PROGRAM_RETCODE = RET_ERROR Then     /*       */
+                 Do;                        /*                       */
+                 Put Edit(MSG06)(SKIP,A);   /* Msg="Server response" */
+                 Put Edit(MSG10)(SKIP,A);   /* Msg="A serious error" */
+                 ABORT='YES';               /*                       */
+                 BATCH_RETURN_CODE = 16;    /* Set RC=16             */
+                 End;                       /*                       */
+             Else Do;                       /*                       */
+                 Put Edit(RECORD)(SKIP,A);  /* Output the record     */
+                 End;                       /*                       */
+             End;                           /*                       */
+         End;                               /*                       */
+     Else Do;                               /*                       */
+         Put Edit(MSG25)(SKIP,A);           /* Msg="Dpl call failed" */
+         Put Edit(MSG26)(SKIP,A);           /* Msg="Link retcodes"   */
+         Call GET_RET;                      /* Output return codes   */
+         Put Edit(MSG27)(SKIP,A);           /* Msg="Dpl return codes */
+         Put Edit('*      Resp, resp2, and Abend code: ',
+         EXCI_DPL_RESP,EXCI_DPL_RESP2,SPACES,EXCI_DPL_ABCODE)
+         (SKIP,A,F(8),F(8),A,A);            /* Output DPL ret. codes */
+         ABORT='YES';                       /*                       */
+         Put Edit(MSG14)(SKIP,A);           /* Msg="Aborting..."     */
+         end;                               /*                       */
+                                            /*                       */
+     If TARGET_PROGRAM_RETCODE = RET_EOF Then /*                     */
+         Do;                                /*                       */
+         Put Edit(MSG22)(SKIP,A);           /* Msg="*===End File===*"*/
+         Put Edit(MSG02)(SKIP,A);           /* Msg="*              *"*/
+         ABORT='YES';                       /*                       */
+         End;                               /*                       */
+                                            /*=======================*/
+ End;    /* While loop */
+
+ RETURN;
+ /*==================================================================*/
+ /*                                                                  */
+ /*     >>>>>>>>> End of DPL_SECTION processing. <<<<<<<<<<          */
+ /*                                                                  */
+ /*==================================================================*/
+ END DPL_SECTION;
+
+ SECTION_III: PROC;
+ /*==================================================================*/
+ /*                                                                  */
+ /*   SECTION_III:   Whether or not SECTION_II processing was a      */
+ /*                  success, we assume that at least all the calls  */
+ /*                  were completed. Hence we perform a further Dpl  */
+ /*                  call to the server program to set the Target    */
+ /*                  file Closed, and continue by Closing and        */
+ /*                  Deallocating the Pipe to the Target CICS system */
+ /*                  to shut down the Link before exiting to MVS.    */
+ /*                                                                  */
+ /*==================================================================*/
+
+ /*==================================================================*/
+ /*                                                                  */
+ /*  Set up and perform DPL request.                                 */
+ /*                                                                  */
+ /*==================================================================*/
+                                /*===================================*/
+   CALL = CLOSE_CALL;           /* Set up the Server call-type.      */
+   CALL DFHXCIS(VERSION_1,      /* Version no. of EXCI API.          */
+                RETAREA,        /* For Return codes (High level)     */
+                USER_TOKEN,     /* Refer to this EXCI user           */
+                DPL_REQUEST,    /* Call is a DPL_REQUEST type        */
+                PIPE_TOKEN,     /* Refer to the Pipe already set up. */
+                TARGET_PROGRAM, /* The CICS-resident Server          */
+                COMMAREA,       /* Contains Server parameters+retarea*/
+                COMM_LENGTH,    /* Length of the whole commarea      */
+                DATA_LENGTH,    /* No of bytes of commarea sent out  */
+                TARGET_TRANSID, /* TransId on Target CICS ->DFHMIRS  */
+                NULL_VALUE,     /* Unit of Work Id is ommitted.      */
+                TARGET_USERID,  /* End user's userid            @P1C */
+                DPL_RETAREA,    /* For DPL Return codes (low level)  */
+                SYNCONRETURN);  /* Synconreturn is mandatory.        */
+ Put Edit(MSG28)(SKIP,A);       /* Msg='Closing DPL call attempted'  */
+                                /*===================================*/
+ /*==================================================================*/
+ /*  Perform Close Pipe call.                                        */
+ /*==================================================================*/
+                                   /*================================*/
+   CALL DFHXCIS(VERSION_1,         /* Version no. of EXCI API        */
+                RETAREA,           /* For Return codes.              */
+                USER_TOKEN,        /* Refer to this EXCI User        */
+                CLOSE_PIPE,        /* Call is a Close_Pipe type      */
+                PIPE_TOKEN);       /* Refer to the used Pipe         */
+ Put Edit(MSG29)(SKIP,A);          /* Msg='Close_Pipe call complete' */
+                                   /*================================*/
+ /*==================================================================*/
+ /*  Perform Deallocate Pipe call.                                   */
+ /*==================================================================*/
+                                   /*================================*/
+   CALL DFHXCIS(VERSION_1,         /* Version no. of EXCI API        */
+                RETAREA,           /* For Return codes.              */
+                USER_TOKEN,        /* Refer to this EXCI User        */
+                DEALLOCATE_PIPE,   /* Call is a Close_Pipe type      */
+                PIPE_TOKEN);       /* Refer to the used Pipe         */
+ Put Edit(MSG30)(SKIP,A);          /* Msg='Deallocate_Pipe complete'.*/
+                                   /*================================*/
+ /*==================================================================*/
+ /*                                                                  */
+ /*      >>>>>>>>>> End of SECTION_III processing. <<<<<<<<<<<       */
+ /*                                                                  */
+ /*==================================================================*/
+ RETURN;
+ END SECTION_III;
+
+ GET_RET: PROC;
+ /*==================================================================*/
+ /*                                                                  */
+ /*  If the EXCI call fails, this section will create the printable  */
+ /*  return codes, and messages.                                     */
+ /*                                                                  */
+ /*==================================================================*/
+
+ If CALLMODE = CALL_LEVEL Then
+  Do;
+  Put Edit('*     Response, Reason, and Subreason Codes of:',
+  EXCI_RESPONSE,EXCI_REASON,EXCI_SUB_REASON1)(SKIP,A,F(8),F(8),F(8));
+  BATCH_RETURN_CODE = EXCI_RESPONSE;
+  EXCI_MSG=BINARYVALUE(EXCI_MSG_PTR);  /*============================*/
+  If EXCI_MSG ^= 0 Then                /* Has a message come back?   */
+     Do;                               /*                            */
+     Put Edit(MSG13)(SKIP,A);          /* Msg="A message has been.." */
+     Put Edit(MSG02)(SKIP,A);          /* Msg="*                  *" */
+     LINKMSG = SUBSTR(EXCI_MSG_TEXT,1,EXCI_MSG_LEN-4); /* copy msg   */
+     Put Edit(LINKMSG)(SKIP,A);        /* Output error message       */
+     Put Edit(MSG02)(SKIP,A);          /* Msg="*                  *" */
+     End;                              /*============================*/
+  End;
+ Else
+    Do;
+    Put Edit('*     Response, Reason, and Abend codes of:',
+    EXEC_RESP,EXEC_RESP2,SPACES,EXEC_ABCODE)(SKIP,A,F(8),F(8),A,A);
+    BATCH_RETURN_CODE = EXEC_RESP;
+    If EXEC_MSG_LEN ^= 0      Then     /*  Has a message come back?  */
+       Do;                             /*                            */
+       Put Edit(MSG13)(SKIP,A);        /* Msg="A message has been.." */
+       Put Edit(MSG02)(SKIP,A);        /* Msg="*                  *" */
+       LINKMSG = SUBSTR(EXEC_MSG_TEXT,1,EXEC_MSG_LEN);
+       Put Edit(LINKMSG)(SKIP,A);      /*   ...and output it.        */
+       Put Edit(MSG02)(SKIP,A);        /* Msg="*                  *" */
+       End;                            /*============================*/
+    End;
+
+ RETURN;
+ /*==================================================================*/
+ /*                                                                  */
+ /*      >>>>>>>>>> End of GET_RET processing. <<<<<<<<<<<           */
+ /*                                                                  */
+ /*==================================================================*/
+ END GET_RET;
+
+ END DFHPXCC;

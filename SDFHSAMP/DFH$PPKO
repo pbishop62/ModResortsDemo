@@ -1,0 +1,359 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$PPKO                                           */
+ /*                                                                  */
+ /* Descriptive Name = Keystroke Overlap Sample Program              */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1984, 2012"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /*   CICS/VS BMS PARTITION SUPPORT SAMPLE PROGRAM                   */
+ /*                                                                  */
+ /*                                                                  */
+ /*   THIS PROGRAM DEMONSTRATES THE IMPLEMENTATION OF A POSSIBLE     */
+ /*   APPLICATION OF PARTITIONS IN A CICS/VS TRANSACTION.   TWO      */
+ /*   COPIES OF A DATA-ENTRY MAP ARE DISPLAYED.  HAVING ENTERED      */
+ /*   A COMPLETED MAP  IN ONE PARTITION,  THE OPERATOR MAY JUMP      */
+ /*   TO THE OTHER PARTITION, AND START ENTERING DATA WHILE THE      */
+ /*   DATA FROM THE FIRST PARTITION IS PROCESSED.                    */
+ /*                                                                  */
+ /*   IN THIS SAMPLE PROGRAM DATA ENTRY IS BEING DONE, USING         */
+ /*   TWO IDENTICAL DATA ENTRY PARTITIONS. WHILE CICS/VS IS          */
+ /*   PROCESSING THE DATA ENTERED IN ONE PARTITION, THE TERMINAL     */
+ /*   OPERATOR CAN HIT THE JUMP KEY, AND START KEYING IN THE OTHER   */
+ /*   PARTITION. THE ORIGINAL PARTITION DATA REMAINS DISPLAYED       */
+ /*   AND UN-ALTERABLE, UNTIL THE APPLICATION FREES THE KEYBOARD     */
+ /*   FOR THIS PARTITION, AND PERHAPS SENDS AN ERROR MESSAGE         */
+ /*   RELATING TO THE DATA ENTERED IN THIS PARTITION.                */
+ /*                                                                  */
+ /*                                                                  */
+ /*   PARTNSET: DFH$PS                                               */
+ /*      PARTN: A                                                    */
+ /*      PARTN: B                                                    */
+ /*                                                                  */
+ /*     MAPSET: DFH$PGP                                              */
+ /*        MAP: MAPDE                                                */
+ /*                                                                  */
+ /*                                                                  */
+ /*   TO MAKE THE NEED FOR THIS FACILITY MORE APPARENT, THE ORDER-   */
+ /*   ENTRY MAP ALLOWS THE OPERATOR TO ENTER SEVERAL LINES OF        */
+ /*   ORDERS FOR ONE CUSTOMER ACCOUNT BEFORE ANY PROCESSING.  THE    */
+ /*   CUSTOMER ACCOUNT INFORMATION AND THE FOLLOWING LINE ORDER-     */
+ /*   ITEMS ARE SAVED IN TEMPORARY STORAGE.                          */
+ /*                                                                  */
+ /*   THE NUMBER OF DATA-ENTRY MAPS PRESENTED COULD BE INCREASED     */
+ /*   BY INCREASING THE NUMBER OF THE ARRAY 'PARTN' AND CHANGING     */
+ /*   'CURRENT' TO A 'FIXED' VALUE.                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*   OUTPUT = TEMPORARY STORAGE QUEUE 'DFH$PPQ'                     */
+ /*                                                                  */
+ /*   EXTERNAL REFERENCES = PARTITION-SET 'DFH$PS'                   */
+ /*                           AND MAP-SET 'DFH$PGP'                  */
+ /*                                                                  */
+ /*   EXIT = RETURN TO CICS/VS                                       */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /* $SEG(DFH$PPKO),COMP(SAMPLES),PROD(CICS TS )                      */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 170 841030 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $D1= I07267 630 020418 HDHYJB : Compile all samples             */
+ /*       R40551 680 120423 HDLISJH: Remove *PROCESS                 */
+ /*                                                                  */
+ /********************************************************************/
+
+ PPKO: PROC OPTIONS(MAIN);
+ DCL (
+   CSTG,
+   ADDR
+      ) BUILTIN;
+
+ DCL
+   1 PARTN(0:1),
+     2 NAME CHAR(2),
+     2 ORDERNUM PIC'999999',
+   CURRENT BIT(1) INIT('0'B),
+   ERR_FLAG BIT(1) INIT('0'B);
+
+ DCL
+   (WOCODE, QNUMBER) FIXED BIN(15),
+         RESPNUM FIXED BIN(15);
+
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /* LOAD THE PARTITION SET.                                           */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+   EXEC CICS SEND PARTNSET('DFH$PS');
+
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /* INITIALIZE WITH DATA ENTRY MAP IN PARTITION A, WHICH IS ACTIVATED */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+   PARTN.NAME(0) = 'A';
+
+   PARTN.ORDERNUM(0) = ALLOCNUM('DFH$PPQ');
+   CALL NULLIT(ADDR(MAPDEO),CSTG(MAPDEO));
+   DEORDRNO = PARTN.ORDERNUM(0);
+
+   EXEC CICS SEND MAP('MAPDE') MAPSET('DFH$PGP') ERASE
+                    OUTPARTN(PARTN.NAME(0)) ACTPARTN(PARTN.NAME(0));
+
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /* INITIALIZE DATA ENTRY MAP IN PARTITION B - NOT ACTIVATED.         */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+   PARTN.NAME(1) = 'B';
+
+   PARTN.ORDERNUM(1) = ALLOCNUM('DFH$PPQ');
+   CALL NULLIT(ADDR(MAPDEO),CSTG(MAPDEO));
+   DEORDRNO = PARTN.ORDERNUM(1);
+
+   EXEC CICS SEND MAP('MAPDE') MAPSET('DFH$PGP') ERASE FREEKB
+                  OUTPARTN(PARTN.NAME(1)) ACTPARTN(PARTN.NAME(0));
+
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /*                                                                   */
+ /* START OF LOOP. THE TERMINAL OPERATOR SHOULD KEY IN PARTITION A.   */
+ /*                                                                   */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ LOOP:
+   DCL LAST BIT(1) INIT('0'B);
+   DO WHILE (^LAST);
+
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /* RECEIVE THE TERMINAL OPERATOR INPUT, WHICH IS CONSTRAINED TO BE   */
+ /* FROM THE CURRENT(I.E.ACTIVE ) PARTITION.                          */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+     EXEC CICS RECEIVE MAP('MAPDE')
+                   MAPSET('DFH$PGP') INPARTN(PARTN.NAME(CURRENT))
+                   RESP(RESPNUM);
+
+     IF RESPNUM = DFHRESP(MAPFAIL)
+        THEN CALL MAP_ERROR;
+        ELSE CALL PROCESS_DATA;
+
+
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /*                                                                   */
+ /* BACK ROUND THE LOOP.                                              */
+ /*                                                                   */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+   END; /* DO WHILE(^LAST) */
+
+
+ PROCESS_DATA:
+  PROC;
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /* WHEN THE TERMINAL OPERATOR HAS ENTERED FROM THE ACTIVE PARTITION, */
+ /* ACTIVATE THE INACTIVE PARTITION AND START KEYING IN.              */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+ /* CLEAR ERROR PARTITION IF AN ERROR MESSAGE HAS BEEN SENT           */
+     IF ERR_FLAG
+     THEN DO;
+       ERR_FLAG = ^ERR_FLAG;
+       EXEC CICS SEND CONTROL ERASE OUTPARTN('P5');
+     END;
+
+     EXEC CICS SEND CONTROL WAIT
+                   FREEKB OUTPARTN(PARTN.NAME(CURRENT))
+                   ACTPARTN(PARTN.NAME(^CURRENT));
+
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /*                                                                   */
+ /* MEANWHILE CICS/VS IS PROCESSING                                   */
+ /* THE DATA THAT WAS ENTERED IN THE CURRENT PARTITION, NOW INACTIVE. */
+ /* WRITEOUT RETURNS '0' FOR DATA ACCEPTED, OR '1' FOR DATA REJECTED. */
+ /*                                                                   */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+     WOCODE =  WRITEOUT('DFH$PPQ',PARTN.ORDERNUM(CURRENT),
+                        DECUSTAI,ADDR(DEPNUM1L));
+
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /*                                                                   */
+ /* THE DATA ENTERED IN CURRENT PARTN IS EITHER ACCEPTED OR REJECTED, */
+ /* (AS SHOWN BY THE VALUE RETURNED BY WRITEOUT - 0:ACCEPT 1:REJECT)  */
+ /* VIA A SEND MAP TO THE INACTIVE PARTN WITH KEYBRD RESTORE. FURTHER */
+ /* DATA CAN THEN BE ENTERED IN ACTIVE PARTN. IN CASE THE OPERATOR    */
+ /* FORGOT, THE APPLICATION ACTIVATES THE 'NOT CURRENT' PARTITION.    */
+ /*                                                                   */
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+     IF WOCODE = 0  /* DID WRITEOUT ACCEPT THE DATA? */
+     THEN DO;
+       CALL NULLIT(ADDR(MAPDEO),CSTG(MAPDEO));
+       DEMESSGO = 'ORDER '||PARTN.ORDERNUM(CURRENT)||' ACCEPTED';
+       PARTN.ORDERNUM(CURRENT) = ALLOCNUM('DFH$PPQ');
+       DEORDRNO = PARTN.ORDERNUM(CURRENT);
+       EXEC CICS SEND MAP('MAPDE') MAPSET('DFH$PGP') ERASE FREEKB
+                      OUTPARTN(PARTN.NAME(CURRENT))
+                      ACTPARTN(PARTN.NAME(^CURRENT));
+     END;
+
+     ELSE DO;
+       DEORDRNO = PARTN.ORDERNUM(CURRENT);
+       DEMESSGO = 'ORDER '||PARTN.ORDERNUM(CURRENT)||' NOT ACCEPTED';
+       DEPNUM1L = -1; /* SET CURSOR POSITION */
+       EXEC CICS SEND MAP('MAPDE') MAPSET('DFH$PGP') FREEKB CURSOR
+                      OUTPARTN(PARTN.NAME(CURRENT))
+                      ACTPARTN(PARTN.NAME(^CURRENT));
+     END;
+
+     CURRENT = ^CURRENT; /* CATCH UP WITH THE OPERATOR. */
+  END PROCESS_DATA;
+
+ MAP_ERROR:
+  PROC;
+    IF EIBAID = DFHPF3   /* EXIT IF PF3 PRESSED */
+    THEN DO;
+      EXEC CICS SEND CONTROL FREEKB ERASE OUTPARTN('A');
+      EXEC CICS SEND CONTROL FREEKB ERASE OUTPARTN('B');
+      EXEC CICS RETURN;
+    END;
+
+    PMM1O   = 'ENTER DATA OR PF3 TO QUIT';
+    EXEC CICS SEND MAP('PM01') MAPSET('DFH$PGP') OUTPARTN('P5');
+    ERR_FLAG = '1'B;         /* SET ERROR FLAG TRUE */
+    CALL NULLIT(ADDR(MAPDEO),CSTG(MAPDEO));
+    DEORDRNO = PARTN.ORDERNUM(CURRENT);
+    DEMESSGO = 'ORDER '||PARTN.ORDERNUM(CURRENT)||' NOT ACCEPTED';
+    EXEC CICS SEND MAP('MAPDE') MAPSET('DFH$PGP')
+                   OUTPARTN(PARTN.NAME(CURRENT));
+  END MAP_ERROR;
+
+
+
+
+     DCL
+       1 OUTREC,
+         2 ONUM PIC'999999',
+         2 CNUM CHAR(6),
+         2 PNUM CHAR(6),
+         2 AMNT CHAR(6),
+         2 WNUM CHAR(2);
+
+
+ ALLOCNUM:
+ /** * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /* ALLOCATE AN ORDER NUMBER.                                        */
+ /** * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+   PROC(QNAME) RETURNS(PIC'999999');
+     DCL QNAME CHAR(8);
+     QNUMBER = 1;
+     EXEC CICS READQ TS
+                     QUEUE(QNAME)
+                     INTO(OUTREC)
+                     LENGTH(CSTG(OUTREC))
+                     ITEM(QNUMBER)
+                     RESP(RESPNUM)
+                     ;
+     IF RESPNUM = DFHRESP(QIDERR)
+        THEN DO;                  /* CREATE TEMPORARY STORAGE QUEUE */
+             OUTREC.ONUM = 1;
+             EXEC CICS WRITEQ TS
+                             QUEUE(QNAME)
+                             FROM(OUTREC)
+                             LENGTH(CSTG(OUTREC))
+                             ITEM(QNUMBER)
+                             MAIN
+                             ;
+             END;
+        ELSE DO;
+             OUTREC.ONUM = OUTREC.ONUM + 1;
+             EXEC CICS WRITEQ TS
+                             QUEUE(QNAME)
+                             FROM(OUTREC)
+                             LENGTH(CSTG(OUTREC))
+                             ITEM(QNUMBER) REWRITE
+                             MAIN
+                             ;
+             END;
+     RETURN(OUTREC.ONUM);
+   END ALLOCNUM;
+
+ WRITEOUT:
+ /** * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ /* EXAMINE THE ORDER ENTRY DATA, AND REJECT IT BY RETURNING '1', OR */
+ /* ACCEPT IT, SAVE THE INDIVIDUAL ORDERS, AND RETURN '0'.           */
+ /** * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+   PROC(QNAME,ONUM,CNUM,ENTRYPTR)
+                   RETURNS(FIXED BIN(15));
+     DCL
+       QNAME CHAR(8),
+       ONUM PIC'999999',
+       CNUM CHAR(6),
+       ENTRYPTR PTR,
+       1 ETABLE BASED(ENTRYPTR) UNAL,
+         2 ENTRY(8),
+           4 DEPNUM,
+             6 LENGTH FIXED BINARY (15,0),
+             6 FLAG CHARACTER (1),
+             6 PARTNUM CHAR(6),
+           4 DENUMB,
+             6 LENGTH FIXED BINARY (15,0),
+             6 FLAG CHARACTER (1),
+             6 AMOUNT CHAR(6),
+           4 DEWKNM,
+             6 LENGTH FIXED BINARY (15,0),
+             6 FLAG CHARACTER (1),
+             6 WNUM CHAR(2);
+     DO I = 1 TO 8 WHILE(ETABLE.DEPNUM.LENGTH(I) ^= 0
+                        &ETABLE.DENUMB.LENGTH(I) ^= 0
+                        &ETABLE.DEWKNM.LENGTH(I) ^= 0);
+       IF ETABLE.PARTNUM(I) = '555555'
+                                 /* CHECK BOGUS FAILURE CONDITION */
+       THEN RETURN(1); /* RETURN ^0 VALUE */
+       OUTREC.ONUM = ONUM; OUTREC.CNUM = CNUM;
+       OUTREC.PNUM = ETABLE.PARTNUM(I);
+       OUTREC.AMNT = ETABLE.AMOUNT(I);
+       OUTREC.WNUM = ETABLE.WNUM(I);
+       EXEC CICS WRITEQ TS
+                       QUEUE(QNAME)
+                       FROM(OUTREC)
+                       LENGTH(CSTG(OUTREC))
+                       MAIN
+                       ;
+     END;
+       /* DO I = 1 TO 8 WHILE(SUBSTR(ETABLE.PARTNUM(I),1,1) ^= ' ') */
+     RETURN(0); /* RETURN 0 */
+
+   END WRITEOUT;
+
+ NULLIT:
+   PROC(@PTR,@LEN);
+     DCL
+       (SUBSTR, LOW) BUILTIN;
+
+     DCL
+       @PTR PTR,
+       @LEN FIXED BIN(15),
+       @DUMM CHAR(256) BASED(@PTR);
+
+     SUBSTR(@DUMM,1,@LEN) = LOW(@LEN);
+
+   END NULLIT;
+
+  %INCLUDE DFH$PGP;
+  %INCLUDE DFHAID;
+
+ END PPKO;

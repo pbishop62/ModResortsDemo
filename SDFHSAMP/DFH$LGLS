@@ -1,0 +1,235 @@
+*======================================================================
+*
+* MODULE NAME = DFH$LGLS
+*
+* DESCRIPTIVE NAME = CICS TS  (SAMPLES) Sample GLUE program for XLGSTRM
+*
+*
+*
+*      Licensed Materials - Property of IBM
+*
+*      "Restricted Materials of IBM"
+*
+*      5655-Y04
+*
+*      (C) Copyright IBM Corp. 1999, 2014"
+*
+*
+*
+*
+* STATUS = 7.2.0
+*
+* TRANSACTION NAME = Not applicable
+*
+* FUNCTION =
+*    This is a sample program that can be used as a skeleton for
+*    writing a global user exit program for XLGSTRM.
+*
+* NOTES :
+*    DEPENDENCIES = S/390
+*    RESTRICTIONS =
+*       For this sample program to work as it is, the model log stream
+*       'CICSAD01.DEPT0001.MODEL100' should be created before it is
+*       run, otherwise CICS will fail to create the log stream.
+*
+*       See the note appended to the UEPIXG description in the INPUT
+*       section below.
+*    REGISTER CONVENTIONS =
+*       R0  - Work reg (implicit)
+*       R1  - Work reg
+*       R2  - Program data area
+*       R3  - GLUE parameter list(DFHUEPAR)
+*       R4  - Log stream definition parameter list
+*       R5  - XPI call parameter list
+*       R6  - Unused
+*       R7  - Unused
+*       R8  - Unused
+*       R9  - Unused
+*       R10 - Unused
+*       R11 - Program code base reg
+*       R12 - Unused
+*       R13 - Callers data area on entry/exit and kernel stack
+*       R14 - Callers return address on entry/exit else unused
+*       R15 - Code base address on entry and return code on exit
+*    MODULE TYPE = Source
+*    PROCESSOR = Assembler
+*    ATTRIBUTES = Read only, Serially Reusable
+*
+*----------------------------------------------------------------------
+* ENTRY POINT = DFH$LGLS
+*
+*   PURPOSE     = All functions
+*
+*   LINKAGE     = Called by the CICS exit handler
+*
+*   INPUT       = R1 contains the address of DFHUEPAR.
+*                 DFHUEPAR contains the following exit-specific
+*                 parameters:
+*                 UEPLSN   Address of a 26 byte log stream name
+*                 UEPMLSN  Address of a 26 byte model log stream name
+*                 UEPIXG   Address of the parameter list for the MVS
+*                          macro IXGINVNT.
+*                          Any field of this parameter list may be
+*                          changed via the macro IXGINVNT.
+*
+*                          NOTE: Please note that CICS's support for
+*                          this parameter list is limited to a
+*                          particular version for each release of CICS.
+*                          CICS TS 2.1 supports PLISTVER 2  for this
+*                          parameter list.
+*
+*                          You should not code this exit program to
+*                          modify a parameter that needs a higher
+*                          version number than that supported by the
+*                          CICS release it is intended to run on.
+*
+*                          See CICS Customization Guide for more
+*                          release specific information.
+*                 UEPLGTYP Address of a 1 byte log type, which can
+*                          assume the following values:
+*                             UEPSYSLG EQU  X'01' System log
+*                             UEPGENLG EQU  X'02' General log.
+*
+*   OUTPUT      = UEPMLSN  Address of a 26 byte model log stream name.
+*                          This name can optionally be changed.
+*                 UEPIXG   Address of the modified parameter list.
+*                 R15 = Return code (UERCNORM or UERCBYP).
+*
+*   EXIT-NORMAL = Return to CICS with R15 = UERCNORM.
+*
+*   EXIT-ERROR  = Return to CICS with R15 = UERCBYP to indicate:
+*                   a) an exit program failure
+*                   b) bypass log stream creation.
+*
+*----------------------------------------------------------------------
+*
+* DESCRIPTION
+*   The purpose of this sample program is to show how to access XLGSTRM
+*   parameters with the view of changing some of them.
+*
+*   The application logic is very simple, changing the model log stream
+*   name addressed by UEPMLSN and the HIGHOFFLOAD parameter held in the
+*   parameter list addressed by UEPIXG.
+*
+*   You will very likely need to change the application logic, which
+*   may include:
+*   a) The model log stream name pointed to by UEPMLSN
+*   b) Any element of log stream definition parameter list pointed to
+*      by UEPIXG, using the IXGINVNT macro.
+*
+*----------------------------------------------------------------------
+*
+* CHANGE ACTIVITY :
+*
+*        $MOD(DFH$LGLS),COMP(SAMPLES),PROD(CICS TS ):
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS
+*    $D1= I06897 610 990602 HD9SHGP : New sample GLUE
+*    $D2= I06897 610 990615 HD9SHGP : Add comment
+*    $D3= I06897 610 990702 HD9SHGP : Add PLISTVER(2)                 *
+*    $P0= M14219 610 990421 HD9SHGP : Creation
+*    $P1= M14861 610 991217 HD9SHGP : Fix RC and tidyup               *
+*
+*======================================================================
+*
+         TITLE 'Sample GLUE program for XLGSTRM'
+* Macro definitions
+* Set return code in caller's RSA
+         MACRO
+         SET_RETURN_CODE &RC
+         LA    R15,&RC             Get return code
+         L     R1,UEPEPSA          Get address of caller's RSA
+         ST    R15,16(R1)          Store RC in caller's R15
+         MEND
+*
+         DFHUEXIT TYPE=EP,ID=XLGSTRM GLUE parameter list definition
+         DFHUEXIT TYPE=XPIENV      Setup XPI environment
+         COPY DFHSMMCY             Setup XPI plist for SM
+*
+PROGDATA DSECT                     Program data area definition
+LSMODEL  DS    CL26                Log stream model name
+LSOFFLOD DS    F                   Log stream high offload value
+PROGDATL EQU   *-PROGDATA          Program data length
+*
+DFH$LGLS CSECT                     Code section
+DFH$LGLS AMODE 31                  Set Address mode
+DFH$LGLS RMODE ANY                 Set program location mode
+* Std program entry linkage
+         STM   R14,R12,12(R13)     Save caller's registers
+         LR    R11,R15             Set up code base register
+         USING DFH$LGLS,R11        .. tell ASM
+* Get access to GLUE parameter list
+         LR    R3,R1               Set base reg to input parameter list
+         USING DFHUEPAR,R3         .. tell ASM
+* Get access to the Kernel stack for XPI calls
+         L     R13,UEPSTACK        Set R13 to the Kernel stack
+* Issue program entry message
+         WTO   'DFH$LGLS Entry'    Issue entry message to console
+* Get storage for program data area
+         L     R5,UEPXSTOR         Set base reg to XPI plist
+         USING DFHSMMC_ARG,R5      .. tell ASM
+         DFHSMMCX CALL,                                                @
+               CLEAR,                                                  @
+               IN,                                                     @
+               FUNCTION(GETMAIN),                                      @
+               GET_LENGTH(PROGDATL),                                   @
+               SUSPEND(YES),                                           @
+               STORAGE_CLASS(USER),                                    @
+               OUT,                                                    @
+               ADDRESS((R2)),                                          @
+               RESPONSE(*),                                            @
+               REASON(*)
+         CLI   SMMC_RESPONSE,SMMC_OK Response OK?
+         BE    PDATAOK             .. yes
+         WTO   'DFH$LGLS - GETMAIN failure for program data area'
+         SET_RETURN_CODE UERCBYP   Set return code to UERCBYP      @P1C
+         B     RETURN              Return
+PDATAOK  DS    0H                  R2 is base register for program data
+         USING PROGDATA,R2         .. tell ASM
+*
+* ---------------------------------------------------------------------
+* Start of application logic
+* ---------------------------------------------------------------------
+*
+* Modify log stream model name
+         L     R1,UEPMLSN          Get address of model LSN in plist
+         MVC   0(L'NEWMODEL,R1),NEWMODEL Set model LSN in plist
+*
+* Modify log stream definition parameter list (IXGINVNT)
+* NOTE: see the note appended to the UEPIXG description in the program
+* prologue INPUT section.
+         MVC   LSOFFLOD,NEWOFFLD   Set high offload parameter
+         L     R4,UEPIXG           Set R4 to MVS Logger parameter list
+         IXGINVNT REQUEST=DEFINE,TYPE=LOGSTREAM,                       @
+               HIGHOFFLOAD=LSOFFLOD,                                   @
+               PLISTVER=2,                                             @
+               MF=(M,(R4),NOCHECK) Call MVS Logger to update p/list@D3C
+* Set return code to OK
+         SET_RETURN_CODE UERCNORM  Set return code to UERCNORM
+*
+* ---------------------------------------------------------------------
+* End of application logic
+* ---------------------------------------------------------------------
+*
+* Return to program caller
+RETURN   DS    0H
+* Release program data area
+         DFHSMMCX CALL,                                                @
+               CLEAR,                                                  @
+               IN,                                                     @
+               FUNCTION(FREEMAIN),                                     @
+               ADDRESS((R2)),                                          @
+               STORAGE_CLASS(USER),                                    @
+               OUT,                                                    @
+               RESPONSE(*),                                            @
+               REASON(*)
+* Issue program exit message
+         WTO   'DFH$LGLS Exit'     Issue exit message to console
+* Std program exit linkage
+         L     R13,UEPEPSA         Restore caller's save area
+         LM    R14,R12,12(R13)     Restore caller's register
+         BR    R14                 Return to caller
+* Constants
+NEWMODEL DC    CL26'CICSAD01.DEPT0001.MODEL100'  Model log stream name
+NEWOFFLD DC    F'77'               High offload
+         LTORG
+         END   DFH$LGLS

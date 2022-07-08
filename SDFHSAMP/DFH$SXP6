@@ -1,0 +1,206 @@
+***********************************************************************
+*                                                                     *
+*   MODULE NAME = DFH$SXP6                                            *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (RDO) Sample User Exit Program 6        *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1989, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*        Provides a sample user exit to show how to change the        *
+*        routing of a message from a Transient data queue to          *
+*        a list of consoles.                                          *
+*                                                                     *
+*        This sample shows how to route a message destined for        *
+*        transient data queue CSCS, to consoles with route codes      *
+*        2 & 11.                                                      *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*        None.                                                        *
+*                                                                     *
+*    RESTRICTIONS =                                                   *
+*        None.                                                        *
+*                                                                     *
+*    MODULE TYPE = Executable | Table                                 *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable, <Authorized>          *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*     $MOD(DFH$SXP6),COMP(SAMPLES),PROD(CICS TS ):                    *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= 507    320 890814 HD5EISR: Implicit flag.                   *
+*    $L1= 807    650 050721 HD4PALS: Pass product id on XMEOUT exit   *
+*    $P1= M60695 320 900129 HD6ISS: Change Msg Num From 0101 to 0108  *
+*    $P2= M62307 320 900602 HD3BADW: Use UERCNORM return code EQU     *
+*    $P3= M96433 510 960205 HD4PALS: RMODE ANY & Chng SN0108->SN1100  *
+*        R132499 710 161010 HD2GJST: Set rc in UEPCRCA if highest     *
+*                                                                     *
+***********************************************************************
+*/*(   Start of ABSTRACT commenting                     */
+**********************************************************
+* This instruction sets up the Sample user exit point.   *
+**********************************************************
+*
+         DFHUEXIT TYPE=EP,ID=XMEOUT
+*
+**********************************************************
+* The following DSECT maps a storage area you can use to *
+* make the exit program reentrant by storing the address *
+* of the storage you acquire in the first four bytes of  *
+* the 260-byte area provided by the user exit handler    *
+* (DFHUEH) and addressed by UEPXSTOR.                    *
+**********************************************************
+*
+TRANSTOR DSECT
+*
+**********************************************************
+* Register Equates                                       *
+**********************************************************
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+PMNTD    EQU   R3                  Number of TD queues
+PMNRC    EQU   R4                  Number of Route codes
+PMTDQ    EQU   R5                  Array of TD queues
+PMROU    EQU   R6                  Array of Route codes
+*
+**********************************************************
+* The next seven instructions form the normal start of a *
+* Sample user exit program, setting the addressing mode  *
+* to 31-bit, saving the calling program's registers,     *
+* establishing base addressing, and establishing the     *
+* addressing of the user exit parameter list             *
+**********************************************************
+DFH$SXP6 CSECT
+DFH$SXP6 AMODE 31
+DFH$SXP6 RMODE ANY                                                 @P3A
+         SAVE  (14,12)             SAVE REGISTERS
+         LR    R11,R15
+         USING DFH$SXP6,R11        SET UP PROGRAM BASE REGISTER
+         LR    R2,R1
+         USING DFHUEPAR,R2         ADDRESS USER EXIT PARAMETER LIST
+*
+**********************************************************
+* <<<<<< Section to be Modified by the Users.     >>>>>> *
+*                        START.                          *
+**********************************************************
+*
+**********************************************************
+*/*|   Is the number of TD queues zero ?  NTD = 0 ?     */
+*/*|   If yes, then we have no work to do, and exit     */
+*/*|            Return code NORMAL                      */
+**********************************************************
+         L     PMNTD,UEPMNTD       Get address of Number of TD queues
+         CLC   0(2,PMNTD),=H'0'
+         BE    RCNORMAL
+**********************************************************
+*/*|   Set up Transient data queue, route codes array   */
+*/*|            & number of route codes.                */
+**********************************************************
+         L     PMTDQ,UEPMTDQ       Get address of transient data queue
+         L     PMROU,UEPMROU       Get address of Route Codes array
+         L     PMNRC,UEPMNRC       Get address of Number of Routes
+**********************************************************
+*/*|   Is Message number = 1100?...                     */
+*/*|     & Product Id = DFH?...                         */         @L1A
+*/*|     & Domain Id = SN?...                           */
+*/*|     & only TD queue = CSCS?                        */
+*/*|   Yes? Then we've found what we want               */
+*/*|   No?  Exit - return code NORMAL                   */
+**********************************************************
+         L     R7,UEPCPID          Get address of Product id       @L1A
+         CLC   0(3,R7),=C'DFH'     Product id = DFH?               @L1A
+         BNE   RCNORMAL
+         L     R7,UEPCPDOM         Get address of Domain Id        @L1A
+         CLC   0(2,R7),=C'SN'      Domain Id = SN?                 @L1C
+         BNE   RCNORMAL
+         L     R7,UEPCPNUM         Get address of Message Number   @L1A
+         CLC   0(4,R7),=F'1100'    Message number = 1100?          @L1C
+         BNE   RCNORMAL
+         CLC   0(4,PMTDQ),=C'CSCS' TD queue = CSCS?
+         BNE   RCNORMAL
+         CLC   0(2,PMNTD),=H'1'    Number TD queues = 1?
+         BNE   RCNORMAL
+**********************************************************
+*/*|   Having found the correct message,                */
+*/*|   We decrease the number of transient data queues  */
+*/*|   ...increase the number of route codes to 2       */
+*/*|   ...and set the route codes to 2 and 11           */
+**********************************************************
+         MVC   0(2,PMNTD),=H'0'    Set Number of TD queues to 0
+         MVC   0(2,PMNRC),=H'2'    Set Number Route codes to 2
+         MVI   0(PMROU),X'02'      Set first route code to 2
+         MVI   1(PMROU),X'0B'      Set second route code to 11     @P1C
+*
+**********************************************************
+*                         END.                           *
+* <<<<<< Section to be Modified by the Users.     >>>>>> *
+**********************************************************
+*
+*/*)   Return code NORMAL                              */
+*
+**********************************************************
+*   RCNORMAL will set the return code to UERCNORM        *
+**********************************************************
+*
+RCNORMAL DS    0H
+         LA    R15,UERCNORM            Set Normal RC          @R132499C
+         B     STEND
+*
+STEND    DS    0H
+**********************************************************
+* Compare my RC (R15) with previous RC.                  *
+* IF my RC = previous, send it.                          *
+* IF my RC < previous, send previous.                    *
+* IF my RC > previous, send mine, and update previous    *
+* to mine.                                               *
+**********************************************************
+         ICM   R14,15,UEPCRCA          Load previous RC addr  @R132499A
+         BZ    STEND2                  None - send my rc      @R132499A
+         CH    R15,0(,R14)             Compare RC with prev   @R132499A
+         BE    STEND2                  Equal - send mine      @R132499A
+         BL    STEND1                  Mine low - send prev   @R132499A
+         STH   R15,0(,R14)             Mine high set previous @R132499A
+         B     STEND2                  Go exit                @R132499A
+STEND1   DS    0H
+         LH    R15,0(,R14)             Get previous RC        @R132499A
+STEND2   DS    0H
+**********************************************************
+* Restore registers, set return code, and return to user *
+* exit handler.                                          *
+**********************************************************
+         L     R13,UEPEPSA
+         RETURN (14,12),RC=(15)
+         LTORG
+         END   DFH$SXP6

@@ -1,0 +1,1067 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* MODULE NAME = DFH$SNPW                                           */
+ /*                                                                  */
+ /* DESCRIPTIVE NAME = CICS TS  Password Expiration Management       */
+ /*                             sample program for Windows/NT**      */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*      Licensed Materials - Property of IBM                        */
+ /*                                                                  */
+ /*      "Restricted Materials of IBM"                               */
+ /*                                                                  */
+ /*      5655-Y04                                                    */
+ /*                                                                  */
+ /*      (C) Copyright IBM Corp. 1999"                               */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* STATUS = 7.2.0                                                   */
+ /*                                                                  */
+ /* FUNCTION =                                                       */
+ /*      This module is an example of how to write a client          */
+ /*      application to exploit the Password Expiration Management   */
+ /*      server functions of a CICS/ESA or CICS Transaction Server   */
+ /*      host system. This version is designed to run under          */
+ /*      Windows/NT** using the Microsoft** SNA server or            */
+ /*      the IBM Communications Server for NT.                       */
+ /*                                                                  */
+ /*      For further information on using the Password Expiration    */
+ /*      Management interface, see the CICS-RACF Security Guide,     */
+ /*      SC33-1701.                                                  */
+ /*                                                                  */
+ /*  **  Windows, Windows/NT, and Microsoft are trademarks of        */
+ /*      the Microsoft Corporation.                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* NOTES :                                                          */
+ /*  DEPENDENCIES = Windows/NT                                       */
+ /*  MODULE TYPE = Executable                                        */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* CHANGE ACTIVITY :                                                */
+ /*      $MOD(DFH$SNPW),COMP(SIGNON),PROD(CICS TS ):                 */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXXIII : REMARKS                        */
+ /*  $P0= M31338 530 990105 HD2JPEH : Password Expiration Management */
+ /*                                                                  */
+ /********************************************************************/
+
+  #include <windows.h>
+
+  #include <stdio.h>
+  #include <stdlib.h>
+  #include <stddef.h>
+  #include <string.h>
+
+  #include <winappc.h> /* win32 appc */
+  #include <wincsv.h>  /* appc common service verbs */
+
+
+  /* Macro clear_vbc sets the APPC verb control block to zero */
+  #define clear_vcb()   memset(&vcb,(int)'\0',sizeof(vcb))
+
+  #define FALSE                 0
+  #define TRUE                  1
+
+  /* Type of PEM function, and possible values */
+  typedef unsigned int resp_type;
+  #define PEM_OK                0
+  #define TP_STARTED_FAIL       1
+  #define ALLOCATE_FAIL         2
+  #define BUFF_ALLOC_FAIL       3
+  #define SEND_FAIL             4
+  #define RECEIVE_FAIL          5
+  #define RECEIVE_DEALLOC_FAIL  6
+  #define TP_ENDED_FAIL         7
+  #define MALLOC_FAIL           8
+
+  /* PEM has two call functions: Sign On and Change Password */
+  typedef unsigned int func_type;
+  #define SIGN_ON               0
+  #define CHANGE                1
+
+  /* APPC return code: Primary and Secondary */
+  typedef struct ret_code_str {
+          unsigned short p;
+          unsigned long  s;
+          } APPC_rc;
+
+  /* Length Constants */
+  #define PEM_REQ_LEN          45
+  #define PEM_RESP_LEN         50
+  #define PARTNER_LU_ALIAS_LEN  8
+  #define TP_NAME_LEN          64
+  #define LU_ALIAS_LEN          8
+  #define MODE_NAME_LEN         8
+  #define TP_ID_LEN             8
+
+  /* Pointer to shared buffer */
+  unsigned char *buffer_address;
+
+
+  /* Verb Control Block (vcb) - See APPC.H for component declarations */
+  union  {
+         struct allocate              alloc;
+         struct deallocate            dealloc;
+         struct receive_and_wait      rcv_wait;
+         struct send_data             send;
+         struct tp_started            tpstart;
+         struct tp_ended              tpend;
+         struct convert               cnvt;
+         } vcb;
+
+  /* Pointer to the vcb */
+  unsigned char *vcbptr;
+
+  /* Function Prototypes */
+
+  void      main(int,char **);
+  resp_type pem(func_type,char *,char *,char *,char *,char *,char *,
+                char *,char *);
+  void      build_request(func_type,char *,char *,char *,char *);
+  APPC_rc   PEM_TP_STARTED(char *,char *,char *);
+  APPC_rc   PEM_ALLOCATE(char *,char *,char *,char *,unsigned
+  long *);
+  APPC_rc   PEM_SEND_REQUEST(char *,unsigned long,char *);
+  APPC_rc   PEM_RECEIVE_RESPONSE(char *,unsigned long,char *);
+  APPC_rc   PEM_RECEIVE_DEALLOC(char *,unsigned long);
+  APPC_rc   PEM_TP_ENDED(char *);
+  unsigned char *     get_shared_buffer(void);
+  void      free_shared_buffer(unsigned char *);
+  void      convert_to_EBCDIC(char *, unsigned int);
+  void      display_PEM_response(char *);
+
+
+  /********************************************************************/
+  /* MAIN function                                                    */
+  /*                                                                  */
+  /* This function is a skeleton driver for the PEM function,         */
+  /* It takes the arguments specified on the program invocation,      */
+  /* and passes them on to PEM.                                       */
+  /*                                                                  */
+  /* Syntax of program invocation is:                                 */
+  /*                                                                  */
+  /* PEM partner_LU_alias LU_alias mode_name user_id password         */
+  /*                                                 {<new_password>} */
+  /*                                                                  */
+  /* Input:                                                           */
+  /*   ARGC                                                           */
+  /*   ARGV                                                           */
+  /*                                                                  */
+  /********************************************************************/
+
+  void main(argc, argv)
+
+  int       argc;
+  char      *argv[];
+
+  {
+    resp_type resp;
+    func_type function_required;
+    unsigned int arg1_len, arg2_len, arg3_len,
+                 arg4_len, arg5_len, arg6_len;
+
+    char      tps_tp_name[TP_NAME_LEN],     /* TP name for TP Started */
+              partner_LU_alias[PARTNER_LU_ALIAS_LEN],
+              LU_alias[LU_ALIAS_LEN],
+              mode_name[MODE_NAME_LEN],
+              user_id[9],                   /* 8 Chars plus null      */
+              password[9],
+              new_password[9],
+              PEM_response[PEM_RESP_LEN];   /* PEM Response Structure */
+
+    switch (argc) {                        /* If new passwd specified */
+    case  6 : function_required = SIGN_ON; /* No, then Sign On        */
+              break;
+    case  7 : function_required = CHANGE;  /* Yes, then Change Passwd */
+              strcpy(new_password, strupr(argv[6]));
+              break;
+    default : printf("Invalid Syntax\n\n");
+              printf("Command Format is:\n\n");
+              printf("PEM <partner_LU_alias> <LU_alias> <mode_name> "
+                     "<User_Id> <Password> {<New_Password>}\n");
+              exit(0);
+              break;
+    }
+
+    /* validate parameters */
+    arg1_len = strlen(argv[1]);
+    arg2_len = strlen(argv[2]);
+    arg3_len = strlen(argv[3]);
+    arg4_len = strlen(argv[4]);
+    arg5_len = strlen(argv[5]);
+    if (function_required == CHANGE) arg6_len = strlen(argv[6]);
+
+    if (arg1_len > PARTNER_LU_ALIAS_LEN ||
+        arg2_len > LU_ALIAS_LEN ||
+        arg3_len > MODE_NAME_LEN ||
+        arg4_len > 8 ||
+        arg5_len > 8 ||
+        (arg6_len > 8 && function_required == CHANGE)) {
+          printf("Invalid Parameter Length\n\n");
+          printf("Maximum Length is 8 characters\n\n");
+          exit(0);
+          }
+
+    /* Set APPC parameters to blanks */
+    memset(tps_tp_name,     (int) ' ', TP_NAME_LEN);
+    memset(partner_LU_alias,(int) ' ', PARTNER_LU_ALIAS_LEN);
+    memset(LU_alias,        (int) ' ', LU_ALIAS_LEN);
+    memset(mode_name,       (int) ' ', MODE_NAME_LEN);
+
+    /* Set APPC Parameters to values        */
+    /* specified on the program invocation. */
+    /* Note, as memcpy is being used,       */
+    /* the resulting strings will not be    */
+    /* null-terminated.                     */
+    memcpy(tps_tp_name,      strupr(argv[0]), strlen(argv[0]));
+    memcpy(partner_LU_alias, strupr(argv[1]), strlen(argv[1]));
+    memcpy(LU_alias,         strupr(argv[2]), strlen(argv[2]));
+    memcpy(mode_name,        strupr(argv[3]), strlen(argv[3]));
+
+    /* Set the User-id and password fields */
+    strcpy(user_id,  strupr(argv[4]));
+    strcpy(password, strupr(argv[5]));
+
+
+    vcbptr = (unsigned char *)&vcb;         /* Set pointer to vbc     */
+
+    resp = pem(function_required,           /* Issue the PEM request  */
+               tps_tp_name,
+               partner_LU_alias,
+               LU_alias,
+               mode_name,
+               user_id,
+               password,
+               new_password,
+               PEM_response);
+
+
+
+
+    switch (resp) {             /* Check outcome of request */
+    case PEM_OK               : printf("PEM_OK\n\n");
+                                display_PEM_response(PEM_response);
+                                break;
+    case TP_STARTED_FAIL      : printf("TP_STARTED_FAIL\n");
+                                break;
+    case ALLOCATE_FAIL        : printf("ALLOCATE_FAIL\n");
+                                break;
+    case BUFF_ALLOC_FAIL      : printf("BUFF_ALLOC_FAIL\n");
+                                break;
+    case SEND_FAIL            : printf("SEND_FAIL\n");
+                                break;
+    case RECEIVE_FAIL         : printf("RECEIVE_FAIL\n");
+                                break;
+    case RECEIVE_DEALLOC_FAIL : printf("RECEIVE_DEALLOC_FAIL\n");
+                                break;
+    case TP_ENDED_FAIL        : printf("TP_ENDED_FAIL\n");
+                                break;
+    case MALLOC_FAIL          : printf("MALLOC_FAIL\n");
+                                break;
+    default                   : printf("Invalid Resp from PEM\n");
+                                break;
+    }
+  }
+  /********************************************************************/
+
+  /********************************************************************/
+  /* APPC Password Expiration Manager (PEM) Requester                 */
+  /*                                                                  */
+  /* Builds a PEM request structure, sends it to the CICS Server,     */
+  /* and receives the response.                                       */
+  /* This response structure is passed back to the caller.            */
+  /*                                                                  */
+  /* Input:                                                           */
+  /*   function_required                                              */
+  /*   tps_tp_name                                                    */
+  /*   partner_LU_alias                                               */
+  /*   LU_alias                                                       */
+  /*   mode_name                                                      */
+  /*   user_id                                                        */
+  /*   password                                                       */
+  /*   new_password                                                   */
+  /*                                                                  */
+  /* Output:                                                          */
+  /*   PEM_response                                                   */
+  /*                                                                  */
+  /* Return Value:                                                    */
+  /*   resp_type = {PEM_OK, TP_STARTED_FAIL, ALLOCATE_FAIL,           */
+  /*                BUFF_ALLOC_FAIL, SEND_FAIL, RECEIVE_FAIL,         */
+  /*                RECEIVE_DEALLOC_FAIL, TP_ENDED_FAIL, MALLOC_FAIL} */
+  /*                                                                  */
+  /********************************************************************/
+
+  resp_type pem (function_required,
+                 tps_tp_name,
+                 partner_LU_alias,
+                 LU_alias,
+                 mode_name,
+                 user_id,
+                 password,
+                 new_password,
+                 PEM_response)
+
+  func_type      function_required;
+  char           tps_tp_name[],
+                 partner_LU_alias[],
+                 LU_alias[],
+                 mode_name[],
+                 user_id[],
+                 password[],
+                 new_password[],
+                 PEM_response[];
+
+  {
+    char         tp_name[TP_NAME_LEN],
+                 tp_id[TP_ID_LEN],
+                 PEM_request[PEM_REQ_LEN];
+
+    APPC_rc ret_code;        /* APPC Primary & Secondary return code  */
+    unsigned long conv_id;   /* APPC Conversation Id                  */
+
+    /* Set TP Name of CICS PEM server transaction - 0x06F3F0F1 */
+    memset(tp_name,(int)' ',TP_NAME_LEN);
+
+    tp_name[0] = (char) 0x06;
+    tp_name[1] = (char) 0xF3;
+    tp_name[2] = (char) 0xF0;
+    tp_name[3] = (char) 0xF1;
+
+
+    /* Build a PEM request structure from the given parameters */
+    build_request(function_required,
+                  user_id,
+                  password,
+                  new_password,
+                  PEM_request);
+
+    /*Tell APPC a TP has Started */
+    ret_code = PEM_TP_STARTED(LU_alias,
+                          tps_tp_name,
+                          tp_id);
+
+    if (ret_code.p != AP_OK) {
+       printf("PEM_TP_STARTED failed\n");
+       printf("APPC Return Code - Primary  : %#010hx \n", ret_code.p);
+       printf("                 - Secondary: %#010lx \n", ret_code.s);
+       return(TP_STARTED_FAIL);
+    }
+
+    /* Allocate APPC session for conversation */
+    ret_code = PEM_ALLOCATE(tp_id,
+                        partner_LU_alias,
+                        tp_name,
+                        mode_name,
+                        &conv_id );
+
+    if (ret_code.p != AP_OK) {
+       printf("ALLOCATE failed\n");
+       printf("APPC Return Code - Primary  : %#010hx \n", ret_code.p);
+       printf("                 - Secondary: %#010lx \n", ret_code.s);
+       return(ALLOCATE_FAIL);
+    }
+
+
+    /* allocate APPC data buffer */
+    buffer_address = get_shared_buffer();
+    if (buffer_address == FALSE) {
+       return(MALLOC_FAIL);
+    }
+
+
+    /* Send request to the CICS PEM Server, inviting a response */
+    ret_code = PEM_SEND_REQUEST(tp_id,
+                            conv_id,
+                            PEM_request);
+
+    if (ret_code.p != AP_OK) {
+       printf("SEND_REQUEST failed\n");
+       printf("APPC Return Code - Primary  : %#010hx \n", ret_code.p);
+       printf("                 - Secondary: %#010lx \n", ret_code.s);
+       free_shared_buffer(buffer_address);
+       return(SEND_FAIL);
+    }
+
+
+
+
+    /* Receive response from the CICS PEM Server */
+    ret_code = PEM_RECEIVE_RESPONSE(tp_id,
+                                conv_id,
+                                PEM_response);
+
+    if (ret_code.p != AP_OK) {
+       printf("APPC RECEIVE failed\n");
+       printf("APPC Return Code - Primary  : %#010hx \n", ret_code.p);
+       printf("                 - Secondary: %#010lx \n", ret_code.s);
+       free_shared_buffer(buffer_address);
+       return(RECEIVE_FAIL);
+    }
+
+    /* Receive Deallocation notification from the CICS PEM Server */
+    ret_code = PEM_RECEIVE_DEALLOC(tp_id,
+                               conv_id);
+
+     free_shared_buffer(buffer_address);
+
+
+    if (ret_code.p != AP_DEALLOC_NORMAL) {
+       printf("APPC RECEIVE_DEALLOCATE failed\n");
+       printf("APPC Return Code - Primary  : %#010hx \n", ret_code.p);
+       printf("                 - Secondary: %#010lx \n", ret_code.s);
+       return(RECEIVE_DEALLOC_FAIL);
+    }
+
+    /* Tell APPC that transaction program is done */
+    ret_code = PEM_TP_ENDED(tp_id);
+
+    if (ret_code.p != AP_OK) {
+       printf("APPC TP_ENDED failed\n");
+       printf("APPC Return Code - Primary  : %#010hx \n", ret_code.p);
+       printf("                 - Secondary: %#010lx \n", ret_code.s);
+       return(TP_ENDED_FAIL);
+    }
+
+    return(PEM_OK);
+  }
+  /********************************************************************/
+
+
+  /********************************************************************/
+  /* build_request                                                    */
+  /*                                                                  */
+  /* Builds a PEM request structure as defined in the                 */
+  /* CICS-RACF Security Guide.                                        */
+  /*                                                                  */
+  /* Input:                                                           */
+  /*   function_required                                              */
+  /*   user_id                                                        */
+  /*   password                                                       */
+  /*   new_password                                                   */
+  /*                                                                  */
+  /* Output:                                                          */
+  /*   PEM_request                                                    */
+  /*   User_id, password and new_password will now be in EBCDIC.      */
+  /*                                                                  */
+  /********************************************************************/
+
+  void build_request(function_required,
+                     user_id,
+                     password,
+                     new_password,
+                     PEM_request)
+
+  func_type          function_required;
+  char               user_id[],
+                     password[],
+                     new_password[],
+                     PEM_request[];
+
+
+
+
+  {
+  char *sub_field_ptr;    /* Used to build variable length sub fields */
+  unsigned int length;    /* Sub field length                         */
+
+    /* Set the GDS Variable ID to 0x1221 */
+    PEM_request[2] = (char) 0x12;
+    PEM_request[3] = (char) 0x21;
+
+    /* Set the Request field to 0xFF00 for Sign On,        */
+    /*                          0xFF01 for Change Password */
+    PEM_request[6] = (char) 0xFF;
+    if (function_required == SIGN_ON)
+       PEM_request[7] = (char) 0x00;
+    else
+       PEM_request[7] = (char) 0x01;
+
+    /* Set pointer to start of variable length sub fields */
+    sub_field_ptr = &PEM_request[8];
+
+    /* set user id sub field - length byte, id 0x01, and EBCDIC value */
+    length = strlen(user_id);
+    sub_field_ptr[0] = (char) length + 2;
+    sub_field_ptr[1] = (char) 0x01;
+    convert_to_EBCDIC(user_id, length);
+    memcpy(&sub_field_ptr[2], user_id, length);
+
+    /* Set pointer to start of next variable length sub field */
+    sub_field_ptr = &sub_field_ptr[2] + length;
+
+    /* set password sub field - length byte, id 0x02,      */
+    /*                          and EBCDIC value           */
+    length = strlen(password);
+    sub_field_ptr[0] = (char) length + 2;
+    sub_field_ptr[1] = (char) 0x02;
+    convert_to_EBCDIC(password, length);
+    memcpy(&sub_field_ptr[2], password, length);
+
+    /* Set pointer to start of next variable length sub field */
+    sub_field_ptr = &sub_field_ptr[2] + length;
+
+    /* If Change Password requested, then include the new password */
+    if (function_required == CHANGE) {
+      /* set new password sub field - length byte, id 0x06,  */
+      /*                              and EBCDIC value       */
+      length = strlen(new_password);
+      sub_field_ptr[0] = (char) length + 2;
+      sub_field_ptr[1] = (char) 0x06;
+      convert_to_EBCDIC(new_password, length);
+      memcpy(&sub_field_ptr[2], new_password, length);
+
+      /* Set pointer to start of next variable length sub field */
+      sub_field_ptr = &sub_field_ptr[2] + length;
+    }
+
+    /* Set GDS Variable LL - high order byte to 0x00,                 */
+    /*                       low order byte to the                    */
+    /*                           length of the built request,         */
+    /*                           including the length of this LL.     */
+    PEM_request[0] = (char) 0x00;
+    PEM_request[1] = (char) (sub_field_ptr - &PEM_request[0]);
+
+    /* Set nested data structure LL - high order byte to 0x00,        */
+    /*                                low order byte to the length    */
+    /*                                    of the GDS variable,        */
+    /*                                    minus the length of         */
+    /*                                    the GDS (4 bytes)           */
+    PEM_request[4] = (char) 0x00;
+    PEM_request[5] = (char) (sub_field_ptr - &PEM_request[0] - 4);
+  }
+  /********************************************************************/
+
+
+
+
+  /********************************************************************/
+  /* convert_to_EBCDIC                                                */
+  /*                                                                  */
+  /* Converts the given ASCII string to EBCDIC.                       */
+  /*                                                                  */
+  /* input:                                                           */
+  /*   ASCII_string                                                   */
+  /*   length                                                         */
+  /*                                                                  */
+  /* output:                                                          */
+  /*   ASCII_string                                                   */
+  /*                                                                  */
+  /********************************************************************/
+
+  void convert_to_EBCDIC(ASCII_string, length)
+
+  char ASCII_string[];
+  unsigned int length;
+  {
+    clear_vcb();
+
+    vcb.cnvt.opcode = SV_CONVERT;
+    vcb.cnvt.direction = SV_ASCII_TO_EBCDIC;
+    vcb.cnvt.char_set = SV_AE;
+    vcb.cnvt.len = length;
+    vcb.cnvt.source = vcb.cnvt.target = (unsigned char *)ASCII_string;
+
+    WinCSV ((long) vcbptr);
+  }
+  /********************************************************************/
+
+
+
+  /********************************************************************/
+  /* get_shared_buffer                                                */
+  /*                                                                  */
+  /* APPC requires a data buffer in a shared unnamed segment          */
+  /*                                                                  */
+  /* return value                                                     */
+  /*   dptr: address of storage                                       */
+  /*                                                                  */
+  /********************************************************************/
+  unsigned char * get_shared_buffer(void)
+  {
+    unsigned char *dptr;            /* Address of allocated buffer    */
+
+    dptr = malloc(256);
+    if (dptr == NULL) {
+      printf( "Error allocating memory buffer\n");
+      return(FALSE);
+    }
+    return dptr;
+  }
+  /********************************************************************/
+
+
+  /********************************************************************/
+  /* free_shared_buffer                                               */
+  /*                                                                  */
+  /* Free data buffer in the shared                                   */
+  /*                                                                  */
+  /********************************************************************/
+
+   void free_shared_buffer(unsigned char * dptr)
+  {
+    free(dptr);
+  }
+  /********************************************************************/
+
+
+  /********************************************************************/
+  /* PEM_TP_STARTED                                                   */
+  /*                                                                  */
+  /* Notify APPC that we are requesting resources for a transaction   */
+  /* program initiated as a result of a local command, rather than    */
+  /* an incoming allocation request.                                  */
+  /*                                                                  */
+  /* input:                                                           */
+  /*   LU_alias                                                       */
+  /*   tps_tp_name                                                    */
+  /*                                                                  */
+  /* output:                                                          */
+  /*   tp_id                                                          */
+  /*   tps_tp_name will now be in EBCDIC                              */
+  /*                                                                  */
+  /* return value                                                     */
+  /*   APPC return code                                               */
+  /*                                                                  */
+  /********************************************************************/
+
+  APPC_rc PEM_TP_STARTED(LU_alias,
+                     tps_tp_name,
+                     tp_id)
+
+  char LU_alias[],
+       tps_tp_name[],
+       tp_id[];
+  {
+    APPC_rc rc;
+
+    /* The TPS TP name must be in EBCDIC */
+    convert_to_EBCDIC(tps_tp_name, TP_NAME_LEN);
+
+    clear_vcb();
+
+    vcb.tpstart.opcode = AP_TP_STARTED;
+
+    memcpy (vcb.tpstart.lu_alias, LU_alias, LU_ALIAS_LEN);
+    memcpy (vcb.tpstart.tp_name, tps_tp_name, TP_NAME_LEN);
+
+    APPC ((long) vcbptr);
+
+    rc.p = vcb.tpstart.primary_rc;
+    rc.s = vcb.tpstart.secondary_rc;
+
+    /* If call was sucessful, return the assigned TP id */
+    if (rc.p == AP_OK)
+      memcpy (tp_id, vcb.tpstart.tp_id, TP_ID_LEN);
+
+    return(rc);
+  }
+  /********************************************************************/
+
+
+  /********************************************************************/
+  /* PEM_ALLOCATE                                                     */
+  /*                                                                  */
+  /* Allocate a session between the local and partner LUs.            */
+  /* This conversation will be of type - basic, synclevel - none,     */
+  /* security - none, and will return control when a session is       */
+  /* allocated.                                                       */
+  /*                                                                  */
+  /* input:                                                           */
+  /*   tp_id                                                          */
+  /*   partner_LU_alias                                               */
+  /*   tp_name                                                        */
+  /*   mode_name                                                      */
+  /*                                                                  */
+  /* output:                                                          */
+  /*   conv_id                                                        */
+  /*   mode_name will now be in EBCDIC                                */
+  /*                                                                  */
+  /* return value                                                     */
+  /*   APPC return code                                               */
+  /*                                                                  */
+  /********************************************************************/
+
+  APPC_rc   PEM_ALLOCATE (tp_id,
+            partner_LU_alias,
+            tp_name,
+            mode_name,
+            conv_id)
+
+  char      tp_id[],
+            partner_LU_alias[],
+            tp_name[],
+            mode_name[];
+
+  unsigned long *conv_id;
+  {
+    APPC_rc rc;
+
+
+
+    /* The mode name must be in EBCDIC */
+    convert_to_EBCDIC(mode_name, MODE_NAME_LEN);
+
+    clear_vcb();
+
+    vcb.alloc.opcode     = AP_B_ALLOCATE;
+    vcb.alloc.opext      = AP_BASIC_CONVERSATION;
+    vcb.alloc.sync_level = AP_NONE;
+    vcb.alloc.security   = AP_NONE;
+    vcb.alloc.rtn_ctl    = AP_WHEN_SESSION_FREE;
+    /* Activate Session but don't hang */
+
+    memcpy (vcb.alloc.tp_id, tp_id, TP_ID_LEN);
+    memcpy (vcb.alloc.plu_alias, partner_LU_alias,
+    PARTNER_LU_ALIAS_LEN);
+    memcpy (vcb.alloc.tp_name, tp_name, TP_NAME_LEN);
+    memcpy (vcb.alloc.mode_name, mode_name, MODE_NAME_LEN);
+
+    APPC ((long) vcbptr);
+
+    rc.p = vcb.alloc.primary_rc;
+    rc.s = vcb.alloc.secondary_rc;
+
+    /* if the call was successful, set the conv_id assigned */
+    if (rc.p == AP_OK)
+      *conv_id = vcb.alloc.conv_id;
+
+    return(rc);
+  }
+  /********************************************************************/
+
+
+  /********************************************************************/
+  /* SEND_REQUEST                                                     */
+  /*                                                                  */
+  /* Send the PEM request to the CICS PEM Server.                     */
+  /* The send will flush the data, and will prepare to receive.       */
+  /*                                                                  */
+  /* input:                                                           */
+  /*   tp_id                                                          */
+  /*   conv_id                                                        */
+  /*   PEM_request                                                    */
+  /*                                                                  */
+  /* return value                                                     */
+  /*   APPC return code                                               */
+  /*                                                                  */
+  /********************************************************************/
+
+  APPC_rc
+  PEM_SEND_REQUEST(tp_id,
+               conv_id,
+               PEM_request)
+
+  unsigned long conv_id;
+  char          tp_id[],
+                PEM_request[];
+  {
+    register unsigned msg_len;
+    unsigned short send_length;
+    APPC_rc rc;
+
+    /* Set send length to low order byte of GDS variable LL */
+    send_length = (int) PEM_request[1];
+    msg_len = send_length;
+
+
+
+    /* Copy PEM request to shared buffer */
+    for(;msg_len;)  {
+      msg_len--;
+      buffer_address[msg_len] = PEM_request[msg_len];
+    }
+
+    clear_vcb();
+
+    vcb.send.opcode  = AP_B_SEND_DATA;
+    vcb.send.opext   = AP_BASIC_CONVERSATION;
+    vcb.send.type    = AP_SEND_DATA_P_TO_R_FLUSH; /* invite response */
+    vcb.send.conv_id = conv_id;
+    vcb.send.dlen    = send_length;
+    vcb.send.dptr    = buffer_address;
+
+    memcpy (vcb.send.tp_id, tp_id, TP_ID_LEN);
+
+    APPC ((long) vcbptr);
+
+    rc.p = vcb.send.primary_rc;
+    rc.s = vcb.send.secondary_rc;
+
+    return(rc);
+  }
+  /********************************************************************/
+
+
+  /********************************************************************/
+  /* RECEIVE_RESPONSE                                                 */
+  /*                                                                  */
+  /* Receive the PEM response structure,                              */
+  /* (as defined in the CICS-RACF Security Guide)                     */
+  /* from the CICS PEM Server.                                        */
+  /*                                                                  */
+  /* input:                                                           */
+  /*   tp_id                                                          */
+  /*   conv_id                                                        */
+  /*                                                                  */
+  /* output:                                                          */
+  /*   PEM_response                                                   */
+  /*                                                                  */
+  /* return value                                                     */
+  /*   APPC return code                                               */
+  /*                                                                  */
+  /********************************************************************/
+
+  APPC_rc
+  PEM_RECEIVE_RESPONSE(tp_id,
+                   conv_id,
+                   PEM_response)
+
+  unsigned long    conv_id;
+  char             tp_id[],
+                   PEM_response[];
+  {
+    unsigned short received_length,
+                   max_length;
+    APPC_rc rc;
+
+    max_length = PEM_RESP_LEN;
+
+    clear_vcb();
+
+    vcb.rcv_wait.opcode     = AP_B_RECEIVE_AND_WAIT;
+    vcb.rcv_wait.opext      = AP_BASIC_CONVERSATION;
+    vcb.rcv_wait.rtn_status = AP_NO;
+    vcb.rcv_wait.conv_id    = conv_id;
+    vcb.rcv_wait.max_len    = max_length;
+    vcb.rcv_wait.dptr       = buffer_address;
+
+
+    memcpy (vcb.rcv_wait.tp_id, tp_id, TP_ID_LEN);
+
+    APPC ((long) vcbptr);
+
+    rc.p = vcb.rcv_wait.primary_rc;
+rc.s = vcb.rcv_wait.secondary_rc;
+
+    /* If response received ok, then copy data from shared buffer */
+    if (rc.p == AP_OK) {
+      received_length = vcb.rcv_wait.dlen;
+
+      for(;received_length;) {
+        received_length--;
+        PEM_response[received_length] = buffer_address[received_length];
+      }
+    }
+
+    return(rc);
+  }
+  /********************************************************************/
+
+
+  /********************************************************************/
+  /* RECEIVE_DEALLOC                                                  */
+  /*                                                                  */
+  /* Receive deallocation notification (AP_DEALLOC_NORMAL return code)*/
+  /* from the CICS PEM Server.  If this is not received, then         */
+  /* termination of the conversation is forced by issuing a           */
+  /* deallocate abend.                                                */
+  /*                                                                  */
+  /* input:                                                           */
+  /*   tp_id                                                          */
+  /*   conv_id                                                        */
+  /*                                                                  */
+  /* return value                                                     */
+  /*   APPC return code                                               */
+  /*                                                                  */
+  /********************************************************************/
+
+  APPC_rc
+  PEM_RECEIVE_DEALLOC(tp_id,
+                  conv_id)
+
+  unsigned long   conv_id;
+  char            tp_id[];
+  {
+    APPC_rc rc;
+
+    clear_vcb();
+
+    vcb.rcv_wait.opcode     = AP_B_RECEIVE_AND_WAIT;
+    vcb.rcv_wait.opext      = AP_BASIC_CONVERSATION;
+    vcb.rcv_wait.rtn_status = AP_NO;
+    vcb.rcv_wait.conv_id    = conv_id;
+    vcb.rcv_wait.max_len    = 50;     /* Arbitrary length */
+    vcb.rcv_wait.dptr       = buffer_address;
+
+    memcpy (vcb.rcv_wait.tp_id, tp_id, TP_ID_LEN);
+
+    APPC ((long) vcbptr);
+
+    rc.p = vcb.rcv_wait.primary_rc;
+    rc.s = vcb.rcv_wait.secondary_rc;
+
+
+    /* If conversation has not been terminated by the CICS PEM Server,*/
+    /* then we issue a deallocate abend to force termination.         */
+    if (!(rc.p == AP_DEALLOC_NORMAL |
+          rc.p == AP_DEALLOC_ABEND_PROG |
+          rc.p == AP_DEALLOC_ABEND_SVC |
+          rc.p == AP_DEALLOC_ABEND_TIMER |
+          rc.p == AP_CONV_FAILURE_NO_RETRY |
+          rc.p == AP_CONV_FAILURE_RETRY)) {
+
+      clear_vcb();
+
+      vcb.dealloc.opcode       = AP_B_DEALLOCATE;
+      vcb.dealloc.opext        = AP_BASIC_CONVERSATION;
+      vcb.dealloc.dealloc_type = AP_ABEND;
+      vcb.dealloc.conv_id      = conv_id;
+
+      memcpy (vcb.dealloc.tp_id, tp_id, TP_ID_LEN);
+
+      APPC ((long) vcbptr);
+    }
+
+    return(rc);
+  }
+  /********************************************************************/
+
+
+  /********************************************************************/
+  /* DO_TP_ENDED                                                      */
+  /*                                                                  */
+  /* Notify APPC of the end of this transaction program.              */
+  /*                                                                  */
+  /* input:                                                           */
+  /*   tp_id                                                          */
+  /*                                                                  */
+  /* return value                                                     */
+  /*   APPC return code                                               */
+  /*                                                                  */
+  /********************************************************************/
+
+  APPC_rc
+  PEM_TP_ENDED(tp_id)
+
+  char     tp_id[];
+  {
+    APPC_rc rc;
+
+    clear_vcb();
+
+    vcb.tpend.opcode = AP_TP_ENDED;
+
+    memcpy (vcb.tpend.tp_id, tp_id, TP_ID_LEN);
+
+    APPC ( (long) vcbptr );
+
+    rc.p = vcb.tpend.primary_rc;
+    rc.s = vcb.tpend.secondary_rc;
+
+    return(rc);
+  }
+  /********************************************************************/
+
+  /********************************************************************/
+  /* display_PEM_response                                             */
+  /*                                                                  */
+  /* Displays the date returned in the PEM response structure.        */
+  /*                                                                  */
+  /* input:                                                           */
+  /*   PEM_response                                                   */
+  /*                                                                  */
+  /********************************************************************/
+
+
+
+  void display_PEM_response(PEM_response)
+
+  char PEM_response[];
+  {
+    unsigned int index,
+                 length,
+                 sub_field_len,
+                 i;
+
+    length = (unsigned int) PEM_response[1];
+
+    /* Display GDS LLID */
+    printf("GDS LLID\n");
+
+    for(index = 0; index <= 3; index++)
+      printf("%02hx ", (unsigned char) PEM_response[index]);
+      printf("\n\n");
+
+    /* Display Sign-On Reply LLID */
+    printf("Sign-On Reply LLID\n");
+
+    for(; index <= 7; index++)
+      printf("%02hx ", (unsigned char) PEM_response[index]);
+    printf("\n\n");
+
+    /* Display Sign_on Completion Status Subfield */
+    printf("Sign-On Completion Status Subfield\n");
+
+    for(; index <= 10; index++)
+      printf("%02hx ", (unsigned char) PEM_response[index]);
+    printf("\n\n");
+
+    while (index < length) {
+      sub_field_len = (unsigned int) PEM_response[index];
+
+      /* Switch on Sub Field ID */
+      switch((unsigned int) PEM_response[index + 1]) {
+      case 0x01 : printf("Sign-On Request Formating Error Subfield\n");
+
+                  for(i = 0; i < sub_field_len; i++)
+                    printf("%02hx ",
+                           (unsigned char)PEM_response[index+i]);
+                  printf("\n\n");
+                  index = index + i;
+                  break;
+      case 0x02 : printf("Date & Time of Current "
+                         "Successful Sign-On Subfield\n");
+
+                  for(i = 0; i < sub_field_len; i++)
+                    printf("%02hx ",
+                           (unsigned char)PEM_response[index+i]);
+                  printf("\n\n");
+                  index = index + i;
+                  break;
+      case 0x03 : printf("Date & Time of Last Successful "
+                         "Sign-On Subfield\n");
+
+                  for(i = 0; i < sub_field_len; i++)
+                    printf("%02hx ",
+                           (unsigned char)PEM_response[index+i]);
+                  printf("\n\n");
+                  index = index + i;
+                  break;
+      case 0x04 : printf("Date & Time Password will Expire Subfield\n");
+
+                  for(i = 0; i < sub_field_len; i++)
+                    printf("%02hx ",
+                           (unsigned char)PEM_response[index+i]);
+                  printf("\n\n");
+                  index = index + i;
+                  break;
+      case 0x05 : printf("Revoke Count Subfield\n");
+
+
+
+                  for(i = 0; i < sub_field_len; i++)
+                    printf("%02hx ",
+                           (unsigned char)PEM_response[index+i]);
+                  printf("\n\n");
+                  index = index + i;
+                  break;
+      default :   printf("Invalid Subfield ID\n");
+                  index = PEM_RESP_LEN;
+      }
+      }
+      }

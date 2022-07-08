@@ -1,0 +1,316 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$PREN                                           */
+ /*                                                                  */
+ /* Descriptive Name = Order Entry for Sample Application            */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1984, 2012"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /* $SEG(DFH$PREN),COMP(SAMPLES),PROD(CICS TS ):                     */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 170 840814 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $P2= D14922 650 051220 HDGRPNT: 2 Add FIXED to DFH$PREN/$PREP   */
+ /*  $D1= I07267 630 020418 HDHYJB : Compile all samples             */
+ /*       R40551 680 120423 HDLISJH: Remove *PROCESS                 */
+ /*                                                                  */
+ /********************************************************************/
+ ORDER:PROC(COMPOINT)  OPTIONS(MAIN);
+
+ %INCLUDE DFHBMSCA;                   /*STANDARD ATTRIBUTE CHARACTERS*/
+ %INCLUDE DFH$PFIL;                   /*COLLECTION OF ACCOUNTS       */
+ %INCLUDE DFH$PL86;                   /*RECORD DESCRIPTION FOR L86O  */
+ %INCLUDE DFH$PGK;                    /*MAP DEFINITION               */
+ %INCLUDE DFHAID;                     /*ATTENTION IDENTIFER VALUES   */
+
+ DCL                                  /*BUILT IN FUNCTIONS           */
+    (ADDR,
+     LOW,
+     STG,
+     SUBSTR,
+     VERIFY) BUILTIN;
+
+ DCL
+     CHSTR       CHAR(256) BASED;
+ DCL
+     ERROR_FLAG  BIT(1)    INIT('0'B);
+ DCL
+     END_FLAG    BIT(1)    INIT('0'B);
+ DCL
+     COMPOINT    PTR;
+ DCL
+     RESPONSE FIXED BINARY(31);        /* RESPONSES TO CICS CMDS @P2C */
+ DCL
+     DUMMY_FLAG  CHAR(1) BASED(COMPOINT);  /* DUMMY COMM. AREA */
+ DCL PRESMSG CHAR(20) STATIC
+       INIT('PROCESSING COMPLETED');
+
+   /*                                                                 */
+   /* AN EXIT IS SET UP TO TRAP ANY UNEXPECTED ERRORS. NOTE THAT ALL  */
+   /* OTHER ERRORS ARE DETECTED EXPLICITLY BY THE PROGRAM BY          */
+   /* SPECIFYING THE "RESP" OPTION ON CICS COMMANDS.                  */
+   /*                                                                 */
+   EXEC CICS HANDLE CONDITION ERROR(OTHER_ERRORS);
+ /*********************************************************************/
+ /* CLEAR AND DISPLAY OUTPUT MAP IF THIS IS 1ST PROGRAM INVOCATION    */
+ /*********************************************************************/
+   IF EIBCALEN = 0 THEN DO;
+      /*                                                              */
+      /* THE LENGTH OF THE "COMMAREA" IS TESTED. IF ZERO THEN THE     */
+      /* PROGRAM MUST DISPLAY THE ORDER ENTRY MAP AT AN ERASED SCREEN.*/
+      /*                                                              */
+      ALLOCATE DUMMY_FLAG;
+      SUBSTR(ADDR(DFH$PGKO)->CHSTR,1,STG(DFH$PGKO))=LOW(STG(DFH$PGKO));
+      /*                                                              */
+      /* ERASE SCREEN + DISPLAY MAP                                   */
+      /*                                                              */
+      EXEC CICS SEND MAP('DFH$PGK') ERASE RESP(RESPONSE);
+   END;
+   ELSE
+      /*                                                              */
+      /* IF A COMMAREA HAS BEEN PASSED THEN THE PROCEDURE "RECEIVE"   */
+      /* IS CALLED TO RECEIVE THE ORDER ENTRY MAP FROM THE SCREEN AND */
+      /* VALIDATE THE ORDER.                                          */
+      /*                                                              */
+      /* RECEIVE MAP FROM SCREEN IF THIS IS NOT 1ST PROGRAM           */
+      /* INVOCATION.                                                  */
+      /*                                                              */
+      CALL RECEIVE;
+   /*                                                                 */
+   /* IF THE CLEAR KEY WAS PRESSED THEN THE TRANSACTION TERMINATES.   */
+   /*                                                                 */
+   IF END_FLAG THEN EXEC CICS RETURN;
+   /*                                                                 */
+   /* CHECK RESPONSES TO CICS COMMANDS                                */
+   /*                                                                 */
+   SELECT(RESPONSE);
+      /*                                                              */
+      /* THE RESPONSE TO THE CICS COMMAND ISSUED FROM WITHIN THE      */
+      /* PROCEDURE "RECEIVE" IS CHECKED. NOTE THAT THE PROCEDURE      */
+      /* "RECEIVE" TERMINATES IMMEDIATELY WHEN A RESPONSE OTHER THAN  */
+      /* "NORMAL" IS RETURNED FROM A CICS COMMAND.                    */
+      /*                                                              */
+      WHEN(DFHRESP(NORMAL)); /* DO NOTHING */
+      WHEN(DFHRESP(MAPFAIL))
+                 /*                                                   */
+                 /* ERROR IN RECEIVING MAP FROM SCREEN                */
+                 /*                                                   */
+                 CALL MAPFAIL;
+      WHEN(DFHRESP(NOTFND))
+                 /*                                                   */
+                 /* RECORD NOT FOUND                                  */
+                 /*                                                   */
+                 CALL NOTFOUND;
+      OTHERWISE DO;
+                 /*                                                   */
+                 /* UNEXPECTED ERROR - TERMINATE TRANSACTION          */
+                 /*                                                   */
+                 CALL ERRORS;
+                 EXEC CICS RETURN;
+     END;
+   END;
+   /*                                                                 */
+   /* CONTROL IS RETURNED TO CICS ALONG WITH A TRANSACTION IDENTIFIER */
+   /* AND "COMMAREA". NOTE THAT THE "COMMAREA" DOES NOT CONTAIN ANY   */
+   /* INFORMATION THAT IS USED BY THE PROGRAM, BUT THE PRESENCE OF    */
+   /* A "COMMAREA" DENOTES THAT AN ORDER ENTRY VALIDATION SHOULD BE   */
+   /* CARRIED OUT.                                                    */
+   /*                                                                 */
+   EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(DUMMY_FLAG) LENGTH(1);
+
+   RECEIVE: PROC;
+   /*                                                                 */
+   /* THIS "RECEIVE MAP" CAUSES A READ FROM THE TERMINAL AND MAPS IN  */
+   /* THE CUSTOMER NUMBER, PART NUMBER AND QUANTITY WHEN THE "ENTER"  */
+   /* KEY WAS PRESSED.                                                */
+   /*                                                                 */
+   /* IF THE "CLEAR" KEY WAS PRESSED THEN THE PROCEDURE "ENDPROC" IS  */
+   /* CALLED AND THE "RECEIVE" PROCEDURE ENDS.                        */
+   /*                                                                 */
+   /* ANY OTHER PF KEY WILL CAUSE AN ERROR MESSAGE AND THE SCREEN     */
+   /* WILL BE REDISPLAYED.                                            */
+   /*                                                                 */
+   SELECT (EIBAID);
+        /*                                                            */
+        /* THE USER PRESSED ENTER.                                    */
+        /*                                                            */
+        WHEN (DFHENTER);
+        /*                                                            */
+        /* CLEAR KEY PRESSED. TERMINATE THE PROGRAM                   */
+        /*                                                            */
+        WHEN (DFHCLEAR)
+        DO;
+           CALL ENDPORD;
+           RETURN;
+        END;
+        /*                                                            */
+        /* WRONG KEY PRESSED. OUTPUT MESSAGE AND REDISPLAY THE SCREEN */
+        /*                                                            */
+        OTHERWISE
+        DO;
+           MSG2O = 'PRESS ENTER OR CLEAR';
+           MSG2A = DFHBMASB;
+           /*                                                         */
+           /* REDISPLAY THE SCREEN                                    */
+           /*                                                         */
+           EXEC CICS SEND MAP ('DFH$PGK');
+           RETURN;
+        END;
+   END;
+   /*                                                                 */
+   /* "ENTER" WAS PRESSED. RECEIVE THE MAP.                           */
+   /*                                                                 */
+   EXEC CICS RECEIVE MAP('DFH$PGK') RESP(RESPONSE);
+   /*                                                                 */
+   /* MAP IN CUSTNO,PARTNO & QUANT                                    */
+   /*                                                                 */
+   IF RESPONSE^=DFHRESP(NORMAL) THEN RETURN;
+   ERROR_FLAG='0'B;
+   CUSTNOA,PARTNOA,QUANTA=DFHBMFSE;   /*MDT=1 IN CASE NEED TO REINPUT*/
+ /*********************************************************************/
+ /*                                      SIMPLE VALIDATION OF DATA    */
+ /*********************************************************************/
+   /*                                                                 */
+   /* THE ORDER DETAILS ARE CHECKED, INVALID ORDERS ARE REDISPLAYED   */
+   /* FOR CORRECTION. ERROR FIELDS ARE HIGHLIGHTED AND HAVE "MDT" SET */
+   /* ON. THE USER SHOULD ADD FURTHER EDITING STEPS NECESSARY TO      */
+   /* ENSURE ONLY VALID ORDERS ARE ACCEPTED.                          */
+   /*                                                                 */
+   IF VERIFY(CUSTNOI,'1234567890')^=0 THEN
+     DO;
+       CUSTNOA    = DFHUNINT;
+       ERROR_FLAG = '1'B;
+     END;
+   IF VERIFY(PARTNOI,'1234567890')^=0 THEN
+     DO;
+       PARTNOA    = DFHUNINT;
+       ERROR_FLAG = '1'B;
+     END;
+   IF VERIFY(QUANTI,'1234567890')^=0 THEN
+     DO;
+       QUANTA     = DFHUNINT;
+       ERROR_FLAG = '1'B;
+     END;
+   IF ERROR_FLAG THEN
+     DO;
+       /*                                                             */
+       /* THE ERROR MESSAGE "DATA ERROR - REENTER" IS A CONSTANT IN   */
+       /* THE MAP LOAD MODULE AND IS SENT TO THE TERMINAL, WITH ANY   */
+       /* OTHER CONSTANT INFORMATION, UNLESS "DATAONLY" IS SPECIFIED  */
+       /* ON THE "SEND MAP". THE MESSAGE IS NORMALLY DARK(NON-DISPLAY)*/
+       /* THIS INSTRUCTION OVERRIDES THE DARK ATTRIBUTE AND THE       */
+       /* MESSAGE APPEARS IN HIGH INTENSITY WHEN THE "SEND MAP"       */
+       /* COMMAND IS EXECUTED.                                        */
+       /*                                                             */
+       MSG2A=DFHBMASB;                          /*DATA ERROR-REENTER */
+       EXEC CICS SEND MAP('DFH$PGK') ERASE;
+       RETURN;
+     END;
+ /*********************************************************************/
+ /*                                    READ RECORD,CHECK CUSTNO EXISTS*/
+ /*********************************************************************/
+   /*                                                                 */
+   /* THE FILE CONTROL "READ" COMMAND ATTEMPTS TO READ THE CUSTOMER   */
+   /* RECORD FROM "FILEA".                                            */
+   /*                                                                 */
+   EXEC CICS READ FILE('FILEA') INTO(FILEA) RIDFLD(CUSTNOI)
+             RESP(RESPONSE);
+   IF RESPONSE^=DFHRESP(NORMAL) THEN RETURN;
+   /*                                                                 */
+   /* THE ORDER DETAILS ARE MOVED FROM THE INPUT MAP TO THE QUEUE AREA*/
+   /*                                                                 */
+   CUSTNO   = CUSTNOI;
+   PARTNO   = PARTNOI;
+   QUANTITY = QUANTI;
+   TERMID   = EIBTRMID;
+ /*********************************************************************/
+ /*                                    WRITE VALID ORDER TO TD QUEUE  */
+ /*********************************************************************/
+   /*                                                                 */
+   /* THE "WRITEQ TD" COMMAND WRITES THE ORDER RECORD TO A SEQUENTIAL */
+   /* FILE, A TRANSIENT DATA QUEUE.                                   */
+   /*                                                                 */
+   EXEC CICS WRITEQ TD QUEUE ('L86O') FROM (L86O) LENGTH(22);
+   /*                                                                 */
+   /* THE ORDER ENTRY MAP IS REDISPLAYED READY FOR THE NEXT ORDER.    */
+   /* ONLY THE MAP LOAD MODULE IS USED TO BUILD THE SCREEN DISPLAY,   */
+   /* "MAPONLY" CAUSES THE DATA IN THE MAP DSECT AREA TO BE IGNORED.  */
+   /* "ERASEAUP" ERASES ALL THE UNPROTECTED DATA ON THE SCREEN, THAT  */
+   /* IS, THE CUSTOMER NUMBER, PART NUMBER AND QUANTITY.              */
+   /*                                                                 */
+   EXEC CICS SEND MAP('DFH$PGK') MAPONLY ERASEAUP;
+   END RECEIVE;
+ /*********************************************************************/
+ /*      HANDLE ERROR CONDITIONS                                      */
+ /*********************************************************************/
+   /*                                                                 */
+   /* IF THERE IS NO RECORD FOR THE CUSTOMER ON "FILEA", CICS RAISES  */
+   /* THE "NOTFND" CONDITION AND THE PROGRAM BRANCHES HERE.           */
+   /* THE ATTRIBUTE FOR THE CUSTOMER NUMBER FIELD IS SET TO HIGH      */
+   /* INTENSITY WITH "MDT" AND AN ERROR MESSAGE "NUMBER NOT FOUND -   */
+   /* REENTER" IS SET TO DISPLAY IN HIGH INTENSITY.                   */
+   /* THE ORDER IS REDISPLAYED FOR CORRECTION.                        */
+   /*                                                                 */
+   NOTFOUND: PROC;                              /*INVALID ACCOUNT NO */
+   CUSTNOA = DFHUNINT;
+   MSG1A   = DFHBMASB;                          /*NUMBER NOT FOUND   */
+   EXEC CICS SEND MAP('DFH$PGK');
+   END NOTFOUND;
+   /*                                                                 */
+   /* IF NO FIELDS ARE ENTERED, THE "MAPFAIL" CONDITION OCCURS.       */
+   /* THE MESSAGE "DATA ERROR-REENTER" IS DISPLAYED IN HIGH INTENSITY.*/
+   /*                                                                 */
+   MAPFAIL: PROC;                               /* NO DATA IN FIELDS  */
+   SUBSTR(ADDR(DFH$PGKO)->CHSTR,1,STG(DFH$PGKO))=LOW(STG(DFH$PGKO));
+   MSG2A=DFHBMASB;                              /* DATA ERROR -REENTER*/
+   EXEC CICS SEND MAP('DFH$PGK');
+   END MAPFAIL;
+ /*********************************************************************/
+ /*                                    EXIT FROM PROGRAM              */
+ /*********************************************************************/
+   /*                                                                 */
+   /* IF AN ERROR OCCURS A DUMP IS TAKEN AND THE MESSAGE "TRANSACTION */
+   /* TERMINATED" IS DISPLAYED IN HIGH INTENSITY IN THE DATA ERROR    */
+   /* MESSAGE AREA. THE PROGRAM TERMINATES LEAVING THE ORDER ENTRY    */
+   /* SCREEN DISPLAYED.                                               */
+   /*                                                                 */
+   ERRORS: PROC;                                /*GENERAL ERROR COND */
+   MSG2O='TRANSACTION TERMINATED';
+   MSG2A=DFHBMASB;                              /*DATA ERROR -REENTER*/
+   EXEC CICS SEND MAP('DFH$PGK') NOHANDLE;
+   EXEC CICS DUMP DUMPCODE('ERRS');
+   END ERRORS;
+   /*                                                                 */
+   /* UNEXPECTED ERRORS.                                              */
+   /*                                                                 */
+   OTHER_ERRORS:
+   CALL ERRORS;
+   EXEC CICS RETURN;
+   /*                                                                 */
+   /* WHEN THE "CLEAR" KEY IS PRESSED THE PROGRAM TERMINATES. THE     */
+   /* MESSAGE "PROCESSING COMPLETED" IS DISPLAYED ON A BLANK SCREEN   */
+   /* AND THE KEYBOARD IS FREED.                                      */
+   /*                                                                 */
+   ENDPORD: PROC;                               /*EXIT-'CLEAR'WAS HIT*/
+   END_FLAG = '1'B;
+   EXEC CICS SEND TEXT FROM(PRESMSG) ERASE;
+   EXEC CICS SEND CONTROL FREEKB;               /*SET INPUT-INHIB OFF*/
+   END ENDPORD;
+   END;

@@ -1,0 +1,528 @@
+         TITLE 'DFH$IFBL - CICS INTERCOMMUNICATION SAMPLE - REMOTE FILE*
+                BROWSE - LOCAL PROCESSING'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$IFBL                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Remote File Browse Local Processing Sample       *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1985, 1993"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*        INPUTS TO THIS PROGRAM         START BROWSE KEY              *
+*        ( FROM USERS SCREEN )          REMOTE FILE NAME              *
+*                                       REMOTE SYSTEM ID              *
+*                                                                     *
+*        OUTPUTS FROM THIS PROGRAM      START BROWSE KEY              *
+*        ( PASSED TO PROGRAM IFBR )     REMOTE FILE NAME              *
+*                                       RUN AND DIRECTION FLAG        *
+*                                       ( FIRST RUN AND               *
+*                                         BROWSE FWD OR BKWD BITS )   *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$IFBL),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= Z30    170 85     HD1XIC : CREATE BASE SOURCE               *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*    $P2= M81202 410 930323 HD4OGB  : Add entry points to Sample pgms *
+*                                                                     *
+***********************************************************************
+*
+***********************************************************************
+*        STATUS FLAG AND EIB SESSION STORAGE AREA                     *
+***********************************************************************
+DFHEISTG DSECT
+*
+XDFEIFLG DS    0CL7
+*
+XSYNC    DS    C                   IF SET, EXECUTE SYNCPOINT
+*
+XFREE    DS    C                   IF SET, FREE TERMINAL / LU
+*
+XRECV    DS    C                   IF SET, EXECUTE RECEIVE
+*
+XSEND    DS    C                   RESERVED
+*
+XATT     DS    C                   IF SET, EXECUTE EXTRACT TO
+*                                     ACCESS ATTACH HEADER DATA
+XEOC     DS    C                   IF SET, END-OF-CHAIN WAS
+*                                     RECEIVED WITH DATA
+XFMH     DS    C                   IF SET, DATA PASSED TO APPL'N
+*                                     CONTAINS FMH - N/A FOR LU6.2
+*
+***********************************************************************
+*        MAP DEFINITIONS FOR MAPSET DFH$IGB                           *
+***********************************************************************
+*
+         COPY  DFH$IGB
+         COPY  DFHAID
+*
+OUTAREA  DS    0CL19               DATA OUTPUT AREA
+TRANOUT  DS    CL4                 TRANSACTION TO INITIATE
+FLAG     DS    XL1                 RUN AND DIRECTION FLAG
+KEYOUT   DS    CL6                 START BROWSE KEY OUTPUT
+BRDSET   DS    CL8                 FILE TO BE BROWSED
+*
+ATCHSESS DS    CL4                 ATTACHED SESSION ID
+MESSAGE  DS    CL36                OUTPUT MESSAGE
+INAREA   DS    CL350               DATA INPUT AREA
+RECVDMSG DS    CL20                RECEIVED MESSAGE TO BE DISPLAYED
+INLEN    DS    H                   LENGTH OF TS RECORD
+OUTLEN   DS    H                   DATA OUTPUT LENGTH
+RECLEN   DS    H                   LENGTH OF A RECVD RECORD
+MSGLEN   DS    H                   LENGTH OF OUTPUT MSG
+FROMLEN  DS    H                   COMMON SEND LENGTH VARIABLE
+CURSOR   DS    H                   CURSOR POSITION ON PAGE
+REGSTOR1 DS    F                   LINK REGISTER SAVE AREA 1
+RESP     DS    F                   RESPONSES TO CICS COMMANDS
+REGSTOR2 DS    F                   LINK REGISTER SAVE AREA 2
+SAVEIT EQU     X'01'               FIRST RUN INDICATOR BIT
+FORWARD  EQU   X'02'               FORWARD BROWSE INDICATOR BIT
+R0       EQU   0
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R14      EQU   14
+*
+*
+FILEA    DSECT
+FILEREC  DS    CL86
+*
+*
+DFH$IFBL CSECT  ,                                                  @P2C
+*
+*
+         BAL   R14,GETDATA         RECEIVE CORRECT USER INPUT
+*
+         BAL   R14,SETUP           INITIALIZATION SECTION
+*
+         BAL   R14,CLEARSCN        CLEAR USERS SCREEN
+*
+GETMORE  DS    0H
+*
+         CH    R7,PAGEFULL         IS PAGE FULL ?
+         BNE   NOTFULL             NO....  CONTINUE.
+         LA    R7,1                YES.... POSITION CURSOR
+         STH   R7,CURSOR           AT TOP OF SCREEN.
+*
+         BAL   R14,CLEARSCN        CLEAR USERS SCREEN
+*
+NOTFULL  DS    0H
+*
+***********************************************************************
+*        OBTAIN CONVERSATION LINK                                     *
+***********************************************************************
+*
+*
+***********************************************************************
+*        ACQUIRE SESSION TO REMOTE SYSTEM                             *
+***********************************************************************
+*
+         EXEC CICS ALLOCATE SYSID(RSYSI) RESP(RESP)
+         CLC   RESP,DFHRESP(SYSIDERR)       CHECK FOR VALID SYSTEM ID
+         BE    SYSERR1
+         CLC   RESP,DFHRESP(NORMAL)         CHECK FOR NORMAL RESPONSE
+         BNE   ERROR1
+*
+         MVC   ATCHSESS,EIBRSRCE   SAVE SESSION NAME
+*
+***********************************************************************
+*        CONVERSE WITH REMOTE TRANSACTION ( IMPLICIT SEND/RECEIVE )   *
+***********************************************************************
+*
+         EXEC CICS CONVERSE SESSION(ATCHSESS) FROMLENGTH(OUTLEN)       *
+               FROM(OUTAREA) TOLENGTH(INLEN) INTO(INAREA)              *
+               RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BE    CONVEROK
+         CLC   RESP,DFHRESP(EOC)   EOC RESPONSE OK, ALL ELSE ERROR
+         BNE   ERROR1
+*
+***********************************************************************
+*        FREE THE SESSION AND PROCESS THE DATA RECEIVED               *
+***********************************************************************
+*
+CONVEROK DS    0H
+         EXEC CICS FREE SESSION(ATCHSESS) RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+*
+         BAL   R14,DISPDATA        SEND DATA RECEIVED TO SCREEN
+*
+         BAL   R14,GOAGAIN         ASK USER IF MORE BROWSING REQUIRED
+*
+         B     GETMORE             LOOP BACK TO RECEIVE MORE RECORDS
+*
+GETDATA  DS    0H
+*
+***********************************************************************
+*        ROUTINE TO RECEIVE USERS INPUT FROM SCREEN AND VALIDATE IT   *
+***********************************************************************
+*
+MAPFAIL  DS    0H
+         XC    SPMAPAI(SPMAPAE-SPMAPAI),SPMAPAI     CLEAR MAP STORAGE
+         ST    R14,REGSTOR1                         SAVE LINK REGISTER.
+*
+***********************************************************************
+*        SEND INITIAL REQUEST MENU TO SCREEN                          *
+***********************************************************************
+*
+CLEANUP  DS    0H
+*
+         EXEC CICS SEND MAP('SPMAPA') MAPSET('DFH$IGB') MAPONLY        *
+               ERASE WAIT RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+*
+RETRY    DS    0H
+*
+*
+         EXEC CICS RECEIVE MAP('SPMAPA') MAPSET('DFH$IGB')             *
+               RESP(RESP)
+         CLI   EIBAID,DFHPF3          WAS PF3 PRESSED?
+         BE    COMPLETE               .... YES, GO TO COMPLETE
+         CLI   EIBAID,DFHCLEAR        WAS CLEAR KEY PRESSED?
+         BE    CLEANUP                .... YES, GO TO CLEANUP
+         CLI   EIBAID,DFHENTER        WAS ENTER KEY PRESSED?
+         BNE   INVMSG                 IF NOT, GO TO INVMSG
+         CLC   RESP,DFHRESP(NORMAL)   WAS NORMAL REPONSE?
+         BE    RECEVOK1               ... YES, GO TO RECEVOK1
+         CLC   RESP,DFHRESP(EOC)      WAS EOC RESPONSE?
+         BNE   ERROR1                 ... NO, ERROR
+*
+RECEVOK1 DS    0H
+         CLI   STRTKEYI,0             START KEY FIELD CHANGED ?
+         BE    BADKEY                 NO, SEND ERROR MSG.
+         CLC   STRTKEYL,=H'0'         ANY DATA GIVEN ?
+         BNE   KEYGVN                 YES, TEST FILE FIELD.
+*
+BADKEY   DS    0H
+         LA    R5,=CL(L'ERRMSGO)'PLEASE SUPPLY A START BROWSE KEY'
+         B     RESEND
+*
+INVMSG   DS    0H
+         LA    R5,=CL(L'ERRMSGO)'INVALID KEY ENTERED'
+         B     SENDMAP
+*
+KEYGVN   DS    0H
+         CLI   RDSETI,0               FILE FIELD CHANGED ?
+         BE    BADDSET                NO, SEND ERROR MSG.
+         CLC   RDSETL,=H'0'           ANY DATA GIVEN ?
+         BNE   DSETGVN                YES, TEST SYSID FIELD.
+*
+BADDSET  DS    0H
+         LA    R5,=CL(L'ERRMSGO)'PLEASE SUPPLY A FILE NAME'
+         B     RESEND
+*
+DSETGVN  DS    0H
+         L     R14,REGSTOR1           RESET LINK REGISTER.
+         CLI   RSYSI,0                SYSID FIELD CHANGED ?
+         BE    BADSYSID               NO, SEND ERROR MSG.
+         CLC   RSYSL,=H'0'            ANY DATA GIVEN ?
+         BNER  R14                    YES, ALL FIELDS PRESENT.
+*
+BADSYSID DS    0H
+         LA    R5,=CL(L'ERRMSGO)'PLEASE SUPPLY A REMOTE SYSTEM ID'
+*
+RESEND   DS    0H                     VALUE NOT GIVEN, INFORM USER.
+*
+***********************************************************************
+*        DATA RECEIVED WAS INCOMPLETE, SO SEND ERROR MESSAGE          *
+*        WITH MAP AND RECEIVE REQUIREMENTS AGAIN                      *
+***********************************************************************
+*
+         XC    SPMAPAI(SPMAPAE-SPMAPAI),SPMAPAI     CLEAR MAP STORAGE.
+*
+SENDMAP  DS    0H
+         MVC   ERRMSGO,0(R5)                        PUT CORRECT MESSAGE
+*                                                   IN OUTPUT FIELD.
+         EXEC CICS SEND MAP('SPMAPA') MAPSET('DFH$IGB')                *
+               DATAONLY WAIT RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+*
+         B     RETRY
+*
+***********************************************************************
+*        INITIALIZATION SECTION                                       *
+***********************************************************************
+*
+SETUP    DS    0H
+         MVC   RECLEN,=AL2(L'FILEREC)   SET MAX LEN OF EACH RECORD.
+         MVC   INLEN,=AL2(L'INAREA)     SET DATA INPUT AREA LENGTH.
+         MVC   OUTLEN,=AL2(L'OUTAREA)   SET DATA OUTPUT AREA LENGTH.
+         MVC   BRDSET,RDSETI            SAVE FILE RECEIVED.
+         MVC   TRANOUT,=C'IFBR'         ASSIGN REM TRANID TO INITIATE.
+         MVC   KEYOUT,STRTKEYI          PUT RECVD START KEY IN OUTAREA.
+         MVI   FLAG,X'00'               INITIALIZE FLAG BYTE.
+         OI    FLAG,SAVEIT              SET SAVE FLAG TO 'SAVE'
+         OI    FLAG,FORWARD             SET BROWSE DIRECTION TO FORWARD
+         LA    R7,1                     POSITION CURSOR ON FIRST.
+         STH   R7,CURSOR                LINE OF SCREEN.
+         BR    R14                      RETURN CONTROL.
+*
+***********************************************************************
+*        ROUTINE TO CLEAR THE USERS SCREEN                            *
+***********************************************************************
+CLEARSCN DS    0H
+*
+         ST    R14,REGSTOR1             SAVE LINK REGISTER.
+*
+         EXEC CICS SEND FROM(CURSOR) LENGTH(0) ERASE RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+*
+         L     R14,REGSTOR1             RESET LINK REGISTER.
+         BR    R14                      RETURN CONTROL.
+*
+***********************************************************************
+*        ROUTINE TO PROCESS AND DISPLAY THE DATA RECEIVED             *
+***********************************************************************
+DISPDATA DS    0H
+*
+         ST    R14,REGSTOR1          SAVE LINK REGISTER.
+         NI    FLAG,X'FF'-SAVEIT     NEXT CONVERSE WILL NOT
+*                                    BE FIRST SO SET SAVE FLAG.
+         LA    R5,INAREA             R5 -> BEGINNING OF DATA RECEIVED.
+         MVC   KEYOUT,0(R5)          SAVE LAST KEY READ.
+         LA    R5,L'KEYOUT(R5)       R5 -> BEGINNING OF RECORD DATA.
+         LH    R6,INLEN              REDUCE THE LENGTH OF DATA
+         SH    R6,=Y(L'KEYOUT)       RECEIVED BY LENGTH OF KEY.
+         MVC   FROMLEN,=H'78'        TRUNCATE RECORD LENGTH SENT
+*                                    TO SCREEN TO ONE LINE (78 CHARS)
+NEXTLINE DS    0H
+         CH    R6,RECLEN             ANY RECORDS LEFT ?
+         BL    ERMSGOUT              NO, MUST BE ERROR MSG.
+         BAL   R14,SENDTEXT          SEND RECEIVED RECORD TO SCREEN.
+         LH    R7,CURSOR
+         LA    R7,1(R7)              INCREMENT OUTPUT LINE NUMBER.
+         STH   R7,CURSOR
+         SH    R6,RECLEN             DECREMENT R6 BY LEN. OF 1 RECORD.
+         LA    R5,L'FILEREC(R5)      INCREMENT INPUT DATA AREA PTR.
+         BNZ   NEXTLINE              GET NEXT RECORD FROM INPUT BUFFER
+*                                    IF POINTER IS NOT AT ZERO.
+*
+         EXEC CICS SEND PAGE TRAILER(PFMSG) RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+*
+         L     R14,REGSTOR1          RESET LINK REGISTER.
+         BR    R14                   RETURN CONTROL.
+*
+ERMSGOUT DS    0H
+*
+***********************************************************************
+*        DATA RECEIVED CONTAINS MESSAGE, SO DISPLAY IT AND            *
+*        TERMINATE AS NO DATA LEFT TO PROCESS                         *
+***********************************************************************
+*
+         STH   R6,FROMLEN            SET LENGTH OF DATA TO SEND.
+         BAL   R14,SENDTEXT          SEND MESSAGE TO USERS SCREEN.
+*
+         EXEC CICS SEND PAGE TRAILER(PFMSG) RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+*
+         L     R14,REGSTOR1          RESET LINK REGISTER
+         BR    R14                   RETURN CONTROL
+*
+***********************************************************************
+*        RECEIVE FROM USER NEXT OPERATION REQUIRED BY ISSUING A       *
+*        'RECEIVE' FROM THE SCREEN. REQUEST MUST BE PF3, PF7 OR       *
+*        PF8, FOR TERMINATION, BROWSE BACK, OR FORWARD RESPECTIVELY.  *
+***********************************************************************
+GOAGAIN  DS    0H
+*
+         ST    R14,REGSTOR1        SAVE LINK REGISTER.
+*
+*
+         EXEC CICS RECEIVE RESP(RESP)
+         CLI   EIBAID,DFHPF3          WAS PF3 PRESSED?
+         BE    COMPLETE               .... YES, GO TO COMPLETE
+         CLI   EIBAID,DFHPF7          WAS PF7 PRESSED?
+         BE    BROWBK                 .... YES, GO TO BROWBK
+         CLI   EIBAID,DFHPF8          WAS PF8 PRESSED?
+         BE    BROWFD                 .... YES, GO TO BROWFD
+         CLC   RESP,DFHRESP(NORMAL)   WAS NORMAL RESPONSE?
+         BE    RECEVOK2               ... YES, GO TO RECEVOK2
+         CLC   RESP,DFHRESP(EOC)      WAS EOC RESPONSE?
+         BNE   ERROR1                 ... NO, ERROR
+*
+***********************************************************************
+*        AN INVALID KEY WAS RECEIVED SO SEND MESSAGE                  *
+*        WITH MAP AND TERMINATE.                                      *
+***********************************************************************
+*
+RECEVOK2 DS    0H
+         LA    R5,=CL(L'ERRMSGO)'INVALID KEY - TRANSACTION TERMINATED'
+         MVC   ERRMSGO,0(R5)                        PUT CORRECT MESSAGE
+*                                                   IN OUTPUT FIELD.
+         EXEC CICS SEND MAP('SPMAPA') MAPSET('DFH$IGB')                *
+               ERASE WAIT RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+*
+         B     TERMNATE
+*
+BROWBK   DS    0H
+         NI    FLAG,X'FF'-FORWARD  BROWSE BACK REQUESTED, SO SET
+*                                  DIRECTION FLAG.
+         L     R14,REGSTOR1        RESET LINK REGISTER.
+         BR    R14                 RETURN CONTROL.
+*
+BROWFD   DS    0H
+         OI    FLAG,FORWARD        BROWSE FORWARD REQUESTED, SO SET
+*                                  DIRECTION FLAG.
+         L     R14,REGSTOR1        RESET LINK REGISTER.
+         BR    R14                 RETURN CONTROL.
+*
+***********************************************************************
+*        ROUTINE TO SEND RECEIVED DATA TO THE USERS SCREEN            *
+***********************************************************************
+*
+SENDTEXT DS    0H
+*
+         ST    R14,REGSTOR2        SAVE LINK REGISTER.
+*
+         EXEC CICS SEND TEXT FROM(0(R5)) LENGTH(FROMLEN)               *
+               JUSTIFY(CURSOR) ACCUM FREEKB ALARM RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+*
+         L     R14,REGSTOR2        RESET LINK REGISTER.
+         BR    R14                 RETURN CONTROL.
+*
+***********************************************************************
+*        PREPARE CORRECT SYSERR ERROR MESSAGE TO SEND TO USER.        *
+***********************************************************************
+*
+SYSERR1  DS    0H
+         CLI   EIBRCODE+1,X'0C'    SYSID ERROR ?
+         BE    UNKNOWN
+         CLI   EIBRCODE+1,X'08'    LINK OUT OF SERVICE ?
+         BE    OUTSERV
+*
+NOLINK   DS    0H
+         LA    R5,NOLNKMSG         ADDRESS NO LINK ERROR MSG.
+         MVC   SYS1,RSYSI          INSERT SYSID INTO MESSAGE.
+         B     SENDERR
+*
+UNKNOWN  DS    0H
+         CLI   EIBRCODE+2,X'04'    SYSID NOT A REMOTE SYSID ?
+         BE    NOTRENT
+         LA    R5,UNKWNMSG         ADDRESS UNKNOWN SYS ERROR MSG.
+         MVC   SYS2,RSYSI          INSERT SYSID INTO MESSAGE.
+         B     SENDERR
+*
+OUTSERV  DS    0H
+         LA    R5,OUTSVMSG         ADDRESS OUT OF SERVICE ERROR MSG.
+         MVC   SYS3,RSYSI          INSERT SYSID INTO MESSAGE.
+         B     SENDERR
+*
+NOTRENT  DS    0H
+         LA    R5,NOTRMSG          ADDRESS NOT REMODE SYSID ERRMSG.
+         MVC   SYS4,RSYSI          INSERT SYSID INTO MESSAGE.
+         B     SENDERR
+*
+***********************************************************************
+*        MESSAGE ASSIGNMENT IF CONDITION ERROR RAISED                 *
+***********************************************************************
+*
+ERROR1   DS    0H
+         LA    R5,ERRORMSG         ADDRESS ERROR MSG.
+         B     SENDERR
+*
+***********************************************************************
+*        PREPARE ERROR MESSAGE, SEND ERROR MAP TO USER THEN TERMINATE *
+***********************************************************************
+*
+SENDERR DS     0H
+         MVI   OUTMSGO,C' '           CLEAR ERROR MESSAGE OUTPUT AREA.
+         MVC   OUTMSGO+1(L'OUTMSGO),OUTMSGO
+         LH    R6,0(R5)               PUT MESSAGE LENGTH IN R6.
+         STH   R6,MSGLEN
+         BCTR  R6,R0
+         EX    R6,MVCMSG              PREPARE MESSAGE TO BE SENT.
+*
+         EXEC CICS SEND MAP('SPMAPE') MAPSET('DFH$IGB') ERASE WAIT     *
+               RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+*
+         B     TERMNATE               TERMINATE TRANSACTION.
+MVCMSG   MVC   OUTMSGO(0),L'MSGLEN(R5)
+*
+TERMNATE DS    0H
+*
+***********************************************************************
+*        TRANSACTION TERMINATION.                                     *
+***********************************************************************
+         EXEC CICS SEND CONTROL FREEKB RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+         EXEC CICS RETURN
+*
+COMPLETE DS    0H
+*
+         EXEC CICS SEND TEXT FROM(TERMMSG) LENGTH(LTERMMSG)            *
+               FREEKB ERASE RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+         EXEC CICS RETURN
+*
+PAGEFULL DC    H'21'               PAGE FULL VARIABLE.
+PFMSG    DS    0CL50               TRAILER MESSAGE
+         DC    H'46'               TO BE PLACED AT
+         DC    C' '                BOTTOM OF 'SEND
+         DS    C                   PAGE' COMMAND.
+TRLDATA  DC    CL46'PF7=BROWSE BACK  PF8=BROWSE FWD  PF3=TERMINATE'
+*
+***********************************************************************
+*        ERROR MESSAGE STORAGE DEFINITIONS                            *
+***********************************************************************
+*
+NOLNKMSG DC    AL2(L'MSG1)
+MSG1     DC    C'UNABLE TO ESTABLISH LINK TO ....'
+         ORG   MSG1+28
+SYS1     DS    CL4
+         ORG   ,
+UNKWNMSG DC    AL2(L'MSG2)
+MSG2     DC    C'SYSTEM NAME .... IS NOT KNOWN'
+         ORG   MSG2+12
+SYS2     DS    CL4
+         ORG   ,
+OUTSVMSG DC    AL2(L'MSG3)
+MSG3     DC    C'LINK TO .... IS OUT OF SERVICE'
+         ORG   MSG3+8
+SYS3     DS    CL4
+         ORG   ,
+NOTRMSG  DC    AL2(L'MSG4)
+MSG4     DC    C'.... IS NOT A REMOTE SYSTEM NAME'
+         ORG   MSG4
+SYS4     DS    CL4
+         ORG   ,
+ERRORMSG DC    AL2(L'MSG5)
+MSG5     DC    C'AN ERROR HAS OCCURRED'
+*
+TERMMSG  DC    C'TRANSACTION TERMINATED'
+LTERMMSG DC    AL2(L'TERMMSG)
+         END

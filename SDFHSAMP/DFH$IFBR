@@ -1,0 +1,342 @@
+         TITLE 'DFH$IFBR - CICS INTERCOMMUNICATION SAMPLE - REMOTE FILE*
+                BROWSE - REMOTE PROCESSING'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$IFBR                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Remot File Browse Remote Processing Sample       *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1985, 1993"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*      INPUTS TO THIS PROGRAM         START BROWSE KEY                *
+*      ( RECEIVED FROM IFBL )         FILE TO BROWSE                  *
+*                                     BROWSE DIRECTION REQD.          *
+*                                     RUN FLAG ( FIRST RUN BIT )      *
+*                                                                     *
+*      OUTPUTS FROM THIS PROGRAM      UP TO 4 RECORDS READ FROM       *
+*      ( PASSED BACK TO IFBL )        REQUIRED FILE, OR UP TO         *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$IFBR),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= Z30    170 85     HD1XIC : CREATE BASE SOURCE               *
+*    $P0= M56345 310 890711 HD6FVN : CORRECT GARBLED MESSAGE          *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*    $P2= M81202 410 930323 HD4OGB  : Add entry points to Sample pgms *
+*                                                                     *
+***********************************************************************
+DFHEISTG DSECT
+*
+***********************************************************************
+*        STATUS FLAG AND EIB SESSION STORAGE AREA                     *
+***********************************************************************
+*
+XDFEIFLG DS    0CL7
+*
+XSYNC    DS    C                   IF SET, EXECUTE SYNCPOINT
+*
+XFREE    DS    C                   IF SET, FREE TERMINAL / LU
+*
+XRECV    DS    C                   IF SET, EXECUTE RECEIVE
+*
+XSEND    DS    C                   RESERVED
+*
+XATT     DS    C                   IF SET, EXECUTE EXTRACT TO
+*                                     ACCESS ATTACH HEADER DATA
+XEOC     DS    C                   IF SET, END-OF-CHAIN WAS
+*                                     RECEIVED WITH DATA
+XFMH     DS    C                   IF SET, DATA PASSED TO APPL'N
+*                                     CONTAINS FMH - N/A FOR LU6.2
+INAREA   DS    0CL20               DATA OUTPUT AREA
+TRANIN   DS    CL4                 THIS TRANSACTION ID
+RUNDNFLG DS    XL1                 RUN AND DIRECTION INDICATOR
+KEYIN    DS    CL6                 START BROWSE KEY RECEIVED
+DSETIN   DS    CL8                 FILE TO BE BROWSED
+OUTAREA  DS    CL350               DATA INPUT AREA
+INLEN    DS    H                   INPUT DATA LENGTH
+OUTLEN   DS    H                   OUTPUT DATA LENGTH
+RESP     DS    F                   RESPONSES TO CICS COMMANDS
+SAVEIT EQU     X'01'               FIRST RUN INDICATOR
+FORWARD  EQU   X'02'               BROWSE DIRECTION INDICATOR
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+FILEA    DSECT
+FILEREC  DS    CL86
+*
+DFH$IFBR CSECT  ,                                                  @P2C
+*
+*
+         LA    R4,1                SET COUNTER TO 1.
+         LA    R5,OUTAREA          R5 <- ADDRS OF OUTPUT BUFFER.
+         LA    R5,L'KEYIN(R5)      MAKE ROOM FOR LAST RIDFLD USED.
+         USING FILEA,R5            DECLARE FILE BASE REGISTER.
+         LA    R6,L'INAREA         SET INLEN TO LENGTH OF
+         STH   R6,INLEN            INPUT DATA AREA.
+*
+***********************************************************************
+*        RECEIVE DATA PASSED FROM 'IFBL'                              *
+***********************************************************************
+*
+         EXEC CICS RECEIVE INTO(INAREA) LENGTH(INLEN) RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)    CHECK FOR NORMAL RESPONSE
+         BE    RECEIVOK
+         CLC   RESP,DFHRESP(EOC)       CHECK FOR EOC RESPONSE
+         BNE   ERROR1
+RECEIVOK DS    0H
+         MVC   XDFEIFLG,EIBSYNC    SAVE EIB VALUES
+*
+EIBTEST  DS    0H
+*
+TESTSYNC DS    0H
+         CLI   XSYNC,X'FF'
+         BNE   TESTFREE
+*
+***********************************************************************
+*        SYNCPOINT SET, SO ISSUE A SYNCPOINT REQUEST                  *
+***********************************************************************
+*
+         EXEC CICS SYNCPOINT RESP(RESP)
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE ERROR1
+*
+TESTFREE DS    0H
+         CLI   XFREE,X'FF'
+         BNE   TESTRECV            FREE NOT ON SO TEST RECV
+*
+***********************************************************************
+*        FREE SET, SO ISSUE A FREE REQUEST                            *
+***********************************************************************
+*
+         EXEC CICS FREE RESP(RESP)
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE  ERROR1
+*
+         B     IMMRET
+*
+TESTRECV DS    0H
+         CLI   XRECV,X'FF'
+         BNE   ENDTEST             RECEIVE NOT ON SO BEGIN BROWSE
+*
+***********************************************************************
+*        RECEIVE SET, THIS SHOULD NOT OCCUR SO RETURN IMMEDIATELY     *
+***********************************************************************
+*
+         B     IMMRET
+*
+ENDTEST  DS    0H
+*
+***********************************************************************
+*        START BROWSE FROM SUPPLIED RECORD KEY, AND READ              *
+*        THROUGH FILE, ( FORWARDS OR BACKWARDS AS REQUIRED )          *
+*        BUFFERING FOUR RECORDS AND SENDING THEM                      *
+*        BACK TO THE DRIVER TRAN. ON EACH TRAN. INVOCATION.           *
+***********************************************************************
+*
+*
+*
+         EXEC CICS STARTBR FILE(DSETIN) RIDFLD(KEYIN)                  *
+               RESP(RESP)
+         CLC  RESP,DFHRESP(DSIDERR)    DOES FILE EXIST?
+         BE   DSIDERR1                 ... NO, GO TO DSIDERR1
+         CLC  RESP,DFHRESP(DISABLED)   IS FILE DISABLED?
+         BE   DISABLED                 ... YES, GO TO DISABLED
+         CLC  RESP,DFHRESP(NOTFND)     IS RECORD PRESENT?
+         BE   NOTFND1                  ... NO, GO TO NOTFND1
+         CLC  RESP,DFHRESP(NORMAL)     CHECK FOR NORMAL RESPONSE
+         BNE  ERROR1
+*
+         TM    RUNDNFLG,FORWARD    BROWSE FORWARD REQUESTED ?
+         BNO   BROWBK              NO, BROWSE BACK REQUESTD.
+*
+***********************************************************************
+*        BROWSING FORWARD ROUTINE                                     *
+***********************************************************************
+*
+BROWFWD  DS    0H
+*
+         EXEC CICS READNEXT INTO(FILEREC) FILE(DSETIN)                 *
+               RIDFLD(KEYIN) RESP(RESP)
+         BAL  R2,BRWTEST           BRANCH TO BRWTEST TO TEST RESPONSES
+*
+         BAL   R14,COMMON          EXECUTE COMMON PROCESSING ROUTINE.
+         CH    R15,=H'4'           IS THE BUFFER FULL ?
+         BE    RETURN              YES, SO RETURN RECORDS.
+         B     BROWFWD             NO, SO READ ANOTHER RECORD
+*
+***********************************************************************
+*        BROWSING BACKWARDS ROUTINE                                   *
+***********************************************************************
+*
+BROWBK   DS    0H
+*
+         EXEC CICS READPREV INTO(FILEREC) FILE(DSETIN)                 *
+               RIDFLD(KEYIN) RESP(RESP)
+         BAL  R2,BRWTEST           BRANCH TO BRWTEST TO TEST RESPONSES
+*
+         BAL   R14,COMMON          EXECUTE COMMON PROCESSING ROUTINE.
+         CH    R15,=H'4'           IS THE BUFFER FULL ?
+         BE    RETURN              YES, SO RETURN RECORDS.
+         B     BROWBK              NO, SO READ ANOTHER RECORD
+*
+***********************************************************************
+*        COMMON RECORD PROCESSING ROUTINE                             *
+*        NOTE.  THE SAVE INDICATOR FLAG IS USED TO PREVENT US FROM    *
+*        SAVING THE FIRST RECORD READ FROM THE FILE. THIS IS          *
+*        BECAUSE WE WILL RESTART THE FILE BROWSE AT THE SAME POINT    *
+*        AS WE FINISHED IN THE LAST RUN ( ASSUMING THIS IS NOT        *
+*        THE FIRST RUN OTHERWISE WE MISS OUT THE FIRST RECORD ).      *
+***********************************************************************
+*
+COMMON   DS    0H
+         SR    R15,R15             ZERO RETURN REG
+         TM    RUNDNFLG,SAVEIT     DO WE WANT TO SAVE THIS RECORD?
+         BO    CONTINUE            YES, SO CONTINUE
+         OI    RUNDNFLG,SAVEIT     NO, SET UP TO SAVE NEXT RECORD
+         B     COMMONR              AND RETURN
+CONTINUE DS    0H
+         LA    R4,1(R4)            INCREMENT RECORD COUNT.
+         LA    R5,L'FILEREC(R5)    INCREMENT BUFFER POINTER.
+         CH    R4,=H'5'            OUTPUT AREA FILLED ?
+         BL    COMMONR             NO, RETURN
+         LA    R15,4   '           YES, SET R/C FOR FULL BUFFER
+*
+COMMONR  DS    0H
+         BR    R14                 RETURN
+*
+***********************************************************************
+*        ERROR RECEIVED DURING PROCESSING SO PREPARE RELEVANT MESSAGE *
+***********************************************************************
+*
+ERROR1   DS    0H                  ERROR HAS OCCURRED,
+         LA    R4,ERRORMSG         SO RETURN WITH
+         B     SENDERR             ERROR MESSAGE.
+*
+ENDFILE1 DS    0H                  END OF FILE REACHED,
+         LA    R4,ENDFLMSG         SO SEND BACK
+         B     SENDERR             'END OF FILE' MESSAGE.
+*
+NOTFND1  DS    0H                  RECORD WAS NOT FOUND,
+         LA    R4,NOTFDMSG         SO SEND ERROR MESSAGE.
+         MVC   KEY1,KEYIN          INSERT KEY INTO MESSAGE.
+         B     SENDERR
+*
+DISABLED DS    0H                  FILE WAS DISABLED,
+         LA    R4,DISABMSG         SO SEND ERROR MESSAGE.
+         MVC   DSET1,DSETIN        INSERT FILE INTO MESSAGE.
+         B     SENDERR
+*
+SYSERR1  DS    0H                  FILE WAS NOT ACCESSIBLE,
+         LA    R4,SYSERMSG         SO SEND ERROR MESSAGE.
+         MVC   DSET2,DSETIN        INSERT FILE INTO MESSAGE.
+         B     SENDERR
+*
+DSIDERR1 DS    0H                  FILE WAS NOT FOUND,
+         LA    R4,DSTERMSG         SO SEND ERROR MESSAGE.
+         MVC   DSET3,DSETIN        INSERT FILE INTO MESSAGE.
+         B     SENDERR
+*
+SENDERR DS     0H
+         LH    R6,0(R4)                PUT MESSAGE LENGTH IN R6.
+         BCTR  R6,R0
+         EX    R6,MVCMSG               PUT ERROR MSG IN OUTAREA.
+         LA    R5,1(R5,R6)             POINT TO END OF DATA
+         B     RETURN                  RETURN DATA AND TERMINATE.
+MVCMSG   MVC   0(0,R5),L'OUTLEN(R4)
+*
+***********************************************************************
+*        ROUTINE FOR TESTING RESPONSE TO CICS COMMANDS WHILE BROWSING *
+*        FILE                                                         *
+***********************************************************************
+BRWTEST  DS    0H
+         CLC   RESP,DFHRESP(DSIDERR)   DOES FILE EXIST?
+         BE    DSIDERR1                ... NO, GO TO DSIDERR1
+         CLC   RESP,DFHRESP(DISABLED)  IS FILE DISABLED?
+         BE    DISABLED                ... YES, GO TO DISABLED
+         CLC   RESP,DFHRESP(ENDFILE)   HAS END OF FILE BEEN REACHED?
+         BE    ENDFILE1                ... YES, GO TO ENDFILE1
+         CLC   RESP,DFHRESP(NOTFND)    CAN THE RECORD BE FOUND?
+         BE    NOTFND1                 ... NO, GO TO NOTFND1
+         CLC   RESP,DFHRESP(LENGERR)   IS RECORD TOO LONG?
+         BER   R2                      ... YES, IGNORE AND RETURN
+         CLC   RESP,DFHRESP(NORMAL)    CHECK FOR NORMAL RESPONSE
+         BER   R2                      IF OK THEN RETURN
+         B     ERROR1                  ELSE GO TO ERROR ROUTINE
+*
+RETURN   DS    0H
+*
+***********************************************************************
+*        RETURN CONTROL ( AND DATA ) BACK TO MASTER TRANSACTION       *
+***********************************************************************
+*
+         MVC   OUTAREA(L'KEYIN),KEYIN   PUT LAST KEY READ AT
+*                                       FRONT OF OUTAREA.
+         LA    R4,OUTAREA               CALCULATE LENGTH
+         SR    R5,R4                    OF DATA TO SEND.
+         STH   R5,OUTLEN
+*
+         EXEC CICS SEND FROM(OUTAREA) LENGTH(OUTLEN) WAIT LAST         *
+               RESP(RESP)
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE  ERROR1
+IMMRET   DS    0H
+         EXEC CICS RETURN
+*
+ENDFLMSG DC    AL2(L'MSG1)
+MSG1     DC    C'END OF FILE'
+NOTFDMSG DC    AL2(L'MSG2)
+MSG2     DC    C'RECORD WITH KEY ...... NOT FOUND'
+         ORG   MSG2+16
+KEY1     DS    CL6
+         ORG   ,
+DISABMSG DC    AL2(L'MSG3)
+MSG3     DC    C'FILE ........ IS DISABLED'
+         ORG   MSG3+5
+DSET1    DS    CL8
+         ORG   ,
+SYSERMSG DC    AL2(L'MSG4)
+MSG4     DC    C'FILE ........ IS NOT ACCESSIBLE'
+         ORG   MSG4+5
+DSET2    DS    CL8
+         ORG   ,
+DSTERMSG DC    AL2(L'MSG5)
+MSG5     DC    C'FILE ........ NOT FOUND'
+         ORG   MSG5+5
+DSET3    DS    CL8
+         ORG   ,
+ERRORMSG DC    AL2(L'MSG6)
+MSG6     DC    C'ERROR HAS OCCURRED IN REMOTE TRANSACTION'
+*
+         END

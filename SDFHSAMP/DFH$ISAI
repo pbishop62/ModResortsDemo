@@ -1,0 +1,569 @@
+*ASM XOPTS(SP)
+*=====================================================================*
+*                                                                     *
+* MODULE NAME = DFH$ISAI                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = %PRODUCT (IS) IP Interconnectivity               *
+*                    IPCONN autoinstall user program (AUP)            *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2011"                                *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = %SPA0                                                     *
+*                                                                     *
+* FUNCTION =                                                          *
+*                                                                     *
+* This user replaceable program illustrates a technique of            *
+* customizing autoinstall of an IPCONN such that the IPCONN name and  *
+* APPLID are generated according to a template IPCONN previously      *
+* installed.                                                          *
+*                                                                     *
+* This sample is for illustrative purposes and may be tailored to     *
+* suit particular requirements.                                       *
+*                                                                     *
+* This sample generates an IPCONN name and APPLID of eight characters *
+* composed of the APPLID in the IPCONN template followed by a         *
+* generated count. For example, if the APPLID is seven characters in  *
+* length, a one-character count is appended to provide the full eight *
+* character IPCONN name. The technique is appropriate when using      *
+* WebSphere Application Server for z/OS which is running in local     *
+* mode with CICS Transaction Gateway and which is communicating with  *
+* CICS TS for z/OS using IPIC.                                        *
+*                                                                     *
+*     INSTALL                                                         *
+*                                                                     *
+* When the communication area for the autoinstall user replaceable    *
+* program, DFHISAIC, has isaic_function set to isaic_install, the     *
+* supplied version of the user program takes the following actions:   *
+*                                                                     *
+* 1. The value of an APPLID in parameter isaic_applid is checked.     *
+* If no value is supplied, the DFHISAIC communication area parameter  *
+* isaic_response is set to a non-zero value so that the IPCONN        *
+* autoinstall is not allowed.                                         *
+*                                                                     *
+* For values returned by this sample in isaic_response, refer to      *
+* working storage definitions below.                                  *
+*                                                                     *
+* 2. The template IPCONN with a name equal to isaic_networkid is      *
+* located using the SPI command INQUIRE IPCONN. If the CICS           *
+* Transaction Gateway is used in this scenario, isaic_networkid is an *
+* APPLID qualifier. The template IPCONN would, for example, have both *
+* its APPLID attribute and NETWORKID attribute set to a character     *
+* string value. These values are used by this sample autoinstall user *
+* replaceable program. The NETWORKID attribute is not set to the      *
+* value of the network identifier in use by the CICS Transaction      *
+* Gateway client system. If it was set, there would be an attempt to  *
+* use the template IPCONN itself for communication and not to invoke  *
+* the autoinstall process as is required with this sample.            *
+*                                                                     *
+* 3. If no IPCONN with a name equal to isaic_networkid is installed,  *
+* the sample logic rejects the request to autoinstall an IPCONN. If a *
+* template IPCONN is found, it would typically be expected to have    *
+* security parameters that are appropriate to the instance of         *
+* WebSphere Application Server for z/OS in use.                       *
+*                                                                     *
+* 4. The DFHISAIC communication area parameter isaic_applid is        *
+* checked. It must be the same as the APPLID in the IPCONN template.  *
+* If isaic_host contains an IP address, it is also checked to be the  *
+* same as defined in the IPCONN template. If either check fails, the  *
+* DFHISAIC communication area parameter isaic_response is set to a    *
+* non-zero value so that the IPCONN autoinstall is not allowed. The   *
+* value of isaic_response indicates which check failed. A message to  *
+* indicate which particular failure occurred is written to TD         *
+* destination CISL to provide further diagnostic information.         *
+*                                                                     *
+* 5. There is a maximum number of autoinstalled IPCONNs with IPCONN   *
+* names composed of the APPLID followed by the count characters.  If  *
+* this limit is exceeded, isaic_response is set to a non-zero value   *
+* so that the IPCONN autoinstall is not allowed.                      *
+*                                                                     *
+*                                                                     *
+* The value of the IPCONN name and the APPLID is the characters of    *
+* the isaic_applid parameter followed by a generated character        *
+* suffix. The suffix is generated from the value of a count which is  *
+* maintained by this sample for each template IPCONN. The current     *
+* value of a count is recorded in a CICS temporary storage element    *
+* which is accessed using the CICS API. When a new count value is     *
+* required to generate a suffix, the temporary storage element is     *
+* read to obtain its current value. This value is incremented to      *
+* generate a new value and the temporary storage element is           *
+* rewritten. The new value is appended to the APPLID which is         *
+* supplied in isaic_applid in order to obtain an APPLID which is the  *
+* full eight characters.                                              *
+*                                                                     *
+* The temporary storage elements have a 16 character QNAME composed   *
+* of the character string DFH$IPIC concatenated with the value of     *
+* isaic_networkid. The API commands ENQ and DEQ are used to serialize *
+* updates to the temporary storage elements.                          *
+*                                                                     *
+*     DELETE                                                          *
+*                                                                     *
+* When the communication area for the autoinstall user replaceable    *
+* program, DFHISAIC,  has isaic_function set to isaic_delete, this    *
+* sample takes no action and returns immediately.                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        ¶MOD(DFH$ISAI),COMP($ISCI),PROD(%PRODUCT):                   *
+*                                                                     *
+*  PN= REASON REL YYMMDD HDXXIII : REMARKS                            *
+* RTC  29179  %SP 111020 HDCQMDB : Create                             *
+*      D40123 %SP 111129 HD0EGMA : Extend name lengths etc            *
+*      D43205 %SP 120308 HD0EGMA : Update prologue                    *
+*                                                                     *
+*=====================================================================*
+DFHEISTG DSECT ,
+*
+* Working storage definitions
+*
+RESP                 DS F
+TEMPLATE_HOST        DS CL116
+TEMPLATE_APPLID      DS CL8
+TEMPLATE_APPLID_LEN  DS F                                      @D40123A
+INPUT_APPLID_LEN     DS F                                      @D40123A
+INPUT_NETWORKID_LEN  DS F                                      @D40123A
+WS_IPCONN_RESP       DS F                                      @D40123A
+WS_COUNT             DS PL4                                    @D40123C
+WS_MAX_CON           DS PL4                                    @D40123C
+WS_IPCONN_COUNT      DS CL8                                    @D40123C
+WS_ITEM              DS CL2                                    @D40123C
+*
+WS_CREATE_SUFFIX_RET DS A                                      @D40123A
+*
+WS_QNAME             DS 0CL16                                  @D40123C
+WS_QNAME_PREFIX      DS CL8                                    @D40123C
+WS_QNAME_SUFFIX      DS CL8                                    @D40123C
+*
+MSG             DS 0CL132
+MSG_ATTRIB      DS CL9
+MSG_TXT         DS CL123
+*
+* Errors - Values returned in ISAIC_RESPONSE
+WS_GOOD_RC      EQU  X'00'
+WS_ILLOGIC_RC   EQU  X'01'        Illogic in exit              @D40123C
+WS_NOAPPLID_RC  EQU  X'02'        No applid supplied by client @D40123C
+WS_TEMPLATE_RC  EQU  X'03'        No template matches          @D40123C
+*                                 client networkid             @D40123C
+WS_BADAPPLID_RC EQU  X'04'        Applid supplied does not     @D40123C
+*                                 match template
+WS_BADHOST_RC   EQU  X'05'        Client IP address does       @D40123C
+*                                 not match template           @D40123C
+WS_COUNT_RC     EQU  X'06'        IPCONN count                 @D40123C
+*                                 exceeds WS_MAX_CON           @D40123C
+WS_LENGTH_RC    EQU  X'07'        Input applid length does     @D40123A
+*                                 not match template           @D40123A
+*
+* Copy the Commarea definitions
+         COPY  DFHISAIC
+*
+DFH$ISAI CSECT ,
+*=====================================================================*
+*                     I N I T I A L I S A T I O N                     *
+*=====================================================================*
+DFH$ISAI RMODE ANY
+         DFHREGS ,                 Equate registers
+         OC    EIBCALEN,EIBCALEN   Any commarea?
+         BZ    RETURN              ...no, get out
+         L     R2,DFHEICAP         Address input parameter list
+         USING DFHISAIC,R2         Commarea addressability
+         MVI   ISAIC_RESPONSE,WS_GOOD_RC  Assume all OK        @D40123C
+*---------------------------------------------------------------------
+* Select function required
+*---------------------------------------------------------------------
+         CLI   ISAIC_FUNCTION,ISAIC_INSTALL
+         BE    INSTALL_IPCONN       Install requested
+         CLI   ISAIC_FUNCTION,ISAIC_DELETE
+         BE    DELETE_IPCONN        Delete requested
+         MVI   ISAIC_RESPONSE,WS_ILLOGIC_RC  Invalid function  @D40123C
+         B     RETURN              So return
+*
+*=====================================================================
+*
+*                     I N S T A L L
+*
+*=====================================================================
+INSTALL_IPCONN DS 0H
+*---------------------------------------------------------------------
+*   Compute lengths of applid and network id input parameters by
+*   searching from end of parameter for first non-space character
+*---------------------------------------------------------------------
+         LA    R6,L'ISAIC_APPLID-1  Initialize position index  @D40123C
+*                                   to point at end char       @D40123C
+COMPUTE_LENGTH_1 DS 0H
+         LA    R7,ISAIC_APPLID(R6)  Point at current char      @D40123C
+         CLI   0(R7),C' '           Is this character a space? @D40123C
+         BNE   COMPUTE_LENGTH_1X    No: Found first            @D40123C
+*                                   non-space character->      @D40123C
+         BCT   R6,COMPUTE_LENGTH_1  Decrement position index   @D40123C
+*                                   and if non-zero retry->    @D40123C
+COMPUTE_LENGTH_1X DS 0H
+         LA    R6,1(,R6)            Obtain length by           @D40123C
+*                                   incrementing index value   @D40123C
+         ST    R6,INPUT_APPLID_LEN  Save length                @D40123C
+*
+         LA    R6,L'ISAIC_NETWORKID-1 Initialize position index@D40123C
+*                                   to point at end charactoer @D40123C
+COMPUTE_LENGTH_2 DS 0H
+         LA    R7,ISAIC_NETWORKID(R6) Point at current char    @D40123C
+         CLI   0(R7),C' '           Is this character a space? @D40123C
+         BNE   COMPUTE_LENGTH_2X    No: Found first            @D40123C
+*                                   non-space character->      @D40123C
+         BCT   R6,COMPUTE_LENGTH_2  Decrement position index   @D40123C
+*                                   and if non-zero retry->    @D40123C
+COMPUTE_LENGTH_2X DS 0H
+         LA    R6,1(,R6)            Obtain length by           @D40123C
+*                                   incrementing index value   @D40123C
+         ST    R6,INPUT_NETWORKID_LEN  Save length             @D40123C
+*---------------------------------------------------------------------
+*   Set ipconn template to name supplied netid
+*---------------------------------------------------------------------
+         MVC   ISAIC_TEMPLATE,ISAIC_NETWORKID
+*---------------------------------------------------------------------
+*   No applid, so error
+*---------------------------------------------------------------------
+         CLC   ISAIC_APPLID,=CL8' '
+         BNE   CHECK_NETID
+         MVI   ISAIC_RESPONSE,WS_NOAPPLID_RC                   @D40123C
+         B     FAIL_REQUEST                                    @D40123C
+*---------------------------------------------------------------------
+*   Use client network id to check for name of a template ipconn
+*   Save applid and host name from template for validation
+*---------------------------------------------------------------------
+CHECK_NETID DS 0H
+         EXEC CICS INQUIRE IPCONN(ISAIC_TEMPLATE)                      *
+                 APPLID(TEMPLATE_APPLID)                               *
+                 HOST(TEMPLATE_HOST)                                   *
+                 RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)                            @D40123C
+         BE    SET_IPCONN_NAME_PART                            @D40123C
+         MVI   ISAIC_RESPONSE,WS_TEMPLATE_RC                   @D40123C
+         B     FAIL_REQUEST
+SET_IPCONN_NAME_PART DS 0H                                     @D40123C
+         MVC   ISAIC_IPCONN,TEMPLATE_APPLID                    @D40123C
+*---------------------------------------------------------------------
+*   Compute length of applid from ipconn template by searching
+*   from end of parameter for first non-space character
+*---------------------------------------------------------------------
+         LA    R6,L'TEMPLATE_APPLID-1 Initialize position index@D40123C
+*                                   to point at end character  @D40123C
+COMPUTE_LENGTH_3 DS 0H
+         LA    R7,TEMPLATE_APPLID(R6) Point at current char    @D40123C
+         CLI   0(R7),C' '           Is this character a space? @D40123C
+         BNE   COMPUTE_LENGTH_3X    No: Found first            @D40123C
+*                                   non-space character->      @D40123C
+         BCT   R6,COMPUTE_LENGTH_3  Decrement position index   @D40123C
+*                                   and if non-zero retry->    @D40123C
+COMPUTE_LENGTH_3X DS 0H                                        @D40123C
+         LA    R6,1(,R6)            Obtain length by           @D40123C
+*                                   incrementing index value   @D40123C
+         ST    R6,TEMPLATE_APPLID_LEN Save length              @D40123C
+*---------------------------------------------------------------------
+*   Obtain maximum number of ipconn names which can be
+*   generated from the template applid after it has had
+*   an index value appended. eg. template applid AAAAAA
+*   will have a maximum number of 99, the 'highest'
+*   being AAAAAA99.
+*---------------------------------------------------------------------
+         BCTR  R6,0                 Offset of table entry =    @D40123C
+*                                   (template applid length-1) @D40123C
+         SLA   R6,2                 multiplied by 4            @D40123C
+         LA    R6,MAX_CON_TABLE(R6) Address table entry        @D40123C
+*                                   using computed offset      @D40123C
+*                                   to get maximum             @D40123C
+         MVC   WS_MAX_CON,0(R6)     Save maximum number        @D40123C
+*                                   of ipconn names            @D40123C
+*---------------------------------------------------------------------
+*   If supplied applid length does not match
+*   template applid length then fail request
+*---------------------------------------------------------------------
+         CLC   INPUT_APPLID_LEN,TEMPLATE_APPLID_LEN            @D40123C
+         BE    CHECK_APPLID                                    @D40123C
+         MVI   ISAIC_RESPONSE,WS_LENGTH_RC                     @D40123C
+         B     FAIL_REQUEST                                    @D40123C
+*---------------------------------------------------------------------
+*   If supplied applid does not match template applid fail request
+*---------------------------------------------------------------------
+CHECK_APPLID DS 0H                                             @D40123C
+         CLC   TEMPLATE_APPLID,ISAIC_APPLID                    @D40123C
+         BE    CHECK_HOST                                      @D40123C
+         MVI   ISAIC_RESPONSE,WS_BADAPPLID_RC                  @D40123C
+         B     FAIL_REQUEST                                    @D40123C
+*---------------------------------------------------------------------
+*   If supplied host does not match template fail.
+*---------------------------------------------------------------------
+CHECK_HOST DS 0H
+         CLC   TEMPLATE_HOST,=CL116' '                         @D40123C
+         BE    GET_UNUSED_NAME                                 @D40123C
+         CLC   TEMPLATE_HOST,ISAIC_HOST                        @D40123C
+         BE    GET_UNUSED_NAME                                 @D40123C
+         MVI   ISAIC_RESPONSE,WS_BADHOST_RC                    @D40123C
+         B     FAIL_REQUEST                                    @D40123C
+*---------------------------------------------------------------------
+*   If template applid <8 then generate a suffix
+*---------------------------------------------------------------------
+GET_UNUSED_NAME DS 0H
+         CLC   TEMPLATE_APPLID_LEN,=F'8'                       @D40123C
+         BL    START_CREATE_SUFFIX  Create name with suffix    @D40123C
+         EXEC  CICS INQUIRE                                            *
+               IPCONN(ISAIC_IPCONN)                                    *
+               RESP(WS_IPCONN_RESP)
+         CLC   WS_IPCONN_RESP,DFHRESP(SYSIDERR) Unused name?   @D40123C
+         BE    SET_APPLID                       True           @D40123C
+         MVI   ISAIC_RESPONSE,WS_ILLOGIC_RC                    @D40123C
+         B     FAIL_REQUEST                                    @D40123C
+*---------------------------------------------------------------------
+*   Create ipconn name with suffix
+*---------------------------------------------------------------------
+START_CREATE_SUFFIX DS 0H                                      @D40123C
+         ZAP   WS_COUNT,=P'0' initialise suffix counter        @D40123C
+PERFORM_CREATE_SUFFIX DS 0H                                    @D40123C
+         BAL   R9,CREATE_SUFFIX
+         CLC   WS_IPCONN_RESP,DFHRESP(SYSIDERR) IPCONN name    @D40123C
+*                                               in use?
+         BNE   PERFORM_CREATE_SUFFIX            Yes, try again @D40123C
+SET_APPLID DS 0H
+         MVC   ISAIC_APPLID,ISAIC_IPCONN                       @D40123C
+*---------------------------------------------------------------------
+*    Issue a message about the successful attempt
+*---------------------------------------------------------------------
+         MVC   MSG,=CL132' '            clear message buffer
+         MVC   MSG_ATTRIB,MSG_HEADER
+         LA    R8,MSG_TXT
+         MVC   0(L'MSG_TXT_1,R8),MSG_TXT_1  = 'Verified IPCONN autoin'
+         LA    R8,L'MSG_TXT_1(,R8)
+         MVC   0(L'ISAIC_IPCONN,R8),ISAIC_IPCONN  = ISAIC_IPCONN
+         LA    R8,L'ISAIC_IPCONN(,R8)
+         MVC   0(L'MSG_TXT_2,R8),MSG_TXT_2        = ' for client '
+         LA    R8,L'MSG_TXT_2(,R8)
+         LA    R7,ISAIC_NETWORKID           = ISAIC_NETWORKID  @D40123C
+         L     R6,INPUT_NETWORKID_LEN                          @D40123C
+         BCTR  R6,0                                            @D40123C
+         EX    R6,MVC_EXECUTE                                  @D40123C
+         LA    R8,1(R6,R8)                                     @D40123C
+         MVC   0(L'MSG_TXT_3,R8),MSG_TXT_3        = '.'
+         LA    R8,L'MSG_TXT_3(,R8)
+         LA    R7,ISAIC_APPLID                    = ISAIC_APPLID
+         L     R6,INPUT_APPLID_LEN
+         BCTR  R6,0                                            @D40123C
+         EX    R6,MVC_EXECUTE
+         LA    R8,1(R6,R8)                                     @D40123C
+         MVC   0(L'MSG_TXT_4,R8),MSG_TXT_4        = ' from host '
+         LA    R8,L'MSG_TXT_4(,R8)
+         LA    R7,ISAIC_HOST                      = ISAIC_HOST @D40123C
+         LA    R6,MSG+L'MSG-1                                  @D40123C
+         SLR   R6,R8                                           @D40123C
+         EX    R6,MVC_EXECUTE                                  @D40123C
+*
+         EXEC  CICS WRITEQ TD                                          *
+               QUEUE('CISL')                                           *
+               FROM(MSG)                                               *
+               LENGTH(=A(L'MSG))                                       *
+               RESP(RESP)
+*
+         B     RETURN              Finished
+*
+*=====================================================================*
+*                                                                     *
+*                       D E L E T E                                   *
+*                                                                     *
+*=====================================================================*
+DELETE_IPCONN  DS 0H
+*
+* >>> Code for delete processing can be added here <<<
+*
+         B     RETURN              Finished
+*
+*=====================================================================*
+*                                                                     *
+*                  E R R O R   P R O C E S S I N G                    *
+*                                                                     *
+*=====================================================================*
+FAIL_REQUEST  DS 0H
+*
+         MVC   MSG,=CL132' '            clear message buffer
+         MVC   MSG_ATTRIB,MSG_HEADER
+         LA    R8,MSG_TXT
+         MVC   0(L'MSG_TXT_5,R8),MSG_TXT_5  = 'Autoinstall Error('
+         LA    R8,L'MSG_TXT_5(,R8)
+         MVC   0(L'ISAIC_RESPONSE,R8),ISAIC_RESPONSE  = ISAIC_RESPONSE
+         OI    0(R8),X'F0'
+         LA    R8,L'ISAIC_RESPONSE(,R8)
+         MVC   0(L'MSG_TXT_6,R8),MSG_TXT_6        = ')'
+         LA    R8,L'MSG_TXT_6(,R8)
+         MVC   0(L'MSG_TXT_2,R8),MSG_TXT_2        = ' for client '
+         LA    R8,L'MSG_TXT_2(,R8)
+         LA    R7,ISAIC_NETWORKID           = ISAIC_NETWORKID  @D40123C
+         L     R6,INPUT_NETWORKID_LEN                          @D40123C
+         BCTR  R6,0                                            @D40123C
+         EX    R6,MVC_EXECUTE                                  @D40123C
+         LA    R8,1(R6,R8)                                     @D40123C
+         MVC   0(L'MSG_TXT_3,R8),MSG_TXT_3        = '.'
+         LA    R8,L'MSG_TXT_3(,R8)
+         LA    R7,ISAIC_APPLID                    = ISAIC_APPLID
+         L     R6,INPUT_APPLID_LEN
+         BCTR  R6,0                                            @D40123C
+         EX    R6,MVC_EXECUTE
+         LA    R8,1(R6,R8)
+         MVC   0(L'MSG_TXT_4,R8),MSG_TXT_4        = ' from host '
+         LA    R8,L'MSG_TXT_4(,R8)
+         LA    R7,ISAIC_HOST                      = ISAIC_HOST @D40123C
+         LA    R6,MSG+L'MSG-1                                  @D40123C
+         SLR   R6,R8                                           @D40123C
+         EX    R6,MVC_EXECUTE                                  @D40123C
+*
+         EXEC  CICS WRITEQ TD                                          *
+               QUEUE('CISL')                                           *
+               FROM(MSG)                                               *
+               LENGTH(=AL2(L'MSG))                                     *
+               RESP(RESP)
+*
+         MVI   ISAIC_RESPONSE,WS_BADAPPLID_RC                  @D40123C
+         B     RETURN
+*
+*=====================================================================*
+*              P R O G R A M   R E T U R N   P O I N T                *
+*=====================================================================*
+RETURN   DS    0H
+         EXEC CICS RETURN
+*
+*
+*======================================================================
+*              CREATE IPCONN SUFFIX SUBROUTINE
+*======================================================================
+CREATE_SUFFIX DS 0H                                            @D40123C
+         ST   R9,WS_CREATE_SUFFIX_RET  Save return address     @D40123A
+*---------------------------------------------------------------------
+*   Check we are not looping
+*---------------------------------------------------------------------
+         AP    WS_COUNT,=P'1'                                  @D40123C
+         CP    WS_COUNT,WS_MAX_CON                             @D40123C
+         BNH   LOOP_CHECK_OK                                   @D40123C
+         MVI   ISAIC_RESPONSE,WS_COUNT_RC                      @D40123C
+         B     FAIL_REQUEST                                    @D40123C
+LOOP_CHECK_OK DS 0H
+*---------------------------------------------------------------------
+*   Create unique numerical suffix for ipconn
+*---------------------------------------------------------------------
+         MVC   WS_QNAME_PREFIX,=CL8'DFH$IPIC'                  @D40123C
+         MVC   WS_QNAME_SUFFIX,ISAIC_TEMPLATE                  @D40123C
+*---------------------------------------------------------------------
+*   Obtain ENQ to ensure serialisation on TS queue
+*---------------------------------------------------------------------
+         EXEC  CICS ENQ                                                *
+               RESOURCE(WS_QNAME)                                      *
+               LENGTH(=AL2(L'WS_QNAME))                                *
+               TASK
+*---------------------------------------------------------------------
+*   Read the current counter value
+*---------------------------------------------------------------------
+         EXEC  CICS READQ TS                                           *
+               QNAME(WS_QNAME)                                         *
+               INTO(WS_COUNT)                                          *
+               ITEM(=AL2(1))                                           *
+               RESP(RESP)
+*---------------------------------------------------------------------
+*   If there is no queue then create one.
+*---------------------------------------------------------------------
+         CLC   RESP,DFHRESP(QIDERR)
+         BE    CREATE_TSQUEUE
+*
+         B     COUNT_CHECK                                     @D40123C
+CREATE_TSQUEUE DS 0H
+         ZAP   WS_COUNT,=P'0'     set count to 0               @D40123C
+*
+         MVC   WS_ITEM,=AL2(1)                                 @D40123C
+         EXEC  CICS WRITEQ TS                                          *
+               QNAME(WS_QNAME)                                         *
+               FROM(WS_COUNT)                                          *
+               ITEM(WS_ITEM)                                           *
+               RESP(RESP)
+*---------------------------------------------------------------------
+*   Update the count and wrap if it reaches
+*   the maximum permitted value
+*---------------------------------------------------------------------
+COUNT_CHECK DS 0H                                              @D40123C
+         CP   WS_COUNT,WS_MAX_CON                              @D40123C
+         BL   COUNT_INCREMENT                                  @D40123C
+         ZAP  WS_COUNT,=P'1'                                   @D40123C
+         B    WRITE_QUEUE                                      @D40123C
+COUNT_INCREMENT DS 0H                                          @D40123C
+         AP   WS_COUNT,=P'1'                                   @D40123C
+*---------------------------------------------------------------------
+*   Write the new count value back to the queue
+*---------------------------------------------------------------------
+WRITE_QUEUE DS 0H
+         MVC   WS_ITEM,=AL2(1)                                 @D40123C
+         EXEC  CICS WRITEQ TS                                          *
+               QNAME(WS_QNAME)                                         *
+               FROM(WS_COUNT)                                          *
+               ITEM(WS_ITEM)                                           *
+               REWRITE                                                 *
+               RESP(RESP)
+*---------------------------------------------------------------------
+*   Build the ipconn name
+*---------------------------------------------------------------------
+         UNPK  WS_IPCONN_COUNT,WS_COUNT Convert count to char  @D40123C
+         OI    WS_IPCONN_COUNT+7,X'F0'  Remove sign            @D40123C
+         L     R6,TEMPLATE_APPLID_LEN   Obtain length          @D40123C
+         BCTR  R6,0                 Adjust length for MVC      @D40123C
+         LA    R7,ISAIC_IPCONN      Address name characters    @D40123C
+         LA    R8,WS_IPCONN_COUNT   Address count characters   @D40123C
+         EX    R6,MVC_EXECUTE       Copy name characters       @D40123C
+*                                   to front of count chars    @D40123C
+         MVC   ISAIC_IPCONN,WS_IPCONN_COUNT Copy final ipconn  @D40123C
+*                                   name to parameter field    @D40123C
+*---------------------------------------------------------------------
+*   See if IPCONN name is in use
+*---------------------------------------------------------------------
+         EXEC  CICS INQUIRE                                            *
+               IPCONN(ISAIC_IPCONN)                                    *
+               RESP(WS_IPCONN_RESP)
+*---------------------------------------------------------------------
+*   End serialisation of this request against the queue
+*---------------------------------------------------------------------
+         EXEC  CICS DEQ                                                *
+               RESOURCE(WS_QNAME)                                      *
+               LENGTH(=AL2(L'WS_QNAME))                                *
+               RESP(RESP)
+*---------------------------------------------------------------------
+*   Return
+*---------------------------------------------------------------------
+         L     R9,WS_CREATE_SUFFIX_RET                         @D40123A
+         BR    R9                   Return                     @D40123A
+*=====================================================================*
+*=====================================================================*
+*
+* Constants
+*
+MAX_CON_TABLE DC    PL4'9999999'                               @D40123A
+              DC    PL4'999999'                                @D40123A
+              DC    PL4'99999'                                 @D40123A
+              DC    PL4'9999'                                  @D40123A
+              DC    PL4'999'                                   @D40123A
+              DC    PL4'99'                                    @D40123A
+              DC    PL4'9'                                     @D40123C
+*
+MSG_HEADER   DC    CL9'DFH$ISAI '
+MSG_TXT_1    DC    C'Verified IPCONN autoinstall '
+MSG_TXT_2    DC    C' for client '
+MSG_TXT_3    DC    C'.'
+MSG_TXT_4    DC    C' from host '
+MSG_TXT_5    DC    C'Autoinstall Error('
+MSG_TXT_6    DC    C')'
+*
+MVC_EXECUTE MVC 0(,R8),0(R7)                                   @D40123C
+*
+         END   DFH$ISAI

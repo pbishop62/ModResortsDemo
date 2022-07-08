@@ -1,0 +1,1419 @@
+*ASM XOPTS(CICS,SP,NOEDF,NOPROLOG,NOEPILOG)
+         TITLE 'DFH$REQC - Sample XFCSREQC Exit Program'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$REQC                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Sample global user exit program for XFCSREQC     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 2001"                                   *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*                                                                     *
+*   This program provides sample processing for the File Control      *
+*   file state GLobal User Exit (GLUE) XFCSREQC.                      *
+*   It is called after a file Enable, Disable, Open , Close, or       *
+*   Cancel Close has been acted on.                                   *
+*                                                                     *
+*   This GLUE was introduced in CICS for MVS/ESA, version 5 release 3 *
+*   and does not exist in prior versions of CICS for MVS/ESA.         *
+*                                                                     *
+* NOTES :                                                             *
+*  DEPENDENCIES   = S/390                                             *
+*  RESTRICTIONS   = CICS/ESA GLUE restrictions                        *
+*                   GLUEs have certain unique restrictions. These     *
+*                   include, but are not limited to, such things as   *
+*                   addressing mode, the use of CICS services and the *
+*                   CICS storage protection facility. Please refer to *
+*                   the CICS/ESA Customization Guide for details.     *
+*  REGISTER CONVENTIONS = On entry, these registers have values:      *
+*                   R1 - address of the user exit parameter list      *
+*                        DFHUEPAR                                     *
+*                   R13- address of a standard register save area     *
+*                        R13 must have this value when returning to   *
+*                        the caller.                                  *
+*                   R14- address to which this program must return    *
+*                   R15- entry address of this program                *
+*                   No other register values are guaranteed on entry  *
+*                   The exit should save and restore any registers    *
+*                   that it modifies, using the save area addressed   *
+*                   by R13.                                           *
+*                                                                     *
+*                   These registers are used in this program:         *
+*                   R1 - Plist                                        *
+*                   R2 - Address in message build area where the next *
+*                        piece of data will be moved.                 *
+*                   R3 - Code base                                    *
+*                   R4 - Address of input data to convert / move      *
+*                   R5 - Length of data to convert / move             *
+*                   R6 - WORK_STORAGE base                            *
+*                   R7 - Work register                                *
+*                   R8 - Start address of message build area.         *
+*                   R9 - Subroutine link register                     *
+*                   R10- DFHEISTG base (DFHEIPLR)                     *
+*                   R11- EIB base (DFHEIBR)                           *
+*                   R12- Work register and Stored return code         *
+*                   R13- Kernel stack base                            *
+*                   R14- Work register                                *
+*                   R15- Work register                                *
+*  MODULE TYPE    = Executable                                        *
+*  PROCESSOR      = Assembler                                         *
+*  ATTRIBUTES     = Read only, AMODE 31, RMODE ANY                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$REQC                                              *
+*                                                                     *
+*   PURPOSE     = All functions                                       *
+*                                                                     *
+*   LINKAGE     = Called by the CICS exit handler                     *
+*                                                                     *
+*   INPUT       = R1 contains the address of DFHUEPAR                 *
+*                 DFHUEPAR contains the following exit-specific       *
+*                 parameters:                                         *
+*                                                                     *
+*                 UEPFSREQ  Address of a 2-byte field that indicates  *
+*                           the type of file request.The first byte   *
+*                           shows the request ( Open , Close  etc )   *
+*                           the second byte the type of request       *
+*                           ( Normal, Close pending etc )             *
+*                 UEPFILE   8-byte file name                          *
+*                 UEPFINFO  Address of the storage area containing    *
+*                           information about the file which can be   *
+*                           mapped using Dsect DFHUEFDS.              *
+*                 UEPFSRSP  Address of a byte containing the request  *
+*                           return code ( Normal, Warning etc ).      *
+*                 UEPRECUR  Address of a halfword recursion counter,  *
+*                           set to 0 on the first invocation of the   *
+*                           exit and incremented for each recursive   *
+*                           call.                                     *
+*   OUTPUT      = R15 = Return code                                   *
+*                                                                     *
+*   EXIT = Return to CICS with R15 = UERCNORM ( zero )                *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+*                                                                     *
+*     CALLS = EXEC CICS ADDRESS EIB                                   *
+*             EXEC CICS WRITEQ TD                                     *
+*             EXEC CICS WRITE OPERATOR                                *
+*                                                                     *
+*     DATA AREAS = ACB ( Access Method Control Block )                *
+*                  EIB ( Exec Interface Block )                       *
+*                  Parameter List                                     *
+*                                                                     *
+*     CONTROL BLOCKS = DFHUEPAR                                       *
+*                      DFHUEFDS                                       *
+*                                                                     *
+*     GLOBAL VARIABLES = None                                         *
+*                                                                     *
+* TABLES = None                                                       *
+*                                                                     *
+* MACROS = None                                                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+* ------------------------------------------------------------------- *
+* PURPOSE                                                             *
+*   The purpose of this sample program is to intercept a file open    *
+*   request against a vsam file after it has been acted on and to     *
+*   examine the vsam error flag. If the error flag contains hex 74    *
+*   (OPERR 116) an information message , the ACB, PLIST, and EIB data *
+*   areas and file information are written in full or in part to      *
+*   either the OPERATOR or CICS console.                              *
+*                                                                     *
+* * * THIS CAN BE TAILORED BEFORE USE IN A PRODUCTION ENVIRONMENT * * *
+*                                                                     *
+*   Some suggested extensions to the sample program are included in   *
+*   a section at the end of this description.                         *
+* ------------------------------------------------------------------- *
+* METHOD                                                              *
+* This sample program is made up of several subroutines which , when  *
+* used in combination with each other , produce edited output data.   *
+* Separate paths exist to write this data to either an system         *
+* console using EXEC CICS WRITE OPERATOR commands or to a TD queue    *
+* using EXEC CICS WRITEQ TD commands.                                 *
+*                                                                     *
+* When using the WRITE OPERATOR path messages are written into 690    *
+* bytes of contiguous storage and conform to the editing rules of     *
+* the EXEC CICS WRITE OPERATOR command ( See the CICS Application     *
+* programming reference manual). A new line is started after every    *
+* 69 bytes. This sample ensures each line ends with a space character *
+* and that the first character of the next line is not a space.       *
+*                                                                     *
+* It is the user responsibility to ensure all rules are complied with *
+* when modifying or adding routines. If they are not, unpredictable   *
+* results can occur.                                                  *
+*                                                                     *
+* The Major subroutines name the message or data area that will be    *
+* written and pass the addresses and size of those areas to           *
+* intermediate subroutines.                                           *
+*                                                                     *
+* For WRITE OPERATOR path they are:                                   *
+*                                                                     *
+*                    CREATE_INTRO_MESSAGE                             *
+*                    CREATE_ACB_MESSAGE                               *
+*                    CREATE_EIB_MESSAGE                               *
+*                    CREATE_PLIST_MESSAGE                             *
+*                    CREATE_FINFO_MESSAGE                             *
+*                                                                     *
+* In addition WRITE_OUTPUT_DATA exists to write the final message to  *
+* the operator console.                                               *
+*                                                                     *
+* For WRITEQ TD path they are:                                        *
+*                                                                     *
+*                    CREATE_INTRO_MESSAGE_TDQ                         *
+*                    CREATE_ACB_MESSAGE_TDQ                           *
+*                    CREATE_EIB_MESSAGE_TDQ                           *
+*                    CREATE_PLIST_MESSAGE_TDQ                         *
+*                    CREATE_FINFO_MESSAGE_TDQ                         *
+*                                                                     *
+* In addition BEGIN_NEW_LINE exists to reset pointer and work areas   *
+* after a line has been written to a TD queue.                        *
+*                                                                     *
+* The intermediate subroutines called are listed below for each path. *
+* They move the input data to the output message area and write /     *
+* create new lines.                                                   *
+*                                                                     *
+* For WRITE OPERATOR path they are:                                   *
+*                                                                     *
+*                     MOVE_CHAR_DATA                                  *
+*                     CONVERT_HEX_TO_CHAR_MOVE                        *
+*                     CREATE_NEW_LINE                                 *
+*                                                                     *
+* For WRITEQ TD path they are:                                        *
+*                                                                     *
+*                     MOVE_CHAR_DATA_TDQ                              *
+*                     CONVERT_HEX_TO_CHAR_MOVE_TDQ                    *
+*                     BEGIN_NEW_LINE                                  *
+*                                                                     *
+* For both paths input to the first two intermediate subroutines are  *
+* the start address of the input data to be moved / converted in R4   *
+* and the length of data to be moved / converted in R5. The amount of *
+* indentation when a new line is started can also be specified and is *
+* passed in workarea INDENT to CONVERT_HEX_TO_CHAR_MOVE / TDQ.        *
+*                                                                     *
+* MOVE_CHAR_DATA / TDQ - Moves character data only. Maximum that can  *
+* be moved is the lesser of either 256 bytes, the number of bytes     *
+* remaining in a line or the number of bytes left in the message      *
+* build area for the WRITE OPERATOR path.                             *
+*                                                                     *
+* CONVERT_HEX_TO_CHAR_MOVE / TDQ Converts hex data to character       *
+* format one byte at a time. Each single byte of hex data is displayed*
+* as two bytes of character data. EG single byte 01 becomes 2 bytes   *
+* F0F1. This needs to be considered when calculating the number of    *
+* bytes left in a line.                                               *
+*                                                                     *
+* CREATE_NEW_LINE bumps pointers (R2) to the next block of 69 bytes of*
+* storage within the 690 byte area and sets indentation.              *
+*                                                                     *
+* BEGIN_NEW_LINE writes the existing line if not all of it has been   *
+* used, otherwise it just resets pointers (R2) back to the start of   *
+* the message build area ready to build the next message.             *
+*                                                                     *
+* Other subroutines are described later within the module.            *
+* --------------------------------------------------------------------*
+*  PROCESS                                                            *
+*   Check this is an OPEN request, an attempt was made to open a VSAM *
+*   file, that an VSAM ACB exists, and that the error flag is non zero*
+*   In any of these are untrue return.                                *
+*   Otherwise, initialise working storage. Set both R2 and R8 to the  *
+*   start of the message build area. R8 will not change. R2 will      *
+*   address the next byte in the message build area into which data   *
+*   will be placed and is used to calculate the number of bytes       *
+*   remaining of the 690 bytes of contiguous storage or within a line.*
+*   Move the ACB error number to work area.Set the length of each line*
+*   that is to be built. This has to be 69 for the WRITE OPERATOR path*
+*   for existing editing to work within this module. .                *
+*   Check if the error message is X'74' OPERR116  and either branch   *
+*   to DEFAULT_MESSAGE to follow the WRITE OPERATOR path or DEFAULT_  *
+*   MESSAGE_TDQ for the WRITEQ TD path.                               *
+*                                                                     *
+*   ( Extra tests can be coded here to action other messages. Users   *
+*     can then branch to the existing paths or create their own. )    *
+*                                                                     *
+*   Return from DEFAULT_MESSAGE can occur when all messages and data  *
+*   areas have been written or if the 690 bytes of storage area has   *
+*   been used before all requested data has been processed. The write *
+*   will only output the amount of data built in the message area     *
+*   as held in the work area USED_SO_FAR.                             *
+*                                                                     *
+*   Return from DEFAULT_MESSAGE_TDQ will have written as many lines   *
+*   as were built and will then return to CICS.                       *
+*                                                                     *
+*   Possible extensions to this sample program are listed below:      *
+*                                                                     *
+*   - Vsam return error codes other than hex 74 ( OPERR116 ) could be *
+*     tested for and actioned.                                        *
+*                                                                     *
+*   - Instead of only processing vsam OPEN requests the program could *
+*     be extended to include ENABLE, DISABLE, OPEN and CANCEL CLOSE   *
+*     requests.                                                       *
+*                                                                     *
+*   - The program could be customized to output alternative messages  *
+*     and data areas or to write to different destinations such as    *
+*     SYSOUT or other transient data queues.                          *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$REQC),COMP(SAMPLES),PROD(CICS    ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= Base   620 0107   HD4EPEA : Base / Migrate PQ48277          *
+*                                                                     *
+*     This module was first shipped by APAR PQ44211                   *
+***********************************************************************
+*
+WORK_STORAGE DSECT                           Working storage DSECT
+INDENT       DS  XL2                         Line indentation
+ERROR_NUMBER DS  XL1                         ACB error number
+WORKAREA3    DS  CL3                         Hex convert workarea
+WORKAREA2    DS  CL2                         Hex convert workarea
+USED_SO_FAR  DS  XL4                         Bytes used so far (690)
+BYTES_LEFT   DS  XL4                         Bytes left in line (69)
+LINE_LEN     DS  XL4                         Line length
+SUBSAVE1     DS  F                           Subroutine save area 1
+SUBSAVE2     DS  F                           Subroutine save area 2
+SUBSAVE3     DS  F                           Subroutine save area 3
+SUBSAVE4     DS  F                           Subroutine save area 4
+SUBSAVE5     DS  F                           Subroutine save area 5
+REG1SAVE     DS  F                           Plist Reg 1 save area
+SPARE        DS  XL16                        Spare bytes
+MSG_AREA     DS  0CL690                      Message build area
+TD_LINE_LEN  DS  CL132                       TDQ line (length)
+MSG_SPACE    DS  CL558                       Message area
+WRKSTGL      EQU *-INDENT                    Work storage length
+***********************************************************************
+* Ensure AMODE(31) and RMODE(ANY).                                    *
+***********************************************************************
+DFH$REQC CSECT
+DFH$REQC AMODE 31
+DFH$REQC RMODE ANY
+***********************************************************************
+*   -Generate the prolog code with the DFHEIENT macro.                *
+*      Specify CODEREG, DATAREG and EIBREG.                           *
+*      This enables use of EXEC CICS (API) calls.                     *
+***********************************************************************
+         DFHEIENT CODEREG=3,DATAREG=10,EIBREG=11
+***********************************************************************
+*   -Include DSECTS needed for:                                       *
+*      User Exit Parameter List - DFHUEPAR                            *
+***********************************************************************
+         DFHUEXIT TYPE=EP,ID=(XFCSREQC)  DFHUEPAR plist for XFCSREQC
+         EJECT
+         DFHUEXIT TYPE=XPIENV
+         EJECT
+         COPY DFHUEFDS
+         EJECT
+         IFGACB AM=VSAM
+***********************************************************************
+* DFHEISTG working storage.                                           *
+***********************************************************************
+         DFHEISTG                        Start working storage
+CICSRESP       DS    F                   EXEC CICS RESP code
+               DS    0D                  Doubleword align
+WORK_STG       DS    CL(WRKSTGL)         Storage
+         DFHEIEND                        End working storage
+         EJECT
+DFH$REQC CSECT
+***********************************************************************
+*   -Address the DFHUEPAR parameter list.                             *
+***********************************************************************
+         USING DFHUEPAR,R1                    Param List
+***********************************************************************
+*    Initial processing starts here. The following have to be true    *
+*    for processing to continue otherwise return is made to CICS.     *
+*    This is an OPEN request.                                         *
+*    It was a VSAM file being opened.                                 *
+*    An ACB ( Access Method Control Block ) exists and the error flag *
+*    is not zero.                                                     *
+*                                                                     *
+*    Address working storage and set it all to zeroes.                *
+*    Save Plist register ( R1) into working storage.                  *
+*    Set R2 and R8 to start of message build area.                    *
+*    Save the ACB error flag into working storage                     *
+*    The default path is to write to the OPERATOR CONSOLE so 69 is set*
+*    as the line length.                                              *
+*    Default is to check for error flag X 74 ( OPERR116 ). If found   *
+*    start message create processing.                                 *
+***********************************************************************
+         L     R15,UEPFSREQ                     Request type
+         CLI   0(R15),UEPFSOPN                  ? Open request
+         BNE   RETURN_TO_CICS                     no return
+         L     R7,UEPFINFO                      File info
+         USING DFHUEFDS,R7                      Address file info.
+         CLI   UEFDSACC,UEFVSAM                 ? Vsam file
+         BNE   RETURN_TO_CICS                     no return
+         ICM   R14,15,UEFACBCP                  Address ACB copy
+         BZ    RETURN_TO_CICS                   no return
+         USING IFGACB,R14                       Address ACB dsect
+         CLI   ACBERFLG,X'00'                   ? ACB error code zero
+         BE    RETURN_TO_CICS                   yes return
+         LA    R6,WORK_STG                      Working storage
+         USING WORK_STORAGE,R6                  Address working storage
+         XC    WORK_STG(250),WORK_STG           Zeroise
+         XC    WORK_STG+250(250),WORK_STG         750 bytes
+         XC    WORK_STG+500(250),WORK_STG           working storage
+         ST    R1,REG1SAVE                      Save Plist address
+         LA    R2,MSG_AREA                      R2 = start message area
+         LR    R8,R2                            R8 = start message area
+         MVC   ERROR_NUMBER,ACBERFLG            ACB error code to work
+***********************************************************************
+* Default is to check for error code hex 74 ( OPERR116 ) and write to *
+* the operator console.                                               *
+***********************************************************************
+         MVC   LINE_LEN,CON_LINE_LEN            Line size 69 bytes
+         CLI   ACBERFLG,X'74'                   If error 116 x'74'
+         BE    DEFAULT_MESSAGE                  Create default output
+*=====================================================================*
+* To write to the TDQ amend the code above so LINE_LEN is set to a    *
+* length consistent with the record size defined for the TDQ to       *
+* which the data will be written. Also change the branch to label     *
+* DEFAULT_MESSAGE_TDQ. In the example below the length is set to the  *
+* value needed for the current code in this module and the editing it *
+* performs.                                                           *
+* EG:    MVC   LINE_LEN,=F'124'                 Line size is 124 bytes*
+*        B     DEFAULT_MESSAGE_TDQ              Write to TDQ          *
+*=====================================================================*
+* Add code in here to process ACB error flags other than  x'74'       *
+* (OPERR116)                                                          *
+* EG :   CLI   0(R15),X'4C'                     If error 76 X'4C'     *
+*        BE    DEFAULT_MESSAGE_TDQ                                    *
+* OR     CLI   0(R15),X'60'                     If error 96 X'60      *
+*        BE    DEFAULT_MESSAGE                                        *
+*=====================================================================*
+*
+         B    RETURN_TO_CICS                    Error not found
+WRITE_MSG  DS 0H
+         BAL  R9,WRITE_OUTPUT_DATA
+***********************************************************************
+*   -Generate epilog code with the DFHEIRET macro                     *
+*    The DFHEIRET macro frees DFHEISTG working storage,               *
+*    restores caller's registers, and sets R15 before exiting         *
+***********************************************************************
+RETURN_TO_CICS DS 0H
+         LA   R15,UERCNORM               No errors
+         DFHEIRET RCREG=15               Return with rc in R15
+*
+         EJECT
+***********************************************************************
+*  DEFAULT_MESSAGE creates output into a message area of 690 bytes    *
+*  divided into 10 lines of 69 bytes. A new line is started for the   *
+*  next data type and is prefixed with an eyecatcher. Due to the      *
+*  restriction of 690 byes imposed by the EXEC CICS WRITE OPERATOR    *
+*  command, not all of every data area is written. Only exit-specific *
+*  parameters of the Plist are displayed. File information from the   *
+*  address UEPFINFO is restricted to data contained in labels UEFLNAME*
+*  and UEDSNAME.                                                      *
+*                                                                     *
+*  Sample output is displayed below.                                  *
+*                                                                     *
+*VSAM OPEN ERROR HAS OCCURRED -- VSAM ERROR FLAG HEX 74               *
+*ACB   A010004C 12993A90 00FD77F0 DA120101 00010001 C1010000 80800008 *
+*      00000000 00000000 132C03D0 03EC0011 008A6E60 D2760000 00000000 *
+*      00000000 00000000 00000000 00000000 00000000                   *
+*EIB   0101201F 0101066F C3C5D4E3 0000028C E3C3F0F3 000000B6 43F87D02 *
+*      02000000 00000000 00000000 00000000 00000000 00000040 40404040 *
+*      40404000 00000000 00000000 00000000 00000000 00000000 00000000 *
+*      00                                                             *
+*PLIST 00046420 0004642C 0004642C 000460EC 000000CD 00000000 132891D6 *
+*FINFO FILEA   TCOM.IYCLZCCE.FILEA                                    *
+***********************************************************************
+*
+DEFAULT_MESSAGE DS 0H
+         BAL  R9,CREATE_INTRO_MESSAGE              Write header msg
+         BAL  R9,CREATE_ACB_MESSAGE                Write ACB
+         BAL  R9,CREATE_EIB_MESSAGE                Write EIB
+         BAL  R9,CREATE_PLIST_MESSAGE              Write Plist
+         BAL  R9,CREATE_FINFO_MESSAGE              Write file info
+         B   WRITE_MSG                             Write msg console
+*
+***********************************************************************
+* DEFAULT_MESSAGE_TDQ writes a line of 132 bytes to the transient data*
+* queue CFSL or a queue of your choice. A new line is started for the *
+* next data type and is prefixed with an eyecatcher.There is no       *
+* restriction on the size of data that can be written so the entire   *
+* length of each block is output.                                     *
+* For conformity file information written out is the same as for the  *
+* WRITE OPERATOR path.                                                *
+***********************************************************************
+*
+DEFAULT_MESSAGE_TDQ DS 0H
+         BAL  R9,CREATE_INTRO_MESSAGE_TDQ          Write header msg
+         BAL  R9,CREATE_ACB_MESSAGE_TDQ            Write ACB
+         BAL  R9,CREATE_EIB_MESSAGE_TDQ            Write EIB
+         BAL  R9,CREATE_PLIST_MESSAGE_TDQ          Write Plist
+         BAL  R9,CREATE_FINFO_MESSAGE_TDQ          Write file info
+         BAL  R9,BEGIN_NEW_LINE                    Write last line
+         B    RETURN_TO_CICS                       Return to caller
+*
+**********************************************************************
+*                            SUBROUTINES                             *
+**********************************************************************
+*              MAJOR SUBROUTINES FOR WRITE TO OPERATOR               *
+**********************************************************************
+********************** CREATE_INTRO_MESSAGE **************************
+* Register usage :                                                   *
+*                 R4 - Start address of data to move / convert       *
+*                 R5 - Length of data                                *
+*                 R9 - Subroutine link register                      *
+* Subroutines    :                                                   *
+*                 Move_char_data                                     *
+*                 Convert_hex_to_char_move                           *
+*                 Create_new_line                                    *
+* Function       :                                                   *
+*                 Build introduction message into output area.       *
+* Method         :                                                   *
+*                 Move the introduction message into the output      *
+*                 area. Convert the ACB error code to character      *
+*                 format and append it to the introduction message   *
+*                 Start a new line.                                  *
+**********************************************************************
+*
+CREATE_INTRO_MESSAGE DS 0H
+*
+         ST   R9,SUBSAVE1                          Save link Reg
+*
+         LA   R4,MSGINTRO                          Address Intro msg
+         LA   R5,L'MSGINTRO                        Length Intro msg
+         BAL  R9,MOVE_CHAR_DATA                    Move Intro msg
+         LA   R4,ERROR_NUMBER                      Address ACB error
+         LA   R5,L'ERROR_NUMBER                    Length ACB error
+         BAL  R9,CONVERT_HEX_TO_CHAR_MOVE          ACB error to char
+         BAL  R9,CREATE_NEW_LINE                   Next on new line
+*
+         L    R9,SUBSAVE1                          Restore link reg
+         BR   R9                                   Return
+*
+********************** CREATE_ACB_MESSAGE ****************************
+* Register usage :                                                   *
+*                 R4 - Start address of data to move / convert       *
+*                 R5 - Length of data                                *
+*                 R9 - Subroutine link register                      *
+* Subroutines    :                                                   *
+*                 Move_char_data                                     *
+*                 Convert_hex_to_char_move                           *
+*                 Create_new_line                                    *
+* Function       :                                                   *
+*                 Build ACB data into output area.                   *
+* Method         :                                                   *
+*                 Move ACB eyecatcher into the output. Convert the   *
+*                 entire length of the ACB to character format and   *
+*                 move it to the message area after the eyecatcher.  *
+*                 Set the amount of line indentation required if     *
+*                 the length of data being converted extends over    *
+*                 more than one line.                                *
+*                 Start a new line.                                  *
+**********************************************************************
+*
+CREATE_ACB_MESSAGE DS 0H
+*
+         ST   R9,SUBSAVE1                          Save link reg
+*
+         LA   R4,ACB_EYE                           Address eyecatcher
+         LA   R5,L'ACB_EYE                         Length eyecatcher
+         BAL  R9,MOVE_CHAR_DATA                    Move eyecatcher
+         L    R4,UEFACBCP                          Address ACB
+         DROP R14
+         USING IFGACB,R4                           Copy ACB
+         LH   R5,ACBLENG                           Length ACB
+         MVC  INDENT,=X'0006'                      Line indentation
+         BAL  R9,CONVERT_HEX_TO_CHAR_MOVE          ACB to char
+         BAL  R9,CREATE_NEW_LINE                   Start new line
+*
+         L    R9,SUBSAVE1                          Restore link reg
+         BR   R9                                   Return
+*
+************************ CREATE_EIB_MESSAGE **************************
+* Register usage :                                                   *
+*                 R4 - Start address of data to move / convert       *
+*                 R5 - Length of data                                *
+*                 R9 - Subroutine link register                      *
+* Subroutines    :                                                   *
+*                 Get_EIB                                            *
+*                 Move_char_data                                     *
+*                 Convert_hex_to_char_move                           *
+*                 Create_new_line                                    *
+* Function       :                                                   *
+*                 Build EIB data into output area.                   *
+* Method         :                                                   *
+*                 Get the EIB address and move the EIB eyecatcher    *
+*                 into the output area. Convert the entire EIB to    *
+*                 character format and add it to the message area    *
+*                 after the eyecatcher.Start a new line.             *
+**********************************************************************
+*
+CREATE_EIB_MESSAGE DS 0H
+*
+         ST   R9,SUBSAVE1                          Save link reg
+*
+         BAL  R9,GET_EIB                           Get the EIB
+         LA   R4,EIB_EYE                           Address eyecatcher
+         LA   R5,L'EIB_EYE                         Length eyecatcher
+         BAL  R9,MOVE_CHAR_DATA                    Move eyecatcher
+         LR   R4,DFHEIBR                           Address EIB
+         LA   R5,EIBLENG                           Length EIB
+         BAL  R9,CONVERT_HEX_TO_CHAR_MOVE          EIB to char
+         BAL  R9,CREATE_NEW_LINE                   Next on new line
+*
+         L    R9,SUBSAVE1                          Restore link reg
+         BR   R9                                   Return
+*
+*
+*********************** CREATE_PLIST_MESSAGE *************************
+* Register usage :                                                   *
+*                 R4 - Start address of data to move / convert       *
+*                 R5 - Length of data                                *
+*                 R9 - Subroutine link register                      *
+* Subroutines    :                                                   *
+*                 Move_char_data                                     *
+*                 Convert_hex_to_char_move                           *
+*                 Create_new_line                                    *
+* Function       :                                                   *
+*                 Build PLIST data into output area.                 *
+* Method         :                                                   *
+*                 Move the PLIST eyecatcher into the output area.    *
+*                 Convert the exit-specific part of the parameter    *
+*                 list into character format and add it to the       *
+*                 message area after the eyecatcher. Start a new     *
+*                 line.                                              *
+**********************************************************************
+*
+CREATE_PLIST_MESSAGE DS 0H
+*
+         ST   R9,SUBSAVE1                          Save link reg
+*
+         LA   R4,PLIST_EYE                         Address eyecatcher
+         LA   R5,L'PLIST_EYE                       Length eyecatcher
+         BAL  R9,MOVE_CHAR_DATA                    Move eyecatcher
+         L    R1,REG1SAVE                          Address Plist
+         LA   R4,UEPFSREQ                          Address Plist
+         LA   R5,(UEPEPEND-UEPFSREQ)               Length Plist
+         BAL  R9,CONVERT_HEX_TO_CHAR_MOVE          Plist to char
+         BAL  R9,CREATE_NEW_LINE                   Next on new line
+*
+         L    R9,SUBSAVE1                          Restore link reg
+         BR   R9                                   Return
+*
+********************* CREATE_FINFO_MESSAGE ***************************
+* Register usage :                                                   *
+*                 R4 - Start address of data to move / convert       *
+*                 R5 - Length of data                                *
+*                 R9 - Subroutine link register                      *
+* Subroutines    :                                                   *
+*                 Move_char_data_tdq                                 *
+*                 Convert_hex_to_char_move_tdq                       *
+* Function       :                                                   *
+*                 Build File Information into output area.           *
+* Method         :                                                   *
+*                 Move the File Info eyecatcher ( FINFO ) into the   *
+*                 output area.Move the filename and DSN to the       *
+*                 output area after the eyecatcher ( This is the     *
+*                 first 52 bytes from the address in UEPFINFO )      *
+**********************************************************************
+*
+CREATE_FINFO_MESSAGE DS 0H
+*
+         ST   R9,SUBSAVE1                          Save link reg
+*
+         LA   R4,FINFO_EYE                         Address eyecatcher
+         LA   R5,L'FINFO_EYE                       Length eyecatcher
+         BAL  R9,MOVE_CHAR_DATA                    Move File Info.
+         L    R1,REG1SAVE                          Restore PLIST
+         L    R4,UEPFINFO                          Address UEPFINFO
+         LA   R5,FINFO_LEN                         Length Plist
+         BAL  R9,MOVE_CHAR_DATA                    Plist to char
+*
+         L    R9,SUBSAVE1                          Restore link reg
+         BR   R9                                   Return
+**********************************************************************
+*             INTERMEDIATE SUBROUTINES FOR WRITE TO OPERATOR         *
+**********************************************************************
+*
+********************** MOVE_CHAR_DATA ********************************
+* Register usage :                                                   *
+*                 R9 - Subroutine link register                      *
+* Subroutines    :                                                   *
+*                 Check_fit                                          *
+*                 Move_data                                          *
+*                 Update_work_areas                                  *
+* Function       :                                                   *
+*                 Move data into output message area.                *
+* Method         :                                                   *
+*                 Ensure that the amount of data to move will fit    *
+*                 into the amount of space left in the output area . *
+*                 Move the data into the output area. Update work    *
+*                 area used_so_far.                                  *
+**********************************************************************
+*
+MOVE_CHAR_DATA DS 0H
+*
+         ST   R9,SUBSAVE2                           Save link reg
+*
+         BAL  R9,CHECK_FIT                          Ensure msg will fit
+         BAL  R9,MOVE_DATA                          Move data to output
+         BAL  R9,UPDATE_WORK_AREAS                  Calc used so far
+*
+         L    R9,SUBSAVE2                           Restore link reg
+         BR   R9                                    Return
+*
+******************* CONVERT_HEX_TO_CHAR_MOVE *************************
+* Register usage :                                                   *
+*                 R0 - Count of input bytes converted                *
+*                 R2  - Address in output area into which the        *
+*                       next piece of converted data will be         *
+*                       moved                                        *
+*                 R4  - Address of input to convert                  *
+*                 R9  - Subroutine link register                     *
+*                 R14 - Number of bytes left in output area          *
+* Subroutines    :                                                   *
+*                 Get_bytes left                                     *
+*                 Set_newline_values                                 *
+*                 Update_work_areas                                  *
+*                 Convert_hex_characters                             *
+* Function       :                                                   *
+*                 Check and initialise environment before converting *
+*                 hex data to character format.                      *
+* Method         :                                                   *
+*                 Get number of bytes remaining in the line being    *
+*                 built. If the size is not less than two bytes (    *
+*                 the amount of converted data that is moved ) then  *
+*                 convert the byte being pointed to by R4. Decrement *
+*                 the length of data to convert and recheck the size *
+*                 If the size left is less than 2 create a new line. *
+*                 Repeat the loop until all characters have been     *
+*                 converted or the output area of 690 bytes has been *
+*                 filled.                                            *
+**********************************************************************
+*
+CONVERT_HEX_TO_CHAR_MOVE DS 0H
+*
+         ST  R9,SUBSAVE2                            Save link reg
+*
+         SR  R0,R0                                  Zeroise space cnt
+         BAL R9,GET_BYTES_LEFT                      Calc bytes left
+         L   R14,BYTES_LEFT                         R14 = bytes left
+         C   R14,CON_LINE_LEN                       ? zero
+         BNE CHECK_SIZE                               no check size
+NEW_LINE DS  0H                                     Add / sub indent
+         BAL R9,SET_NEWLINE_VALUES                  set R14 line size
+CHECK_SIZE   DS 0H
+         CH  R14,=H'2'                              ? > 2 bytes left
+         BNL CONVERT_CHARACTERS                       Yes convert char
+START_NEW_LINE DS 0H
+         AR  R2,R14                                 Next byte in line
+         BAL R9,UPDATE_WORK_AREAS                   Calc used so far
+         SR  R0,R0                                  Zeroise space cnt
+         B   NEW_LINE                               Set new line values
+CONVERT_CHARACTERS DS 0H
+         BAL R9,CONVERT_HEX_CHARACTERS              Convert 1 byte
+         BCT  R5,CHECK_SIZE                         ? len zero yes
+         BAL R9,UPDATE_WORK_AREAS                   Calc used so far
+*
+         L   R9,SUBSAVE2                            Restore link reg
+         BR  R9                                     Return
+*
+*********************** CREATE_NEW_LINE ******************************
+* Register usage :                                                   *
+*                 R2  : Points to the next byte in the output area   *
+*                       being built into which the next two converted*
+*                       characters will be moved.                    *
+*                 R9  : Subroutine link area                         *
+* Subroutines    :                                                   *
+*                 Update_work_areas                                  *
+* Function       :                                                   *
+*                 To point R2 to the start of the next sixty nine    *
+*                 bytes of the message output area eg : start of a   *
+*                 new line.                                          *
+* Method         :                                                   *
+*                 When a new line is started a space is moved into   *
+*                 the last byte of the previous line as an edit      *
+*                 character to conform to the EXEC CICS OPERATOR     *
+*                 commands editing rules.                            *
+**********************************************************************
+*
+CREATE_NEW_LINE DS 0H
+*
+         ST  R9,SUBSAVE2                              Save link reg
+*
+         BAL R9,GET_BYTES_LEFT                        Bytes in line
+         L   R14,BYTES_LEFT                           If bytes left
+         C   R14,CON_LINE_LEN                         is 69 already
+         BE   CREATE_LINE_RETURN                      start of line
+         A   R2,BYTES_LEFT                            R2 = end of line
+         SH  R2,=H'1'                                 End of line - 1
+         MVI 0(R2),X'40'                              Set to char space
+         LA  R2,1(R2)                                 Next input byte
+         BAL R9,UPDATE_WORK_AREAS                     Calc used so far
+*
+CREATE_LINE_RETURN DS 0H
+         L   R9,SUBSAVE2                              Restore link reg
+         BR R9                                        Return
+*
+*********************** WRITE_OUTPUT_DATA *****************************
+* Register usage :                                                    *
+*                 R9 : Subroutine link register                       *
+* Subroutines    :                                                    *
+*                 None                                                *
+* Function       :                                                    *
+*                :Write the amount of data built into the message area*
+*                 ( maximum 690 bytes ) to the operator console       *
+***********************************************************************
+*                                                                     *
+WRITE_OUTPUT_DATA DS 0H
+*
+         ST   R9,SUBSAVE1                            Save link reg
+*
+         EXEC CICS WRITE OPERATOR                                      *
+               TEXT(MSG_AREA)                                          *
+               TEXTLENGTH(USED_SO_FAR)                                 *
+               RESP(CICSRESP)
+*
+         L     R9,SUBSAVE1                           Restore link reg
+         BR    R9                                    Return
+*
+**********************************************************************
+*              MINOR SUBROUTINES FOR WRITE TO OPERATOR               *
+**********************************************************************
+*
+*************************** CHECK_FIT ********************************
+* Register usage :                                                   *
+*                 R5  : Length of message to move.                   *
+*                 R9  : Subroutine link register.                    *
+*                 R14 : Work register                                *
+* Subroutines    :                                                   *
+*                 None.                                              *
+* Function       :                                                   *
+*                 Check that the size of data fits into the bytes    *
+*                 remaining in the output build area.                *
+* Method         :                                                   *
+*                 Check that the size of data to move as specified   *
+*                 in R5 fits into the space remaining in the output  *
+*                 area. The move is restricted to the lesser of 256  *
+*                 bytes or whatever is remaining in the output area  *
+*                 and is truncated accordingly.                      *
+**********************************************************************
+*
+CHECK_FIT DS 0H
+*
+         ST   R9,SUBSAVE3                            Save link reg
+*
+         LR   R14,R5                                 R14 = msg len
+         A    R14,USED_SO_FAR                        add used so far
+         CH   R14,MAX_SIZE                           ? R14 = 690
+         BL   CHECK_256                                no check 256
+         LH   R14,MAX_SIZE                           R14 = 690
+CHECK_256     DS 0H
+         S    R14,USED_SO_FAR                        690 - used so far
+         C    R14,MAX_MSG_LEN                        ? Msg len < 256
+         BNH  CHECK_FIT_RETURN                         Yes ok to move
+         L    R5,MAX_MSG_LEN                         Set to max move
+CHECK_FIT_RETURN DS 0H
+*
+         L    R9,SUBSAVE3                            Restore link reg
+         BR   R9                                     Return
+*
+*********************** UPDATE_WORK_AREAS ***************************
+* Register usage :                                                  *
+*                 R2  : Points to the address in the output area    *
+*                       where the next piece of data will be moved. *
+*                 R9  : Subroutine link register                    *
+*                 R15 : Work register                               *
+* Subroutines    :                                                  *
+*                 None.                                             *
+* Function       :                                                  *
+*                 Calculate the amount of bytes in the output       *
+*                 message area that have been used so far.          *
+* Method         :                                                  *
+*                 Load R15 with the address of where the next byte  *
+*                 will be placed in the output area and subtract    *
+*                 the start address of the output area. If the end  *
+*                 of the output message area has been reached (690) *
+*                 write 690 bytes to the operator console and end   *
+*                 otherwise save bytes used so far into work area.  *
+*********************************************************************
+*
+UPDATE_WORK_AREAS DS 0H
+*
+         ST  R9,SUBSAVE3                             Save link reg
+*
+         LR  R15,R2                                  Addr pos moved
+         SR  R15,R8                                  Sub start address
+         ST  R15,USED_SO_FAR                         Save total moved
+         CH  R15,MAX_SIZE                            ? 690 moved
+         BE  WRITE_MSG                               Yes finished
+*
+         L   R9,SUBSAVE3                             Restore link reg
+         BR  R9                                      Return
+*
+*********************** GET_BYTES_LEFT ******************************
+* Register usage :                                                  *
+*                 R9  : Subroutine link register                    *
+*                 R14 : Work register                               *
+* Subroutines    :                                                  *
+*                 None                                              *
+* Function       :                                                  *
+*                 Calculate the number of bytes remaining in a line *
+* Method         :                                                  *
+*                 Divide the amount of output message area used so  *
+*                 far by the length of a line ( 69 bytes ). The     *
+*                 remainder of the division is subtracted from the  *
+*                 line length and saved in work area Used_So_Far    *
+* *******************************************************************
+*
+GET_BYTES_LEFT DS 0H
+*
+         ST  R9,SUBSAVE4                             Save link reg
+*
+         SR  R14,R14                                 clear R14
+         L   R15,USED_SO_FAR                         Bytes written out
+         D   R14,CON_LINE_LEN                        Find remainder
+         L   R15,CON_LINE_LEN                        R15 = Line length
+         SR  R15,R14                                 Bytes left in lne
+         ST  R15,BYTES_LEFT                          Save byte left
+*
+         L   R9,SUBSAVE4                             Restore link reg
+         BR  R9                                      Return
+*
+**********************************************************************
+*             MAJOR SUBROUTINES FOR WRITE TO TD QUEUE                *
+**********************************************************************
+*
+******************** CREATE_MESSAGE_INTRO_TDQ ************************
+* Register usage :                                                   *
+*                 R4 - Start address of data to move / convert       *
+*                 R5 - Length of data                                *
+*                 R9 - Subroutine link register                      *
+* Subroutines    :                                                   *
+*                 Move_char_data_tdq                                 *
+*                 Convert_hex_to_char_move_tdq                       *
+*                 Begin_new_line                                     *
+* Function       :                                                   *
+*                 Build introduction message into the output area    *
+*                 and write message to the TD queue.                 *
+* Method         :                                                   *
+*                 Move the introduction message into the output      *
+*                 area. Convert the ACB error code to character      *
+*                 format and append it to the introduction message   *
+*                 Start a new line.                                  *
+**********************************************************************
+*
+CREATE_INTRO_MESSAGE_TDQ DS 0H
+*
+         ST   R9,SUBSAVE1                          Save link reg
+*
+         LA   R4,MSGINTRO                          Address intro msg
+         LA   R5,L'MSGINTRO                        Length intro msg
+         BAL  R9,MOVE_CHAR_DATA_TDQ                Move intro msg
+         LA   R4,ERROR_NUMBER                      Address ACB error
+         LA   R5,L'ERROR_NUMBER                    Length ACB error
+         BAL  R9,CONVERT_HEX_TO_CHAR_MOVE_TDQ      ACB error to char
+         BAL  R9,BEGIN_NEW_LINE                    Start new line
+*
+         L    R9,SUBSAVE1                          Restore link reg
+         BR   R9                                   Return
+*
+********************** CREATE_ACB_MESSAGE_TDQ ************************
+* Register usage :                                                   *
+*                 R4 - Start address of data to move / convert       *
+*                 R5 - Length of data                                *
+*                 R9 - Subroutine link register                      *
+* Subroutines    :                                                   *
+*                 Move_char_data                                     *
+*                 Convert_hex_to_char_move                           *
+*                 Create_new_line                                    *
+* Function       :                                                   *
+*                 Build ACB data into output area and write it to    *
+*                 the TD queue.                                      *
+* Method         :                                                   *
+*                 Move ACB eyecatcher into the output area. Convert  *
+*                 entire ACB to character format and add it to the   *
+*                 message area after the eyecatcher. Set the         *
+*                 amount of line indentation required if the length  *
+*                 of data being converted extends over more than     *
+*                 one line. start a new line.                        *
+**********************************************************************
+*
+CREATE_ACB_MESSAGE_TDQ DS 0H
+*
+         ST   R9,SUBSAVE1                          Save link reg
+*
+         LA   R4,ACB_EYE                           Address eyecatcher
+         LA   R5,L'ACB_EYE                         Length eyecatcher
+         BAL  R9,MOVE_CHAR_DATA_TDQ                Move eyecatcher
+         L    R4,UEFACBCP                          Address ACB
+         USING IFGACB,R4                           Copy ACB
+         LH   R5,ACBLENG                           Length ACB
+         MVC  INDENT,=X'0006'                      Indentation
+         BAL  R9,CONVERT_HEX_TO_CHAR_MOVE_TDQ      ACB to char
+         BAL  R9,BEGIN_NEW_LINE                    Start new line
+*
+         L    R9,SUBSAVE1
+         BR   R9
+*
+********************** CREATE_EIB_MESSAGE_TDQ ************************
+* Register usage :                                                   *
+*                 R4 - Start address of data to move / convert       *
+*                 R5 - Length of data                                *
+*                 R9 - Subroutine link register                      *
+* Subroutines    :                                                   *
+*                 Get_EIB                                            *
+*                 Move_char_data_tdq                                 *
+*                 Convert_hex_to_char_move_tdq                       *
+*                 Begin_new_line                                     *
+* Function       :                                                   *
+*                 Build EIB data into output area and write it to    *
+*                 the TD queue.                                      *
+* Method         :                                                   *
+*                 Get the EIB address and move the EIB eyecatcher    *
+*                 into the output area. Convert the entire EIB to    *
+*                 character format and add it to the message area    *
+*                 after the eyecatcher.Start a new line.             *
+**********************************************************************
+*
+CREATE_EIB_MESSAGE_TDQ DS 0H
+*
+         ST   R9,SUBSAVE1                          Save link reg
+*
+         BAL  R9,GET_EIB                           Get EIB
+         LA   R4,EIB_EYE                           Address eyecatcher
+         LA   R5,L'EIB_EYE                         Length eyecatcher
+         BAL  R9,MOVE_CHAR_DATA_TDQ                Move eyecatcher
+         LR   R4,DFHEIBR                           Address EIB
+         LA   R5,EIBLENG                           Length EIB
+         BAL  R9,CONVERT_HEX_TO_CHAR_MOVE_TDQ      EIB to char
+         BAL  R9,BEGIN_NEW_LINE                    Start new line
+*
+         L    R9,SUBSAVE1                          Restore link reg
+         BR   R9                                   Return
+*
+*
+********************* CREATE_PLIST_MESSAGE_TDQ ***********************
+* Register usage :                                                   *
+*                 R4 - Start address of data to move / convert       *
+*                 R5 - Length of data                                *
+*                 R9 - Subroutine link register                      *
+* Subroutines    :                                                   *
+*                 Get_EIB                                            *
+*                 Move_char_data_tdq                                 *
+*                 Convert_hex_to_char_move_tdq                       *
+*                 Begin_new_line                                     *
+* Function       :                                                   *
+*                 Build PLIST data into output area and write it to  *
+*                 the TD queue.                                      *
+* Method         :                                                   *
+*                 Move the PLIST eyecatcher into the output area.    *
+*                 Convert the entire PLIST to character format and   *
+*                 add it to the message area after the eyecatcher.   *
+*                 Start a new line.                                  *
+**********************************************************************
+*
+CREATE_PLIST_MESSAGE_TDQ DS 0H
+*
+         ST   R9,SUBSAVE1                          Save link reg
+*
+         LA   R4,PLIST_EYE                         Address eyecatcher
+         LA   R5,L'PLIST_EYE                       Length eyecatcher
+         BAL  R9,MOVE_CHAR_DATA_TDQ                Move Plist
+         L    R4,REG1SAVE                          Address Plist
+         LA   R5,UEPEPLEN                          Length Plist
+         BAL  R9,CONVERT_HEX_TO_CHAR_MOVE_TDQ      Plist to char
+         BAL  R9,BEGIN_NEW_LINE                    Start on new line
+*
+         L    R9,SUBSAVE1                          Restore link reg
+         BR   R9                                   Return
+*
+********************* CREATE_FINFO_MESSAGE_TDQ ***********************
+* Register usage :                                                   *
+*                 R4 - Start address of data to move / convert       *
+*                 R5 - Length of data                                *
+*                 R9 - Subroutine link register                      *
+* Subroutines    :                                                   *
+*                 Move_char_data_tdq                                 *
+*                 Convert_hex_to_char_move_tdq                       *
+* Function       :                                                   *
+*                 Build File Information into output area and write  *
+*                 message to the TD queue.                           *
+* Function       :                                                   *
+*                 Move the FINFO eyecatcher ( File Info ) into the   *
+*                 output area.Move the filename and DSN to the       *
+*                 output area after the eyecatcher ( This is the     *
+*                 first 52 bytes from the address in UEPFINFO )      *
+**********************************************************************
+*
+CREATE_FINFO_MESSAGE_TDQ DS 0H
+*
+         ST   R9,SUBSAVE1                          Save link reg
+*
+         LA   R4,FINFO_EYE                         Address eyecatcher
+         LA   R5,L'FINFO_EYE                       Length eyecatcher
+         BAL  R9,MOVE_CHAR_DATA_TDQ                Move File Info.
+         L    R1,REG1SAVE                          Restore PLIST
+         L    R4,UEPFINFO                          Address UEPFINFO
+         LA   R5,FINFO_LEN                         Length Plist
+         BAL  R9,MOVE_CHAR_DATA_TDQ                Plist to char
+*
+         L    R9,SUBSAVE1                          Restore link reg
+         BR   R9                                   Return
+**********************************************************************
+*            INTERMEDIATE SUBROUTINES FOR WRITE TO OPERATOR          *
+**********************************************************************
+*
+************************** MOVE_CHAR_DATA_TDQ ************************
+* Register usage :                                                   *
+*                 R5  : Length of data to move                       *
+*                 R9  : Subroutine link register                     *
+*                 R14 : Work area                                    *
+*                 R15 : Work area                                    *
+* Subroutines    :                                                   *
+*                 Move_data_tdq                                      *
+* Function       :                                                   *
+*                 Move data in character format into output message  *
+*                 area and write each line to the TD queue.          *
+* Method         :                                                   *
+*                 Calculate amount of space left in the current line *
+*                 being written. Move the amount of data specified   *
+*                 by the value in R5 into the area left in the       *
+*                 current line first and then into a new line until  *
+*                 all the data has been moved.After each move,update *
+*                 the USED_SO_FAR work area with the amount that     *
+*                 was moved.                                         *
+**********************************************************************
+*
+MOVE_CHAR_DATA_TDQ DS 0H
+*
+         ST    R9,SUBSAVE2                           Save link reg
+*
+         LR    R14,R5                                R14 = msg len
+         L     R15,LINE_LEN                          R15 = line len
+         S     R15,USED_SO_FAR                       Sub used so far
+         BZ    WRITE_LINE                            Start new line
+         CR    R5,R15                                Len < line len
+         BNH   MOVE_DATA_TDQ                         Yes move data
+         LR    R5,R15                                Move bytes left
+MOVE_DATA_TDQ  DS 0H
+         BAL   R9,MOVE_DATA                          Move data
+         ST    R5,USED_SO_FAR                        Save bytes mvd
+         SR    R14,R5                                Sub msg len
+         BC    12,END_MCDTQ                          ? Any more
+         AR    R4,R5                                 Sub moved data
+         LR    R5,R14                                R5 = new len
+WRITE_LINE     DS 0H
+         BAL   R9,WRITE_LINE_TDQ                     Yes write line
+         LR    R2,R8                                 Start new line
+         C     R5,LINE_LEN                           ? > 128 to move
+         BNH   MOVE_DATA_TDQ                           no
+         LR    R14,R5                                Bytes to move
+         L     R5,LINE_LEN                           Set move len
+         B     MOVE_DATA_TDQ                         move data
+END_MCDTQ DS 0H
+*
+         L     R9,SUBSAVE2                           Restore link reg
+         BR    R9                                    Return
+*
+******************* CONVERT_HEX_TO_CHAR_MOVE_TDQ **********************
+* Register usage :                                                    *
+*                 R0 - Count of input bytes converted                 *
+*                 R2  - Address in output area into which the         *
+*                       next piece of converted data will be          *
+*                       moved                                         *
+*                 R4  - Address of input to convert                   *
+*                 R9  - Subroutine link register                      *
+*                 R14 - Number of bytes left in output area           *
+* Subroutines    :                                                    *
+*                 Set_newline_values                                  *
+*                 Convert_hex_characters                              *
+* Function       :                                                    *
+*                 Check and initialise environment before converting  *
+*                 hex data to character format.                       *
+* Method         :                                                    *
+*                 Check if the number of bytes remaining in the       *
+*                 current line is not less than 2 bytes ( the amount  *
+*                 of converted data that is moved ). If it is then    *
+*                 convert and move the byte being pointed to by R4.   *
+*                 Decrement the length of data to convert and recheck *
+*                 the size.If the size left is either zero or less    *
+*                 than 2 write the current line. Repeat the loop until*
+*                 all characters have been converted. After all       *
+*                 characters have been converted update work area     *
+*                 USED_SO_FAR with the amount of data moved into the  *
+*                 last line.                                          *
+***********************************************************************
+*
+CONVERT_HEX_TO_CHAR_MOVE_TDQ DS 0H
+*
+         ST    R9,SUBSAVE2                            Save link reg
+*
+         SR    R0,R0                                  Zeroise space cnt
+         L     R14,LINE_LEN                           R14 = line len
+         S     R14,USED_SO_FAR                        Sub used so far
+         LTR   R14,R14                                ? zero new line
+         BNZ   CHECK_SIZE_TDQ                         Check next fit
+NEW_LINE_TDQ DS 0H                                    Add / sub indent
+         LR  R2,R8                                     Start Line
+         BAL R9,SET_NEWLINE_VALUES                    set R14 line size
+CHECK_SIZE_TDQ DS 0H
+         CH    R14,=H'2'                              ? < 2 bytes left
+         BNL   CONVERT_CHARACTERS_TDQ                   no
+         BAL   R9,WRITE_LINE_TDQ                      Write line
+         SR    R0,R0                                  Zeroise space cnt
+         B     NEW_LINE_TDQ                           Set new line vals
+CONVERT_CHARACTERS_TDQ DS 0H
+         BAL R9,CONVERT_HEX_CHARACTERS                Convert next byte
+DO_NEXT_CHARACTER_TDQ DS 0H
+         BCT R5,CHECK_SIZE_TDQ                        ? more to do
+         L   R15,LINE_LEN                             No R15 = line len
+         SR  R15,R14                                  Minus amount mvd
+         ST  R15,USED_SO_FAR                          Save used so far
+*
+         L   R9,SUBSAVE2                              Restore link reg
+         BR  R9                                       Return
+*
+**********************************************************************
+*                 MINOR SUBROUTINES FOR WRITE TD QUEUE               *
+**********************************************************************
+*
+***********************  BEGIN_NEW_LINE ******************************
+* Register usage :                                                   *
+*                 R9  : Subroutine link register                     *
+*                 R2  : Address in the output message area where the *
+*                       next byte of data will be written.           *
+*                 R18 : Start address of output message area.        *
+*                 R15 : Work area                                    *
+* Subroutines    :                                                   *
+*                 Write_line_tdq                                     *
+* Function       :                                                   *
+*                 Start next a new line.                             *
+* Method         :                                                   *
+*                 Write a new line if previously data had been       *
+*                 written into a line and was not followed by a      *
+*                 BAL to WRITE_LINE_TDQ. Set R2 to point to the      *
+*                 start of the message build area to start a new line*
+**********************************************************************
+*
+BEGIN_NEW_LINE DS 0H
+*
+         ST  R9,SUBSAVE2                              Save link reg
+*
+         ICM R15,15,USED_SO_FAR                       R15 = bytes used
+         BZ  LINE_ALREADY_WRITTEN                       no
+         BAL R9,WRITE_LINE_TDQ                        Write line
+LINE_ALREADY_WRITTEN DS 0H
+         LR  R2,R8                                    Start of line
+*
+         L   R9,SUBSAVE2                              Restore link reg
+         BR  R9                                       Return
+*
+************************* WRITE_LINE_TDQ ******************************
+* Register usage :                                                    *
+*                 R9 : Subroutine link register                       *
+* Subroutines    :                                                    *
+*                 None                                                *
+* Function       :                                                    *
+*                 Write a line of data to the TD queue.               *
+* Method         :                                                    *
+*                 Write one line of data of the length specified in   *
+*                 LINE_LEN to a TDQ. Clear work areas for next line   *
+*                 creation.                                           *
+***********************************************************************
+*
+WRITE_LINE_TDQ DS 0H
+*
+         ST  R9,SUBSAVE3                               Save link reg
+*
+         EXEC CICS WRITEQ TD QUEUE('CSFL')                             *
+               FROM(MSG_AREA)                                          *
+               LENGTH(128)                                             *
+               RESP(CICSRESP)
+         XC  USED_SO_FAR,USED_SO_FAR                   Clear work
+         XC  TD_LINE_LEN,TD_LINE_LEN                   areas
+*
+         L   R9,SUBSAVE3                               Restore link reg
+         BR  R9                                        Return
+*
+***********************************************************************
+*                    COMMON SUBROUTINES                               *
+***********************************************************************
+*
+************************* CONVERT_HEX_CHARACTERS **********************
+* Register Usage :                                                    *
+*                 R0  : Count of bytes converted.                     *
+*                 R2  : Points to the next byte in the output area    *
+*                       being built into which the next two converted *
+*                       characters will be moved.                     *
+*                 R4  : Address of the next byte in the input string  *
+*                       to convert.                                   *
+*                 R5  : Size input string.                            *
+*                 R14 : Number of bytes left in line being built      *
+*                       bytes of data a space will be created         *
+* Subroutines    :                                                    *
+*                 None                                                *
+* Function       :                                                    *
+*                 Convert one byte of hex data at a time into         *
+*                 character data.                                     *
+* Method         :                                                    *
+*                 Converted one byte of hex data into 2 bytes of      *
+*                 character data.Increment R2 by two to point to the  *
+*                 next byte in the output line where the next piece   *
+*                 of data will be moved. Decrement the number of      *
+*                 bytes left in the line ( R14 ). Keep a count of the *
+*                 number of bytes converted in R0 and when this       *
+*                 equals four add a space by incrementing R2 by one   *
+*                 to the next poistion in the line  and decrementing  *
+*                 the number of bytes left in the line by one         *
+***********************************************************************
+*
+CONVERT_HEX_CHARACTERS DS 0H
+*
+         ST  R9,SUBSAVE4                             Save link reg
+*
+         MVO WORKAREA2,0(1,R4)                       Convert one byte
+         OI  WORKAREA2+1,X'0F'                       of hex data into
+         UNPK WORKAREA3,WORKAREA2                    2 bytes of char
+         TR  WORKAREA3+1(2),HEXTAB-240               data and move to
+         MVC 0(2,R2),WORKAREA3+1                     msg area
+         LA  R2,2(R2)                                Input area + 2
+         LA  R4,1(R4)                                Next input byte
+         SH  R14,=H'2'                               Sub left in line
+         AH  R0,=H'1'                                Space cnt + 1
+         CH  R0,=H'4'                                ? = space after
+         BNE DO_NEXT_CHARACTER                        no do next char
+         CH  R14,=H'1'                               ? will space fit
+         BL  DO_NEXT_CHARACTER                        no do next char
+         LA  R2,1(R2)                                Next input byte
+         SH  R14,=H'1'                               Sub left in line
+         SR  R0,R0                                   Zeroise line cnt
+DO_NEXT_CHARACTER DS 0H
+*
+         L   R9,SUBSAVE4                              Restore link reg
+         BR  R9                                       Return
+*
+************************* MOVE_DATA *********************************
+* Register usage :                                                  *
+*                 R5 : Length of data to move.                      *
+*                 R9 : Subroutine link register                     *
+* Subroutines    :                                                  *
+*                 None                                              *
+* Function       :                                                  *
+*                 Move data from input area to output area.         *
+* Method         :                                                  *
+*                 Move the number of bytes specified by the value   *
+*                 in R5 from the input adresss (R4) to the output   *
+*                 message area pointed to by R2. Maximum amount     *
+*                 moved is 256 bytes.                               *
+*********************************************************************
+*
+MOVE_DATA DS 0H
+*
+         ST   R9,SUBSAVE3                            Save link reg
+*
+         BCTR R5,0                                   Sub 1 msg len
+         EX   R5,EXMOVE                              Move data
+         LA   R5,1(R5)                               Reset msg len
+         AR   R2,R5                                  Next byte input
+*
+         L    R9,SUBSAVE3                            Restore link reg
+         BR   R9                                     Return
+*
+*********************** SET_NEWLINE_VALUES ***************************
+* Register usage :                                                   *
+*                 R2  : Address in the output message area where the *
+*                       next byte will be written.                   *
+*                 R9  : Subroutine link register.                    *
+*                 R14 : Work register                                *
+* Subroutines    :                                                   *
+*                 None                                               *
+* Function       :                                                   *
+*                 Reset registers to start a new line.               *
+* Method         :                                                   *
+*                 A new line is being started. Set R2 to point to    *
+*                 the first byte after any indentation. Set the      *
+*                 number of bytes left (R14) to the line length      *
+*                 minus any indentation.                             *
+**********************************************************************
+*
+SET_NEWLINE_VALUES DS 0H
+*
+         ST  R9,SUBSAVE4                               Save link reg
+*
+         AH  R2,INDENT                                 Set indentation
+         L   R14,LINE_LEN                              Set line length
+         SH  R14,INDENT                                Set indentation
+
+*
+         L   R9,SUBSAVE4                               Restore link reg
+         BR  R9                                        Return
+*
+***************************** GET_EIB ********************************
+* Register usage :                                                   *
+*                 R7  - Save Plist address ( R1 )                    *
+*                 ( R1 is corrupted across the EXEC CICS call to     *
+*                 address the EIB )                                  *
+*                 R9  - Subroutine link register                     *
+*                 R11 - EIB base ( DFHEIBR )                         *
+*                 R13 - Address Kernel stack entry                   *
+* Subroutines    :                                                   *
+*                 None                                               *
+* Function       :                                                   *
+*                 Obtain the EIB.                                    *
+* Method         :                                                   *
+*                 Address the EIB using the EXEC CICS ADDRESS        *
+*                 COMMAND.                                           *
+**********************************************************************
+*
+GET_EIB  DS 0H
+*
+         ST  R9,SUBSAVE2                           Save link reg
+*
+         L     R13,UEPSTACK              Address kernel stack entry
+         EXEC CICS ADDRESS EIB(DFHEIBR)
+*
+         L  R9,SUBSAVE2                            Restore link reg
+         BR R9                                     Return
+*
+***********************************************************************
+* The following command relates the EX instruction in subroutine      *
+* MOVE_CHAR_DATA.                                                     *
+***********************************************************************
+EXMOVE   MVC 0(0,R2),0(R4)                    * Move char data
+*
+***********************************************************************
+* Operator Messages.                                                  *
+***********************************************************************
+MSGINTRO DC    C'VSAM OPEN ERROR HAS OCCURRED -- VSAM ERROR FLAG HEX '
+*
+***********************************************************************
+* Other constants.                                                    *
+***********************************************************************
+EIB_EYE        DC    C'EIB   '
+PLIST_EYE      DC    C'PLIST '
+ACB_EYE        DC    C'ACB   '
+FINFO_EYE      DC    C'FINFO '
+MAX_SIZE       DC    H'690'
+CON_LINE_LEN   DC    F'69'
+MAX_MSG_LEN    DC    F'256'
+FINFO_LEN      EQU   (UEFSERV-UEFLNAME)
+*
+HEXTAB   DC    X'F0F1F2F3F4F5F6F7F8F9C1C2C3C4C5C6'
+***********************************************************************
+* End of DFH$REQC                                                     *
+***********************************************************************
+         DROP
+         END DFH$REQC

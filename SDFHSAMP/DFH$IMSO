@@ -1,0 +1,400 @@
+         TITLE 'DFH$IMSO - INTERCOMMUNICATION SAMPLE - CICS TO IMS DEMA*
+               ND PAGED OUTPUT'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$IMSO                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS to IMS Demand Paged Output Sample           *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1985, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$IMSO),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 850808 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFHEISTG DSECT
+         COPY  DFH$IGS
+*
+*        STORAGE AREA FOR EIB SESSION AND STATUS FLAGS
+*
+XDFEIFLG DS    0CL7
+*
+DFHSYNC  DS    C                   IF SET, SYNCPOINT MUST
+*                                  BE EXECUTED
+DFHFREE  DS    C                   IF SET, TERMINAL / LU
+*                                  MUST BE FREED
+DFHRECV  DS    C                   IF SET, RECEIVE MUST
+*                                  BE EXECUTED
+DFHSEND  DS    C                   RESERVED
+*
+DFHATT   DS    C                   IF SET, ATTACH HEADER
+*                                  DATA EXISTS AND MAY BE
+*                                  ACCESSED USING EXTRACT
+DFHEOC   DS    C                   IF SET, END-OF-CHAIN
+*                                  WAS RECEIVED WITH DATA
+DFHFMH   DS    C                   IF SET, DATA PASSED TO
+*                                  APPL'N CONTAINS FMH(S)
+         COPY  DFHBMSCA            BMS ATTRIBUTES
+         COPY  DFHAID              ATTENTION IDS
+R2       EQU   2
+* R3 IS BASE REGISTER
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+DPAGEREG EQU   8
+R9       EQU   9
+R10      EQU   10
+*
+MESSAGE  DS    CL32
+RESP     DS    F
+DBLWORD  DS    D
+INLEN    DS    H
+REMSYS   DS    CL8
+ATCHSESS DS    CL4
+*
+OLP      DSECT
+OLPCODE  DS    CL2
+OLPVAL   DS    CL3
+         EJECT
+DFH$IMSO CSECT
+MAPFAIL  XC    MAPAI(MAPAE-MAPAI),MAPAI  CLEAR MAP
+SENDMAP  DS    0C
+         EXEC CICS SEND MAP('MAPA') MAPSET('DFH$IGS') ERASE WAIT       *
+               RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)    CHECK FOR NORMAL RESPONSE
+         BNE   ERROR1
+         EXEC CICS RECEIVE MAP('MAPA') MAPSET('DFH$IGS') RESP(RESP)
+         CLI   EIBAID,DFHCLEAR         WAS CLEAR KEY PRESSED ?
+         BE    EXIT                    YES, EXIT
+         CLC   RESP,DFHRESP(NORMAL)    WAS MAP RECEIVED OK?
+         BE    RESPOK1                 ... YES, GO TO RESPOK1
+         CLC   RESP,DFHRESP(MAPFAIL)
+         BE    MAPFAIL                 ... NO, GO TO MAPFAIL
+         CLC   RESP,DFHRESP(EOC)       ... EOC OK
+         BNE   ERROR1
+RESPOK1  DS    0H
+         CLI   SYSIDI,0            REMOTE SYSTEM NAME GIVEN ?
+         BE    REMAP               ..NO, SEND MSG TO OPERATOR
+         EXEC CICS ALLOCATE SYSID(SYSIDI) RESP(RESP)
+         CLC   RESP,DFHRESP(SYSIDERR)  IS SYSTEM ID VALID?
+         BE    SYSERR                  ... NO, GO TO SYSERR
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+         MVC   ATCHSESS,EIBRSRCE
+         B     BUILD
+REMAP    DS    0H
+         XC    ERRORO,ERRORO               CLEAR ERROR LINE.
+         MVC   ERROIO(L'SYSMSG),SYSMSG SET UP PROMPTING MSG
+         MVI   ERROIA,DFHBMBRY     HIGHLIGHT MESSAGE
+         B     SENDMAP             AND SEND IT.
+BUILD    DS    0H
+         EXEC CICS BUILD ATTACH                                        *
+               ATTACHID('TIMS') RESOURCE(TRANI) IUTYPE(=H'1')          *
+               RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+         EXEC CICS SEND SESSION(ATCHSESS) ATTACHID('TIMS') FROM(DATAI) *
+               LENGTH(DATAL) INVITE RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+         EXEC CICS SYNCPOINT RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+         EXEC CICS RECEIVE SESSION(ATCHSESS)                           *
+               SET(R9) LENGTH(INLEN) RESP(RESP)
+         BAL   R2,TESTRESP             CHECK RESPONSES FROM COMMAND
+         MVC   XDFEIFLG,EIBSYNC        SAVE EIB VALUES
+         CLI   DFHATT,X'FF'            IF NO HEADER SENT,
+         BNE   ABEND                   REMOTE SYSTEM ERROR.
+*
+         EXEC CICS EXTRACT ATTACH SESSION(ATCHSESS)                    *
+               QUEUE(QGETQNAM) RESP(RESP).  GET REMOTE QUEUE NAME.
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+         MVC   QGETNQNM,QGETQNAM
+         MVC   QPURGENM,QGETQNAM
+*
+         EXEC CICS BUILD ATTACH                                        *
+               ATTACHID('QMOD') PROCESS(QMODEL) IUTYPE(=H'1')          *
+               RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+*
+RECV     DS    0H
+         LA    DPAGEREG,1              1ST LOGICAL PAGE.
+         EXEC CICS CONVERSE SESSION(ATCHSESS) FROM(QGETN)              *
+               FROMLENGTH(QGETNLEN) TOLENGTH(INLEN) SET(R9)            *
+               ATTACHID('QMOD') FMH RESP(RESP)
+         BAL   R2,TESTRESP
+*
+UNPICK   DS    0H
+         MVC   XDFEIFLG,EIBSYNC        SAVE EIB VALUES
+         LA    R4,MAPBI                START OF OUTPUT MAP
+         LR    R6,R4
+         LA    R5,ERRORL-MAPBI         LENGTH OF MAP
+         XR    R7,R7
+         MVCL  R4,R6                   CLEAN UP THE MAP
+*
+         LH    R4,INLEN                LENGTH OF REC'D DATA
+*
+         XR    R5,R5
+CATFMH   DS    0H
+         IC    R5,0(R9)                FMH LENGTH.
+         LR    R6,R9
+         AR    R9,R5                   POINT BEYOND FMH.
+         SR    R4,R5                   LENGTH OF ACTUAL DATA.
+         BZ    QSTATUS                 QSTATUS IF NO DATA.
+         TM    1(R6),X'80'             ANY CONCATENATED FMHS ?
+         BO    CATFMH                  YES - AGAIN.
+*
+         LA    R7,LINE1O               ADDRESS 1ST OUTPUT LINE
+LRECL    DS    0H
+         LH    R5,0(R9)                LOGICAL RECORD LENGTH
+         SR    R4,R5                   REDUCE BLOCK LENGTH
+         SH    R5,=H'3'                PREPARE FOR EX INSTR.
+         EX    R5,SETLINE              MOVE LREC TO MAP
+         LTR   R4,R4                   END OF BLOCK REACHED ?
+         BZ    SENDMAPB                ..YES, SEND THE MAP
+         AH    R9,0(R9)                ADVANCE TO NEXT RECORD
+         LA    R7,LINE2O-LINE1O(R7)    ADDR NEXT OUTPUT LINE
+         B     LRECL                   GO TO MOVE NEXT REC
+SENDMAPB DS    0H
+         EXEC CICS SEND MAP('MAPB') MAPSET('DFH$IGS') ERASE WAIT       *
+               CURSOR(=H'1841') RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+         XC    ERRORO,ERRORO               CLEAR ERROR LINE.
+*
+TESTSYNC DS    0H
+         CLI   DFHSYNC,X'FF'
+         BNE   TESTFREE
+         EXEC CICS SYNCPOINT RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+TESTFREE DS    0H
+         CLI   DFHFREE,X'FF'
+         BE    EXIT
+         CLI   DFHRECV,X'FF'
+         BE    ABEND
+*
+GETOLP   DS    0H
+         EXEC CICS RECEIVE SET(R9) LENGTH(INLEN) RESP(RESP)
+         CLI   EIBAID,DFHCLEAR         WAS CLEAR KEY PRESSED ?
+         BE    CLEAR                   YES, EXIT
+         BAL   R2,TESTRESP
+*
+         LA    R9,3(R9)                 BYPASS SBA BYTES.
+         USING OLP,R9
+         CLC   OLPCODE,=C'P/'           'P/' REQUIRED TO START.
+         BNE   OLPERR
+         CLI   OLPVAL,C'C'              CURRENT PAGE AGAIN ?
+         BE    READQ                    YES.
+         L     R5,=F'1'                 SET PAGE NUMBER INCREMENT +1
+         CLI   OLPVAL,C'N'              NEXT PAGE REQUIRED ?
+         BE    ADDINCR                  YES
+         CLI   OLPVAL,C'P'              PREVIOUS PAGE REQ'D ?
+         BE    SUBINCR
+*
+         LH    R4,INLEN
+         SH    R4,=H'6'                 SBA +  3 CHARS. R4 IS LEN OF   X
+                                        NUMBER IF A SIGN IS PRESENT
+         BM    OLPERR                   MUST BE SBA + 'P/' + MIN 1 CHAR
+*
+         LA    R5,OLPVAL+1              POINT R5 AFTER SIGN
+         CLI   OLPVAL,C'+'              POSITIVE INCREMENT ?
+         BE    PACKINST
+         CLI   OLPVAL,C'-'              NEGATIVE INCREMENT ?
+         BE    PACKINST
+         LA    R5,OLPVAL                NO SIGN SO POINT R5 TO 1ST DIG
+         LA    R4,1(,R4)                NO SIGN SO LEN IS 1 GREATER
+*
+PACKINST DS    0H
+         LR    R10,R5                   R5 POINTS TO 1ST DIGIT
+         LR    R6,R5
+         AR    R6,R4                    R6 POINTS AFTER LAST DIGIT
+CHECKNUM DS    0H
+         CLI   0(R10),C'0'              IF DIGIT < '0' THEN ...
+         BL    NONUM                    ... IT IS AN ERROR
+         CLI   0(R10),C'9'              IF DIGIT > '9' THEN ...
+         BH    NONUM                    ... IT IS AN ERROR
+         LA    R10,1(,R10)              ADDRESS NEXT DIGIT
+         CR    R10,R6                   HAVE WE REACHED THE MAX LENGTH?
+         BL    CHECKNUM                 NO, CHECK NEXT DIGIT
+         S     R4,=F'1'                 DECREMENT LENGTH FOR EXECUTE
+         EX    R4,PACK                  PACK PAGE NO. AND
+         CVB   R5,DBLWORD               CONVERT TO BINARY VALUE. R5 NOWX
+                                        CONTAINS THE NUMBER ENTERED
+*
+         CLI   OLPVAL,C'+'              POSITIVE INCREMENT ?
+         BE    ADDINCR
+         CLI   OLPVAL,C'-'              NEGATIVE INCREMENT ?
+         BE    SUBINCR
+*
+         LR    DPAGEREG,R5              NO INCR - ABSOLUTE PAGE
+         B     READQ
+*
+SUBINCR  DS    0H
+         SR    DPAGEREG,R5              SET TS ITEM NO.
+         B     READQ
+ADDINCR  DS    0H
+         AR    DPAGEREG,R5              SET TS ITEM NO.
+*
+READQ    DS    0H
+         LTR   DPAGEREG,DPAGEREG       IF PAGE NO. IS NOT POSITIVE
+         BNP   OLPERR                  THIS IS AN ERROR.
+         STCM  DPAGEREG,3,DPAGENO      STORE QUEUE RECORD NO.
+         EXEC CICS CONVERSE SESSION(ATCHSESS) FROM(QGET)               *
+               FROMLENGTH(QGETLEN) TOLENGTH(INLEN) SET(R9) FMH         *
+               RESP(RESP)
+         BAL   R2,TESTRESP             TEST RESPONSES FROM COMMAND
+         CLC   INLEN,=H'0'             IF NULL RU SENT,THEN
+         BNE   UNPICK                  ANALYSE INPUT.
+         MVC   XDFEIFLG,EIBSYNC        SAVE EIB VALUES
+         B     TESTSYNC                NOTHING TO SEND.
+*
+PACK     PACK  DBLWORD,0(0,R5)
+*
+OLPERR   DS    0H
+         MVC   ERRORO(L'OLPERMSG),OLPERMSG  SET UP MSG.
+         B     SENDMAPB
+*
+QSTATUS  DS    0H
+         MVC   ERRORO(L'QSTAMSG),QSTAMSG    SET UP MSG.
+         LA    DPAGEREG,1              1ST LOGICAL PAGE.
+         EXEC CICS CONVERSE SESSION(ATCHSESS) FROM(QGETN)              *
+               FROMLENGTH(QGETNLEN) TOLENGTH(INLEN) SET(R9) FMH        *
+               RESP(RESP)
+         BAL   R2,TESTRESP             CHECK RESPONSES FROM COMMAND
+*
+         B     UNPICK
+*
+CLEAR    DS    0H
+         EXEC CICS CONVERSE SESSION(ATCHSESS) FROM(QPURGE)             *
+               FROMLENGTH(QPURGELN) TOLENGTH(INLEN) SET(R9) FMH        *
+               RESP(RESP)
+         BAL   R2,TESTRESP             CHECK RESPONSES FROM COMMAND
+         B     EXIT
+*
+ABEND    DS    0H
+         MVC   ERRORO(L'ABENDMSG),ABENDMSG SET UP ERROR MSG.
+         EXEC CICS SEND MAP('MAPB') MAPSET('DFH$IGS')                  *
+               WAIT RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)
+         BNE   ERROR1
+         B     EXIT
+*
+SETLINE  MVC   0(0,R7),2(R9)           MOVE LOG.REC. TO MAP.
+*
+SYSMSG   DC    C'MUST SPECIFY REMOTE SYSID'
+OLPERMSG DC    C'OPERATOR LOGICAL PAGING ERROR - RE-TYPE'
+ABENDMSG DC    C'PROCESSING ERROR IN REMOTE SYSTEM'
+QSTAMSG  DC    C'PAGE NO. EXCEEDS QUEUE SIZE'
+*
+*        QGETN
+*
+QGETN    DS    0H
+         DC    X'10060A1000010208'
+QGETQNAM DC    CL8' '
+*
+QGETNLEN DC    AL2(*-QGETN)        LENGTH.
+*
+*        QGET
+*
+QGET     DS    0H
+         DC    X'13060A04000102'
+         DC    X'08'
+QGETNQNM DC    CL8' '
+         DC    X'02'
+DPAGENO  DS    CL2
+*
+QGETLEN  DC    AL2(*-QGET)         LENGTH.
+*
+*
+*        QPURGE
+*
+QPURGE   DS    0H
+         DC    X'10060A06000102'
+         DC    X'08'
+QPURGENM DC    CL8' '
+*
+QPURGELN DC    AL2(*-QPURGE)       LENGTH.
+*
+QMODEL   DS    0CL8
+         DC    X'03'
+         DC    CL7' '
+*
+TESTRESP DS    0H
+         CLC   RESP,DFHRESP(INBFMH)  IF FMH PRESENT, THEN IGNORE
+         BER   R2                      AND RETURN
+         CLC   RESP,DFHRESP(EOC)     IF EOC PRESENT, THEN IGNORE
+         BER   R2                      AND RETURN
+         CLC   RESP,DFHRESP(NORMAL)    ELSE CHECK FOR NORMAL RESPONSE
+         BER   R2
+*
+NONUM    DS    0H
+         MVC   ERRORO(L'ERRNUM),ERRNUM     NON NUMERIC MESSAGE
+         B     SENDMAPB
+ERRNUM   DC    CL32'ERROR - VALUE IS NOT NUMERIC'
+ERROR1   DS    0H
+         MVC   MESSAGE,ERRMSG
+         B     EXPLAIN
+ERRMSG   DC    CL32'ERROR - TRANSACTION TERMINATED'
+*
+SYSERR   DS    0H
+         CLI   EIBRCODE+1,12
+         BE    UNKNOWN
+         CLI   EIBRCODE+1,8
+         BE    OUTSERV
+         CLI   EIBRCODE+1,4
+         BE    NOTCTSE
+NOLINK   DS    0H
+         MVC   MESSAGE,LINKMSG
+         MVC   MESSAGE+28(4),SYSIDI
+         B     EXPLAIN
+LINKMSG  DC    CL32'UNABLE TO ESTABLISH LINK TO       '
+*
+UNKNOWN  DS    0H
+         MVC   MESSAGE,UNKMSG
+         MVC   MESSAGE+12(4),SYSIDI
+         B     EXPLAIN
+UNKMSG   DC    CL32'SYSTEM NAME      IS NOT KNOWN   '
+*
+OUTSERV  DS    0H
+         MVC   MESSAGE,OUTSVMSG
+         MVC   MESSAGE+8(4),SYSIDI
+         B     EXPLAIN
+OUTSVMSG DC    CL32'LINK TO      IS OUT OF SERVICE'
+*
+NOTCTSE  DS    0H
+         MVC   MESSAGE,TCTMSG
+         MVC   MESSAGE(4),SYSIDI
+         B     EXPLAIN
+TCTMSG   DC    CL32'     IS NOT A SYSTEM NAME'
+*
+EXPLAIN  DS    0H
+         EXEC CICS SEND FROM(MESSAGE) LENGTH(=H'32')                   *
+               ERASE WAIT RESP(RESP)
+EXIT     DS    0H
+         EXEC CICS SEND CONTROL FREEKB RESP(RESP)
+         EXEC CICS RETURN
+         END

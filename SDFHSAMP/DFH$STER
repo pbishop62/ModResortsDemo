@@ -1,0 +1,384 @@
+*ASM XOPTS(CICS,SP)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$STER                                              *
+*                                                                     *
+* CICS/ESA(STATS) Sample PLT Program to print Recovery statistics     *
+*                 on CICS Emergency Restart.                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1995, 2014"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION = Sample PLT Program to print Recovery statistics on CICS  *
+*            Emergency restart.                                       *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*    Program should be defined in a PLT prior to CICS Initialization  *
+*                                                                     *
+*    RESTRICTIONS =                                                   *
+*                                                                     *
+*                                                                     *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable,                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*     $MOD(DFH$STER),COMP(STATS),PROD(CICS TS ):                      *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= 95173  510 950719 HD2IPD : Creation                         *
+*         R38042 690 130404 HDAFDRB: Use EXTRACT STATISTICS           *
+*                                                                     *
+***********************************************************************
+* DESCRIPTION                                                         *
+*                                                                     *
+*   DFH$STER    : Program to print Recovery Statistics                *
+*                                                                     *
+*   Background and Purpose:                                           *
+*                                                                     *
+*     To compliment the Recovery Manager Domain recovery messages     *
+*     on a CICS Emergency Restart.                                    *
+*     The Recovery Manager of CICS/ESA produces several messages      *
+*     during Emergency Restart detailing the state of inflight and    *
+*     shunted Units-Of-Work (UOWs). The messages are :-               *
+*                                                                     *
+*       DFHRM200 : <applid> xx Indoubt UOWs were reconstructed        *
+*                                                                     *
+*                  After reading the system log, the CICS Recovery    *
+*                  Manager found that there were 'xx' number of       *
+*                  Units-of-work that were shunted Indoubt already    *
+*                  or were waiting indoubt at the time the system     *
+*                  was terminated. Both types have suffered an        *
+*                  indoubt failure with their Recovery Coordinator    *
+*                  (eg. another CICS, DBCTL, etc) and must await      *
+*                  reconnection/resynchronisation with the coordinator*
+*                  to know whether to commit or backout the changes   *
+*                  made within a particular shunted UOW ie. to        *
+*                  complete a syncpoint.                              *
+*                  Recovery Coordinators will be across LU6.2, LU6.1, *
+*                  MRO (XM/IRC/XCF) links, or a product interface     *
+*                  through the Resource Manager Interface (RMI) such  *
+*                  as DBCTL, MQ and DB2.                              *
+*                                                                     *
+*       DFHRM201 : <applid> xx backout-failed and commit-failed       *
+*                   UOWs were reconstructed                           *
+*                                                                     *
+*                  After reading the system log, the CICS Recovery    *
+*                  Manager found that there were 'xx' number of       *
+*                  Units-of-work that were shunted awaiting the       *
+*                  availability of a LOCAL recoverable resource that  *
+*                  was updated by the task in question. The local     *
+*                  resources to CICS are Files, RLS Files, TD Queues, *
+*                  TS Queues, RDO objects and User. There are many    *
+*                  reasons why a recoverable resource cannot be       *
+*                  committed or backed-out eg. RLS Server not         *
+*                  available, IO errors on datasets, coupling facility*
+*                  errors, backout exit failures etc. Again (as above *
+*                  RM200 message) the UOWs could not complete their   *
+*                  syncpoint processing, but they are not shunted     *
+*                  awaiting resolution of an indoubt failure.         *
+*                                                                     *
+*       DFHRM202 : <applid> xx Inflight UOWs were reconstructed       *
+*                                                                     *
+*                  After reading the system log, the CICS Recovery    *
+*                  Manager found that there were 'xx' number of       *
+*                  Units-of-work in progress ie. the number of tasks  *
+*                  that were executing in the CICS region before the  *
+*                  system was terminated abnormally. These tasks      *
+*                  were in between syncpoint requests and therefore   *
+*                  have to be backed-out (rollbacked) or shunted      *
+*                  awaiting resynchronisation with an external        *
+*                  resource manager (eg DBCTL).                       *
+*                                                                     *
+*                                                                     *
+*       - where 'xx' in each case is the number of UOWs in the        *
+*         respective states.                                          *
+*                                                                     *
+*     Recovery Manager produced these messages after processing       *
+*     the System Log and is an accurate representation of the         *
+*     state of the CICS system workload at the time of cancellation,  *
+*     abend or termination. After these messages have been produced   *
+*     the CICS/ESA Recovery Manager will attempt to resolve the       *
+*     UOWs by committing, backing-out, or shunting them.              *
+*     For further information on the shunting of Units-Of-Work see    *
+*     the CICS/ESA Recovery and Restart Guide.                        *
+*                                                                     *
+*   Logic overview:                                                   *
+*                                                                     *
+*     DFH$STER has a simple operation. The statistics are retrieved   *
+*     from the Recovery Manager, formatted and printed to the CSSL    *
+*     Transient Data Queue (as the former DFHRUP used to in previous  *
+*     releases).                                                      *
+*                                                                     *
+*   Installation  :                                                   *
+*                                                                     *
+*     This program should be defined in the 2nd phase PLTPI for       *
+*     your CICS regions.                                              *
+*                                                                     *
+*                                                                     *
+***********************************************************************
+         EJECT ,
+***********************************************************************
+*        REGISTER USAGE                                               *
+***********************************************************************
+R0       EQU   0                   -
+R1       EQU   1                   -
+R2       EQU   2                   -
+R3       EQU   3                   Base reg (default)
+R4       EQU   4                   -
+R5       EQU   5                   Address of DFHRMGDS data
+R6       EQU   6                   -
+R7       EQU   7                   -
+R8       EQU   8                   -
+R9       EQU   9                   -
+R10      EQU   10                  -
+R11      EQU   11                  EIB Base reg (default)
+R12      EQU   12                  -
+R13      EQU   13                  DFHEISTG Base reg (default)
+R14      EQU   14                  -
+R15      EQU   15                  -
+***********************************************************************
+*        COPYBOOKS                                                    *
+***********************************************************************
+         COPY  DFHRMGDS            Recovery Manager Stats Dsect
+         EJECT ,
+***********************************************************************
+*        DEFINITIONS                                                  *
+***********************************************************************
+DFHEISTG DSECT
+* Automatic variables
+         DS    0F
+REQRESP  DS    F                   CICS Request response field
+OS_SV14  DS    F                   Return addr save area for s/rtn
+STARTTYP DS    F                   CICS Startup type (cold,warm,emer)
+         DS    0D
+WORKPACK DS    PL8                 Work field for bin-dec conversion
+*
+STATLINE DS    0CL60               Individual statistic output line
+         DS    CL2                 Indentation
+SLMSG    DS    CL48                Statistic title
+SLEDSTAT DS    CL10                Edited stats value
+*
+         EJECT
+***********************************************************************
+* Main                                                                *
+***********************************************************************
+DFH$STER CSECT
+DFH$STER AMODE 31
+DFH$STER RMODE ANY
+         SPACE
+***********************************************************************
+* Set up a generic handle condition for QIDERR. This program only     *
+* writes to the CSSL TD Queue. If this is not defined then no         *
+* alternative is sought and we exit immediately.                      *
+***********************************************************************
+         EXEC CICS HANDLE CONDITION QIDERR(STEREND)                    C
+                                    ERROR(STEREND)
+*                                                                     *
+***********************************************************************
+* Only execute if the CICS start type is Emergency.                   *
+***********************************************************************
+*
+         EXEC CICS INQUIRE SYSTEM STARTUP(STARTTYP)
+*
+         CLC  STARTTYP,DFHVALUE(EMERGENCY)   Did we start emergency?
+         BNE  STEREND               No, then exit immediately
+*
+***********************************************************************
+* Write a title line (and blank line following)                       *
+***********************************************************************
+         EXEC CICS WRITEQ TD QUEUE('CSSL') FROM(STARTMSG) LENGTH(60)
+*
+         MVI   STATLINE,X'40'      Move in blank
+         MVC   STATLINE+1(L'SLMSG-1),STATLINE ... and propogate
+*
+         BAL   R14,OUTPUT_STATSLINE  Output the blank line
+***********************************************************************
+* Retrieve the Recovery Statistics.                                   *
+***********************************************************************
+*
+         EXEC CICS EXTRACT STATISTICS RECOVERY SET(R5)                 C
+                   RESP(REQRESP)
+*
+         CLC   REQRESP,DFHRESP(NORMAL) Was the command successful ?
+         BE    STERFORM            Yes, continue
+*                                  No, write error message
+         EXEC CICS WRITEQ TD QUEUE('CSSL') FROM(NOSTATS) LENGTH(60)
+*                                  Ignore the response
+         B     STEREND             And exit
+*
+***********************************************************************
+* Format and print each Recovery stats field (thats applicable).      *
+***********************************************************************
+STERFORM DS    0H
+         MVI   STATLINE,X'40'      Move in blank
+         MVC   STATLINE+1(L'STATLINE-1),STATLINE ... and propogate
+*
+         USING DFHRMGDS,R5         Base the Recovery Stats dsect
+*
+***********************************************************************
+* Format and print : No. of syncpoints forward (commits)              *
+***********************************************************************
+         L     R6,RMGSYFWD         Get sync forwards
+         CVD   R6,WORKPACK         Convert to decimal packed
+         MVC   SLEDSTAT(10),EDPTRN Move in pattern
+         ED    SLEDSTAT(10),WORKPACK+4 Last 4 bytes only (Max 9.9M)
+*
+         MVC   SLMSG(L'SLMSG),SYFWD  Set title : Sync forwards
+         BAL   R14,OUTPUT_STATSLINE  Output the Stats field line
+*
+***********************************************************************
+* Format and print : No. of syncpoints backward (rollbacks)           *
+***********************************************************************
+         L     R6,RMGSYBWD         Get sync backwards
+         CVD   R6,WORKPACK         Convert to decimal packed
+         MVC   SLEDSTAT(10),EDPTRN Move in pattern
+         ED    SLEDSTAT(10),WORKPACK+4 Last 4 bytes only (Max 9.9M)
+*
+         MVC   SLMSG(L'SLMSG),SYBWD  Set title : Sync backwards
+         BAL   R14,OUTPUT_STATSLINE  Output the Stats field line
+*
+***********************************************************************
+* Format and print : No. of resynchronisations                        *
+***********************************************************************
+         L     R6,RMGRESYN         Get resyncs
+         CVD   R6,WORKPACK         Convert to decimal packed
+         MVC   SLEDSTAT(10),EDPTRN Move in pattern
+         ED    SLEDSTAT(10),WORKPACK+4 Last 4 bytes only (Max 9.9M)
+*
+         MVC   SLMSG(L'SLMSG),RESYN  Set title : Resyncs
+         BAL   R14,OUTPUT_STATSLINE  Output the Stats field line
+*
+***********************************************************************
+* Skip a line                                                         *
+***********************************************************************
+*
+         MVI   STATLINE,X'40'      Move in blank
+         MVC   STATLINE+1(L'STATLINE-1),STATLINE ... and propogate
+*
+         BAL   R14,OUTPUT_STATSLINE  Output the blank line
+*
+***********************************************************************
+* Format and print : No. of Indoubt shunts completed                  *
+***********************************************************************
+         L     R6,RMGTSHIN         Get Indoubt shunts completed
+         CVD   R6,WORKPACK         Convert to decimal packed
+         MVC   SLEDSTAT(10),EDPTRN Move in pattern
+         ED    SLEDSTAT(10),WORKPACK+4 Last 4 bytes only (Max 9.9M)
+*
+         MVC   SLMSG(L'SLMSG),TSHIN  Set title : indoubt shunts comp.
+         BAL   R14,OUTPUT_STATSLINE  Output the Stats field line
+*
+***********************************************************************
+* Format and print : No. of resource commit/backout shunts completed  *
+***********************************************************************
+         L     R6,RMGTSHRO         Get com/back shunts completed
+         CVD   R6,WORKPACK         Convert to decimal packed
+         MVC   SLEDSTAT(10),EDPTRN Move in pattern
+         ED    SLEDSTAT(10),WORKPACK+4 Last 4 bytes only (Max 9.9M)
+*
+         MVC   SLMSG(L'SLMSG),TSHRO  Set title : com/back shunts comp.
+         BAL   R14,OUTPUT_STATSLINE  Output the Stats field line
+*
+***********************************************************************
+* Skip a line                                                         *
+***********************************************************************
+*
+         MVI   STATLINE,X'40'      Move in blank
+         MVC   STATLINE+1(L'STATLINE-1),STATLINE ... and propogate
+*
+         BAL   R14,OUTPUT_STATSLINE  Output the blank line
+*
+***********************************************************************
+* Format and print : No. of Indoubt shunts outstanding (current)      *
+***********************************************************************
+         L     R6,RMGCSHIN         Get Indoubt shunts outstanding
+         CVD   R6,WORKPACK         Convert to decimal packed
+         MVC   SLEDSTAT(10),EDPTRN Move in pattern
+         ED    SLEDSTAT(10),WORKPACK+4 Last 4 bytes only (Max 9.9M)
+*
+         MVC   SLMSG(L'SLMSG),CSHIN  Set title : indoubt shunts current
+         BAL   R14,OUTPUT_STATSLINE  Output the Stats field line
+*
+***********************************************************************
+* Format and print : No. of resource commit/backout shunts outstanding*
+***********************************************************************
+         L     R6,RMGCSHRO         Get com/back shunts outstanding
+         CVD   R6,WORKPACK         Convert to decimal packed
+         MVC   SLEDSTAT(10),EDPTRN Move in pattern
+         ED    SLEDSTAT(10),WORKPACK+4 Last 4 bytes only (Max 9.9M)
+*
+         MVC   SLMSG(L'SLMSG),CSHRO  Set title : com/back shunts curr.
+         BAL   R14,OUTPUT_STATSLINE  Output the Stats field line
+*
+***********************************************************************
+* Skip a line                                                         *
+***********************************************************************
+*
+         MVI   STATLINE,X'40'      Move in blank
+         MVC   STATLINE+1(L'STATLINE-1),STATLINE ... and propogate
+*
+         BAL   R14,OUTPUT_STATSLINE  Output the blank line
+*
+***********************************************************************
+* Print report termination message                                    *
+***********************************************************************
+*
+         EXEC CICS WRITEQ TD QUEUE('CSSL') FROM(ENDMSG) LENGTH(60)
+*
+***********************************************************************
+* STEREND : Program exit point                                        *
+***********************************************************************
+*
+STEREND  DS    0H                           Return to CICS
+         SPACE
+         EXEC CICS RETURN
+         EJECT
+***********************************************************************
+* OUTPUT_STATSLINE : Write a statistical line to TD Queue             *
+***********************************************************************
+OUTPUT_STATSLINE DS 0H
+         ST    R14,OS_SV14         Save return reg
+*
+         EXEC CICS WRITEQ TD QUEUE('CSSL') FROM(STATLINE) LENGTH(60)
+*
+         L     R14,OS_SV14         Restore return reg
+         BR    R14                 And return to caller
+***********************************************************************
+* Constants and literals                                              *
+***********************************************************************
+         DS    0F
+STARTMSG DC    CL60'DFH$STER : CICS Restart Recovery Activity report'
+NOSTATS  DC    CL60'DFH$STER : CICS Recovery Statistics unavailable'
+ENDMSG   DC    CL60'DFH$STER : End of CICS Recovery activity report'
+*
+SYFWD    DC    CL48'No. of syncpoints (forward)                    :'
+SYBWD    DC    CL48'No. of syncpoints (backward)                   :'
+RESYN    DC    CL48'No. of resynchronisations                      :'
+TSHIN    DC    CL48'No. of UOW indoubt failure shunts completed    :'
+TSHRO    DC    CL48'No. of UOW com/back failure shunts completed   :'
+CSHIN    DC    CL48'No. of UOW indoubt failure shunts outstanding  :'
+CSHRO    DC    CL48'No. of UOW com/back failure shunts outstanding :'
+*
+***********************************************************************
+* Edit pattern for statistical value. Format = x,xxx,xxx              *
+***********************************************************************
+EDPTRN   DC    XL10'40206B2020206B202120'
+         LTORG
+         END

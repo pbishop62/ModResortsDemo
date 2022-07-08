@@ -1,0 +1,548 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$PALL                                           */
+ /*                                                                  */
+ /* Descriptive Name = File Inquiry/Update for Sample Application    */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1984, 2012"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /* $SEG(DFH$PALL),COMP(SAMPLES),PROD(CICS TS ):                     */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 170 840814 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $P2= M90673 330 910823 HD4OGB : Correct RESPONSE checking       */
+ /*  $P5= D03758 630 030418 HDALSW : Fix datastream error in PMNU,PAD*/
+ /*  $P3  Reserved for PTM                                           */
+ /*  $D1= I07267 630 020418 HDHYJB  : Compile all samples            */
+ /*       R40551 680 120423 HDLISJH: Remove *PROCESS                 */
+ /*                                                                  */
+ /********************************************************************/
+ UPDATE: PROC(COMPOINT)  OPTIONS(MAIN);
+         DCL MESSAGES CHAR(39);
+         DCL COMLEN FIXED BIN(15);
+         DCL KEYNUM PICTURE '(6)9';
+         DCL RESPONSE   FIXED BIN(31);
+         %INCLUDE DFH$PGA;
+         %INCLUDE DFH$PGB;
+         %INCLUDE DFH$PFIL;
+         %INCLUDE DFH$PLOG;
+         %INCLUDE DFHBMSCA;
+         DCL CHSTR CHAR(256) BASED;
+         DCL COMPOINT PTR;
+         DCL COMMAREA LIKE FILEA BASED(COMPOINT);
+-        /*                                                           */
+         /* THE "ERROR" EXIT IS SET UP TO TRAP ANY UNEXPECTED ERRORS. */
+         /* NOTE THAT ALL OTHER CONDITIONS ARE EXPLICITLY TESTED FOR  */
+         /* BY THE PROGRAM, USING THE "RESP" OPTION ON CICS COMMANDS. */
+         /*                                                           */
+         EXEC CICS HANDLE CONDITION ERROR(OTHER_ERRORS);
+-        /*                                                           */
+         /* THE LENGTH OF THE "COMMAREA" IS TESTED. IF NOT ZERO THEN  */
+         /* THIS IS THE VALIDATION STAGE OF AN ADD OR UPDATE.         */
+         /*                                                           */
+         IF EIBCALEN^=0 THEN GO TO READ_INPUT;
+-        /*                                                           */
+         /* MUST BE FIRST INVOCATION OF PROGRAM                       */
+         /*                                                           */
+         ALLOCATE COMMAREA;
+-        /*                                                           */
+         /* THE MENU MAP "DFH$PGA" IS RECEIVED. THE ACCOUNT NUMBER, IF*/
+         /* ENTERED, IS MAPPED INTO "KEYI" IN THE DSECT FOR "DFH$PGA".*/
+         /* NOTE HOW THE PROGRAM EXPLICITLY TESTS THE RESPONSE TO THE */
+         /* "RECEIVE" COMMAND.                                        */
+         /*                                                           */
+         EXEC CICS RECEIVE MAP('DFH$PGA') RESP(RESPONSE);
+-        /*                                                           */
+         /* CHECK RESPONSE                                            */
+         /*                                                           */
+         IF RESPONSE^=DFHRESP(NORMAL) THEN DO;
+            CALL CHECK_RESP;
+            EXEC CICS RETURN;
+         END;
+-        /*                                                           */
+         /* CHECK KEY FIELD                                           */
+         /*                                                           */
+         /* THE ACCOUNT NUMBER IS VALIDATED AND SAVED. IF THE KEY HAS */
+         /* NOT BEEN ENTERED OR IS NON-NUMERIC THEN AN ERROR MESSAGE  */
+         /* IS SET UP IN "MESSAGES", PROCEDURE "PMNU" IS CALLED TO    */
+         /* DISPLAY THE MESSAGE IN THE OPERATOR INSTRUCTION MENU      */
+         /* "DFH$PGA" AND THE TRANSACTION TERMINATES BY RETURNING     */
+         /* CONTROL TO CICS.                                          */
+         /*                                                           */
+         IF KEYL=0 THEN DO;
+            MESSAGES='PLEASE ENTER AN ACCOUNT NUMBER';
+            CALL PMNU;
+            EXEC CICS RETURN;
+         END;
+         IF VERIFY(KEYI,'0123456789')^=0 THEN DO;
+            MESSAGES='ACCOUNT NUMBER MUST BE NUMERIC';
+            CALL PMNU;
+            EXEC CICS RETURN;
+         END;
+-        /*                                                           */
+         /* KEYI CONTAINS 6 NUMERIC DIGITS                          */
+         /*                                                           */
+         KEYNUM=KEYI;
+         SUBSTR(ADDR(DFH$PGBO)->CHSTR,1,STG(DFH$PGBO))
+                  =LOW(STG(DFH$PGBO));               /* CLEAR MAP */
+         SELECT(EIBTRNID);
+           WHEN('PADD') DO;
+-                         /*                                          */
+                          /* TRANSACTION TO ADD RECORD TO FILE        */
+                          /*                                          */
+                          /* IF THE PROGRAM IS INVOKED BY "PADD", A   */
+                          /* TITLE AND COMMAND MESSAGE ARE MOVED TO   */
+                          /* THE MAP AREA. THE RECORD KEY IS MOVED TO */
+                          /* THE MAP AREA AND SAVED IN "COMMAREA".    */
+                          /* THE AMOUNT FIELD HAS THE ATTRIBUTE BYTE  */
+                          /* SET TO NUMERIC.                          */
+                          /*                                          */
+                          TITLEO='FILE ADD';
+                          MSG3O='ENTER DATA AND PRESS ENTER KEY';
+                          NUMBO,COMMAREA.NUMB=KEYI;
+                          AMOUNTA=DFHBMUNN;
+                          AMOUNTO='$0000.00';
+                          COMLEN =7;
+-                         /*                                          */
+                          /* DISPLAY ADD MAP                          */
+                          /*                                          */
+                          /* THE ADD SCREEN IS DISPLAYED AND THE      */
+                          /* PROGRAM TERMINATES TO AWAIT A REPLY FROM */
+                          /* FROM THE TERMINAL. THE RETURN GIVES CICS */
+                          /* THE TRANSACTION IDENTIFIER FOR THE NEXT  */
+                          /* TRANSACTION AT THIS TERMINAL, TOGETHER   */
+                          /* WITH A "COMMAREA" CONTAINING ALL INFORMA-*/
+                          /* TION THAT THE PROGRAM NEEDS TO CONTINUE  */
+                          /* THE UPDATE. THE "COMMAREA" IS PASSED TO  */
+                          /* THE NEXT INVOCATION OF THIS PROGRAM.     */
+                          /*                                          */
+                          EXEC CICS SEND MAP ('DFH$PGB') ERASE;
+                          EXEC CICS RETURN TRANSID(EIBTRNID)
+                               COMMAREA(COMMAREA) LENGTH(COMLEN);
+                        END;
+           WHEN('PINQ') DO;
+-                         /*                                          */
+                          /* TRANSACTION TO INQUIRE ABOUT A RECORD    */
+                          /*                                          */
+                          /* WHEN THE INVOKING TRANSACTION IS "PINQ", */
+                          /* THE FILE CONTROL COMMAND READS THE RECORD*/
+                          /* FROM THE FILE INTO THE FILE AREA.        */
+                          /*                                          */
+                          EXEC CICS READ FILE('FILEA') INTO(FILEA)
+                               RESP(RESPONSE) RIDFLD(KEYNUM);
+                          IF RESPONSE^=DFHRESP(NORMAL) THEN
+                          DO;                                 /*@P2C*/
+                             CALL CHECK_RESP;
+                             CALL PMNU;
+                             EXEC CICS RETURN;
+                          END;
+-                         /*                                          */
+                          /* IF THE PROGRAM IS INVOKED BY "PINQ", A   */
+                          /* TITLE AND COMMAND MESSAGE ARE MOVED TO   */
+                          /* THE MAP AREA. THE FILE RECORD FIELDS ARE */
+                          /* MOVED TO THE MAP AREA BY A SUBROUTINE.   */
+                          /*                                          */
+                          TITLEO='FILE INQUIRY';
+                          MSG3O ='PRESS ENTER TO CONTINUE';
+                          CALL MAP_BUILD;
+-                         /*                                          */
+                          /* ALL FIELD ATTRIBUTES ARE SET TO PROTECTED*/
+                          /*                                          */
+                          NAMEA,ADDRA,PHONEA,DATEA,AMOUNTA,
+                                       COMMENTA = DFHBMPRO;
+-                         /*                                          */
+                          /* DISPLAY INQUIRY MAP                      */
+                          /*                                          */
+                          /* THE INQUIRY SCREEN IS DISPLAYED AND THE  */
+                          /* PROGRAM TERMINATES. THE "TRANSID" OF     */
+                          /* "PMNU" CAUSES THE OPERATOR INSTRUCTION   */
+                          /* PROGRAM TO BE INVOKED WHEN THE NEXT      */
+                          /* RESPONSE IS RECEIVED FROM THE TERMINAL.  */
+                          /*                                          */
+                          EXEC CICS SEND MAP('DFH$PGB') ERASE;
+                          EXEC CICS RETURN TRANSID('PMNU');
+                        END;
+           WHEN('PUPD') DO;
+-                         /*                                          */
+                          /* TRANSACTION TO UPDATE RECORD OF FILE     */
+                          /*                                          */
+                          /* WHEN THE INVOKING TRANSACTION IS "PUPD", */
+                          /* THE FILE CONTROL COMMAND READS THE RECORD*/
+                          /* FROM THE FILE INTO THE FILE AREA.        */
+                          /*                                          */
+                          EXEC CICS READ FILE('FILEA') INTO(FILEA)
+                               RESP(RESPONSE) RIDFLD(KEYNUM);
+                          IF RESPONSE^=DFHRESP(NORMAL) THEN DO;
+                             CALL CHECK_RESP;
+                             EXEC CICS RETURN;
+                          END;
+-                         /*                                          */
+                          /* IF THE PROGRAM IS INVOKED BY "PUPD", A   */
+                          /* TITLE AND COMMAND MESSAGE ARE MOVED TO   */
+                          /* THE MAP AREA.                            */
+                          /*                                          */
+                          TITLEO='FILE UPDATE';
+                          MSG3O ='CHANGE FIELDS AND PRESS ENTER';
+-                         /*                                          */
+                          /* THE FILE RECORD IS SAVED IN "COMMAREA".  */
+                          /*                                          */
+                          COMMAREA.FILEREC=FILEA.FILEREC;
+-                         /*                                          */
+                          /* DATA IS MOVED TO THE MAP DSECT AND       */
+                          /* DISPLAYED.                               */
+                          /*                                          */
+                          CALL MAP_BUILD;
+                          /*                                          */
+                          /* DISPLAY UPDATE MAP                       */
+                          /*                                          */
+                          EXEC CICS SEND MAP('DFH$PGB') ERASE;
+-                         /*                                          */
+                          /* THE LENGTH OF THE "COMMAREA" TO BE       */
+                          /* RETURNED IS SET UP AND CONTROL IS        */
+                          /* RETRUNED TO CICS.                        */
+                          /*                                          */
+                          COMLEN=80;
+                          EXEC CICS RETURN TRANSID(EIBTRNID)
+                               COMMAREA(COMMAREA) LENGTH(COMLEN);
+                        END;
+           OTHERWISE DO;
+-                      /*                                             */
+                       /* UNKNOWN TRANSACTION ID                      */
+                       /*                                             */
+                       /* AN UNKNOWN TRANSACTION IDENTIFIER IS TREATED*/
+                       /* AS AN ERROR. A DUMP IS TAKEN AND THE MESSAGE*/
+                       /* "TRANSACTION TERMINATED" IS MOVED TO THE    */
+                       /* VARIABLE "MESSAGES" FOR DISPLAY ON THE      */
+                       /* OPERATOR INSTRUCTION SCREEN. CONTROL IS     */
+                       /* RETURNED TO CICS.                           */
+                       /*                                             */
+                       EXEC CICS DUMP DUMPCODE('ERRS');
+                       MESSAGES='TRANSACTION TERMINATED';
+                       CALL PMNU;
+                       EXEC CICS RETURN;
+                     END;
+         END; /* SELECT */
+
+ MAP_BUILD:   PROC;
+-        /*                                                           */
+         /* THIS SUBROUTINE MOVES FIELDS FROM THE "FILEA" RECORD TO   */
+         /* THE MAP DSECT FOR "DFH$PGB" READY FOR DISPLAY.            */
+         /*                                                           */
+         NUMBO    = FILEA.NUMB;
+         NAMEO    = FILEA.NAME;
+         ADDRO    = FILEA.ADDRX;
+         PHONEO   = FILEA.PHONE;
+         DATEO    = FILEA.DATEX;
+         AMOUNTO  = FILEA.AMOUNT;
+         COMMENTO = FILEA.COMMENT;
+ END;
+
+ READ_INPUT:
+-        /*                                                           */
+         /* THIS ROUTINE CALLED ON 2ND AND SUBSEQUENT INVOCATIONS OF  */
+         /* PROGRAM                                                   */
+         /*                                                           */
+         /* CONTROL IS PASSED HERE WHEN THE TEST OF "EIBCALEN", AT THE*/
+         /* BEGINING  OF THE PROGRAM, FINDS THAT A "COMMAREA" HAS BEEN*/
+         /* RECEIVED. THIS PART OF THE PROGRAM MAPS IN DATA FOR AN ADD*/
+         /* OR UPDATE REQUEST, PERFORMS VALIDATION AND UPDATES "FILEA"*/
+         /*                                                           */
+         /* THE "RECEIVE MAP" COMMAND MAPS IN THE VARIABLES FROM      */
+         /* THE SCREEN.                                               */
+         /*                                                           */
+         EXEC CICS RECEIVE MAP('DFH$PGB') RESP(RESPONSE);
+         IF RESPONSE^=DFHRESP(NORMAL) THEN DO;
+            CALL CHECK_RESP;
+            EXEC CICS RETURN;
+         END;
+
+         SELECT(EIBTRNID);
+           WHEN('PUPD')
+            DO;
+-             /*                                                      */
+              /* IF THIS IS AN UPDATE REQUEST A FILE CONTROL "READ    */
+              /* UPDATE" COMMAND READS THE EXISTING RECORD USING THE  */
+              /* NUMBER STORED IN "COMMAREA" BY THE LAST INVOCATION   */
+              /* OF THE PROGRAM.                                      */
+              /*                                                      */
+              EXEC CICS READ UPDATE FILE('FILEA') INTO(FILEA)
+                        RESP(RESPONSE) RIDFLD(COMMAREA.NUMB);
+              IF RESPONSE^=DFHRESP(NORMAL) THEN DO;
+                 CALL CHECK_RESP;
+                 EXEC CICS RETURN;
+              END;
+              IF STRING(FILEA.FILEREC)^=STRING(COMMAREA.FILEREC) THEN
+                 DO;
+-                  /*                                                 */
+                   /* RECORD UPDATED SINCE IT WAS READ FROM FILE      */
+                   /*                                                 */
+                   /* IF THE CURRENT FILE RECORD IS NOT THE SAME AS   */
+                   /* THE ONE SAVED IN "COMMAREA" THEN ANOTHER USER   */
+                   /* HAS UPDATED THE RECORD. A WARNING MESSAGE IS    */
+                   /* DISPLAYED, WITH FIELDS FROM THE RECORD READ     */
+                   /* FROM "FILEA", FOR REENTRY OF THE UPDATES.       */
+                   /*                                                 */
+                   MSG1O='RECORD UPDATED BY OTHER USER, TRY AGAIN';
+                   MSG1A=DFHBMASB;
+                   MSG3A=DFHPROTN;
+                   CALL MAP_BUILD;
+                   EXEC CICS SEND MAP('DFH$PGB') DATAONLY;
+                   COMMAREA.FILEREC=FILEA.FILEREC;
+                   COMLEN=80;
+                   EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)
+                             LENGTH(COMLEN);
+                 END;
+              ELSE
+                 DO;
+-                  /*                                                 */
+                   /* THE UPDATE FLAG IS SET IN THE RECORD AREA AND   */
+                   /* THE MESSAGE "RECORD UPDATED" IS MOVED TO THE    */
+                   /* MESSAGE AREA READY FOR DISPLAY ON THE OPERATION */
+                   /* INSTRUCTION SCREEN.                             */
+                   /*                                                 */
+                   FILEA.STAT='U';
+                   MESSAGES='RECORD UPDATED';
+                 END;
+            END;
+-          /*                                                         */
+           /* IF THIS IS AN ADD REQUEST THE ADD FLAG IS SET IN THE NEW*/
+           /* RECORD AND THE MESSAGE "RECORD ADDED" IS MOVED TO THE   */
+           /* MESSAGE AREA READY FOR DISPLAY ON THE OPERATOR INSTRUC- */
+           /* TION SCREEN.                                            */
+           /*                                                         */
+           WHEN('PADD') DO;
+                          FILEA.STAT='A';
+                          MESSAGES='RECORD ADDED';
+                        END;
+
+           OTHERWISE DO;
+-              /*                                                     */
+               /* AN UNKNOWN TRANSACTION IDENTIFIER IS TREATED AS AN  */
+               /* ERROR.                                              */
+               /*                                                     */
+               EXEC CICS DUMP DUMPCODE('ERRS');
+               MESSAGES='TRANSACTION TERMINATED';
+               CALL PMNU;
+               EXEC CICS RETURN;
+           END;
+         END; /* SELECT */
+-        /*                                                           */
+         /* IF ALL LENGTH FIELDS IN THE INPUT MAP ARE ZERO THEN NO    */
+         /* DATA HAS BEEN ENTERED ON THE SCREEN.                      */
+         /*                                                           */
+         IF NAMEL    = 0 &
+            ADDRL    = 0 &
+            PHONEL   = 0 &
+            DATEL    = 0 &
+            AMOUNTL  = 0 &
+            COMMENTL = 0 THEN DO;
+              MESSAGES='RECORD NOT MODIFIED';
+              CALL PMNU;
+              EXEC CICS RETURN;
+            END;
+-        /*                                                           */
+         /* ANY REQUIRED EDITING STEPS SHOULD BE INSERTED HERE.       */
+         /* A SUITABLE FORM OF EDITING SHOULD BE USED TO ENSURE VALID */
+         /* RECORDS ARE PLACED ON THE FILE.                           */
+         /*                                                           */
+         SELECT(EIBTRNID);
+           WHEN('PADD') IF
+               VERIFY(NAMEI,'ABCDEFGHIJKLMNOPQRSTUVWXYZ .-''')^=0
+               THEN DO;
+                 CALL DATA_ERROR;
+                 EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)
+                      LENGTH(COMLEN);
+               END;
+
+           WHEN('PUPD')
+                        DO;
+            IF (NAMEL^=0) &
+               (VERIFY(NAMEI,'ABCDEFGHIJKLMNOPQRSTUVWXYZ .-''')^=0)
+               THEN DO;
+                 CALL DATA_ERROR;
+                 EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)
+                           LENGTH(COMLEN);
+               END;
+            IF AMOUNTL^=0 THEN
+            IF VERIFY(AMOUNTI,'0123456789.$›')^=0 THEN DO;
+               CALL DATA_ERROR;
+               EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)
+                         LENGTH(COMLEN);
+               END;
+                        END;
+           OTHERWISE;
+         END; /* SELECT */
+-        /*                                                           */
+         /* THIS CODE CREATES OR UPDATES THE ACCOUNT RECORD. ANY FIELD*/
+         /* WHICH HAS BEEN ENTERED IS MOVED TO THE ACCOUNT RECORD     */
+         /*                                                           */
+         IF EIBTRNID='PADD' THEN
+          DO;                                                /* @P5A*/
+            FILEA='';                                        /* @P5A*/
+            FILEA.NUMB=COMMAREA.NUMB;
+          END;                                               /* @P5A*/
+         IF NAMEL   ^= 0 THEN FILEA.NAME=NAMEI;
+         IF ADDRL   ^= 0 THEN FILEA.ADDRX=ADDRI;
+         IF PHONEL  ^= 0 THEN FILEA.PHONE=PHONEI;
+         IF DATEL   ^= 0 THEN FILEA.DATEX=DATEI;
+         IF AMOUNTL ^= 0 THEN FILEA.AMOUNT=AMOUNTI;
+         ELSE IF EIBTRNID = 'PADD' THEN FILEA.AMOUNT='$0000.00';
+         IF COMMENTL^=0 THEN FILEA.COMMENT=COMMENTI;
+-        /*                                                           */
+         /* THE RECORD FIELDS, THE DATE, THE TIME AND THE TERMID ARE  */
+         /* MOVED TO THE UPDATE LOG RECORD AREA.                      */
+         /*                                                           */
+         LOGREC=FILEA.FILEREC;
+         LDAY  =EIBDATE;
+         LTIME=EIBTIME;
+         LTERML=EIBTRMID;
+-        /*                                                           */
+         /* THE RECORD IS WRITTEN TO THE UPDATE LOG WHICH IS A        */
+         /* TRANSIENT DATA QUEUE.                                     */
+         /*                                                           */
+         EXEC CICS WRITEQ TD QUEUE('LOGA') FROM(LOGA) LENGTH(92);
+
+         IF EIBTRNID='PUPD' THEN DO;
+-           /*                                                        */
+            /* FOR AN UPDATE REQUEST THE UPDATED ACCOUNT RECORD IS    */
+            /* REWRITTEN TO "FILEA".                                  */
+            /*                                                        */
+            EXEC CICS REWRITE FILE('FILEA') FROM(FILEA) RESP(RESPONSE);
+            IF RESPONSE^=DFHRESP(NORMAL) THEN DO;
+               CALL CHECK_RESP;
+               EXEC CICS RETURN;
+            END;
+         END;
+         ELSE DO;
+-           /*                                                        */
+            /* FOR AN ADD REQUEST THE NEW ACCOUNT RECORD IS WRITTEN   */
+            /* TO THE FILE.                                           */
+            /*                                                        */
+            EXEC CICS WRITE FILE('FILEA') FROM(FILEA)
+                 RESP(RESPONSE) RIDFLD(COMMAREA.NUMB);
+            IF RESPONSE^=DFHRESP(NORMAL) THEN DO;
+               CALL CHECK_RESP;
+               EXEC CICS RETURN;
+            END;
+         END;
+         CALL PMNU;
+         EXEC CICS RETURN;
+
+ DATA_ERROR: PROC;
+-        /*                                                           */
+         /* WHEN A DATA ERROR IS DETECTED THE SCREEN IS REDISPLAYED   */
+         /* FOR ERRORS TO BE CORRECTED. AN ERROR MESSAGE IS MOVED TO  */
+         /* THE MAP AREA AND HIGHLIGHTED.                             */
+         /*                                                           */
+         MSG3A=DFHBMASB;
+         MSG3O='DATA ERROR - CORRECT AND PRESS ENTER';
+-        /*                                                           */
+         /* PRESERVE CONTENTS OF SCREEN BY SETTING MODIFIED DATA TAG  */
+         /* AMOUNT IS MADE NUMERIC AND MODIFIED                       */
+         /*                                                           */
+         AMOUNTA=DFHUNNUM;
+-        /*                                                           */
+         /* THE MODIFIED DATA TAG IS SET ON FOR ALL THE DATA FIELDS   */
+         /* SO THAT ALL DATA IS RECEIVED AT THE NEXT "RECEIVE MAP".   */
+         /*                                                           */
+         NAMEA, ADDRA, PHONEA, DATEA, COMMENTA=DFHBMFSE;
+-        /*                                                           */
+         /* THE CONTENTS OF MAP "DFH$PGB" ARE SENT TO THE SCREEN.     */
+         /* THE CONSTANT INFORMATION ON THE SCREEN IS NO REFRESHED AS */
+         /* A RESULT OF THE USE OF THE "DATAONLY" OPTION.             */
+         /*                                                           */
+         EXEC CICS SEND MAP('DFH$PGB') DATAONLY;
+-        /*                                                           */
+         /* THE SIZE OF THE "COMMAREA" IS SET TO 7 FOR AN ADD REQUEST */
+         /* OR TO 80 FOR AN UPDATE REQUEST.                           */
+         /*                                                           */
+         IF EIBTRNID='PADD' THEN COMLEN=7;
+         ELSE COMLEN=80;
+         END;
+
+ PMNU: PROC;
+         /*                                                           */
+         /* CLEAR MENU MAP AND RE-DISPLAY                             */
+-        /*                                                           */
+         /* THIS CODE GETS CONTROL WHEN AN ADD OR UPDATE IS COMPLETE. */
+         /* AN INFORMATION OR ERROR MESSAGE IS IN "MESSAGES".         */
+         /* THE OPERATOR INSTRUCTION MAP AREA IS CLEARED. THE MESSAGE */
+         /* IS MOVED TO THE MAP AREA AND HIGHLIGHTED.                 */
+         /*                                                           */
+         SUBSTR(ADDR(DFH$PGAO)->CHSTR,1,STG(DFH$PGAO))
+                  =LOW(STG(DFH$PGAO));
+         MSGA=DFHBMASB;
+         MSGO=MESSAGES;
+-        /*                                                           */
+         /*  THE OPERATOR INSTRUCTION MAP "DFH$PGA" IS DISPLAYED ON   */
+         /*  AN ERASED SCREEN.                                        */
+         /*                                                           */
+         EXEC CICS SEND MAP('DFH$PGA') ERASE NOHANDLE;
+ END;
+
+ CHECK_RESP: PROC;
+         /* CHECK RESPONSE TO CICS COMMAND                            */
+-        /*                                                           */
+         /* THIS PROCEDURE GAINS CONTROL WHEN THE PROGRAM DETECTS THAT*/
+         /* A CICS COMMAND WITH THE "RESP" OPTION SPECIFIED HAS RE-   */
+         /* TURNED A NON-"NORMAL" RESPONSE. THE PROCEDURE EXPLICITLY  */
+         /* TESTS FOR THE CONDITIONS "DUPREC", "NOTFND" AND "MAPFAIL" */
+         /* AND HAS A 'CATCH ALL' CLAUSE TO TRAP ANY OTHER ERROR RES- */
+         /* PONSE. THE PROCEDURE "PMNU" IS CALLED TO RE-DISPLAY THE   */
+         /* MENU SCREEN WITH THE APPROPRIATE ERROR MESSAGE.           */
+         /*                                                           */
+         SELECT(RESPONSE);
+           WHEN(DFHRESP(DUPREC))
+               /*                                                     */
+               /* DUPLICATE RECORD                                    */
+               /*                                                     */
+               MESSAGES='DUPLICATE RECORD';
+
+           WHEN(DFHRESP(NOTFND))
+               /*                                                     */
+               /* RECORD DOES NOT EXIST                               */
+               /*                                                     */
+               MESSAGES='INVALID NUMBER - PLEASE REENTER';
+
+           WHEN(DFHRESP(MAPFAIL)) DO;
+               IF EIBCALEN^=0 THEN
+                  MESSAGES='RECORD NOT MODIFIED';
+               ELSE MESSAGES='PRESS CLEAR TO EXIT';
+           END;
+
+           OTHERWISE DO;
+               /*                                                     */
+               /* UNEXPECTED ERROR                                    */
+               /*                                                     */
+               EXEC CICS DUMP DUMPCODE('ERRS');
+               MESSAGES='TRANSACTION TERMINATED';
+           END;
+         END; /* SELECT */
+         CALL PMNU;
+ END;
+
+ OTHER_ERRORS:                   /* HANDLE UNEXPECTED ERRORS */
+-        /*                                                           */
+         /* THIS ROUTINE GAINS CONTROL WHEN CICS DETECTS THAT A       */
+         /* COMMAND HAS RETURNED NON-"NORMAL" RESPONSE.               */
+         /*                                                           */
+    CALL CHECK_RESP;
+    EXEC CICS RETURN;
+ END;

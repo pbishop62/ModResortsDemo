@@ -1,0 +1,243 @@
+DFH$IQRL TITLE 'CICS INTERCOMMUNICATION SAMPLE - TS RECORD RETRIEVAL - *
+               LOCAL REQUEST'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$IQRL                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Record Retrieval Local Processing Sample         *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1985, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*     INPUTS TO THIS PROGRAM            KEY OF RECORD REQUIRED        *
+*     ( FROM USERS SCREEN  )            REMOTE TS Q NAME TO SEARCH    *
+*                                       REMOTE SYSTEM ID              *
+*                                                                     *
+*     OUTPUTS FROM THIS PROGRAM         KEY OF RECORD REQUIRED        *
+*     ( PASSED TO TRANSACTION IQRR )    REMOTE TS Q NAME TO SEARCH    *
+*                                       THIS SYSTEMS APPLID           *
+*                                       USERS TERMINAL ID             *
+*                                       RETURN TRANSACTION ID         *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$IQRL),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= Z30    170 85     HD1XIC : CREATE BASE SOURCE               *
+*    $P0= M56292 310 890420 HD6HBH : CORRECT ERROR MESSAGE.           *
+*    $P1= M60198 320 900211 HD1SSMC: PROGRAM RESTRUCTURED             *
+*    $P2= M61934 320 900517 HDAQJV : "TRAN TERMINATEED" MSG FOR       *
+*                                    PF3 ONLY                         *
+*    $P3= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH$IQRL CSECT
+*
+***********************************************************************
+*        SEND INITIAL REQUEST MENU TO SCREEN                          *
+***********************************************************************
+RESETMAP DS    0H
+         XC    SPMAPAO(SPMAPAL),SPMAPAO      CLEAR MAP STORAGE
+         EXEC CICS SEND MAP('SPMAPA') MAPSET('DFH$IG1') MAPONLY        *
+               ERASE WAIT
+*
+***********************************************************************
+*        RECEIVE AND VALIDATE THE REQUIREMENTS                        *
+***********************************************************************
+RETRY    DS    0H
+         EXEC CICS RECEIVE MAP('SPMAPA') MAPSET('DFH$IG1')             *
+               RESP(RESP)
+*
+         CLI   EIBAID,DFHPF3              PF3 PRESSED ?
+         BE    TERMNATE                   ...YES, GO TERMNATE TRANS.
+         CLC   RESP,DFHRESP(MAPFAIL)      MAPFAIL ?
+         BE    RESETMAP                   ...YES, GO RESEND MAP
+         CLC   RESP,DFHRESP(NORMAL)       NORMAL RESPONSE ?
+         BNE   BADRESP1                   ...NO, GO TERMINATE TRANS.
+*
+         CLC   KEYVALL,=H'0'             RECORD KEY ENTERED ?
+         BE    BADKEY                    ...NO, GO SEND ERROR MSG.
+         CLC   KEYVALI,BLANKS            RECORD KEY BLANK ?
+         BE    BADKEY                    ...YES, GO SEND ERROR MSG.
+*
+         CLC   RQNAML,=H'0'              TS Q NAME ENTERED ?
+         BE    BADQNM                    ...NO, GO SEND ERROR MSG.
+         CLC   RQNAMI,BLANKS             TS Q NAME BLANK ?
+         BE    BADQNM                    ...YES, GO SEND ERROR MSG.
+*
+         CLC   RSYSL,=H'0'               SYSID ENTERED ?
+         BE    BADSYSID                  ...NO, GO SEND ERROR MSG.
+         CLC   RSYSI,BLANKS              SYSID BLANK ?
+         BE    BADSYSID                  ...YES, GO SEND ERROR MSG.
+*
+***********************************************************************
+*        SET UP DATA TO BE PASSED BY START COMMAND.                   *
+***********************************************************************
+         MVC   KEYOUT,KEYVALI
+         EXEC CICS ASSIGN APPLID(APPLID)
+*
+***********************************************************************
+*        ISSUE START COMMAND FOR TRANSACTION 'IQRR' IN REMOTE         *
+*        SYSTEM, PASSING REMOTE QNAME, RECORD KEY,                    *
+*        THIS NETNAME AND RETURN TRANID AND TERMID.                   *
+*        TO ENABLE THE REMOTE TRANSACTION TO FIND OUR SYSID, WE       *
+*        PASS IT THE APPLID OF THIS SYSTEM IN THE 'START' COMMAND.    *
+*        THE REMOTE TRANSACTION WILL USE THE 'EXTRACT TCT' COMMAND    *
+*        TO ACQUIRE OUR SYSID. IT WILL THEN USE IT IN THE 'START'     *
+*        COMMAND TO INITIATE ANOTHER TRANSACTION ON THIS SYSTEM.      *
+***********************************************************************
+*
+         EXEC CICS START TRANSID('IQRR') SYSID(RSYSI) QUEUE(RQNAMI)    *
+               FROM(DATAOUT) RTRANSID('IQRD') RTERMID(EIBTRMID)        *
+               RESP(RESP)
+*
+         CLC   RESP,DFHRESP(SYSIDERR)     SYSIDERR ?
+         BE    SYSERR                     ...YES, GO SEND ERROR MSG.
+         CLC   RESP,DFHRESP(NORMAL)       NORMAL RESPONSE ?
+         BNE   BADRESP2                   ...NO, GO TERMINATE TRANS.
+         B     COMPLETE                   ...YES, GO TO COMPLETE TRAN.
+*
+***********************************************************************
+*        TRANSACTION TERMINATION                                      *
+***********************************************************************
+TERMNATE DS    0H
+         MVC   EMLEN,NORMLEN            SET UP MSG. LENGTH
+EXIT     DS    0H
+         MVC   EXITMSG1,NORMMSG         SET UP EXIT MESSAGE
+         EXEC CICS SEND FROM(EXITMSG) LENGTH(EMLEN) ERASE
+*
+COMPLETE DS    0H
+         EXEC CICS RETURN
+         EJECT
+***********************************************************************
+*        ROUTINE TO HANDLE INVALID INPUT FROM USER                    *
+***********************************************************************
+BADKEY   DS    0H                  RECORD KEY NOT SUPPLIED
+         MVC   ERRMSGO,KEYMSG           MOVE MESSAGE TO MAP
+         MVC   KEYVALL,=H'-1'           SET CURSOR POSITION
+         B     RESEND                   GO SEND ERROR MSG.
+*
+BADQNM   DS    0H                  REMOTE Q NAME NOT SUPPLIED
+         MVC   ERRMSGO,QNMMSG           MOVE MESSAGE TO MAP
+         MVC   RQNAML,=H'-1'            SET CURSOR POSITION
+         B     RESEND                   GO SEND ERROR MSG.
+*
+BADSYSID DS    0H                  REMOTE SYSTEM NAME NOT SUPPLIED
+         MVC   ERRMSGO,SYSMSG           MOVE MESSAGE TO MAP
+         MVC   RSYSL,=H'-1'             SET CURSOR POSITION
+         B     RESEND                   GO SEND ERROR MSG.
+*
+*
+***********************************************************************
+*        ROUTINE TO HANDLE SYSIDERR RESPONSE FROM START COMMAND       *
+***********************************************************************
+*
+SYSERR   DS    0H
+         CLI   EIBRCODE+1,X'08'         LINK OUT OF SERVICE ?
+         BNE   UNKNOWN                  ...NO, GO SET UP 'UNKNOWN' MSG.
+         MVC   MSGWA,OUTSVMSG           MOVE SKELETON MSG. TO WORK AREA
+         MVC   SYSWA1,RSYSI             INSERT SYSID INTO MESSAGE.
+         B     MOVEM                    GO MOVE COMPLETE MSG.
+*
+UNKNOWN  DS    0H
+         MVC   MSGWA,UNKWNMSG           MOVE SKELETON MSG. TO WORK AREA
+         MVC   SYSWA2,RSYSI             INSERT SYSID INTO MESSAGE.
+*
+MOVEM    DS    0H
+         MVC   ERRMSGO,MSGWA            MOVE ERROR MESSAGE TO MAP
+         MVC   RSYSL,=H'-1'             SET CURSOR POSITION
+*
+***********************************************************************
+*        DATA RECEIVED WAS INCOMPLETE, OR THERE WAS A PROBLEM         *
+*        WITH THE SYSID, SO GIVE THE USER ANOTHER CHANCE TO           *
+*        ENTER DATA.                                                  *
+***********************************************************************
+RESEND   DS    0H
+         EXEC CICS SEND MAP('SPMAPA') MAPSET('DFH$IG1') DATAONLY       *
+               CURSOR WAIT
+*
+         B     RETRY               RECEIVE REQUIREMENTS AGAIN
+*
+*
+***********************************************************************
+*        HANDLE BAD RESPONSE FROM RECEIVE MAP COMMAND                 *
+***********************************************************************
+BADRESP1 DS    0H
+         MVC   EXITMSG2,BADRCV          SET UP EXIT MSG.
+         MVC   EMLEN,BRLEN              SET UP MSG. LEN
+         B     EXIT                     GO TERMINATE TRANS.
+*
+***********************************************************************
+*        HANDLE BAD RESPONSE FROM START COMMAND                       *
+***********************************************************************
+BADRESP2 DS    0H
+         MVC   EXITMSG2(L'BADSTRT),BADSTRT   SET UP EXIT MSG.
+         MVC   EMLEN,BSLEN              SET UP MSG. LEN
+         B     EXIT                     GO TERMINATE TRANS.
+         EJECT
+***********************************************************************
+*        CONSTANTS                                                    *
+***********************************************************************
+BLANKS   DC    CL8' '
+KEYMSG   DC    CL36'PLEASE SUPPLY KEY OF RECORD REQUIRED'
+QNMMSG   DC    CL36'PLEASE SUPPLY A REMOTE QUEUE NAME.'
+SYSMSG   DC    CL36'PLEASE SUPPLY A REMOTE SYSTEM ID.'
+OUTSVMSG DC    CL36'LINK TO .... IS OUT OF SERVICE'
+UNKWNMSG DC    CL36'SYSTEM NAME .... IS NOT KNOWN'
+NORMMSG  DC    C'IQRL TRANSACTION TERMINATED'
+NORMLEN  DC    AL2(L'NORMMSG)
+BADRCV   DC    C' DUE TO BAD RESPONSE FROM RECEIVE MAP COMMAND'
+BRLEN    DC    AL2(L'NORMMSG+L'BADRCV)
+BADSTRT  DC    C' DUE TO BAD RESPONSE FROM START COMMAND'
+BSLEN    DC    AL2(L'NORMMSG+L'BADSTRT)
+*
+         LTORG
+         EJECT
+***********************************************************************
+*        EQUATES                                                      *
+***********************************************************************
+         COPY  DFHAID              DEFINITIONS FOR ATTENTION ID'S
+*
+         DFHREGS                   REGISTER EQUATES
+         EJECT
+***********************************************************************
+*        WORKING STORAGE                                              *
+***********************************************************************
+DFHEISTG DSECT
+*
+         COPY  DFH$IG1             MAPSET DEFINITIONS
+*
+RESP     DS    F                   RESPONSES TO CICS COMMANDS
+*
+DATAOUT  DS    0CL14               DATA TO BE PASSED TO IQRR
+KEYOUT   DS    CL6                 RECORD KEY TO BE PASSED
+APPLID   DS    CL8                 THIS SYSTEMS APPLID
+*
+EMLEN    DS    H                   EXIT MESSAGE LENGTH
+EXITMSG  DS    0CL72               EXIT MESSAGE AREA
+EXITMSG1 DS    CL27                COMMON MESSAGE
+EXITMSG2 DS    CL45                VARIABLE MESSAGE
+*
+MSGWA    DS    0CL36               WORK AREA FOR ERROR MSGS.
+         DS    CL8
+SYSWA1   DS    CL4
+SYSWA2   DS    CL4
+         DS    CL20
+*
+         END

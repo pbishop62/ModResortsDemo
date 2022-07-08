@@ -1,0 +1,435 @@
+DFH$IQXL TITLE 'CICS INTERCOMMUNICATION SAMPLE - QUEUE TRANSFER - LOCAL*
+                PROCESSING'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$IQXL                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = 'Queue Transfer' Local Processing Sample         *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1985, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*    INPUTS TO THIS PROGRAM              LOCAL TS Q NAME              *
+*    ( FROM USERS SCREEN  )              REMOTE TS Q NAME             *
+*                                        REMOTE SYSTEM ID             *
+*                                                                     *
+*    OUTPUTS FROM THIS PROGRAM           REMOTE TS Q NAME             *
+*    ( PASSED TO TRANSACTION IQXR )      TS Q RECORDS                 *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$IQXL),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= Z30    170 85     HD1XIC : CREATE BASE SOURCE               *
+*    $P1= M52511 310 8803   HD1SSMC: RESET MAX REC LEN BEFORE NEXT TS *
+*                                    READ                             *
+*    $P2= M56302 310 8906   HD1YBC : ADD NOSUSPEND ON WRITEQ TS       *
+*                                    COMMAND                          *
+*    $P3= M60198 320 9002   HD1SSMC: PROGRAM RESTRUCTURED             *
+*    $P4= M61435 320 9004   HDAQJV : ERROR MESSAGE FOR INVALID PF KEY *
+*    $P5= M61448 320 9004   HDAQJV : REMOVE WAITS                     *
+*    $P6= M61933 320 9005   HDAQJV : REMOVE WAITS                     *
+*    $P7= M62331 320 900606 HD6PPAI: CORRECT 61933                    *
+*    $P8= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH$IQXL CSECT
+*
+***********************************************************************
+*        SEND INITIAL REQUEST MENU TO USERS SCREEN                    *
+***********************************************************************
+RESETMAP DS    0H
+         XC    SPMAPAO(SPMAPAL),SPMAPAO      CLEAR MAP STORAGE
+         EXEC CICS SEND MAP('SPMAPA') MAPSET('DFH$IGX') MAPONLY        *
+               ERASE
+*      *                                                           @P5C
+***********************************************************************
+*        RECEIVE USERS REQUIREMENTS FROM THE SCREEN                   *
+***********************************************************************
+RETRY    DS    0H
+         EXEC CICS RECEIVE MAP('SPMAPA') MAPSET('DFH$IGX')             *
+               RESP(RESP)
+*
+         CLI   EIBAID,DFHPF3            PF3 PRESSED ?
+         BE    USEREXIT                 YES, GO END TRANSACTION
+         CLC   RESP,DFHRESP(MAPFAIL)    MAP FAILED ?
+         BE    RESETMAP                 YES, GO TRY AGAIN
+         CLC   RESP,DFHRESP(NORMAL)     NORMAL RESPONSE ?
+         BNE   BADRCV                   NO, GO TERMINATE TRANSACTION
+         CLI   EIBAID,DFHENTER          ENTER PRESSED              @P4A
+         BNE   INVMSG                   NO, GO TO ERROR MSG ROUTINE
+*      *
+         CLC   RQNML,=H'0'              REMOTE Q NAME ENTERED ?
+         BE    NORQNAME                 NO, GO REQUEST Q NAME
+         CLC   RQNMI,BLANKS             REMOTE Q NAME BLANK ?
+         BE    NORQNAME                 YES, GO REQUEST Q NAME
+*
+         CLC   RSYSL,=H'0'              REMOTE SYS ID ENTERED ?
+         BE    NOSYSID                  NO, GO REQUEST SYS ID
+         CLC   RSYSI,BLANKS             REMOTE SYS ID BLANK ?
+         BE    NOSYSID                  YES, GO REQUEST SYS ID
+*
+         CLC   QNAML,=H'0'              LOCAL TS Q NAME SUPPLIED ?
+         BE    NOQNMGVN                 NO, SO GO CREATE TS Q
+         CLC   QNAMI,BLANKS             LOCAL TS Q NAME SUPPLIED ?
+         BE    NOQNMGVN                 NO, SO GO CREATE TS Q
+*
+         MVC   TSQNAME,QNAMI            SAVE SUPPLIED TS Q NAME
+*                                       CLEAR SCREEN
+         EXEC CICS SEND FROM(MSGWA) LENGTH(0) ERASE
+         B     GOTTSQNM                 GO READ FIRST RECORD FROM TS Q
+*
+NOQNMGVN DS    0H
+         BAL   R7,BUILDTSQ              BUILD TS Q WITH DEFAULT NAME
+*                                      (N.B. WILL NOT RETURN HERE IF
+*                                       ANY PROBLEM BUILDING TS QUEUE.)
+*
+***********************************************************************
+*        READ FIRST RECORD IN Q TO ENSURE Q SPECIFIED EXISTS.         *
+***********************************************************************
+GOTTSQNM DS    0H
+         LA    R6,1                    INITIALIZE RECORD ITEM
+         STH   R6,ITEMNUM              NUMBER FOR 'READ Q'.
+         MVC   TSLEN,=H'80'            SET A MAX ON THE REC LENGTH.
+*      *
+         EXEC CICS READQ TS QUEUE(TSQNAME) INTO(TSRECORD)              *
+               LENGTH(TSLEN) ITEM(ITEMNUM) RESP(RESP)
+*
+         CLC   RESP,DFHRESP(QIDERR)    TS Q KNOWN TO CICS ?
+         BE    BADQNM                  NO, SO GO INFORM USER
+         CLC   RESP,DFHRESP(NORMAL)    RECORD READ OK ?
+         BNE   BADREADQ                NO, GO TERMINATE TASK
+*
+***********************************************************************
+*        SEND 'ALLOCATING SESSION AND TRANSFERRING Q'                 *
+*        MESSAGE TO USERS SCREEN.                                     *
+***********************************************************************
+         EXEC CICS SEND MAP('SPMAPC') MAPSET('DFH$IGX')
+*      *                                                           @5PC
+***********************************************************************
+*        ACQUIRE A SESSION TO THE REMOTE SYSTEM                       *
+***********************************************************************
+         EXEC CICS ALLOCATE SYSID(RSYSI) RESP(RESP)
+*
+         CLC   RESP,DFHRESP(SYSIDERR)  SYSTEM ID ERROR ?
+         BE    SYSERR                  YES, GO CHECK REASON
+         CLC   RESP,DFHRESP(NORMAL)    ACQUIRED SESSION OK ?
+         BNE   BADALLOC                NO, GO TERMINATE TASK
+         MVC   ATCHSESS,EIBRSRCE       SAVE NAME OF CONVERSATION
+*
+***********************************************************************
+*        INITIATE THE ACQUIRED CONVERSATION                           *
+***********************************************************************
+         EXEC CICS CONNECT PROCESS CONVID(ATCHSESS)                    *
+               PROCLENGTH(4) PROCNAME('IQXR') SYNCLEVEL(2)
+*
+***********************************************************************
+*        SEND THE Q NAME TO BE ASSIGNED, TO THE REMOTE TRANSACTION    *
+***********************************************************************
+         EXEC CICS SEND CONVID(ATCHSESS) FROM(RQNMI) LENGTH(8)
+*
+***********************************************************************
+*        SEND EACH RECORD ( VIA THE SESSION ) TO                      *
+*        THE REMOTE INITIATED TRANSACTION                             *
+***********************************************************************
+SENDLOOP DS    0H
+         EXEC CICS SEND CONVID(ATCHSESS) FROM(TSRECORD)                *
+               LENGTH(TSLEN)
+*
+***********************************************************************
+*        READ NEXT RECORD FROM THE TEMP. STORAGE QUEUE                *
+***********************************************************************
+         LA    R6,1(R6)                 INCREMENT AND STORE THE...
+         STH   R6,ITEMNUM               ...RECORD ITEM NUMBER.
+         MVC   TSLEN,=H'80'             RESET MAX REC LENGTH.
+*
+         EXEC CICS READQ TS QUEUE(TSQNAME) INTO(TSRECORD)              *
+               LENGTH(TSLEN) ITEM(ITEMNUM) RESP(RESP)
+*
+         CLC   RESP,DFHRESP(NORMAL)     GOT RECORD ?
+         BE    SENDLOOP                 YES, GO SEND IT TO REM. TRAN.
+         CLC   RESP,DFHRESP(ITEMERR)    ALL RECORDS READ ?
+         BNE   BADREADQ                 NO, BAD RESPONSE
+*
+***********************************************************************
+*        THE QUEUE HAS NOW BEEN SENT, SO TAKE A SYNCPOINT             *
+***********************************************************************
+         EXEC CICS SYNCPOINT
+*
+***********************************************************************
+*        FREE THE SESSION AS SOON AS POSSIBLE, AS NO LONGER NEEDED    *
+***********************************************************************
+         EXEC CICS FREE CONVID(ATCHSESS)
+*
+***********************************************************************
+*        DELETE THE TS QUEUE                                          *
+***********************************************************************
+         EXEC CICS DELETEQ TS QUEUE(TSQNAME)
+*
+***********************************************************************
+*        SEND 'TRANSFER COMPLETE, TRANSACTION SUCCESSFUL'             *
+*        MESSAGE TO USER'S SCREEN.                                    *
+***********************************************************************
+         EXEC CICS SEND MAP('SPMAPD') MAPSET('DFH$IGX')
+*
+***********************************************************************
+*        RETURN TO CICS                                               *
+***********************************************************************
+EXIT     DS    0H
+         EXEC CICS RETURN
+         EJECT
+***********************************************************************
+*        ROUTINES TO HANDLE INSUFFICIENT INPUT                        *
+***********************************************************************
+NORQNAME DS    0H                  *** NO REMOTE TS Q NAME SUPPLIED ***
+         MVC   ERRMSGO(L'NORQNMSG),NORQNMSG  MOVE ERROR MSG. TO MAP
+         MVC   RQNML,=H'-1'                  SET CURSOR POSITION
+         B     RESEND                        GO RESEND MAP
+*
+NOSYSID  DS    0H                  *** NO REMOTE SYSTEM ID SUPPLIED ***
+         MVC   ERRMSGO(L'NOSYSMSG),NOSYSMSG  MOVE ERROR MSG. TO MAP
+         MVC   RSYSL,=H'-1'                  SET CURSOR POSITION
+*
+RESEND   DS    0H                        RESEND MAIN MAP WITH ERR. MSG.
+         EXEC CICS SEND MAP('SPMAPA') MAPSET('DFH$IGX')                *
+               DATAONLY CURSOR
+*      *                                                           @P5C
+         B     RETRY                         GO CHECK NEW INPUT
+*
+*
+***********************************************************************
+*        SUBROUTINE TO BUILD A TS QUEUE WITH A DEFAULT Q NAME         *
+*        OF 'TSQLCL'.                                                 *
+*                                                                     *
+*        FIRST SEND 'CONSTRUCTING Q' MESSAGE TO USERS SCREEN          *
+***********************************************************************
+BUILDTSQ DS    0H
+         EXEC CICS SEND MAP('SPMAPB') MAPSET('DFH$IGX') ERASE
+*      *                                                           @P6C
+         MVC   TSRECORD,INITTSR         INITIALIZE TS RECORD AREA
+         MVC   TSLEN,=AL2(L'INITTSR)    INITIALIZE TS RECORD LENGTH
+         LA    R5,5                     INITIALIZE LOOP COUNT
+*
+TSLOOP   DS    0H
+         IC    R4,DIGIT1                INCREMENT AND STORE THE...
+         LA    R4,1(R4)                 ...RECORD NUMBER DIGIT INTO...
+         STC   R4,DIGIT1                ...THE TS RECORD AREA TO BE...
+         STC   R4,DIGIT2                ...WRITTEN TO THE TS Q.
+*
+         EXEC CICS WRITEQ TS QUEUE(DEFAULTQ) FROM(TSRECORD)            *
+               LENGTH(TSLEN) NOSUSPEND RESP(RESP)
+*
+         CLC   RESP,DFHRESP(NOSPACE)    TS Q FULL ?
+         BE    NOSPACE                  YES, GO INFORM USER
+         CLC   RESP,DFHRESP(NORMAL)     RECORD WRITTEN OK ?
+         BNE   BADWRTQ                  NO, GO TERMINATE TRANSACTION
+         BCT   R5,TSLOOP                LOOP UNTIL 5 RECS. WRITTEN
+*
+         MVC   TSQNAME,DEFAULTQ         SAVE TS Q NAME
+         BR    R7                       RETURN TO MAIN LINE CODE
+*
+*
+***********************************************************************
+*        ROUTINE TO HANDLE LOCAL TS QUEUE FULL CONDITION.             *
+***********************************************************************
+NOSPACE  DS 0H
+         CH    R5,=H'5'                 ANY RECORDS WRITTEN ?
+         BE    BYPDELQ                  NO, BYPASS DELETEQ
+*
+         EXEC CICS DELETEQ TS QUEUE(DEFAULTQ)
+*
+BYPDELQ  DS 0H
+         MVC   ERRMSGO,TSFULMSG         MOVE MESSAGE TO MAP
+         MVC   QNAML,=H'-1'             SET CURSOR POSITION
+         B     SENDAGN                  GO RESEND ORIGINAL MAP
+*
+*
+***********************************************************************
+*        ROUTINE TO HANDLE UNKNOWN TS QUEUE NAME                      *
+***********************************************************************
+BADQNM   DS    0H
+         MVC   MSGWA,QIDERMSG      MOVE SKELETON MSG. TO WORK AREA
+         MVC   QNAMWA,TSQNAME      INSERT TS Q NAME INTO MSG.
+         MVC   QNAML,=H'-1'        SET CURSOR POSITION
+         B     MOVEM               GO RESEND MAIN MAP
+*
+***********************************************************************
+*        ROUTINE TO HANDLE SYSIDERR RESPONSE FROM ALLOCATE COMMAND    *
+***********************************************************************
+SYSERR   DS    0H
+         CLI   EIBRCODE+1,X'08'    LINK OUT OF SERVICE ?
+         BNE   UNKNOWN             NO, GO SET UP 'UNKNOWN' MSG.
+         MVC   MSGWA,OUTSVMSG      MOVE SKELETON MSG. TO WORK AREA
+         MVC   SYSWA1,RSYSI        INSERT SYSID INTO MESSAGE.
+         B     SETCURS             GO RESEND ORIGINAL SCREEN
+*
+UNKNOWN  DS    0H                  UNKNOWN SYSTEM NAME
+         MVC   MSGWA,UNKWNMSG      MOVE SKELETON MSG. TO WORK AREA
+         MVC   SYSWA2,RSYSI        INSERT SYSID INTO MESSAGE.
+*
+SETCURS  DS    0H
+         MVC   RSYSL,=H'-1'        SET CURSOR POSITION
+*
+***********************************************************************
+*        ROUTINE TO DISPLAY THE ORIGINAL MAP WITH AN ERROR MESSAGE    *
+***********************************************************************
+MOVEM    DS    0H
+         MVC   ERRMSGO,MSGWA       MOVE ERROR MESSAGE TO MAP
+*
+SENDAGN  DS    0H
+         EXEC CICS SEND MAP('SPMAPA') MAPSET('DFH$IGX')                *
+               CURSOR ERASE WAIT
+*
+         B    RETRY
+*
+SENDAGN1 DS    0H                                                  @P4A
+         EXEC CICS SEND MAP('SPMAPA') MAPSET('DFH$IGX')                *
+               CURSOR ERASE WAIT
+*      *
+         EXEC CICS RECEIVE
+*      *                                                           @P4A
+         B    RESETMAP                                             @P4A
+*
+***********************************************************************
+*        ROUTINES FOR UNRECOVERABLE ERRORS                            *
+***********************************************************************
+BADRCV   DS    0H             BAD RESPONSE FROM 'EXEC CICS RECEIVE'
+         MVC   EMBRCVM,BRMTXT           SET UP MESSAGE
+         MVC   EMLEN,BRMTLEN            SET MESSAGE LENGTH
+         B     COMNERR                  GO SET UP COMMON PART OF MSG.
+*
+BADWRTQ  DS    0H             BAD RESPONSE FROM 'EXEC CICS WRITEQ TS'
+         MVC   EMBWTQ,BWQTXT            SET UP MESSAGE
+         MVC   EMLEN,BWQTLEN            SET MESSAGE LENGTH
+         B     COMNERR                  GO SET UP COMMON PART OF MSG.
+*
+BADREADQ DS    0H             BAD RESPONSE FROM 'EXEC CICS READQ TS'
+         MVC   EMBRDQ,BRQTXT            SET UP MESSAGE
+         MVC   EMLEN,BRQTLEN            SET MESSAGE LENGTH
+         B     COMNERR                  GO SET UP COMMON PART OF MSG.
+*
+BADALLOC DS    0H             BAD RESPONSE FROM 'EXEC CICS ALLOCATE'
+         MVC   EMBALL,BATXT             SET UP MESSAGE
+         MVC   EMLEN,BATLEN             SET MESSAGE LENGTH
+*
+COMNERR  DS    0H
+         MVC   EMBRESP,BRTXT            SET UP COMMON PART OF MSG.
+         B     ENDTRAN                  GO COMPLETE MSG. & TERM. TRAN.
+*
+***********************************************************************
+*        HANDLE INVALID PF KEY                                        *
+***********************************************************************
+INVMSG   DS    0H                                                  @P4A
+         LA    R5,INVALID                                          @P4A
+         MVC   ERRMSGO,0(R5)                                       @P4A
+         B     SENDAGN1                                            @P4A
+*
+***********************************************************************
+*        HANDLE PF3 PRESSED BY USER                                   *
+***********************************************************************
+USEREXIT DS    0H
+         MVC   EMUSER,USERTXT           SET UP MESSAGE
+         MVC   EMLEN,USERTLEN           SET MESSAGE LENGTH
+*
+***********************************************************************
+*        COMPLETE TERMINATION MESSAGE AND SEND IT TO SCREEN           *
+***********************************************************************
+ENDTRAN  DS    0H
+         MVC   EMHEAD,EXITTXT           COMPLETE MESSAGE
+*                                  SEND TERMINATATION MSG. TO SCREEN
+        EXEC CICS SEND FROM(EXITMSG) LENGTH(EMLEN) ERASE
+*
+         B     EXIT                     GO TERMINATE TRANSACTION
+         EJECT
+***********************************************************************
+*        CONSTANTS                                                    *
+***********************************************************************
+*
+BLANKS   DC    CL8' '
+DEFAULTQ DC    CL8'TSQLCL'
+INITTSR  DC    C'000000 SYNCHRONOUS PROCESSING TS Q REC.0'
+TSRECLEN DC    AL2(L'INITTSR)
+NORQNMSG DC    CL36'PLEASE SUPPLY A REMOTE QUEUE NAME'
+NOSYSMSG DC    CL36'PLEASE SUPPLY A REMOTE SYSID'
+TSFULMSG DC    CL36'LOCAL TS FULL - PRESS ENTER TO RETRY'
+OUTSVMSG DC    CL36'LINK TO .... IS OUT OF SERVICE'
+UNKWNMSG DC    CL36'SYSTEM NAME .... IS NOT KNOWN'
+QIDERMSG DC    CL36'QUEUE NAME ........ IS NOT KNOWN'
+EXITTXT  DC    C'IQXL TRANSACTION TERMINATED BY '
+USERTXT  DC    C'USER'
+BRTXT    DC    C'BAD RESPONSE TO '
+BRMTXT   DC    C'RECEIVE MAP COMMAND'
+BWQTXT   DC    C'WRITEQ TS COMMAND'
+BRQTXT   DC    C'READQ TS COMMAND'
+BATXT    DC    C'ALLOCATE COMMAND'
+INVALID  DC    C'INVALID KEY - ENTER TO CONTINUE     '             @P4A
+USERTLEN DC    AL2(L'EXITTXT+L'USERTXT)
+BRMTLEN  DC    AL2(L'EXITTXT+L'BRTXT+L'BRMTXT)
+BWQTLEN  DC    AL2(L'EXITTXT+L'BRTXT+L'BWQTXT)
+BRQTLEN  DC    AL2(L'EXITTXT+L'BRTXT+L'BRQTXT)
+BATLEN   DC    AL2(L'EXITTXT+L'BRTXT+L'BATXT)
+*
+         LTORG
+         EJECT
+***********************************************************************
+*        EQUATES                                                      *
+***********************************************************************
+         COPY  DFHAID              ATTENTION ID DEFINITIONS
+*
+         DFHREGS                   REGISTER EQUATES
+         EJECT
+***********************************************************************
+*        WORKING STORAGE                                              *
+***********************************************************************
+DFHEISTG DSECT
+         COPY  DFH$IGX             MAPSET DEFINITIONS
+*
+RESP     DS    F                   RESPONSES TO CICS COMMANDS
+TSQNAME  DS    CL8                 TS QUEUE NAME
+ITEMNUM  DS    H                   RECORD ITEM NUMBER
+ATCHSESS DS    CL4                 ATTACHED SESSION ID
+*
+TSLEN    DS    H                   LENGTH OF TS RECORD
+TSRECORD DS    0CL80               I/O AREA FOR TS RECORD
+         DS    CL5
+DIGIT1   DS    C
+         DS    CL33
+DIGIT2   DS    C
+         DS    CL40
+*
+MSGWA    DS    CL36                WORK AREA FOR BUILDING ERROR MSG
+         ORG   MSGWA+8
+SYSWA1   DS    CL4
+         ORG   MSGWA+12
+SYSWA2   DS    CL4
+         ORG   MSGWA+11
+QNAMWA   DS    CL8
+         ORG
+*
+EMLEN    DS    H                   LENGTH OF TRAN. TERMINATION MSG.
+EXITMSG  DS    0CL66               WORK AREA FOR TRAN. TERMINATION MSG
+EMHEAD   DS    CL31
+EMUSER   DS    0CL4
+EMBRESP  DS    CL16
+EMBALL   DS    0CL16
+EMBRDQ   DS    0CL16
+EMBWTQ   DS    0CL17
+EMBRCVM  DS    CL19
+*
+         END

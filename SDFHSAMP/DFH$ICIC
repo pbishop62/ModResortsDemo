@@ -1,0 +1,300 @@
+         TITLE 'DFH$ICIC - INTERCOMMUNICATION SAMPLE - CICS TO CICS OR *
+               IMS CONVERSATION'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$ICIC                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS/IMS Conversation Sample                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1985, 1992"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$ICIC),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 850808 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*    $P2= M91974 330 920227 HD9TMW : Skip length field in SEND TEXT   *
+*                                                                     *
+***********************************************************************
+DFHEISTG DSECT
+*
+*        STORAGE AREA FOR EIB SESSION AND STATUS FLAGS
+*
+XDFEIFLG DS    0CL7
+*
+XSYNC    DS    C                   IF SET, SYNCPOINT MUST
+*                                  BE EXECUTED
+XFREE    DS    C                   IF SET, TERMINAL / LU
+*                                  MUST BE FREED
+XRECV    DS    C                   IF SET, RECEIVE MUST
+*                                  BE EXECUTED
+XSEND    DS    C                   RESERVED
+*
+XATT     DS    C                   IF SET, ATTACH HEADER
+*                                  DATA EXISTS AND MAY BE
+*                                  ACCESSED USING EXTRACT
+XEOC     DS    C                   IF SET, END-OF-CHAIN
+*                                  WAS RECEIVED WITH DATA
+XFMH     DS    C                   IF SET, DATA PASSED TO
+*                                  APPL'N CONTAINS FMH(S)
+         COPY  DFH$IGC               COPY MAP
+         COPY  DFHAID
+REMDATA  DS    256D
+ATCHSESS DS    CL4
+CONTROL  DS    0CL60
+SBA      DS    CL3
+CDATA    DS    CL57
+MESSAGE  DS    CL80
+MESSAGEL DS    H
+INLEN    DS    H
+OUTLEN   DS    H
+RESP     DS    F
+NEWLINE  EQU   X'15'
+         EJECT
+DFH$ICIC CSECT
+MAPFAIL  XC    MAPAI(MAPAE-MAPAI),MAPAI    CLEAR MAP
+         EXEC CICS SEND MAP('MAPA') MAPSET('DFH$IGC')                  *
+               ERASE MAPONLY WAIT RESP(RESP)
+         CLC  RESP,DFHRESP(NORMAL)     CHECK FOR NORMAL RESPONSE
+         BNE  ERROR1
+         EXEC CICS RECEIVE MAP('MAPA') MAPSET('DFH$IGC') RESP(RESP)
+         CLI  EIBAID,DFHCLEAR          WAS CLEAR KEY PRESSED?
+         BE   CLEAR                    ... YES, GO TO CLEAR
+         CLC  RESP,DFHRESP(MAPFAIL)    HAS THE MAP BEEN READ IN OK?
+         BE   MAPFAIL                  ... NO, GO TO MAPFAIL
+         CLC  RESP,DFHRESP(NORMAL)     CHECK FOR NORMAL RESPONSE
+         BNE  ERROR1
+         LA    8,DATAI
+         MVC   DATABL(3+L'DATABO),DATAL
+         MVC   OUTLEN,DATAL
+*
+         EXEC CICS SEND MAP('MAPB') MAPSET('DFH$IGC')                  *
+         WAIT ERASE RESP(RESP)
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE  ERROR1
+         EXEC CICS ALLOCATE SYSID(SYSIDI) RESP(RESP)
+         CLC  RESP,DFHRESP(SYSIDERR)   IS THE SYSTEM ID VALID?
+         BE   SYSERR                   ... NO, GO TO SYSERR
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE  ERROR1
+         MVC   ATCHSESS,EIBRSRCE
+CONVERSE DS    0H
+         MVC   INLEN,=H'2048'
+         EXEC CICS CONVERSE                                            *
+               SESSION(ATCHSESS)                                       *
+               FROM(0(8))                                              *
+               FROMLENGTH(OUTLEN)                                      *
+               INTO(REMDATA)                                           *
+               TOLENGTH(INLEN)                                         *
+               RESP(RESP)
+         CLC  RESP,DFHRESP(EOC)        END OF CHAIN IS OK
+         BE   EOCOK1
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE  ERROR1
+EOCOK1   DS      0H
+         MVC   XDFEIFLG,EIBSYNC        SAVE EIB VALUES
+DATASENT DS      0H
+         CLC   INLEN,=H'0'             IF NULL RU SENT
+         BE    TESTSYNC                NOTHING TO SEND.
+*
+         LH    1,INLEN
+         LA    2,REMDATA(1)            ADDR BYTE AFTER DATA
+         MVI   0(2),X'13'              INSERT CURSOR HERE
+         MVI   1(2),X'15'              INSERT CURSOR HERE
+*
+*        DON'T ADD 2 TO LENGTH AS WE SKIP THE FIRST 2 CHARACTERS
+*
+         EXEC CICS SEND TEXT FROM(REMDATA+2) LENGTH(INLEN)             *
+               ACCUM RESP(RESP)
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE  ERROR1
+TESTSYNC DS    0H
+         CLI   XSYNC,X'FF'
+         BNE   TESTFREE
+         EXEC CICS SYNCPOINT RESP(RESP)
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE  ERROR1
+TESTFREE DS    0H
+         CLI   XFREE,X'FF'
+         BNE   TESTRECV
+         EXEC CICS SEND PAGE RETAIN RESP(RESP)
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE  ERROR1
+         EXEC CICS RETURN
+TESTRECV DS    0H
+         CLI   XRECV,X'FF'
+         BNE   SEND
+         MVC   INLEN,=H'2048'
+         EXEC CICS RECEIVE SESSION(ATCHSESS) INTO(REMDATA)             *
+               LENGTH(INLEN) RESP(RESP)
+         CLC  RESP,DFHRESP(EOC)        END OF CHAIN IS OK
+         BE   EOCOK2
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE  ERROR1
+EOCOK2   DS    0H
+         MVC   XDFEIFLG,EIBSYNC        SAVE EIB VALUES
+         B     DATASENT
+SEND     DS    0H
+         EXEC CICS SEND PAGE RETAIN RESP(RESP)
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE  ERROR1
+         MVC   OUTLEN,=H'60'
+         EXEC CICS RECEIVE INTO(CONTROL) LENGTH(OUTLEN) RESP(RESP)
+         CLC  RESP,DFHRESP(NORMAL)
+         BNE  ERROR1
+         LH    0,OUTLEN
+         SH    0,=H'3'                 FOR LENGTH OF SBA
+         LA    8,CDATA
+         B     CONVERSE
+*
+ERROR1   DS    0H
+         MVC   MESSAGE(L'ERRMSG),ERRMSG
+         MVC   MESSAGEL,=Y(L'ERRMSG)
+         B     EXPLAIN
+ERRMSG   DC    C'ERROR - TRANSACTION TERMINATED'
+*
+SYSERR   DS    0H
+         CLI   EIBRCODE+1,X'04'
+         BE    SYSERR04
+         CLI   EIBRCODE+1,X'08'
+         BE    SYSERR08
+         CLI   EIBRCODE+1,X'0C'
+         BE    SYSERR0C
+NOLINK   DS    0H
+         MVC   MESSAGE(L'LNKMSG),LNKMSG
+         MVC   MESSAGE+28(4),SYSIDI
+         MVC   MESSAGEL,=Y(L'LNKMSG)
+         B     EXPLAIN
+LNKMSG   DC    C'UNABLE TO ESTABLISH LINK TO ....'
+*
+SYSERR04 DS    0H
+         CLI   EIBRCODE+2,X'00'
+         BE    ERR0400
+         CLI   EIBRCODE+2,X'04'
+         BE    ERR0404
+         CLI   EIBRCODE+2,X'08'
+         BE    ERR0408
+         CLI   EIBRCODE+2,X'0C'
+         BE    ERR040C
+         CLI   EIBRCODE+2,X'10'
+         BE    ERR0410
+         CLI   EIBRCODE+2,X'14'
+         BE    ERR0414
+         CLI   EIBRCODE+2,X'18'
+         BE    ERR0418
+         B     NOLINK
+*
+SYSERR08 DS    0H
+         CLI   EIBRCODE+2,X'00'
+         BE    ERR0800
+         CLI   EIBRCODE+2,X'04'
+         BE    ERR0804
+         B     NOLINK
+*
+SYSERR0C DS    0H
+         CLI   EIBRCODE+2,X'00'
+         BE    ERR0C00
+         CLI   EIBRCODE+2,X'01'
+         BE    ERR0C01
+         CLI   EIBRCODE+2,X'04'
+         BE    ERR0C04
+         B     NOLINK
+*
+ERR0400  DS    0H
+         MVC   MESSAGE(L'MSG0400),MSG0400
+         MVC   MESSAGEL,=Y(L'MSG0400)
+         B     EXPLAIN
+MSG0400  DC    C'INVALID FUNCTION REQUEST'
+*
+ERR0404  DS    0H
+         MVC   MESSAGE(L'MSG0404),MSG0404
+         MVC   MESSAGEL,=Y(L'MSG0404)
+         B     EXPLAIN
+MSG0404  DC    C'NO SESSIONS AVAILABLE AND NOQUEUE SPECIFIED'
+*
+ERR0408  DS    0H
+         MVC   MESSAGE(L'MSG0408),MSG0408
+         MVC   MESSAGEL,=Y(L'MSG0408)
+         B     EXPLAIN
+MSG0408  DC    C'MODENAME NOT FOUND'
+*
+ERR040C  DS    0H
+         MVC   MESSAGE(L'MSG040C),MSG040C
+         MVC   MESSAGEL,=Y(L'MSG040C)
+         B     EXPLAIN
+MSG040C  DC    C'MODENAME IS INVALID'
+*
+ERR0410  DS    0H
+         MVC   MESSAGE(L'MSG0410),MSG0410
+         MVC   MESSAGEL,=Y(L'MSG0410)
+         B     EXPLAIN
+MSG0410  DC    C'TASK CANCELLED OR TIMED OUT DURING ALLOCATION'
+*
+ERR0414  DS    0H
+         MVC   MESSAGE(L'MSG0414),MSG0414
+         MVC   MESSAGEL,=Y(L'MSG0414)
+         B     EXPLAIN
+MSG0414  DC    C'MODEGROUP IS NOT AVAILABLE'
+*
+ERR0418  DS    0H
+         MVC   MESSAGE(L'MSG0418),MSG0418
+         MVC   MESSAGEL,=Y(L'MSG0418)
+         B     EXPLAIN
+MSG0418  DC    C'MODEGROUP IS DRAINING'
+*
+ERR0800  DS    0H
+         MVC   MESSAGE(L'MSG0800),MSG0800
+         MVC   MESSAGE+0(4),SYSIDI
+         MVC   MESSAGEL,=Y(L'MSG0800)
+         B     EXPLAIN
+MSG0800  DC    C'.... IS OUT OF SERVICE OR RELEASED'
+*
+ERR0804  DS    0H
+         MVC   MESSAGE(L'MSG0804),MSG0804
+         MVC   MESSAGEL,=Y(L'MSG0804)
+         B     EXPLAIN
+MSG0804  DC    C'COULD NOT BIND TO SESSION'
+*
+ERR0C00  DS    0H
+         MVC   MESSAGE(L'MSG0C00),MSG0C00
+         MVC   MESSAGE(4),SYSIDI
+         MVC   MESSAGEL,=Y(L'MSG0C00)
+         B     EXPLAIN
+MSG0C00  DC    C'.... IS NOT A TCTSE'
+*
+ERR0C01  DS    0H
+         MVC   MESSAGE(L'MSG0C01),MSG0C01
+         MVC   MESSAGEL,=Y(L'MSG0C01)
+         B     EXPLAIN
+MSG0C01  DC    C'REMOTE SYSTEM NAME NOT KNOWN IN REMOTE SYSTEM'
+*
+ERR0C04  DS    0H
+         MVC   MESSAGE(L'MSG0C04),MSG0C04
+         MVC   MESSAGE(4),SYSIDI
+         MVC   MESSAGEL,=Y(L'MSG0C04)
+         B     EXPLAIN
+MSG0C04  DC    C'.... IS NOT A VALID TCTSE'
+*
+EXPLAIN  DS    0H
+         EXEC CICS SEND FROM(MESSAGE) LENGTH(MESSAGEL)                 *
+               ERASE WAIT RESP(RESP)
+CLEAR    DS    0H
+         EXEC CICS SEND CONTROL FREEKB RESP(RESP)
+         EXEC CICS RETURN
+         END

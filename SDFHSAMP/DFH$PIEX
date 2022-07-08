@@ -1,0 +1,430 @@
+*ASM XOPTS(CICS,SP,EDF,NOPROLOG,NOEPILOG)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$PIEX                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (WB) Sample DFH$PIEX for             @01C
+*                                           XWSPRROO exit.         @01C
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2007, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION = Sample GLUE exit for XWSPRROO exit point              @01C
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = z/ARCH                                            *
+*    RESTRICTIONS =                                                   *
+*    REGISTER CONVENTIONS =                                           *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only                                           *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$PIEX                                              *
+*                                                                     *
+*     PURPOSE = Sample version of DFH$PIEX global user exit           *
+*                                                                     *
+*     LINKAGE = BASR from DFHUEH                                      *
+*                                                                     *
+*     INPUT =   DFH$PIEX parameter list                               *
+*                                                                     *
+*     OUTPUT =  NONE                                                  *
+*                                                                     *
+*     EXIT-NORMAL = Return with RC=UERCNORM                           *
+*                                                                     *
+*     EXIT-ERROR =  NONE                                              *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+*  This is a sample version of the DFH$PIEX global user exit that     *
+*  demonstrates how to query web service transaction name.            *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$PIEX),COMP(PIPELINE),PROD(CICS TS ):                *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $01= A56097 660 080117 HDBGNRB : Migrate PK56097 from SPA R650   *
+*    $D0= I07872 660 070927 HDJOKMP : Web Services GLUE               *
+*    $P1= D19962 660 071120 HDJOKMP : Clean up DFH$PIEX sample        *
+*    $P2= D20003 660 071126 HDJOKMP : Rename XPI* to XWS*             *
+*    $P3= D21213 660 080610 HD2JPEH : Add missing LTORG statement     *
+*                                                                     *
+***********************************************************************
+         TITLE 'PIPRROO1 - Webservices provider GLUE'
+         COPY  DFHKEBRC           Relative branch definitions
+         DFHREGS ,                   Define register equates
+DFH$PIEX CSECT
+DFH$PIEX AMODE 31
+DFH$PIEX RMODE ANY
+***********************************************************************
+*   Generate the prolog code with the DFHEIENT macro.                 *
+*      Specify CODEREG, EIBREG STATREG and origin of the static area  *
+***********************************************************************
+        DFHEIENT CODEREG=0,EIBREG=11,STATREG=(6,12),STATIC=PIPR9000
+*
+* Initialization
+*
+         LR    R4,R1                 DFHUEPAR plist from caller
+         USING DFHUEPAR,R4           Use R4 to address UEPAR plist
+         EXEC  CICS ADDRESS EIB(R11)
+         USING DFHEIBLK,R11
+         MVC   TDTEXT(L'STARTED_MSG),STARTED_MSG
+         BAL   R7,WRITEQ             Write to TD Queue
+         LA    R15,UERCNORM          Set OK response
+         ST    R15,RETCODE            and save in working storage
+*
+* Check the exit point at which we have been invoked.
+* It should be XWSPRROO, otherwise issue a message and end.        @01C
+*
+         L     R8,UEPEXN            Address the user exit number
+         CLI   0(R8),XWSPRROO       Check if this is XWSPRROO      @01C
+         BE    PIPR0000             Yes, branch to routine
+         MVC   TDRESULT(L'MSGFAIL),MSGFAIL
+         OI    YFAILED,STEP_FAILED
+         MVC   TDCMD,=CL16'MATCH EXIT'
+         MVC   TDMSGTXT(17),=C'EXIT NOT MATCHED!'
+         BAL   R7,WRITEQ          Write to TD Queue
+         B     PIPR0900
+PIPR0000 DS    0H
+*
+* Setup an abend handler
+*
+         EXEC  CICS HANDLE ABEND LABEL(ABEND000)
+*
+* Get the transaction ID
+*
+         MVC   TDRESULT(L'EXECCICS),EXECCICS
+         MVC   TDTEXT(27),=C'GET CONTAINER(DFHWS-TRANID)'
+         BAL   R7,WRITEQ          Write to TD Queue
+         MVC   YCONTNAM(16),=CL16'DFHWS-TRANID    ' Check for container
+         EXEC  CICS GET CONTAINER(YCONTNAM),                           X
+               INTO(YCREC),                                            x
+               RESP(YRESPONSE),                                        X
+               RESP2(YRESPONSE2)
+         MVC   TDFIELD(11),=C'EIBRESP IS:'
+         LA    R5,YRESPONSE
+         BAL   R7,HEXPRINT
+         MVC   TDFIELD(12),=C'EIBRESP2 IS:'
+         LA    R5,YRESPONSE2
+         BAL   R7,HEXPRINT
+         CLC   YRESPONSE,DFHRESP(NORMAL) Is the resource OK?
+         BE    PIPR0051
+         MVC   TDRESULT(L'EXECCICS),EXECCICS
+         MVC   TDTEXT(27),=C'INQUIRE WEBSERVICE() failed'
+         BAL   R7,WRITEQ          Write to TD Queue
+         B     PIPR0053
+PIPR0051 DS    0H
+         MVC   TDRESULT(L'MSGDATA),MSGDATA
+         MVC   TDCMD(8),=C'TRAN ID:'
+         MVC   TDMSGTXT(4),YCREC       Show transaction ID
+         BAL   R7,WRITEQ               Write to TD Queue
+*
+* Get the webservice name
+*
+         MVC   TDRESULT(L'EXECCICS),EXECCICS
+         MVC   TDTEXT(31),=C'GET CONTAINER(DFHWS-WEBSERVICE)'
+         BAL   R7,WRITEQ          Write to TD Queue
+         MVC   YCONTNAM(16),=C'DFHWS-WEBSERVICE' Set container name
+         EXEC  CICS GET CONTAINER(YCONTNAM),                           X
+               INTO(YCREC),                                            x
+               RESP(YRESPONSE),                                        X
+               RESP2(YRESPONSE2)
+         MVC   TDFIELD(11),=C'EIBRESP IS:'
+         LA    R5,YRESPONSE
+         BAL   R7,HEXPRINT
+         MVC   TDFIELD(12),=C'EIBRESP2 IS:'
+         LA    R5,YRESPONSE2
+         BAL   R7,HEXPRINT
+         CLC   YRESPONSE,DFHRESP(NORMAL) Is the resource OK?
+         BNE   PIPR0053                No, go find out why.
+*
+* Print DFHWS-WEBSERVICE name
+*
+         MVC   TDRESULT(L'MSGDATA),MSGDATA
+         MVC   TDCMD(11),=C'WEBSERVICE:'
+         MVC   TDMSGTXT(L'YWEBSRVC),YCREC  Show webservice name
+         BAL   R7,WRITEQ          Write to TD Queue
+*
+* Get the webservice information
+*
+         MVC   TDRESULT(L'EXECCICS),EXECCICS
+         MVC   TDTEXT(20),=C'INQUIRE WEBSERVICE()'
+         BAL   R7,WRITEQ          Write to TD Queue
+         MVC   YWEBSRVC,YCREC     Set webservice name to get
+         EXEC  CICS INQUIRE WEBSERVICE(YWEBSRVC)                       X
+               BINDING(YBINDING),                                      X
+               CCSID(YCCSID),                                          X
+               CONTAINER(YCONT),                                       X
+               ENDPOINT(YENDPNT),                                      X
+               LASTMODTIME(YLMT),                                      X
+               MAPPINGLEVEL(YMAPLVL),                                  X
+               MAPPINGRNUM(YMAPRNUM),                                  X
+               MAPPINGVNUM(YMAPVNUM),                                  X
+               MINRUNLEVEL(YMINLVL),                                   X
+               MINRUNRNUM(YMINRNUM),                                   X
+               MINRUNVNUM(YMINVNUM),                                   X
+               PGMINTERFACE(YPGMINTF),                                 X
+               PIPELINE(YPIPEL),                                       X
+               PROGRAM(YPROGRAM),                                      X
+               STATE(YSTATE),                                          X
+               URIMAP(YURIMAP)                                         X
+               VALIDATIONST(YVALST),                                   X
+               WSBIND(YWSBIND),                                        X
+               WSDLFILE(YWSDLFIL),                                     X
+               XOPDIRECTST(YXOPDST),                                   X
+               XOPSUPPORTST(YXOPSUPST),                                X
+               RESP(YRESPONSE),                                        X
+               RESP2(YRESPONSE2)
+         MVC   TDFIELD(11),=C'EIBRESP IS:'
+         LA    R5,YRESPONSE
+         BAL   R7,HEXPRINT
+         MVC   TDFIELD(12),=C'EIBRESP2 IS:'
+         LA    R5,YRESPONSE2
+         BAL   R7,HEXPRINT
+         CLC   YRESPONSE,DFHRESP(NORMAL) Is the resource OK?
+         BE    PIPR0052
+         MVC   TDRESULT(L'EXECCICS),EXECCICS
+         MVC   TDTEXT(27),=C'INQUIRE WEBSERVICE() failed'
+         BAL   R7,WRITEQ          Write to TD Queue
+         B     PIPR0053
+PIPR0052 DS    0H
+         CLC   YSTATE,DFHVALUE(INSERVICE) Is this webservice INSERVICE?
+         BE    PIPR0054                Yes, go print webservice info
+         B     PIPR0900                No
+PIPR0053 MVC   TDRESULT(L'MSGFAIL),MSGFAIL
+         OI    YFAILED,STEP_FAILED
+         MVC   TDMSGTXT(L'FAILED_MSG),FAILED_MSG
+         BAL   R7,WRITEQ           Write to TD Queue
+         B     PIPR0900            Return to caller
+PIPR0054 DS    0H
+*
+* Print web services info
+*
+         MVC   TDRESULT(L'MSGDATA),MSGDATA
+         MVC   TDCMD(8),=C'BINDING:'
+         MVC   TDMSGTXT,YBINDING
+         BAL   R7,WRITEQ          Write to TD Queue
+         MVC   TDRESULT(L'MSGDATA),MSGDATA
+         MVC   TDCMD(10),=C'CONTAINER:'
+         MVC   TDMSGTXT(L'YCONT),YCONT
+         BAL   R7,WRITEQ          Write to TD Queue
+         MVC   TDRESULT(L'MSGDATA),MSGDATA
+         MVC   TDCMD(9),=C'ENDPOINT:'
+         MVC   TDMSGTXT,YENDPNT
+         BAL   R7,WRITEQ          Write to TD Queue
+         MVC   TDRESULT(L'MSGDATA),MSGDATA
+         MVC   TDCMD(9),=C'PIPELINE:'
+         MVC   TDMSGTXT(L'YPIPEL),YPIPEL
+         BAL   R7,WRITEQ          Write to TD Queue
+         MVC   TDRESULT(L'MSGDATA),MSGDATA
+         MVC   TDCMD(8),=C'PROGRAM:'
+         MVC   TDMSGTXT(L'YPROGRAM),YPROGRAM
+         BAL   R7,WRITEQ          Write to TD Queue
+         MVC   TDRESULT(L'MSGDATA),MSGDATA
+         MVC   TDCMD(7),=C'URIMAP:'
+         MVC   TDMSGTXT(L'YURIMAP),YURIMAP
+         BAL   R7,WRITEQ          Write to TD Queue
+         MVC   TDRESULT(L'MSGDATA),MSGDATA
+         MVC   TDCMD(11),=C'WEBSERVICE:'
+         MVC   TDMSGTXT(L'YWEBSRVC),YWEBSRVC
+         BAL   R7,WRITEQ          Write to TD Queue
+         MVC   TDRESULT(L'MSGDATA),MSGDATA
+         MVC   TDCMD(7),=C'WSBIND:'
+         MVC   TDMSGTXT,YWSBIND
+         BAL   R7,WRITEQ          Write to TD Queue
+PIPR0900 DS    0H
+*
+* All done here.
+*
+         B     RETURN               Go return to CICS
+*
+* SUBROUTINES
+*
+*
+* Subroutine to hex print a fullword.  Will fall through to
+* the WRITEQ routine to send the message.
+*
+HEXPRINT DS    0H
+         LA    R8,TDHEXDAT        POINT TO OUTPUT FIELD
+         UNPK  0(7,R8),0(4,R5)    EXPAND THE FULLWORD
+         MVC   7(1,R8),3(R5)      MODIFY THE LAST BYTE
+         NC    0(8,R8),ZEROF      SPLIT THE BYTES APART
+         TR    0(8,R8),TRTABLE    TRANSLATE FOR DISPLAY
+*
+* Subroutine to write messages to the destination "CSMT" for logging
+*
+WRITEQ   DS    0H
+         EXEC  CICS ASKTIME ABSTIME(UTIME)
+         EXEC  CICS FORMATTIME ABSTIME(UTIME)                          X
+               DATESEP('/') DDMMYY(TDDATE) TIME(TDTIME) TIMESEP
+         LA    R5,TDMSGL
+         STH   R5,TDLEN
+*
+* If you want the exit to start on the L8 TCB then don't use non-
+* threadsafe CICS APIs.
+*
+*        B     WRITEQNO
+         EXEC CICS WRITEQ TD QUEUE('CSMT') FROM(TDMSG) LENGTH(TDLEN)
+WRITEQNO DS    0H
+         MVI   TDMSG,X'00'        Clear the
+         MVC   TDMSG+1(TDMSGL-1),TDMSG message buffer
+         BR    R7                 Return to caller
+*
+* ABEND handler routine
+*
+ABEND000 DS    0H
+         EXEC  CICS HANDLE ABEND CANCEL
+         EXEC  CICS ASSIGN ABCODE(YABENDCD) ABPROGRAM(YABENDPG)
+         MVC   TDTEXT(L'ABENDED_MSG),ABENDED_MSG
+         BAL   R7,WRITEQ            Write to TD Queue
+         MVC   TDTEXT(4),YABENDCD
+         BAL   R7,WRITEQ            Write to TD Queue
+         EXEC  CICS HANDLE ABEND RESET
+         B     PIPR9000
+*
+* Return from thence
+*
+RETURN   DS    0H                   Return point
+         MVC   TDRESULT(L'MSGSUCC),MSGSUCC
+         TM    YFAILED,STEP_FAILED
+         BZ    RETURNOK
+         MVC   TDRESULT(L'MSGFAIL),MSGFAIL
+RETURNOK MVC   TDTEXT(L'STOPPED_MSG),STOPPED_MSG
+         BAL   R7,WRITEQ            Write to TD Queue
+         LA    R15,UERCNORM         Set OK response
+         ST    R15,RETCODE           and save in working storage
+         L     R15,RETCODE          Fetch return code
+*
+* Return from the user exit with an appropriate return code
+*
+STATSTOR EQU   *                    Beginning of static storage
+PIPR9000 DFHEIRET RCREG=15          Return with RC in R15
+*
+* Drop registers
+*
+         DROP  R11                  Done with EIB
+*
+* Constants
+*
+         LTORG ,                                                   @P3A
+ZEROF    DC    8XL1'0F'           FOR SPLITTING APART BYTES
+HEXTAB   EQU   *-240              TAB TO CONVERT TO PRINTABLE HEX
+*                                 FIRST 240 BYTES NOT REFERENCED
+TRTABLE  DC    CL16'0123456789ABCDEF'
+*
+* Message(s) written to the transient data queue
+*
+MSGSUCC  DC    CL8'SUCCESS:'
+MSGFAIL  DC    CL8'FAILURE:'
+MSGDATA  DC    CL10'SHOW DATA:'
+EXECCICS DC    CL10'EXEC CICS '
+STARTED_MSG DC CL30'DFH$PIEX Started successfully!'
+STOPPED_MSG DC CL30'DFH$PIEX Stopped successfully!'
+PASSED_MSG DC  CL12'TEST PASSED!'
+FAILED_MSG DC  CL12'TEST FAILED!'
+ABENDED_MSG DC CL13'TEST ABENDED!'
+STEP_FAILED EQU B'00000001'
+***********************************************************************
+* DFHEISTG working storage.                                           *
+***********************************************************************
+         DFHEISTG ,
+*
+* Storage to format messages
+*
+TDMSG    DS    0F                 WRITEQ TD Message area
+TDDATE   DS    CL8                MM/DD/YY
+         DS    CL2
+TDTIME   DS    CL8                HH:MM:SS
+         DS    CL2
+TDRESULT DS    CL10               Result - Success or failure
+TDTEXT   DS    CL100              Text
+*
+         ORG   TDTEXT
+TDTEXT0  DS    0CL100
+TDCMD    DS    CL16               Command issued
+         DS    CL1
+TDMSGTXT DS    CL83               Message/text
+*
+         ORG   TDTEXT
+TDTEXT1  DS    0CL100
+TDFIELD  DS    CL32               Field name
+         DS    CL1
+TDHEXDAT DS    CL8                 in hex
+         DS    CL59
+         ORG   ,
+*
+TDMSGE   EQU   *                  End of message
+TDMSGL   EQU   TDMSGE-TDMSG       Length of TD message text
+*
+TDLEN    DS    H                  Length of TD message text
+*
+* Working storage fields
+*
+UTIME    DS    PL8                ABSTIME data area
+DWORK    DS    D                  Double work work area
+UNPKWRK  DS    CL15               For packing/unpacking
+         CNOP  0,4                Force fwd alignment
+RETCODE  DS    XL4                Program Return Code
+YRESPONSE DS   F
+YRESPONSE2 DS  F
+YFAILED  DS    X
+*--------Fields Used in ABEND Processing-----------------------*
+YABENDCD DS    CL4                Abend Code
+YABENDPG DS    CL8                Abending Program
+*
+* Channel/container
+*
+YCONTNAM DS    CL16
+YCREC    DS    CL999
+YCRECL   EQU   *-YCREC
+*
+* Returned webservices data
+*
+YWEBDATA DS    0C
+YBINDING DS    CL255
+YCCSID   DS    F
+YCONT    DS    CL16
+YENDPNT  DS    CL255
+YLMT     DS    PL8
+YMAPLVL  DS    CL8
+YMAPRNUM DS    F
+YMAPVNUM DS    F
+YMINLVL  DS    CL8
+YMINRNUM DS    F
+YMINVNUM DS    F
+YPGMINTF DS    F
+YPIPEL   DS    CL8
+YPROGRAM DS    CL8
+YSTATE   DS    F
+YURIMAP  DS    CL8
+YVALST   DS    F
+YWEBSRVC DS    CL32
+YWSBIND  DS    CL255
+YWSDLFIL DS    CL255
+YXOPDST  DS    F
+YXOPSUPST DS   F
+YWEBDLEN EQU   *-YBINDING
+*
+* End for working storage
+*
+         DFHEIEND ,                  End of working storage
+         DFHUEXIT TYPE=EP,ID=(XWSPRROO)                            @01C
+         END   DFH$PIEX             Finish
