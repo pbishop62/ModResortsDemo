@@ -1,0 +1,63 @@
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: TriggerTemplate
+metadata:
+  name: cics-pipeline-demo
+spec:
+  params:
+    - name: git-repo-ssh-url
+      description: The git repository SSH url
+    - name: git-revision
+      description: The git revision
+      default: master
+    - name: git-repo-name
+      description: The name of the deployment to be created / patched
+
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        name: cics-pipeline-demo-$(uid)
+      spec:
+        serviceAccountName: pipeline
+        pipelineRef:
+          name: cics-pipeline-demo
+        params:
+        - name: repo-url
+          value: $(tt.params.git-repo-ssh-url)
+        - name: branch-name
+          value: $(tt.params.git-revision)
+        workspaces:
+        - name: shared-data
+          volumeClaimTemplate:
+            spec:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: 500Mi
+              storageClassName: managed-nfs-storage
+---
+
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: TriggerBinding
+metadata:
+  name: cics-pipeline-demo
+spec:
+  params:
+    - name: git-revision
+      value: $(body.head_commit.id)
+    - name: git-repo-ssh-url
+      value: $(body.repository.ssh_url)
+---
+
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: EventListener
+metadata:
+  name: cics-pipeline-demo
+spec:
+  serviceAccountName: pipeline
+  triggers:
+    - bindings:
+      - ref: cics-pipeline-demo
+      template:
+        name: cics-pipeline-demo

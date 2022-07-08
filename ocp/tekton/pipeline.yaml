@@ -1,0 +1,99 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: cics-pipeline-demo
+  namespace: cics-pipeline-demo
+spec:
+  description: |
+    cics-pipeline-demo clones a git repository containing a CICS playbook and
+    executes it against a z/OS system defined by the ansible inventory file in
+    the same git repository
+    Pipeline demostrates the following:
+      - Using the git-clone catalog Task to clone a branch
+      - Passing a cloned repo to subsequent Tasks using a Workspace.
+      - Ordering Tasks in a Pipeline using "runAfter" so that
+        git-clone completes before we try to read from the Workspace.
+      - Using a volumeClaimTemplate Volume as a Workspace.
+      - Avoiding hard-coded paths by using a Workspace's path
+        variable instead.
+  params:
+    - default: 'git@github.ibm.com:IBMZSoftware/CloudBroker-OSDemo.git'
+      description: The git repository URL to clone from.
+      name: repo-url
+      type: string
+    - default: demo
+      description: The git branch to clone.
+      name: branch-name
+      type: string
+  tasks:
+    - name: fetch-repo
+      params:
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: $(params.branch-name)
+      taskRef:
+        kind: ClusterTask
+        name: git-clone
+      workspaces:
+        - name: output
+          workspace: shared-data
+    - name: list-directory
+      params:
+        - name: args
+          value:
+            - ls
+            - '-lah'
+      runAfter:
+        - fetch-repo
+      taskRef:
+        kind: Task
+        name: cics-ansible-runner-task
+      workspaces:
+        - name: ansible
+          workspace: shared-data
+    - name: install-collections
+      params:
+        - name: args
+          value:
+            # ansible-galaxy collection install ibm.ibm_zos_core==1.2.1 ibm.ibm_zos_cics -cf -p ./collections 
+            - ansible-galaxy
+            - collection
+            - install
+            - ibm.ibm_zos_core:==1.2.1
+            - ibm.ibm_zos_cics
+            - '-cf'
+            - '-p'
+            - ./collections
+      runAfter:
+        - list-directory
+      taskRef:
+        kind: Task
+        name: cics-ansible-runner-task
+      workspaces:
+        - name: ansible
+          workspace: shared-data
+    - name: run-playbook
+      params:
+        - name: args
+          value:
+            # - ansible-playbook --private-key /opt/ansible/.ssh/id_rsa -i zsystem.yml playbook.yml
+            - ansible-playbook
+            - '--private-key'
+            - '/opt/ansible/.ssh/id_rsa'
+            - '-i'
+            - zsystem.yml
+            - playbook.yml
+      runAfter:
+        - install-collections
+      taskRef:
+        kind: Task
+        name: cics-ansible-runner-task
+      workspaces:
+        - name: ansible
+          workspace: shared-data
+  workspaces:
+    - description: |
+        This workspace will receive the cloned git repo and be passed
+        to the next Task for the repo's README.md file to be read.
+      name: shared-data
