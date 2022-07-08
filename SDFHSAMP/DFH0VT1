@@ -1,0 +1,853 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VT1                                         *
+      *                                                               *
+      * DESCRIPTIVE NAME = Primary Panel Handler for Sample App.      *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION :                                                 *
+      *                                                               *
+      *  This module displays the initial T1 panel and performs all   *
+      *  associated processing. It is initiated by the user entering  *
+      *  the AC20 transaction code. From then on all interaction is   *
+      *  by this code although the panel can be initiated by a        *
+      *  transfer control from another module.                        *
+      *                                                               *
+      *  For a full description of the program operation see the      *
+      *  CICS/ESA Book entitled "Sample Applications Guide" Version 3 *
+      *  Release 2, Document Number SC33-0731.                        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *     $MOD(DFH0VT1),COMP(SAMPLES),PROD(CICS TS ):               *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900906        : Created.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0VT1.
+
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  T1                              PIC X(4)  VALUE 'T1'.
+       77  ITEM-1                          PIC S9(4) COMP VALUE +1.
+       77  T1-RESP                         PIC S9(4) COMP VALUE +0.
+       01  ONX                             PIC X          VALUE '1'.
+       01  OFFX                            PIC X          VALUE '0'.
+       01  FASTPATH-SW                     PIC X          VALUE '0'.
+           88  FASTPATH                    VALUE '1'.
+       01  QIDERR-SW                       PIC X          VALUE '0'.
+           88  QIDERR-RAISED               VALUE '1'.
+       01  ITEMERR-SW                      PIC X          VALUE '0'.
+           88  ITEMERR-RAISED              VALUE '1'.
+           COPY DFH0BCA.
+           COPY DFH0BTSQ.
+           COPY DFH0BHT.
+           COPY DFH0BMSG.
+           COPY DFH0T1.
+           COPY DFHAID.
+           COPY DFHBMSCA.
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           05  COMM-DATA-AREA     PIC X(200).
+
+       PROCEDURE DIVISION.
+
+       MAIN-SECTION SECTION.
+
+           MOVE LOW-VALUES TO T1I.
+
+           IF EIBCALEN = LENGTH OF WS-HOLD-AREA
+               MOVE DFHCOMMAREA TO WS-HOLD-AREA,
+           ELSE
+               PERFORM INIT-COMMAREA,
+               MOVE M001 TO T1MSGO,
+               MOVE DFHNEUTR TO T1MSGC,
+               MOVE -1 TO T1TITLEL,
+               PERFORM SEND-T1-SYMB-CURS-PANEL,
+               MOVE T1 TO COMM-BASE-IND
+               MOVE FILE-DISPLAYED TO COMM-ACTION-SELECTED
+               MOVE BASE-PANEL-IND TO COMM-PANEL-TYPE
+               MOVE SPACE TO T1MSGO,
+               MOVE +1 TO COMM-CURR-CTR,
+               PERFORM WRITE-TRACK-TSQ
+               PERFORM WRITE-PANEL-TSQ
+               PERFORM RETURN-AC20
+           END-IF.
+
+           EVALUATE TRUE
+              WHEN COMM-STATE-IND = TRANSFER-CONTROL-IND
+               EVALUATE TRUE
+                  WHEN EIBAID = DFHPF3
+                  OR   EXIT-8
+                   MOVE SPACE TO COMM-STATE-IND
+                   IF COMM-PANEL-CTR = +1
+                       PERFORM EXIT-TO-CICS
+                   ELSE
+                       PERFORM PROCESS-F3
+                   END-IF
+                  WHEN EIBAID = DFHPF10
+                   PERFORM PROCESS-F10
+                  WHEN EIBAID = DFHPF12
+                   MOVE SPACE TO COMM-STATE-IND
+                   PERFORM PROCESS-F12
+                  WHEN EIBAID = DFHCLEAR
+                   MOVE SPACE TO COMM-STATE-IND
+                   PERFORM PROCESS-CLEAR
+               END-EVALUATE
+              WHEN COMM-STATE-IND = RESET-PANEL-IND
+               IF EXIT-8
+                   PERFORM EXIT-TO-CICS
+               END-IF
+               PERFORM READ-PANEL-TSQ
+               MOVE -1 TO T1TITLEL
+               PERFORM SEND-T1-SYMB-CURS-PANEL
+               MOVE SEARCH-SELECTION-IND TO COMM-SEARCH-LEVEL-REQD
+               PERFORM SEARCH-TABLE
+               PERFORM XCTL-NEXT-PROGRAM
+              WHEN OTHER
+               CONTINUE
+           END-EVALUATE.
+
+           EXEC CICS RECEIVE MAP('T1')
+                             MAPSET('DFH0T1')
+                             INTO(T1I)
+                             RESP(COMM-RESPONSE)
+                       END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(MAPFAIL)
+               CONTINUE,
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'T1 01' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+               PERFORM XCTL-NEXT-PROGRAM
+           END-EVALUATE.
+
+           MOVE T1 TO COMM-BASE-IND.
+           MOVE FILE-DISPLAYED TO COMM-ACTION-SELECTED.
+           MOVE BASE-PANEL-IND TO COMM-PANEL-TYPE.
+           MOVE SEARCH-ACTION-BASE-IND TO COMM-SEARCH-LEVEL-REQD.
+           PERFORM SEARCH-TABLE.
+
+           EVALUATE TRUE
+             WHEN EIBAID = DFHPF1
+              PERFORM PROCESS-F1,
+             WHEN EIBAID = DFHPF3
+              PERFORM EXIT-TO-CICS
+             WHEN EIBAID = DFHPF10
+              PERFORM PROCESS-F10,
+             WHEN EIBAID = DFHPF12
+              PERFORM EXIT-TO-CICS
+             WHEN EIBAID = DFHCLEAR
+              PERFORM PROCESS-CLEAR,
+             WHEN OTHER
+              IF EIBAID = DFHENTER
+                  NEXT SENTENCE
+              ELSE
+                  PERFORM PROCESS-INVALID-FKEY,
+              END-IF
+           END-EVALUATE.
+
+           PERFORM READ-TRACK-TSQ.
+           PERFORM REWRITE-TRACK-TSQ.
+
+      * Start of code for CICS 3.2 using BMS CURLOC=YES
+           IF T1FFLDF = DFHBMCUR OR DFHBMEC
+               MOVE FILE-DISPLAYED TO COMM-PULLDOWN-IND
+                                COMM-ACTION-SELECTED
+               MOVE SEARCH-ACTIONBASE-TO-OL-IND TO
+                                         COMM-SEARCH-LEVEL-REQD
+           ELSE IF T1HFLDF = DFHBMCUR OR DFHBMEC
+                    MOVE HELP-DISPLAYED TO COMM-PULLDOWN-IND
+                                           COMM-ACTION-SELECTED
+                    MOVE SEARCH-ACTIONBASE-TO-OL-IND TO
+                                              COMM-SEARCH-LEVEL-REQD
+                ELSE
+                    MOVE FILE-DISPLAYED TO COMM-PULLDOWN-IND
+                                           COMM-ACTION-SELECTED
+                    MOVE ONX TO FASTPATH-SW
+                    MOVE SEARCH-ACTION-BASE-IND TO
+                                              COMM-SEARCH-LEVEL-REQD
+                END-IF
+           END-IF.
+      * End of code for CICS 3.2 using BMS CURLOC=YES
+
+      * Start of code for all releases using EIBCPOSN
+      *    IF EIBCPOSN NOT < 3 AND NOT > 7
+      *        MOVE FILE-DISPLAYED TO COMM-PULLDOWN-IND
+      *                         COMM-ACTION-SELECTED
+      *        MOVE SEARCH-ACTIONBASE-TO-OL-IND TO
+      *                                  COMM-SEARCH-LEVEL-REQD
+      *    ELSE IF EIBCPOSN NOT < 9 AND NOT > 13
+      *             MOVE HELP-DISPLAYED TO COMM-PULLDOWN-IND
+      *                                    COMM-ACTION-SELECTED
+      *             MOVE SEARCH-ACTIONBASE-TO-OL-IND TO
+      *                                       COMM-SEARCH-LEVEL-REQD
+      *         ELSE
+      *             MOVE FILE-DISPLAYED TO COMM-PULLDOWN-IND
+      *                                    COMM-ACTION-SELECTED
+      *             MOVE ONX TO FASTPATH-SW
+      *             MOVE SEARCH-ACTION-BASE-IND TO
+      *                                       COMM-SEARCH-LEVEL-REQD
+      *         END-IF
+      *    END-IF.
+      * End of code for all releases using EIBCPOSN
+
+           MOVE WS-HOLD-AREA TO DFHCOMMAREA.
+           CALL PROGRAM-ROUTER USING DFHEIBLK, DFHCOMMAREA.
+           MOVE DFHCOMMAREA TO WS-HOLD-AREA.
+
+           IF ACTION-INVALID
+               MOVE M004 TO T1MSGO
+               MOVE SPACE TO COMM-ACTION-NOT-AVAIL-SW
+               PERFORM RETURN-ERROR
+           END-IF.
+
+           IF ACTION-NOT-AVAILABLE
+               MOVE M016 TO T1MSGO
+               MOVE SPACE TO COMM-ACTION-NOT-AVAIL-SW
+               PERFORM RETURN-ERROR
+           END-IF.
+
+           IF FASTPATH
+               MOVE OPEN-FOR-BROWSE-LIT TO COMM-SELECTION
+               MOVE SPACE TO COMM-PULLDOWN-IND
+               MOVE SEARCH-SELECTION-IND TO COMM-SEARCH-LEVEL-REQD
+               PERFORM SEARCH-TABLE
+           END-IF.
+
+           PERFORM READ-PANEL-TSQ.
+           MOVE LOW-VALUES TO T1I.
+           PERFORM REWRITE-PANEL-TSQ.
+
+           PERFORM XCTL-NEXT-PROGRAM.
+
+           GOBACK.
+
+       END-MAIN-SECTION.
+           EXIT.
+
+       PROCESS-F1 SECTION.
+
+      * Start of code for CICS 3.2 using BMS CURLOC=YES
+           EVALUATE TRUE
+              WHEN T1FFLDF = DFHBMEC OR DFHBMCUR
+               MOVE HLP-FFLD TO COMM-HELP-FIELD
+              WHEN T1HFLDF = DFHBMEC OR DFHBMCUR
+               MOVE HLP-HFLD TO COMM-HELP-FIELD
+              WHEN T1TITLEF = DFHBMEC OR DFHBMCUR
+               MOVE HLP-T1TITLE TO COMM-HELP-FIELD
+              WHEN OTHER
+               MOVE SPACE TO COMM-HELP-FIELD
+           END-EVALUATE.
+      * End of code for CICS 3.2 using BMS CURLOC=YES
+
+      * Start of code for all releases using EIBCPOSN
+      *    EVALUATE TRUE
+      *       WHEN EIBCPOSN NOT < 3 AND NOT > 7
+      *        MOVE HLP-FFLD TO COMM-HELP-FIELD
+      *       WHEN EIBCPOSN NOT < 9 AND NOT > 13
+      *        MOVE HLP-HFLD TO COMM-HELP-FIELD
+      *       WHEN EIBCPOSN NOT < 189 AND NOT > 206
+      *        MOVE HLP-T1TITLE TO COMM-HELP-FIELD
+      *       WHEN OTHER
+      *        MOVE SPACE TO COMM-HELP-FIELD
+      *    END-EVALUATE.
+      * End of code for all releases using EIBCPOSN
+
+           MOVE FK1 TO COMM-SELECTION.
+           MOVE SPACE TO COMM-ACTION-SELECTED.
+           MOVE EIBCPOSN TO COMM-HELP-CPOSN.
+           MOVE SEARCH-FK-IND TO COMM-SEARCH-LEVEL-REQD.
+           PERFORM SEARCH-TABLE.
+           PERFORM XCTL-NEXT-PROGRAM.
+
+       PROCESS-F1-EXIT.
+           EXIT.
+
+       PROCESS-F3 SECTION.
+
+           MOVE +1 TO COMM-PANEL-CTR,
+                      COMM-CURR-CTR,
+                      COMM-RECORD-ITEM-CTR.
+           PERFORM READ-TRACK-TSQ.
+           PERFORM INIT-TRACK-TSQ-AREA VARYING TRACK-INDEX
+                                FROM +2 BY +1
+                                UNTIL(TRACK-INDEX = 50).
+           PERFORM REWRITE-TRACK-TSQ.
+           MOVE SPACE TO COMM-SEL-HOLD.
+           MOVE -1 TO T1TITLEL.
+           PERFORM SEND-T1-SYMB-CURS-PANEL.
+           PERFORM RETURN-AC20.
+
+       PROCESS-F3-EXIT.
+           EXIT.
+
+       EXIT-TO-CICS SECTION.
+
+           PERFORM DELETE-PANEL-TSQ.
+           PERFORM DELETE-TRACK-TSQ.
+
+           EXEC CICS SEND CONTROL
+                          ERASE
+                          FREEKB
+                END-EXEC.
+
+           EXEC CICS RETURN
+                END-EXEC.
+
+       EXIT-TO-CICS-EXIT.
+           EXIT.
+
+       PROCESS-F10 SECTION.
+
+      * Start of code for CICS 3.2 using BMS CURLOC=YES
+           IF TRANSFER-CONTROL
+               PERFORM READ-PANEL-TSQ
+               MOVE -1 TO T1TITLEL
+               MOVE SPACE TO COMM-STATE-IND
+           ELSE
+               EVALUATE TRUE
+                  WHEN T1FFLDF = DFHBMCUR OR DFHBMEC
+                  OR   T1HFLDF = DFHBMCUR OR DFHBMEC
+                   MOVE -1 TO T1TITLEL
+                  WHEN OTHER
+                   MOVE -1 TO T1FFLDL
+               END-EVALUATE
+           END-IF.
+      * End of code for CICS 3.2 using BMS CURLOC=YES
+
+      * Start of code for all releases using EIBCPOSN
+      *    IF TRANSFER-CONTROL
+      *        PERFORM READ-PANEL-TSQ
+      *        MOVE -1 TO T1TITLEL
+      *        MOVE SPACE TO COMM-STATE-IND
+      *    ELSE
+      *        EVALUATE TRUE
+      *           WHEN EIBCPOSN NOT < 3 AND NOT > 7
+      *           OR EIBCPOSN NOT < 9 AND NOT > 13
+      *            MOVE -1 TO T1TITLEL
+      *           WHEN OTHER
+      *            MOVE -1 TO T1FFLDL
+      *        END-EVALUATE
+      *    END-IF.
+      * End of code for all releases using EIBCPOSN
+
+           PERFORM SEND-T1-SYMB-CURS-PANEL.
+           PERFORM RETURN-AC20.
+
+       PROCESS-F10-EXIT.
+           EXIT.
+
+       PROCESS-CLEAR SECTION.
+
+           PERFORM READ-PANEL-TSQ.
+
+           PERFORM POSITION-CURSOR.
+
+           PERFORM SEND-T1-SYMB-CURS-PANEL.
+
+           IF COMM-PANEL-CTR = COMM-CURR-CTR
+               PERFORM RETURN-AC20
+           ELSE
+               PERFORM ROUTE-TO-NEXT-PGM
+           END-IF.
+
+       PROCESS-CLEAR-EXIT.
+           EXIT.
+
+       PROCESS-F12 SECTION.
+
+           PERFORM READ-PANEL-TSQ.
+
+           IF COMM-SELECTION = FK1
+               MOVE SPACE TO COMM-SELECTION
+               PERFORM SEND-T1-PANEL
+           ELSE
+               PERFORM POSITION-CURSOR
+               PERFORM SEND-T1-SYMB-CURS-PANEL
+           END-IF.
+
+           IF COMM-PANEL-CTR = COMM-CURR-CTR
+           AND COMM-PULLDOWN-IND = SPACE
+               MOVE T1 TO COMM-BASE-IND
+               PERFORM RETURN-AC20
+           ELSE
+               PERFORM ROUTE-TO-NEXT-PGM
+           END-IF.
+
+       PROCESS-F12-EXIT.
+           EXIT.
+
+       POSITION-CURSOR SECTION.
+
+           EVALUATE TRUE
+              WHEN PULLDOWN-DISPLAYED
+               CONTINUE,
+              WHEN OTHER
+               EVALUATE TRUE
+                  WHEN COMM-ACTION-SELECTED = FILE-DISPLAYED
+                  AND  PULLDOWN-WAS-DISPLAYED
+                   MOVE SPACE TO COMM-PULLDOWN-IND
+                   MOVE -1 TO T1FFLDL
+                  WHEN COMM-ACTION-SELECTED = HELP-DISPLAYED
+                  AND  PULLDOWN-WAS-DISPLAYED
+                   MOVE SPACE TO COMM-PULLDOWN-IND
+                   MOVE -1 TO T1HFLDL
+                  WHEN OTHER
+                   MOVE -1 TO T1TITLEL
+               END-EVALUATE
+           END-EVALUATE.
+
+       POSITION-CURSOR-EXIT.
+           EXIT.
+
+       PROCESS-INVALID-FKEY SECTION.
+
+           MOVE M002 TO T1MSGO.
+           PERFORM RETURN-ERROR.
+
+       PROCESS-INVALID-FKEY-EXIT.
+           EXIT.
+
+       READ-PANEL-TSQ SECTION.
+
+           MOVE PANL TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+           MOVE LENGTH OF T1O TO READQ-LENGTH.
+
+           EXEC CICS READQ TS QUEUE(TSQ-NAME)
+                              INTO(T1O)
+                              LENGTH(READQ-LENGTH)
+                              ITEM(COMM-PANEL-CTR)
+                              RESP(COMM-RESPONSE)
+                       END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(QIDERR)
+               MOVE ONX TO QIDERR-SW,
+              WHEN DFHRESP(ITEMERR)
+               MOVE ONX TO ITEMERR-SW,
+              WHEN DFHRESP(LENGERR)
+               CONTINUE,
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'T1 02' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+               PERFORM XCTL-NEXT-PROGRAM
+           END-EVALUATE.
+
+       READ-PANEL-TSQ-EXIT.
+           EXIT.
+
+       READ-TRACK-TSQ SECTION.
+
+           MOVE RECD TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+           MOVE LENGTH OF TRACK-LAYOUT TO READQ-LENGTH.
+
+           EXEC CICS READQ TS QUEUE(TSQ-NAME)
+                              INTO(TRACK-LAYOUT)
+                              LENGTH(READQ-LENGTH)
+                              ITEM(ITEM-1)
+                              RESP(COMM-RESPONSE)
+                       END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN DFHRESP(QIDERR)
+               MOVE ONX TO QIDERR-SW,
+              WHEN DFHRESP(ITEMERR)
+               MOVE ONX TO ITEMERR-SW,
+              WHEN OTHER
+               MOVE 'T1 03' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+               PERFORM XCTL-NEXT-PROGRAM
+           END-EVALUATE.
+
+       READ-TRACK-TSQ-EXIT.
+           EXIT.
+
+       WRITE-TRACK-TSQ SECTION.
+
+           MOVE RECD TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           ADD +1 TO COMM-PANEL-CTR,
+                     COMM-DEPTH-CTR.
+           MOVE COMM-BASE-IND TO TRACK-NAME(COMM-DEPTH-CTR).
+           MOVE COMM-PANEL-TYPE TO TRACK-TYPE(COMM-DEPTH-CTR).
+           MOVE COMM-PANEL-CTR TO TRACK-PANEL-ITEM-NO(COMM-DEPTH-CTR).
+           MOVE COMM-ACTION-SELECTED TO TRACK-ACTION(COMM-DEPTH-CTR).
+
+           EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                               FROM(TRACK-LAYOUT)
+                               LENGTH(LENGTH OF TRACK-LAYOUT)
+                               ITEM(ITEM-1)
+                               RESP(COMM-RESPONSE)
+                       END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'T1 04' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+               PERFORM XCTL-NEXT-PROGRAM
+           END-EVALUATE.
+
+       WRITE-TRACK-TSQ-EXIT.
+           EXIT.
+
+       REWRITE-TRACK-TSQ SECTION.
+
+           MOVE RECD TO TSQ-NAME.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           IF QIDERR-RAISED
+           OR ITEMERR-RAISED
+               MOVE OFFX TO QIDERR-SW
+               MOVE OFFX TO ITEMERR-SW
+               PERFORM WRITE-TRACK-TSQ
+           ELSE
+               MOVE COMM-BASE-IND TO TRACK-NAME(COMM-DEPTH-CTR)
+               MOVE COMM-PANEL-TYPE TO TRACK-TYPE(COMM-DEPTH-CTR)
+               MOVE COMM-PANEL-CTR TO
+                                  TRACK-PANEL-ITEM-NO(COMM-DEPTH-CTR)
+               MOVE COMM-ACTION-SELECTED TO
+                                  TRACK-ACTION(COMM-DEPTH-CTR)
+               EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                                   FROM(TRACK-LAYOUT)
+                                   LENGTH(LENGTH OF TRACK-LAYOUT)
+                                   ITEM(ITEM-1)
+                                   REWRITE
+                                   RESP(COMM-RESPONSE)
+                           END-EXEC
+               EVALUATE COMM-RESPONSE
+                  WHEN DFHRESP(NORMAL)
+                   CONTINUE,
+                  WHEN OTHER
+                   MOVE 'T1 05' TO COMM-CALL-NUMBER
+                   MOVE EIBRSRCE TO COMM-RESOURCE
+                   MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+                   PERFORM XCTL-NEXT-PROGRAM
+               END-EVALUATE
+           END-IF.
+
+       REWRITE-TRACK-TSQ-EXIT.
+           EXIT.
+
+       REWRITE-PANEL-TSQ SECTION.
+
+           MOVE PANL TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           IF QIDERR-RAISED
+           OR ITEMERR-RAISED
+               MOVE OFFX TO QIDERR-SW
+               MOVE OFFX TO ITEMERR-SW
+               PERFORM WRITE-PANEL-TSQ
+           ELSE
+               EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                                   FROM(T1I)
+                                   LENGTH(LENGTH OF T1I)
+                                   ITEM(COMM-PANEL-CTR)
+                                   REWRITE
+                                   RESP(COMM-RESPONSE)
+                           END-EXEC
+               EVALUATE COMM-RESPONSE
+                  WHEN DFHRESP(NORMAL)
+                   CONTINUE,
+                  WHEN OTHER
+                   MOVE 'T1 06' TO COMM-CALL-NUMBER
+                   MOVE EIBRSRCE TO COMM-RESOURCE
+                   MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+                   PERFORM XCTL-NEXT-PROGRAM
+               END-EVALUATE
+           END-IF.
+
+       REWRITE-PANEL-TSQ-EXIT.
+           EXIT.
+
+       WRITE-PANEL-TSQ SECTION.
+
+           MOVE PANL TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                               FROM(T1I)
+                               LENGTH(LENGTH OF T1I)
+                               ITEM(COMM-PANEL-CTR)
+                               RESP(COMM-RESPONSE)
+                       END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'T1 07' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+               PERFORM XCTL-NEXT-PROGRAM
+           END-EVALUATE.
+
+       WRITE-PANEL-TSQ-EXIT.
+           EXIT.
+
+       DELETE-PANEL-TSQ SECTION.
+
+           MOVE PANL TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           EXEC CICS DELETEQ TS QUEUE(TSQ-NAME)
+                                RESP(COMM-RESPONSE)
+                         END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(QIDERR)
+               CONTINUE,
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'T1 08' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+               PERFORM XCTL-NEXT-PROGRAM
+           END-EVALUATE.
+
+       DELETE-PANEL-TSQ-EXIT.
+           EXIT.
+
+       DELETE-TRACK-TSQ SECTION.
+
+           MOVE RECD TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+           MOVE +0 TO COMM-DEPTH-CTR,
+                      COMM-PANEL-CTR,
+                      COMM-CURR-CTR.
+           MOVE +1 TO COMM-RECORD-ITEM-CTR.
+
+           EXEC CICS DELETEQ TS QUEUE(TSQ-NAME)
+                                RESP(COMM-RESPONSE)
+                         END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(QIDERR)
+               CONTINUE,
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'T1 09' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+               PERFORM XCTL-NEXT-PROGRAM
+           END-EVALUATE.
+
+       DELETE-TRACK-TSQ-EXIT.
+           EXIT.
+
+       SEND-T1-PANEL SECTION.
+
+           MOVE T1 TO COMM-BASE-IND.
+
+           EXEC CICS SEND MAP('T1')
+                          MAPSET('DFH0T1')
+                          FROM(T1O)
+                          ERASE
+                          CURSOR(COMM-HELP-CPOSN)
+                          RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+       SEND-T1-PANEL-EXIT.
+           EXIT.
+
+       SEND-T1-SYMB-CURS-PANEL SECTION.
+
+           MOVE T1 TO COMM-BASE-IND.
+
+           EXEC CICS SEND MAP('T1')
+                          MAPSET('DFH0T1')
+                          FROM(T1O)
+                          ERASE
+                          CURSOR
+                          RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+       SEND-T1-SYMB-CURS-PANEL-EXIT.
+           EXIT.
+
+       RETURN-ERROR SECTION.
+
+           MOVE -1 TO T1TITLEL.
+           PERFORM SEND-T1-SYMB-CURS-PANEL.
+           PERFORM SEND-CONTROL-ALARM.
+           PERFORM RETURN-AC20.
+
+       RETURN-ERROR-EXIT.
+           EXIT.
+
+       SEND-CONTROL-ALARM SECTION.
+
+           EXEC CICS SEND CONTROL
+                          ALARM
+                          RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+       SEND-CONTROL-ALARM-EXIT.
+           EXIT.
+
+       RETURN-AC20 SECTION.
+
+           EXEC CICS RETURN TRANSID('AC20')
+                            COMMAREA(COMM-COMMAR)
+                            LENGTH(LENGTH OF COMM-COMMAR)
+                            RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+
+       RETURN-AC20-EXIT.
+           EXIT.
+
+       ROUTE-TO-NEXT-PGM SECTION.
+
+           PERFORM READ-TRACK-TSQ.
+           IF COMM-PULLDOWN-IND NOT = SPACES
+               MOVE SPACE TO COMM-SELECTION
+               MOVE SEARCH-SELECTION-IND TO COMM-SEARCH-LEVEL-REQD
+               PERFORM SEARCH-TABLE
+           ELSE
+               ADD +1 TO COMM-DEPTH-CTR
+               MOVE TRACK-NAME(COMM-DEPTH-CTR) TO COMM-SELECTION
+               MOVE TRACK-TYPE(COMM-DEPTH-CTR) TO COMM-PANEL-TYPE
+               MOVE TRACK-ACTION(COMM-DEPTH-CTR) TO
+                                                 COMM-ACTION-SELECTED
+               MOVE TRACK-PANEL-ITEM-NO(COMM-DEPTH-CTR) TO
+                                                 COMM-PANEL-CTR
+               MOVE SEARCH-SELECTION-IND TO COMM-SEARCH-LEVEL-REQD
+               PERFORM SEARCH-TABLE
+           END-IF.
+           PERFORM XCTL-NEXT-PROGRAM.
+
+       ROUTE-TO-NEXT-PGM-EXIT.
+           EXIT.
+
+       SEARCH-TABLE SECTION.
+
+           MOVE WS-HOLD-AREA TO DFHCOMMAREA.
+           CALL PROGRAM-ROUTER USING DFHEIBLK, DFHCOMMAREA.
+           MOVE DFHCOMMAREA TO WS-HOLD-AREA.
+
+       SEARCH-TABLE-EXIT.
+           EXIT.
+
+       XCTL-NEXT-PROGRAM SECTION.
+
+           MOVE TRANSFER-CONTROL-IND TO COMM-STATE-IND.
+
+           EXEC CICS XCTL PROGRAM(COMM-NEXT-PROGRAM)
+                          COMMAREA(COMM-COMMAR)
+                          LENGTH(LENGTH OF COMM-COMMAR)
+                          RESP(T1-RESP)
+                     END-EXEC.
+
+           EVALUATE T1-RESP
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE M021 TO T1MSGO
+               PERFORM RETURN-ERROR
+           END-EVALUATE.
+
+       XCTL-NEXT-PROGRAM-EXIT.
+           EXIT.
+
+       INIT-COMMAREA SECTION.
+
+           PERFORM INIT-TRACK-TSQ-AREA VARYING TRACK-INDEX
+                                FROM +1 BY +1
+                                UNTIL(TRACK-INDEX = 50).
+
+           MOVE LOW-VALUES TO COMM-COMMAR.
+
+           MOVE SPACES TO COMM-CUST-NAME,
+                          COMM-IO-TYPE,
+                          COMM-PULLDOWN-IND,
+                          COMM-ACTION-SELECTED,
+                          COMM-BASE-IND,
+                          COMM-POPUP-IND,
+                          COMM-STATE-IND,
+                          COMM-RC,
+                          COMM-NEXT-PROGRAM,
+                          COMM-SELECTION,
+                          COMM-SEARCH-LEVEL-REQD,
+                          COMM-CALL-NUMBER,
+                          COMM-RESOURCE,
+                          COMM-ACTION-NOT-AVAIL-SW,
+                          COMM-SEL-NOT-AVAIL-SW,
+                          COMM-PANEL-TYPE,
+                          COMM-SEL-HOLD,
+                          COMM-HELP-FIELD,
+                          COMM-USERTERMID,
+                          COMM-LIST-PANEL-DSPLYD-IND.
+           MOVE 'BRW'  TO COMM-BR-UPD.
+           MOVE '0'    TO COMM-CONFIRM-SW.
+           MOVE +0     TO COMM-PANEL-CTR,
+                          COMM-CURR-CTR,
+                          COMM-RANGE-START,
+                          COMM-RANGE-STOP,
+                          COMM-CUSTOMER-NUMBER,
+                          COMM-LIST-ITEM-NUMBER,
+                          COMM-ITEM-TOTAL,
+                          COMM-RESPONSE,
+                          COMM-DEPTH-CTR,
+                          COMM-P1,
+                          COMM-ITEMS-SELCTD,
+                          COMM-ITEMS-PROCESSED,
+                          COMM-LINE-NUMBER,
+                          COMM-SEL-CTR.
+           MOVE +1     TO COMM-RECORD-ITEM-CTR.
+
+       INIT-COMMAREA-EXIT.
+           EXIT.
+
+       INIT-TRACK-TSQ-AREA SECTION.
+
+           MOVE SPACES TO TRACK-TYPE(TRACK-INDEX)
+                          TRACK-NAME(TRACK-INDEX)
+                          TRACK-ACTION(TRACK-INDEX).
+           MOVE +0     TO TRACK-PANEL-ITEM-NO(TRACK-INDEX),
+                          TRACK-RECORD-ITEM-NO(TRACK-INDEX).
+
+       INIT-TRACK-TSQ-AREA-EXIT.
+           EXIT.

@@ -1,0 +1,390 @@
+      CBL CICS('COBOL3')
+      ******************************************************************
+      *                                                                *
+      *MODULE NAME = DFH0WBPO                                          *
+      *                                                                *
+      *DESCRIPTIVE NAME = CICS TS  (WB) Web Pipelining Sample          *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *        Licensed Materials - Property of IBM                    *
+      *                                                                *
+      *        "Restricted Materials of IBM"                           *
+      *                                                                *
+      *        5655-Y04                                                *
+      *                                                                *
+      *        (C) Copyright IBM Corp. 2006, 2007"                     *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *STATUS = %CER0                                                  *
+      *                                                                *
+      *FUNCTION = CICS COBOL Program that performs PIPELINING to a web *
+      *           server.                                              *
+      *                                                                *
+      *  Versions of this program in other languages are also provided:*
+      *     ASM   - DFH$WBPA                                           *
+      *     C     - DFH$WBPC                                           *
+      *                                                                *
+      *NOTES :                                                         *
+      *DEPENDENCIES = S/390                                            *
+      *MODULE TYPE = Executable                                        *
+      *PROCESSOR = COBOL                                               *
+      *ATTRIBUTES = Read only, Serially Reusable                       *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *DESCRIPTION                                                     *
+      *     This program is a sample version in COBOL of a client      *
+      *     web application that is invoked by a CICS Transaction.  It *
+      *     demonstrates how to construct a pipelining application that*
+      *     uses a Client URIMAP.  The server application that is used *
+      *     by this sample is DFH$WB1A(the supplied sample that is used*
+      *     for Web Support IVP).                                      *
+      *                                                                *
+      *     The Client URIMAP DFH$URI2 needs to be setup before        *
+      *     installing and configuring the server attribute.           *
+      *                                                                *
+      *     Pipelining allows a client to make multiple requests       *
+      *     without waiting for each response, allowing a single TCP   *
+      *     connection to be used much more efficiently, with much     *
+      *     lower elapsed time.                                        *
+      *                                                                *
+      *     For more information on Chunking see RFC2616               *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *                                                                *
+      * CHANGE ACTIVITY :                                              *
+      *                                                                *
+      *        $MOD(DFH0WBPO),COMP(CICSWEB),PROD(CICS TS ):            *
+      *                                                                *
+      *     PN= REASON REL YYMMDD HDXXIII : REMARKS                    *
+      *    $L0= 873    650 060315 HDJBAC  : 3 - Pipelining Samples     *
+      *    $L1= 873    650 060607 HDJBAC  : Web Samples of Chunking    *
+      *    $P1= D18453 650 070405 HD4EPEA : Show status code & status t*
+      ******************************************************************
+      *
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0WBPO.
+      *----------------------------------------------------------------*
+      *                                                                *
+      * Main Procedure                                                 *
+      *                                                                *
+      *----------------------------------------------------------------*
+       ENVIRONMENT DIVISION.
+      *
+       DATA DIVISION.
+      *
+       WORKING-STORAGE SECTION.
+      *
+       01  ws.
+         03  ws-resp                   pic s9(8) BINARY.
+         03  ws-resp2                  pic s9(8) BINARY.
+         03  ws-sesstoken              pic x(8).
+         03  ws-urimap                 pic x(8)  VALUE 'DFH$URI2'.
+         03  ws-doctext                pic x(15).
+         03  ws-characterset           pic x(40).
+         03  ws-mediatype              pic x(56).
+         03  ws-doctoken               pic x(16).
+         03  ws-applid                 pic x(8).
+         03  ws-data                   pic x(50).
+         03  ws-recdata                pic x(200).
+         03  ws-reclen                 pic s9(8) BINARY.
+         03  ws-status                 pic s9(4) BINARY.
+         03  ws-statuslen              pic s9(8) BINARY.
+         03  ws-statusdata             pic x(50).
+         03  ws-maxlength              pic s9(8) BINARY.
+         03  ws-cursor                 pic s9(4) COMP VALUE ZERO.
+         03  ws-msg                    pic x(73).
+       01  error-msg.
+         03  err-msg                   pic x(40).
+         03  err-filler                pic x(7)  VALUE ' RESP= '.
+         03  err-resp                  pic x(8).
+         03  err-filler2               pic x(8)  VALUE ' RESP2= '.
+         03  err-resp2                 pic x(8).
+       01  send-data.
+         03  send-data-key             pic x(7)  VALUE 'applid='.
+         03  send-data-value           pic x(8).
+       01  complete1.
+         03  compl1-msg                pic x(38).
+         03  compl1-statusc            pic z(3)9.
+       01  complete2.
+         03  compl2-msg                pic x(23).
+         03  compl2-statustx           pic x(50).
+      *
+       LINKAGE SECTION.
+      *
+       PROCEDURE DIVISION.
+      *
+       DFH0WBPO-MAIN SECTION.
+      *
+       DFH0WBPO-00.
+      *----------------------------------------------------------------*
+      * Open a session to the Remote server using WEB OPEN and a client*
+      * URIMAP                                                         *
+      *----------------------------------------------------------------*
+           EXEC CICS WEB OPEN URIMAP(ws-urimap)
+                     SESSTOKEN(ws-sesstoken)
+                     RESP(ws-resp)
+                     RESP2(ws-resp2)
+           END-EXEC.
+           move 'ERROR: WEB OPEN failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Create a Doctemplate                                           *
+      *----------------------------------------------------------------*
+           EXEC CICS DOCUMENT CREATE
+                     DOCTOKEN(ws-doctoken)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Using EXEC CICS ASSIGN extract the CICS APPLID and set the     *
+      * APPLID Symbol in the Document template                         *
+      *----------------------------------------------------------------*
+           EXEC CICS ASSIGN
+                     APPLID(ws-applid)
+           END-EXEC.
+
+           EXEC CICS DOCUMENT SET
+                     DOCTOKEN(ws-doctoken)
+                     SYMBOL('APPLID')
+                     VALUE(ws-applid)
+                     LENGTH(8)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Construct a Doctemplate to use on the WEB SEND command         *
+      *----------------------------------------------------------------*
+           move 'applid=&APPLID;' to ws-doctext.
+
+           EXEC CICS DOCUMENT INSERT
+                     DOCTOKEN(ws-doctoken)
+                     FROM(ws-doctext)
+                     LENGTH(15)
+                     RESP(ws-resp)
+                     RESP2(ws-resp2)
+           END-EXEC.
+
+           move 'DFH0WBPO - Doc Insert failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Send the Document template using WEB SEND command.             *
+      *----------------------------------------------------------------*
+           move 'DFH0WBPO - Send First Request' to ws-msg.
+           perform OutputMsg.
+
+           move 'application/x-www-form-urlencoded' to ws-mediatype.
+
+           EXEC CICS WEB SEND POST
+                  DOCTOKEN(ws-doctoken)
+                  SESSTOKEN(ws-sesstoken)
+                  MEDIATYPE(ws-mediatype)
+                  RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Check the Returned RESP Value to ensure the WEB SEND was       *
+      * successful                                                     *
+      *----------------------------------------------------------------*
+           move 'ERROR: First WEB SEND failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Send the Data from a dataarea using WEB SEND COMMAND.          *
+      *----------------------------------------------------------------*
+           move 'DFH0WBPO - Send Second Request' to ws-msg.
+           perform OutputMsg.
+
+           move ws-applid to send-data-value
+
+           EXEC CICS WEB SEND POST
+                  FROM(send-data)
+                  FROMLENGTH(15)
+                  SESSTOKEN(ws-sesstoken)
+                  MEDIATYPE(ws-mediatype)
+                  RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Check the returned RESP value to ensure the WEB SEND was       *
+      * successful                                                     *
+      *----------------------------------------------------------------*
+           move 'ERROR: Second WEB SEND failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Send the Data from a dataarea using WEB SEND COMMAND           *
+      *----------------------------------------------------------------*
+           move 'DFH0WBPO - Send Third Request' to ws-msg.
+           perform OutputMsg.
+
+           move ws-applid to send-data-value
+
+           EXEC CICS WEB SEND POST
+                  FROM(send-data)
+                  FROMLENGTH(15)
+                  SESSTOKEN(ws-sesstoken)
+                  MEDIATYPE(ws-mediatype)
+                  RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Check the returned RESP VALUE to ensure the WEB SEND was       *
+      * successful                                                     *
+      *----------------------------------------------------------------*
+           move 'ERROR: Third WEB SEND failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Setup variables for Receiving Data                             *
+      *----------------------------------------------------------------*
+           move 0 to ws-status.
+           move 50 to ws-statuslen.
+           move 200 to ws-reclen.
+           move 200 to ws-maxlength.
+
+           move 'DFH0WBPO - Receive First Response' to ws-msg.
+           perform OutputMsg.
+           EXEC CICS WEB RECEIVE
+                  STATUSCODE(ws-status)
+                  STATUSTEXT(ws-statusdata)
+                  STATUSLEN(ws-statuslen)
+                  MEDIATYPE(ws-mediatype)
+                  INTO(ws-recdata) LENGTH(ws-reclen)
+                  SESSTOKEN(ws-sesstoken)
+                  MAXLENGTH(ws-maxlength)
+                  RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Check the returned RESP value to ensure the WEB SEND was       *
+      * successful                                                     *
+      *----------------------------------------------------------------*
+           move 'ERROR: First WEB RECEIVE failed' to err-msg.
+           perform checkResps.
+
+      *----------------------------------------------------------------*
+      * Output Successful Message                                      *
+      *----------------------------------------------------------------*
+           perform Successmsg.
+
+           move 0 to ws-status.
+           move 50 to ws-statuslen.
+           move 200 to ws-reclen.
+           move 200 to ws-maxlength.
+
+           move 'DFH0WBPO - Receive Second Response' to ws-msg.
+           perform OutputMsg.
+           EXEC CICS WEB RECEIVE
+                  STATUSCODE(ws-status)
+                  STATUSTEXT(ws-statusdata)
+                  STATUSLEN(ws-statuslen)
+                  MEDIATYPE(ws-mediatype)
+                  INTO(ws-recdata) LENGTH(ws-reclen)
+                  SESSTOKEN(ws-sesstoken)
+                  MAXLENGTH(ws-maxlength)
+                  RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Check the returned RESP value to ensure the WEB SEND was       *
+      * successful                                                     *
+      *----------------------------------------------------------------*
+           move 'ERROR: Second WEB RECEIVE failed' to err-msg.
+           perform checkResps.
+
+      *----------------------------------------------------------------*
+      * Output Successful Message                                      *
+      *----------------------------------------------------------------*
+           perform Successmsg.
+
+           move 0 to ws-status.
+           move 50 to ws-statuslen.
+           move 200 to ws-reclen.
+           move 200 to ws-maxlength.
+
+           move 'DFH0WBPO - Receive Third Response' to ws-msg.
+           perform OutputMsg.
+           EXEC CICS WEB RECEIVE
+                  STATUSCODE(ws-status)
+                  STATUSTEXT(ws-statusdata)
+                  STATUSLEN(ws-statuslen)
+                  MEDIATYPE(ws-mediatype)
+                  INTO(ws-recdata) LENGTH(ws-reclen)
+                  SESSTOKEN(ws-sesstoken)
+                  MAXLENGTH(ws-maxlength)
+                  RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Check the returned RESP value to ensure the WEB SEND was       *
+      * successful                                                     *
+      *----------------------------------------------------------------*
+           move 'ERROR: Third WEB RECEIVE failed' to err-msg.
+           perform checkResps.
+
+      *----------------------------------------------------------------*
+      * Output Successful Message                                      *
+      *----------------------------------------------------------------*
+           perform Successmsg.
+
+      *----------------------------------------------------------------*
+      * Close the Session to the Remote Server                         *
+      *----------------------------------------------------------------*
+           EXEC CICS WEB CLOSE SESSTOKEN(ws-sesstoken)
+           END-EXEC.
+
+           EXEC CICS RETURN
+           END-EXEC.
+
+       DFH0WBPO-END. EXIT.
+             EJECT.
+       OutputMsg SECTION.
+       OutputMsg-00.
+      *----------------------------------------------------------------*
+      * Move the cursor on the screen                                  *
+      *----------------------------------------------------------------*
+           add 80 to ws-cursor.
+
+           EXEC CICS SEND CONTROL
+                     CURSOR(ws-cursor)
+           END-EXEC.
+
+           EXEC CICS SEND
+                     FROM(ws-msg)
+           END-EXEC.
+      *
+       OutputMsg-END. EXIT.
+             EJECT.
+       Successmsg SECTION.
+       Successmsg-00.
+      *----------------------------------------------------------------*
+      * Output success message                                         *
+      *----------------------------------------------------------------*
+           move 'DFH0WBPO - Completed with status code:' to compl1-msg.
+           move ws-status to compl1-statusc.
+           move complete1 to ws-msg.
+           perform OutputMsg.
+           move 'DFH0WBPO - Status text:' to compl2-msg.
+           move ws-statusdata to compl2-statustx.
+           move complete2 to ws-msg.
+           perform OutputMsg.
+       Successmsg-END. EXIT.
+              EJECT.
+       checkResps SECTION.
+       checkResps-00.
+      *----------------------------------------------------------------*
+      * Check the resp values                                          *
+      *----------------------------------------------------------------*
+           IF ws-resp NOT EQUAL ZERO
+      *
+             add 80 to ws-cursor
+      *
+             EXEC CICS SEND CONTROL
+                       CURSOR(ws-cursor)
+             END-EXEC
+      *
+             move ws-resp to err-resp
+             move ws-resp2 to err-resp2
+             EXEC CICS SEND
+               FROM(error-msg)
+             END-EXEC
+      *
+             EXEC CICS RETURN
+             END-EXEC
+      *
+           END-IF.
+      *
+       checkResps-END. EXIT.
+              EJECT.

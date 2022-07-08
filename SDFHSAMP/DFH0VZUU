@@ -1,0 +1,452 @@
+ CBL CICS('FEPI,COBOL3')
+ CBL MAP,OBJ,RENT,NODYNAM,OPT,LIB,DATA(31),LIST,APOST
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+      *****************************************************************
+       PROGRAM-ID.                      DFH0VZUU .
+       DATE-COMPILED.
+      *REMARKS.
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VZUU                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample Program:          *
+      *                    End-session handler.                       *
+      *                    COBOL version                              *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *       Licensed Materials - Property of IBM                    *
+      *                                                               *
+      *       "Restricted Materials of IBM"                           *
+      *                                                               *
+      *       5655-Y04                                                *
+      *                                                               *
+      *       (C) Copyright IBM Corp. 1997, 2001"                     *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * TRANSACTION NAME = CZUU                                       *
+      *                                                               *
+      * TS QUEUE NAME    = SESSION                                    *
+      *                                                               *
+      * FUNCTION = This program cleans up sessions after use by       *
+      *            FEPI sample application programs.                  *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *     $MOD(DFH0VZUU),COMP(FEPI),PROD(CICS TS ):                 *
+      *                                                               *
+      *   PN= REASON REL YYMMDD HDXIII : REMARKS                      *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $P0= M27097 530 970814 HDFWPMJ : Release sesions correctly    *
+      *****************************************************************
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      * This transaction is started by FEPI when an application       *
+      * ends a conversation or when a session is released.            *
+      *                                                               *
+      * The conversation passed by FEPI MUST be accessed so that      *
+      * FEPI knows that the event is being handled.  The processing   *
+      * required depends on entirely on local requirements.  For      *
+      * illustration purposes, this program simply keeps the session  *
+      * for use by another conversation or lets it end, depending     *
+      * on the event type.                                            *
+      *                                                               *
+      * For end of conversation (EVENTTYPE=FREE in start data),       *
+      * processing could typically involve setting the session back   *
+      * to a known state (such as a clear back-end screen ready to    *
+      * accept a new transaction name), or handling security, or      *
+      * overriding the type of FREE used.  Such processing would      *
+      * depend on what data mode and type the session uses (which is  *
+      * obtained from the start data), whether the back-end system    *
+      * is CICS or IMS, and the type of FREE used (also obtained from *
+      * the start data).                                              *
+      *                                                               *
+      * For end of session (EVENTVALUE=RELEASE in start data),     @P0C
+      * processing could typically involve handling security.         *
+      *                                                               *
+      * For both cases, there could be an indication (in EVENTVALUE   *
+      * in the start data) that CICS is shutting down, which might    *
+      * require alternative special processing.  This transaction     *
+      * would have to be in the XLT to allow it to be started during  *
+      * shutdown.                                                     *
+      *                                                               *
+      * After the processing, a report is written to a TS queue       *
+      * named 'SESSION', which can be browsed using CEBR.  The        *
+      * format of the TS queue records is:                            *
+      *                                                               *
+      * date time CZUU End-session handling completed                 *
+      *           RESP........0            RESP2.......0              *
+      *           Target......TGTNAME      Node........NODENAME       *
+      *           Pool........POOLNAME                                *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * PROGRAM LOGIC                                                 *
+      *                                                               *
+      *   Main procedure:                                             *
+      *                                                               *
+      *     RETRIEVE start data                                       *
+      *     Access conversation using FEPI ALLOCATE with PASSCONVID   *
+      *     Call PROCESS-RELEASE or PROCESS-FREE as appropriate       *
+      *     Write event details to TS queue                           *
+      *     RETURN                                                    *
+      *                                                               *
+      *   PROCESS-RELEASE routine:                                    *
+      *                                                               *
+      *     Handle as required                                        *
+      *     Free conversation, ending session                         *
+      *                                                               *
+      *   PROCESS-FREE routine:                                       *
+      *                                                               *
+      *     Handle as required                                        *
+      *     Free conversation, keeping session                        *
+      *                                                               *
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       DATA DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+       WORKING-STORAGE SECTION.
+      *===============================================================*
+      *
+       01  W00-EYECATCHER         PIC X(32)   VALUE
+                 '******* WORKING STORAGE ********'.
+      *
+       01  W01-PROGID             PIC X(8) VALUE 'DFH0VZUU'.
+      *
+      * W02 holds values for CICS commands.
+      *
+       01  W02-RESP               PIC S9(8) COMP.
+       01  W02-LENGTH             PIC S9(4) COMP.
+      *
+      * W03 is used for building TS queue records.
+      *
+       01  W03-HOLD-VALUES.
+           05  W03-RESP           PIC Z(7)9.
+           05  W03-RESP2          PIC Z(7)9.
+           05  W03-UTIME          PIC S9(15) COMP-3.
+      *
+       01  W03-OUTPUT-MSG         PIC X(75).
+      *
+       01  W03-OUTPUT-MSG1 REDEFINES W03-OUTPUT-MSG.
+           05  W03-DATE           PIC X(8).
+           05  FILLER             PIC X(1).
+           05  W03-TIME           PIC X(8).
+           05  FILLER             PIC X(1).
+           05  W03-TRANSID        PIC X(4).
+           05  FILLER             PIC X(1).
+           05  W03-DESC           PIC X(40).
+      *
+       01  W03-OUTPUT-MSG2 REDEFINES W03-OUTPUT-MSG.
+           05  FILLER             PIC X(18).
+           05  W03-DESC1          PIC X(12).
+           05  W03-DATA1          PIC X(12).
+           05  FILLER             PIC X(1).
+           05  W03-DESC2          PIC X(12).
+           05  W03-DATA2          PIC X(12).
+      *
+      * DFHSZAPO defines the FEPI RESP2 values and
+      * the FEPI start data layout.
+      *
+       COPY DFHSZAPO.
+      *
+      *
+      *===============================================================*
+      *=       Constants                                             =*
+      *===============================================================*
+      *
+      * DFH0BZCO defines the customizable constants used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZCO.
+      *
+      * DFH0BZMO defines the messages and other text used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZMO.
+      *
+      *
+      *****************************************************************
+       PROCEDURE DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+      *=       Main procedure                                        =*
+      *===============================================================*
+      *
+      * This section controls processing, according to the event type
+      * got from the start data.
+      *
+       A-MAIN SECTION.
+       A-010.
+      *
+      * Clear the TS queue record area.
+      *
+           MOVE SPACE TO W03-OUTPUT-MSG.
+      *
+      * Get the start data.
+      *
+           MOVE LENGTH OF DFHSZ-DATA TO W02-LENGTH
+           EXEC CICS RETRIEVE INTO(DFHSZ-DATA)
+               LENGTH(W02-LENGTH)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG8 TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO A-090
+           END-IF
+      *
+      * Access the end-session conversation passed by FEPI
+      * using FEPI ALLOCATE with PASSCONVID.
+      * The conversation ID is obtained from the start data.
+      *
+           EXEC CICS FEPI ALLOCATE
+               PASSCONVID(DFHSZ-DATA-CONVID)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSGF TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO A-090
+           END-IF.
+      *
+      * Process according to the event type,
+      * as obtained from the start data.
+      *
+           IF DFHSZ-DATA-EVENTTYPE = DFHVALUE(FREE) THEN
+             IF DFHSZ-DATA-EVENTVALUE = DFHVALUE(RELEASE) THEN
+               PERFORM B-PROCESS-RELEASE
+             ELSE
+               PERFORM B-PROCESS-FREE
+             END-IF
+           END-IF.
+      *
+      * Check that the FEPI FREE command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG5 TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO A-090
+           END-IF
+      *
+      * Record successful end-session processing.
+      *
+           MOVE DFH0BZMO-MSGS TO W03-DESC.
+           PERFORM C-WRITE-REPORT.
+      *
+      * RETURN to CICS.
+      *
+       A-090.
+           EXEC CICS RETURN
+           END-EXEC.
+       A-EXIT.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       End of session routine                                =*
+      *===============================================================*
+      *
+      * This section handles end of session events.
+      *
+       B-PROCESS-RELEASE SECTION.
+       B-010.
+      *
+      * End of session processing could typically be used for
+      * security purposes, enabling signoff to be done when a
+      * connection is released.  This is dependent on local
+      * requirements and so is not illustrated here.
+      * A typical sequence would involve a conversation passing
+      * a signoff command to the back-end system.
+      *
+      * EVENTVALUE in the start data will have the value 'SHUTDOWN'
+      * if CICS is shutting down, so that alternative special
+      * processing can be provided if required.
+      *
+      *
+      * You can supply here whatever processing you want.
+      *
+      * ...
+      *
+      * End the session, using FEPI FREE RELEASE.
+      *
+           EXEC CICS FEPI FREE
+               RELEASE
+               CONVID(DFHSZ-DATA-CONVID)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+       B-099.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       End of conversation routine                           =*
+      *===============================================================*
+      *
+      * This section handles end of conversation events.
+      *
+       B-PROCESS-FREE SECTION.
+       B-110.
+      *
+      * End of conversation processing could typically be used for:
+      *
+      *  - Setting the session back to a known state, such as a clear
+      *    back-end screen ready to accept a new transaction name.
+      *    A typical sequence would involve a conversation passing
+      *    the necessary commands or PF keys to the back-end system.
+      *
+      *  - Security purposes, doing signoff when a conversation ends.
+      *    A typical sequence would involve a conversation passing
+      *    a signoff command to the back-end system.
+      *
+      *  - Overriding the type of FREE used and/or providing special
+      *    processing on CICS shutdown.  EVENTVALUE in the start data
+      *    indicates the type, as for example:
+      *         EVALUATE DFHSZ-DATA-EVENTVALUE
+      *         WHEN DFHVALUE(HOLD)
+      *             PERFORM ...
+      *         WHEN DFHVALUE(TASK)
+      *             PERFORM ...
+      *         WHEN DFHVALUE(RELEASE)
+      *             PERFORM ...
+      *         WHEN DFHVALUE(FORCE)
+      *             PERFORM ...
+      *         WHEN DFHVALUE(SHUTDOWN)
+      *             PERFORM ...
+      *         END-EVALUATE.
+      *
+      * This is dependent on local requirements and so is not
+      * illustrated here.  Such processing would depend on what
+      * data mode and type the session uses (which is obtained from
+      * the start data), whether the back-end system is CICS or IMS.
+      *
+      *
+      * You can supply here whatever processing you want.
+      *
+      * ...
+      *
+      * End the conversation, using FEPI FREE HOLD so that the
+      * session remains available for use by susequent conversations.
+      *
+           EXEC CICS FEPI FREE
+               HOLD
+               CONVID(DFHSZ-DATA-CONVID)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+       B-199.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Write report routine                                  =*
+      *===============================================================*
+      *
+      * This section builds a report and writes it to a TS queue.
+      *
+       C-WRITE-REPORT SECTION.
+       C-010.
+      *
+      * The TS queue record area already contains the event description.
+      *
+      * Format data and time.
+      *
+           EXEC CICS ASKTIME
+               ABSTIME(W03-UTIME)
+           END-EXEC.
+           EXEC CICS FORMATTIME
+               ABSTIME(W03-UTIME)
+               DATE(W03-DATE) DATESEP('/')
+               TIME(W03-TIME) TIMESEP(':')
+           END-EXEC.
+      *
+      * Transaction name.
+      *
+           MOVE DFH0BZCO-ENDSESS-TRANSID TO W03-TRANSID
+      *
+      * Save RESP values.
+      *
+           MOVE W02-RESP TO W03-RESP
+           MOVE DFHSZ-RESP2 TO W03-RESP2
+      *
+      * Write completed description.
+      *
+           PERFORM D-WRITE-TSQ.
+      *
+      * Write RESP information.
+      *
+           MOVE SPACES TO W03-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-RESP TO W03-DESC1.
+           MOVE W03-RESP  TO W03-DATA1.
+           MOVE DFH0BZMO-OPFD-RESP2 TO W03-DESC2.
+           MOVE W03-RESP2  TO W03-DATA2.
+           PERFORM D-WRITE-TSQ.
+      *
+      * Write target and node information.
+      *
+           MOVE SPACES TO W03-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-TARGET TO W03-DESC1.
+           MOVE DFHSZ-DATA-TARGET TO W03-DATA1.
+           MOVE DFH0BZMO-OPFD-NODE TO W03-DESC2.
+           MOVE DFHSZ-DATA-NODE   TO W03-DATA2.
+           PERFORM D-WRITE-TSQ.
+      *
+      * Write pool information.
+      *
+           MOVE SPACES TO W03-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-POOL TO W03-DESC1.
+           MOVE DFHSZ-DATA-POOL   TO W03-DATA1.
+           PERFORM D-WRITE-TSQ.
+      *
+       C-099.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Write TS queue routine                                =*
+      *===============================================================*
+      *
+      * This section writes to a TS queue.
+      *
+       D-WRITE-TSQ SECTION.
+       D-010.
+      *
+           EXEC CICS WRITEQ
+               TS
+               QUEUE(DFH0BZCO-ENDSESS-TSQ)
+               FROM(W03-OUTPUT-MSG)
+           END-EXEC.
+      *
+       D-090.
+           EXIT.
+      *
+      *
+      *****************************************************************
+      *        End of program DFH0VZUU                                *
+      *****************************************************************

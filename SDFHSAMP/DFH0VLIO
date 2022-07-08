@@ -1,0 +1,148 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VLIO                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Local Data File Handler for Sample App     *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION :                                                 *
+      *                                                               *
+      *  This module is the Local I/O handling module. It processes   *
+      *  local Help file (DFH0FHLP) and build the HELP TSQ for the    *
+      *  DFH0VHP module to build the contents of the Help Popups.     *
+      *                                                               *
+      *  For a full description of the program operation see the      *
+      *  CICS/ESA Book entitled "Sample Applications Guide" Version 3 *
+      *  Release 2, Document Number SC33-0731.                        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *     $MOD(DFH0VLIO),COMP(SAMPLES),PROD(CICS TS ):              *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900906        : Created.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0VLIO.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  ONX                             PIC X     VALUE '1'.
+       77  FILE-NAME                       PIC X(8)  VALUE 'DFH0FHLP'.
+       77  ITEM-CTR                        PIC S9(4) COMP VALUE +0.
+       77  LINE-CTR                        PIC 99    VALUE 1.
+       01  ITEMERR-SW                      PIC X     VALUE SPACE.
+           88  ITEMERR-RAISED              VALUE '1'.
+           COPY DFH0BCA.
+           COPY DFH0BTSQ.
+           COPY DFH0BHR.
+           COPY DFHAID.
+           COPY DFHBMSCA.
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           05  COMM-DATA-AREA     PIC X(200).
+
+       PROCEDURE DIVISION.
+
+       MAIN-SECTION SECTION.
+
+           MOVE DFHCOMMAREA TO WS-HOLD-AREA.
+
+           EVALUATE COMM-IO-TYPE
+              WHEN 'RR'
+               MOVE LINE-CTR TO HELPREC-LINE-NO
+               MOVE COMM-HELP-FIELD TO HELPREC-FIELD
+               PERFORM PROCESS-READ
+                            UNTIL(COMM-RESPONSE NOT = DFHRESP(NORMAL))
+               IF COMM-RESPONSE = DFHRESP(NOTFND)
+               OR COMM-RESPONSE = DFHRESP(ENDFILE)
+                   MOVE SPACES TO HELPREC-FIELD
+                   MOVE DFHRESP(NORMAL) TO COMM-RESPONSE
+                   IF LINE-CTR > 1
+                       MOVE DFHRESP(NORMAL) TO COMM-RESPONSE
+                   ELSE
+                       PERFORM PROCESS-READ
+                            UNTIL(COMM-RESPONSE NOT = DFHRESP(NORMAL))
+                   END-IF
+               END-IF
+           END-EVALUATE.
+
+           MOVE WS-HOLD-AREA TO DFHCOMMAREA.
+
+           EXEC CICS RETURN
+                END-EXEC.
+
+           GOBACK.
+
+       END-MAIN-SECTION.
+           EXIT.
+
+       PROCESS-READ SECTION.
+
+           MOVE LENGTH OF HELPREC-LAYOUT TO READ-LENGTH.
+
+           EXEC CICS READ FILE(FILE-NAME)
+                          INTO(HELPREC-LAYOUT)
+                          LENGTH(READ-LENGTH)
+                          RIDFLD(HELPREC-KEY)
+                          RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+           EVALUATE TRUE
+              WHEN COMM-RESPONSE = DFHRESP(NORMAL)
+               PERFORM WRITE-RECORD-TSQ
+              WHEN COMM-RESPONSE = DFHRESP(NOTFND)
+              OR   COMM-RESPONSE = DFHRESP(ENDFILE)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'LIO01' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       PROCESS-READ-EXIT.
+           EXIT.
+
+       WRITE-RECORD-TSQ SECTION.
+
+           MOVE HELP TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                               FROM(HELPREC-LAYOUT)
+                               LENGTH(LENGTH OF HELPREC-LAYOUT)
+                               ITEM(ITEM-CTR)
+                               RESP(COMM-RESPONSE)
+                        END-EXEC
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               ADD +1 TO LINE-CTR
+               MOVE LINE-CTR TO HELPREC-LINE-NO
+              WHEN OTHER
+               MOVE 'LIO02' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       WRITE-RECORD-TSQ-EXIT.
+           EXIT.

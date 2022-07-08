@@ -1,0 +1,345 @@
+      CBL CICS('COBOL3')
+      ******************************************************************
+      *                                                                *
+      *MODULE NAME = DFH0WBCO                                          *
+      *                                                                *
+      *DESCRIPTIVE NAME = CICS TS  (WB) Web Client Chunking Sample     *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *        Licensed Materials - Property of IBM                    *
+      *                                                                *
+      *        "Restricted Materials of IBM"                           *
+      *                                                                *
+      *        5655-Y04                                                *
+      *                                                                *
+      *        (C) Copyright IBM Corp. 2006, 2007"                     *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *STATUS = %CER0                                                  *
+      *                                                                *
+      *FUNCTION = CICS COBOL Program that performs HTTP CHUNKING to a  *
+      *           web server.                                          *
+      *                                                                *
+      *  Versions of this program in other languages are also provided:*
+      *     ASM   - DFH$WBCA                                           *
+      *     C     - DFH$WBCC                                           *
+      *                                                                *
+      *NOTES :                                                         *
+      *DEPENDENCIES = S/390                                            *
+      *MODULE TYPE = Executable                                        *
+      *PROCESSOR = COBOL                                               *
+      *ATTRIBUTES = Read only, Serially Reusable                       *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *DESCRIPTION                                                     *
+      *                                                                *
+      * This is a COBOL sample program demostrating how to construct   *
+      * a HTTP chunking application that uses a Client URIMAP.  The    *
+      * server application that is used by this sample is DFH$WBHA     *
+      * (mapped by URIMAP DFH$URI4).                                   *
+      *                                                                *
+      * The Client URIMAP DFH$URI3 needs the server attribute          *
+      * configured and installed before this sample will function      *
+      * correctly.                                                     *
+      *                                                                *
+      * Chunking allows a client to send a large body in segments      *
+      * (chunks) rather than trying to send the body of the message in *
+      * one send.                                                      *
+      *                                                                *
+      * For more information on Chunking see RFC2616                   *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *                                                                *
+      * CHANGE ACTIVITY :                                              *
+      *                                                                *
+      *        $MOD(DFH0WBCO),COMP(CICSWEB),PROD(CICS TS ):            *
+      *                                                                *
+      *     PN= REASON REL YYMMDD HDXXIII : REMARKS                    *
+      *    $L0= 873    650 060613 HDJBAC  : Web Samples of Chunking    *
+      *    $P1= D18453 650 070405 HD4EPEA : Show status code & status t*
+      ******************************************************************
+      *
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0WBCO.
+      *----------------------------------------------------------------*
+      *                                                                *
+      * MAIN PROCEDURE                                                 *
+      *                                                                *
+      *----------------------------------------------------------------*
+       ENVIRONMENT DIVISION.
+      *
+       DATA DIVISION.
+      *
+       WORKING-STORAGE SECTION.
+      *
+       01  ws.
+         03  ws-resp                   pic s9(8) BINARY.
+         03  ws-resp2                  pic s9(8) BINARY.
+         03  ws-sesstoken              pic x(8).
+         03  ws-urimap                 pic x(8)  VALUE 'DFH$URI3'.
+         03  ws-characterset           pic x(40).
+         03  ws-mediatype              pic x(56).
+         03  ws-applid                 pic x(8).
+         03  ws-recdata                pic x(200).
+         03  ws-reclen                 pic s9(8) BINARY.
+         03  ws-status                 pic s9(4) BINARY.
+         03  ws-statuslen              pic s9(8) BINARY.
+         03  ws-statusdata             pic x(50).
+         03  ws-maxlength              pic s9(8) BINARY.
+         03  ws-cursor                 pic s9(4) COMP VALUE ZERO.
+         03  ws-msg                    pic x(73).
+         03  ws-from-data              pic x(40).
+         03  ws-from-data-len          pic s9(8) BINARY.
+         03  ws-header                 pic x(10).
+         03  ws-header-len             pic s9(8) BINARY.
+         03  ws-value                  pic x(10).
+       01  error-msg.
+         03  err-msg                   pic x(40).
+         03  err-filler                pic x(7)  VALUE ' RESP= '.
+         03  err-resp                  pic x(8).
+         03  err-filler2               pic x(8)  VALUE ' RESP2= '.
+         03  err-resp2                 pic x(8).
+       01  complete1.
+         03  compl1-msg                pic x(38).
+         03  compl1-statusc            pic z(3)9.
+       01  complete2.
+         03  compl2-msg                pic x(23).
+         03  compl2-statustx           pic x(50).
+      *
+       LINKAGE SECTION.
+      *
+       PROCEDURE DIVISION.
+      *
+       DFH0WBCO-MAIN SECTION.
+      *
+       DFH0WBCO-00.
+      *----------------------------------------------------------------*
+      * Open a session to the Remote server using WEB OPEN and a client*
+      * URIMAP                                                         *
+      *----------------------------------------------------------------*
+           EXEC CICS WEB OPEN URIMAP(ws-urimap)
+                     SESSTOKEN(ws-sesstoken)
+                     RESP(ws-resp)
+                     RESP2(ws-resp2)
+           END-EXEC.
+           move 'ERROR: WEB OPEN failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Setup a Trailer Header                                         *
+      *----------------------------------------------------------------*
+           move 'Trailer' to ws-header.
+           move 7 to ws-header-len.
+           move 'Applid' to ws-value.
+           EXEC CICS WEB WRITE HTTPHEADER(ws-header)
+                         NAMELENGTH(ws-header-len)
+                         VALUE(ws-value)
+                         VALUELENGTH(length of ws-value)
+                         SESSTOKEN(ws-sesstoken)
+                         RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+           move 'ERROR: Write Trailer Header Failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Using EXEC CICS ASSIGN extract the CICS APPLID                 *
+      *----------------------------------------------------------------*
+           EXEC CICS ASSIGN
+                     APPLID(ws-applid)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Send the First Chunk using WEB SEND CHUNKYES.                  *
+      *----------------------------------------------------------------*
+           move 'DFH0WBCO - Send First Chunk' to ws-msg.
+           perform OutputMsg.
+
+           move 'application/x-www-form-urlencoded' to ws-mediatype.
+           move 'applid=' to ws-from-data.
+           move 7 to ws-from-data-len.
+
+           EXEC CICS WEB SEND POST
+                  FROM(ws-from-data)
+                  FROMLENGTH(ws-from-data-len)
+                  SESSTOKEN(ws-sesstoken)
+                  MEDIATYPE(ws-mediatype)
+                  CHUNKYES
+                  RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Check the Returned RESP Value to ensure the WEB SEND was       *
+      * successful                                                     *
+      *----------------------------------------------------------------*
+           move 'ERROR: First WEB SEND failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Write the trailer header                                       *
+      *----------------------------------------------------------------*
+           move 'Applid' to ws-header.
+           EXEC CICS WEB WRITE HTTPHEADER(ws-header)
+                     NAMELENGTH(length of ws-header)
+                     VALUE(ws-applid)
+                     VALUELENGTH(length of ws-applid)
+                     SESSTOKEN(ws-sesstoken)
+                     RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+
+           move 'ERROR: Write Trailer Header Applid failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Send the Second Chunk using WEB SEND CHUNKYES.                 *
+      *----------------------------------------------------------------*
+           move 'DFH0WBCO - Send Second Chunk' to ws-msg.
+           perform OutputMsg.
+
+           EXEC CICS WEB SEND
+                  FROM(ws-applid)
+                  FROMLENGTH(length of ws-applid)
+                  CHUNKYES
+                  SESSTOKEN(ws-sesstoken)
+                  RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Check the returned RESP value to ensure the WEB SEND was       *
+      * successful                                                     *
+      *----------------------------------------------------------------*
+           move 'ERROR: Second WEB SEND failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Send the Third Chunk using WEB SEND CHUNKYES                   *
+      *----------------------------------------------------------------*
+           move 'DFH0WBCO - Send Third Chunk' to ws-msg.
+           perform OutputMsg.
+
+           move '&check=12345' to ws-from-data.
+           move 12 to ws-from-data-len.
+
+           EXEC CICS WEB SEND
+                  FROM(ws-from-data)
+                  FROMLENGTH(ws-from-data-len)
+                  CHUNKYES
+                  SESSTOKEN(ws-sesstoken)
+                  RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Check the returned RESP VALUE to ensure the WEB SEND was       *
+      * successful                                                     *
+      *----------------------------------------------------------------*
+           move 'ERROR: Third WEB SEND failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Send the End Chunk using WEB SEND CHUNKEND                     *
+      *----------------------------------------------------------------*
+           move 'DFH0WBCO - Send End Chunk Request' to ws-msg.
+           perform OutputMsg.
+
+           move '&check=12345' to ws-from-data.
+
+           EXEC CICS WEB SEND
+                  CHUNKEND
+                  SESSTOKEN(ws-sesstoken)
+                  RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Check the returned RESP VALUE to ensure the WEB SEND was       *
+      * successful                                                     *
+      *----------------------------------------------------------------*
+           move 'ERROR: Chunkend WEB SEND failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Setup variables for Receiving Data                             *
+      *----------------------------------------------------------------*
+           move 0 to ws-status.
+           move 50 to ws-statuslen.
+           move 200 to ws-reclen.
+           move 200 to ws-maxlength.
+
+           move 'DFH0WBCO - Receive Response' to ws-msg.
+           perform OutputMsg.
+
+           EXEC CICS WEB RECEIVE
+                  STATUSCODE(ws-status)
+                  STATUSTEXT(ws-statusdata)
+                  STATUSLEN(ws-statuslen)
+                  MEDIATYPE(ws-mediatype)
+                  INTO(ws-recdata) LENGTH(ws-reclen)
+                  SESSTOKEN(ws-sesstoken)
+                  MAXLENGTH(ws-maxlength)
+                  RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Check the returned RESP VALUE to ensure the WEB RECEIVE was    *
+      * successful                                                     *
+      *----------------------------------------------------------------*
+           move 'ERROR: WEB RECEIVE failed' to err-msg.
+           perform checkResps.
+      *----------------------------------------------------------------*
+      * Output Successful Message                                      *
+      *----------------------------------------------------------------*
+           move 'DFH0WBCO - Completed with status code:' to compl1-msg.
+           move 0 to compl1-statusc.
+           move ws-status to compl1-statusc.
+           move complete1 to ws-msg.
+           perform OutputMsg.
+           move 'DFH0WBCO - Status text:' to compl2-msg.
+           move ws-statusdata to compl2-statustx.
+           move complete2 to ws-msg.
+           perform OutputMsg.
+      *----------------------------------------------------------------*
+      * Close the Session to the Remote Server                         *
+      *----------------------------------------------------------------*
+           EXEC CICS WEB CLOSE SESSTOKEN(ws-sesstoken)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Return                                                         *
+      *----------------------------------------------------------------*
+           EXEC CICS RETURN
+           END-EXEC.
+
+       DFH0WBCO-END. EXIT.
+             EJECT.
+       OutputMsg SECTION.
+       OutputMsg-00.
+      *----------------------------------------------------------------*
+      * Move the cursor on the screen                                  *
+      *----------------------------------------------------------------*
+           add 80 to ws-cursor.
+
+           EXEC CICS SEND CONTROL
+                     CURSOR(ws-cursor)
+           END-EXEC.
+
+           EXEC CICS SEND
+                     FROM(ws-msg)
+           END-EXEC.
+      *
+       OutputMsg-END. EXIT.
+             EJECT.
+       checkResps SECTION.
+       checkResps-00.
+      *----------------------------------------------------------------*
+      * Check the resp values                                          *
+      *----------------------------------------------------------------*
+           IF ws-resp NOT EQUAL ZERO
+      *
+             add 80 to ws-cursor
+      *
+             EXEC CICS SEND CONTROL
+                       CURSOR(ws-cursor)
+             END-EXEC
+      *
+             move ws-resp to err-resp
+             move ws-resp2 to err-resp2
+             EXEC CICS SEND
+               FROM(error-msg)
+             END-EXEC
+      *
+             EXEC CICS RETURN
+             END-EXEC
+      *
+           END-IF.
+      *
+       checkResps-END. EXIT.
+              EJECT.

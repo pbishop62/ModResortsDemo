@@ -1,0 +1,367 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VHLP                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Help Popup Handler for Sample Application  *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION :                                                 *
+      *                                                               *
+      *  This module performs the processing required when the HELP   *
+      *  full screen popup is displayed from the HELP pulldown.       *
+      *                                                               *
+      *  For a full description of the program operation see the      *
+      *  CICS/ESA Book entitled "Sample Applications Guide" Version 3 *
+      *  Release 2, Document Number SC33-0731.                        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *     $MOD(DFH0VHLP),COMP(SAMPLES),PROD(CICS TS ):              *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900906        : Created.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0VHLP.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  ONX                             PIC X          VALUE '1'.
+       77  ITEM-1                          PIC S9(4) COMP VALUE +1.
+       77  HLP-RESP                        PIC S9(4) COMP VALUE +0.
+       01  PREVIOUS-BASE-FOUND-SW          PIC X          VALUE '0'.
+           88  PREVIOUS-BASE-FOUND         VALUE '1'.
+       01  ITEMERR-SW                      PIC X          VALUE '0'.
+           88  ITEMERR-RAISED              VALUE '1'.
+           COPY DFH0BCA.
+           COPY DFH0BTSQ.
+           COPY DFH0BMSG.
+           COPY DFH0HLP.
+           COPY DFHAID.
+           COPY DFHBMSCA.
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           05  COMM-DATA-AREA              PIC X(200).
+       PROCEDURE DIVISION.
+
+       MAIN-SECTION SECTION.
+
+           MOVE DFHCOMMAREA TO WS-HOLD-AREA.
+
+           MOVE LOW-VALUES TO HLPI.
+
+           IF TRANSFER-CONTROL
+               MOVE SPACE TO COMM-STATE-IND
+               PERFORM READ-TRACK-TSQ
+               ADD +1 TO COMM-DEPTH-CTR
+                         COMM-PANEL-CTR
+               MOVE COMM-SELECTION TO TRACK-NAME(COMM-DEPTH-CTR)
+               MOVE COMM-PANEL-TYPE TO TRACK-TYPE(COMM-DEPTH-CTR)
+               MOVE COMM-PANEL-CTR TO
+                                 TRACK-PANEL-ITEM-NO(COMM-DEPTH-CTR)
+               MOVE COMM-ACTION-SELECTED TO
+                                    TRACK-ACTION(COMM-DEPTH-CTR)
+               PERFORM REWRITE-TRACK-TSQ
+               PERFORM READ-PANEL-TSQ
+               MOVE LOW-VALUES TO HLPI
+               PERFORM REWRITE-PANEL-TSQ
+               PERFORM SEND-HLP-PANEL
+               PERFORM RETURN-AC2C
+           END-IF.
+
+           EVALUATE TRUE
+              WHEN EIBAID = DFHPF12
+               PERFORM PROCESS-F12,
+              WHEN EIBAID = DFHCLEAR
+               PERFORM PROCESS-CLEAR,
+              WHEN OTHER
+               PERFORM PROCESS-INVALID-FKEY,
+           END-EVALUATE.
+
+           GOBACK.
+
+       END-MAIN-SECTION.
+           EXIT.
+
+       PROCESS-F12 SECTION.
+
+           PERFORM READ-TRACK-TSQ.
+           MOVE TRACK-TYPE(COMM-DEPTH-CTR) TO COMM-PANEL-TYPE.
+           MOVE SPACE TO TRACK-NAME(COMM-DEPTH-CTR)
+                         TRACK-TYPE(COMM-DEPTH-CTR)
+                         TRACK-ACTION(COMM-DEPTH-CTR).
+           MOVE +0    TO TRACK-PANEL-ITEM-NO(COMM-DEPTH-CTR)
+                         TRACK-RECORD-ITEM-NO(COMM-DEPTH-CTR).
+           SUBTRACT +1 FROM COMM-DEPTH-CTR.
+           MOVE TRACK-PANEL-ITEM-NO(COMM-DEPTH-CTR) TO COMM-CURR-CTR.
+           PERFORM FIND-PREVIOUS-BASE UNTIL(PREVIOUS-BASE-FOUND).
+           MOVE TRACK-PANEL-ITEM-NO(COMM-DEPTH-CTR) TO COMM-PANEL-CTR.
+           PERFORM REWRITE-TRACK-TSQ.
+           MOVE TRACK-NAME(COMM-DEPTH-CTR) TO COMM-BASE-IND.
+           MOVE SEARCH-BASE-IND TO COMM-SEARCH-LEVEL-REQD.
+           PERFORM SEARCH-TABLE.
+           PERFORM XCTL-NEXT-PROGRAM.
+
+       PROCESS-F12-EXIT.
+           EXIT.
+
+       PROCESS-CLEAR SECTION.
+
+           PERFORM READ-PANEL-TSQ.
+           PERFORM SEND-HLP-PANEL.
+           PERFORM RETURN-AC2C.
+
+       PROCESS-CLEAR-EXIT.
+           EXIT.
+
+       FIND-PREVIOUS-BASE SECTION.
+
+           IF TRACK-TYPE(COMM-DEPTH-CTR) = BASE-PANEL-IND
+               MOVE ONX TO PREVIOUS-BASE-FOUND-SW
+           ELSE
+               SUBTRACT +1 FROM COMM-DEPTH-CTR
+           END-IF.
+
+       FIND-PREVIOUS-BASE-EXIT.
+           EXIT.
+
+       PROCESS-INVALID-FKEY SECTION.
+
+           MOVE M002 TO HLPMSGO.
+           PERFORM RETURN-ERROR.
+
+       PROCESS-INVALID-FKEY-EXIT.
+           EXIT.
+
+       SEND-HLP-PANEL SECTION.
+
+           MOVE -1 TO HLPTITLL.
+
+           EXEC CICS SEND MAP('HLP')
+                          MAPSET('DFH0HLP')
+                          FROM(HLPO)
+                          CURSOR
+                          ERASE
+                          RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+       SEND-HLP-PANEL-EXIT.
+           EXIT.
+
+       SEND-CONTROL-ALARM SECTION.
+
+           EXEC CICS SEND CONTROL
+                          ALARM
+                          FREEKB
+                          RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+       SEND-CONTROL-ALARM-EXIT.
+           EXIT.
+
+       READ-PANEL-TSQ SECTION.
+
+           MOVE PANL TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+           MOVE LENGTH OF HLPO TO READQ-LENGTH.
+
+           EXEC CICS READQ TS QUEUE(TSQ-NAME)
+                              INTO(HLPO)
+                              LENGTH(READQ-LENGTH)
+                              ITEM(COMM-PANEL-CTR)
+                              RESP(COMM-RESPONSE)
+                       END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE
+              WHEN DFHRESP(ITEMERR)
+               MOVE ONX TO ITEMERR-SW
+              WHEN DFHRESP(LENGERR)
+               CONTINUE
+              WHEN OTHER
+               MOVE 'HLP01' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+               PERFORM XCTL-NEXT-PROGRAM
+           END-EVALUATE.
+
+       READ-PANEL-TSQ-EXIT.
+           EXIT.
+
+       REWRITE-PANEL-TSQ SECTION.
+
+           MOVE PANL TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           IF ITEMERR-RAISED
+               PERFORM WRITE-PANEL-TSQ
+           ELSE
+               EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                                   FROM(HLPI)
+                                   LENGTH(LENGTH OF HLPI)
+                                   ITEM(COMM-PANEL-CTR)
+                                   REWRITE
+                                   RESP(COMM-RESPONSE)
+                           END-EXEC
+               EVALUATE COMM-RESPONSE
+                  WHEN DFHRESP(NORMAL)
+                   CONTINUE
+                  WHEN OTHER
+                   MOVE 'HLP02' TO COMM-CALL-NUMBER
+                   MOVE EIBRSRCE TO COMM-RESOURCE
+                   MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+                   PERFORM XCTL-NEXT-PROGRAM
+               END-EVALUATE
+           END-IF.
+
+       REWRITE-PANEL-TSQ-EXIT.
+           EXIT.
+
+       WRITE-PANEL-TSQ SECTION.
+
+           MOVE PANL TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                               FROM(HLPI)
+                               LENGTH(LENGTH OF HLPI)
+                               ITEM(COMM-PANEL-CTR)
+                               RESP(COMM-RESPONSE)
+                       END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE
+              WHEN OTHER
+               MOVE 'HLP03' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+               PERFORM XCTL-NEXT-PROGRAM
+           END-EVALUATE.
+
+       WRITE-PANEL-TSQ-EXIT.
+           EXIT.
+
+       REWRITE-TRACK-TSQ SECTION.
+
+           MOVE RECD TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                               FROM(TRACK-LAYOUT)
+                               LENGTH(LENGTH OF TRACK-LAYOUT)
+                               ITEM(ITEM-1)
+                               REWRITE
+                               RESP(COMM-RESPONSE)
+                       END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE
+              WHEN OTHER
+               MOVE 'HLP04' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+               PERFORM XCTL-NEXT-PROGRAM
+           END-EVALUATE.
+
+       REWRITE-TRACK-TSQ-EXIT.
+           EXIT.
+
+       READ-TRACK-TSQ SECTION.
+
+           MOVE RECD TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+           MOVE LENGTH OF TRACK-LAYOUT TO READQ-LENGTH.
+
+           EXEC CICS READQ TS QUEUE(TSQ-NAME)
+                              INTO(TRACK-LAYOUT)
+                              LENGTH(READQ-LENGTH)
+                              ITEM(ITEM-1)
+                              RESP(COMM-RESPONSE)
+                       END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE
+              WHEN OTHER
+               MOVE 'HLP05' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ABEND-HANDLER TO COMM-NEXT-PROGRAM
+               PERFORM XCTL-NEXT-PROGRAM
+           END-EVALUATE.
+
+       READ-TRACK-TSQ-EXIT.
+           EXIT.
+
+       SEARCH-TABLE SECTION.
+
+           MOVE WS-HOLD-AREA TO DFHCOMMAREA.
+           CALL PROGRAM-ROUTER USING DFHEIBLK, DFHCOMMAREA.
+           MOVE DFHCOMMAREA TO WS-HOLD-AREA.
+
+       SEARCH-TABLE-EXIT.
+           EXIT.
+
+       XCTL-NEXT-PROGRAM SECTION.
+
+           MOVE TRANSFER-CONTROL-IND TO COMM-STATE-IND.
+
+           EXEC CICS XCTL PROGRAM(COMM-NEXT-PROGRAM)
+                          COMMAREA(COMM-COMMAR)
+                          LENGTH(LENGTH OF COMM-COMMAR)
+                          RESP(HLP-RESP)
+                     END-EXEC.
+
+           EVALUATE HLP-RESP
+              WHEN DFHRESP(NORMAL)
+               CONTINUE
+              WHEN OTHER
+               MOVE M021 TO HLPMSGO
+               PERFORM RETURN-ERROR
+           END-EVALUATE.
+
+       XCTL-NEXT-PROGRAM-EXIT.
+           EXIT.
+
+       RETURN-ERROR SECTION.
+
+           PERFORM SEND-HLP-PANEL.
+           PERFORM SEND-CONTROL-ALARM.
+           PERFORM RETURN-AC2C.
+
+       RETURN-ERROR-EXIT.
+           EXIT.
+
+       RETURN-AC2C SECTION.
+
+           EXEC CICS RETURN TRANSID('AC2C')
+                            COMMAREA(COMM-COMMAR)
+                            LENGTH(LENGTH OF COMM-COMMAR)
+                            RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+       RETURN-AC2C-EXIT.
+           EXIT.

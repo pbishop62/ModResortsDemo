@@ -1,0 +1,184 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VDQ                                         *
+      *                                                               *
+      * DESCRIPTIVE NAME = Temporary Storage Cleanup for Sample App   *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION :                                                 *
+      *                                                               *
+      *  This program is only used to assist debugging.  The main code*
+      *  uses several temporary storage queues which are purged under *
+      *  normal operations.  While program development is being done  *
+      *  it can happen that an abend will leave spurious data in a    *
+      *  TS queue giving unpredictable results.  This program erases  *
+      *  all TS queues used by the mainline code and resets the 'HOLD'*
+      *  field in the Customer File to release the records.           *
+      *             It should not be run whilst anyone is using the   *
+      *  application.                                                 *
+      *                                                               *
+      *  For a full description of the program operation see the      *
+      *  CICS/ESA Book entitled "Sample Applications Guide" Version 3 *
+      *  Release 2, Document Number SC33-0731.                        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *     $MOD(DFH0VDQ),COMP(SAMPLES),PROD(CICS TS ):               *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900906        : Created.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0VDQ.
+
+       ENVIRONMENT DIVISION.
+
+       DATA DIVISION.
+
+       WORKING-STORAGE SECTION.
+
+       01  DATA-LINE                       PIC X(80)
+           VALUE 'TS Queues deleted and records released...'.
+       77  RESPONSE                        PIC S9(4) COMP VALUE +0.
+
+       77  TEXT-LENGTH                     PIC S9(4) COMP VALUE +0.
+
+           COPY DFH0BCA.
+
+           COPY DFH0BTSQ.
+
+           COPY DFH0BCR.
+
+           COPY DFHAID.
+
+           COPY DFHBMSCA.
+
+       LINKAGE SECTION.
+
+       PROCEDURE DIVISION.
+
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           MOVE PANL TO TSQ-PREFIX.
+           EXEC CICS DELETEQ TS QUEUE(TSQ-NAME)
+                                RESP(RESPONSE)
+                         END-EXEC.
+
+           EVALUATE RESPONSE
+              WHEN DFHRESP(QIDERR)
+               CONTINUE,
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+           END-EVALUATE.
+
+           MOVE RECD TO TSQ-PREFIX.
+           EXEC CICS DELETEQ TS QUEUE(TSQ-NAME)
+                                RESP(RESPONSE)
+                         END-EXEC.
+
+           EVALUATE RESPONSE
+              WHEN DFHRESP(QIDERR)
+               CONTINUE,
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+           END-EVALUATE.
+
+           MOVE LIST TO TSQ-PREFIX.
+           EXEC CICS DELETEQ TS QUEUE(TSQ-NAME)
+                                RESP(RESPONSE)
+                         END-EXEC.
+
+           EVALUATE RESPONSE
+              WHEN DFHRESP(QIDERR)
+               CONTINUE,
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+           END-EVALUATE.
+
+           MOVE HELP TO TSQ-PREFIX.
+           EXEC CICS DELETEQ TS QUEUE(TSQ-NAME)
+                                RESP(RESPONSE)
+                         END-EXEC.
+
+           EVALUATE RESPONSE
+              WHEN DFHRESP(QIDERR)
+               CONTINUE,
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+           END-EVALUATE.
+
+           MOVE +1 TO COMM-CUSTOMER-NUMBER.
+
+       READ-FILE.
+
+           EXEC CICS READ FILE('DFH0FCUS')
+                          INTO(CUSTREC-LAYOUT)
+                          RIDFLD(COMM-CUSTOMER-NUMBER)
+                          LENGTH(LENGTH OF ACTUAL-RECORD)
+                          GTEQ
+                          UPDATE
+                          RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+           IF COMM-RESPONSE = DFHRESP(ENDFILE)
+           OR COMM-RESPONSE = DFHRESP(NOTFND)
+           OR COMM-RESPONSE NOT = DFHRESP(NORMAL)
+               GO TO SEND-TEXT
+           END-IF.
+
+           MOVE SPACES TO CUSTREC-USERTERMID.
+
+           EXEC CICS REWRITE FILE('DFH0FCUS')
+                             FROM(CUSTREC-LAYOUT)
+                             LENGTH(LENGTH OF ACTUAL-RECORD)
+                             RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+           IF CUSTREC-ACCNO = 99999999
+               GO TO SEND-TEXT
+           END-IF.
+
+           ADD +1, CUSTREC-ACCNO GIVING COMM-CUSTOMER-NUMBER.
+
+           GO TO READ-FILE.
+
+       SEND-TEXT.
+
+           MOVE LENGTH OF DATA-LINE TO TEXT-LENGTH.
+
+           EXEC CICS SEND TEXT
+                          FROM(DATA-LINE)
+                          LENGTH(TEXT-LENGTH)
+                          RESP(RESPONSE)
+                     END-EXEC.
+
+           EXEC CICS SEND CONTROL
+                          FREEKB
+                          RESP(RESPONSE)
+                     END-EXEC.
+
+           EXEC CICS RETURN
+                         END-EXEC.
+
+           GOBACK.

@@ -1,0 +1,188 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VTBL                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Program Route Handler for Sample App.      *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION :                                                 *
+      *                                                               *
+      *  This module is the program routing routine.  It is driven by *
+      *  search parameters in the commarea that are matched against   *
+      *  pre-built user tables in order to find the program names that*
+      *  user option selections initiate within code via the various  *
+      *  routes that are available to them.                           *
+      *                                                               *
+      *  For a full description of the program operation see the      *
+      *  CICS/ESA Book entitled "Sample Applications Guide" Version 3 *
+      *  Release 2, Document Number SC33-0731.                        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *     $MOD(DFH0VTBL),COMP(SAMPLES),PROD(CICS TS ):              *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900906        : Created.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0VTBL.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  NOT-AVAILABLE                   PIC X VALUE '1'.
+       77  INVALID-LIT                     PIC X VALUE '2'.
+       77  PULL-DOWN-HANDLER               PIC X(8) VALUE 'DFH0VOL'.
+           COPY DFH0BCA.
+           COPY DFH0BRT.
+           COPY DFH0BMSG.
+           COPY DFHAID.
+           COPY DFHBMSCA.
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           05  COMM-DATA-AREA              PIC X(200).
+       PROCEDURE DIVISION.
+
+       MAIN-SECTION SECTION.
+
+           MOVE DFHCOMMAREA TO WS-HOLD-AREA.
+
+           MOVE SPACE TO COMM-SEL-NOT-AVAIL-SW,
+                         COMM-ACTION-NOT-AVAIL-SW.
+
+           EVALUATE TRUE
+              WHEN COMM-SEARCH-LEVEL-REQD = SEARCH-ACTION-IND
+               SET ACTION-INDEX TO +1
+               PERFORM SEARCH-ACTION-TABLE
+              WHEN COMM-SEARCH-LEVEL-REQD = SEARCH-BASE-IND
+               SET ACTION-INDEX TO COMM-ACTION-INDEX
+               SET BASE-INDEX TO +1
+               PERFORM SEARCH-BASE-TABLE
+              WHEN COMM-SEARCH-LEVEL-REQD = SEARCH-SELECTION-IND
+               SET ACTION-INDEX TO COMM-ACTION-INDEX
+               SET BASE-INDEX TO COMM-BASE-INDEX
+               SET SELECTION-INDEX TO +1
+               PERFORM SEARCH-SELECTION-TABLE
+              WHEN COMM-SEARCH-LEVEL-REQD = SEARCH-ACTION-BASE-IND
+               SET ACTION-INDEX TO +1
+               SET BASE-INDEX TO +1
+               PERFORM SEARCH-ACTION-TABLE
+               PERFORM SEARCH-BASE-TABLE
+              WHEN COMM-SEARCH-LEVEL-REQD = SEARCH-ACTIONBASE-TO-OL-IND
+               SET ACTION-INDEX TO +1
+               SET BASE-INDEX TO +1
+               PERFORM SEARCH-ACTION-TABLE
+               PERFORM SEARCH-BASE-TABLE
+               MOVE PULL-DOWN-HANDLER TO COMM-NEXT-PROGRAM
+              WHEN COMM-SEARCH-LEVEL-REQD = SEARCH-FK-IND
+               PERFORM SEARCH-FK-TABLE
+           END-EVALUATE.
+
+           MOVE WS-HOLD-AREA TO DFHCOMMAREA.
+
+           GOBACK.
+
+       END-MAIN-SECTION.
+           EXIT.
+
+       SEARCH-ACTION-TABLE SECTION.
+
+           SEARCH AAB-SELECTIONS VARYING ACTION-INDEX
+                  AT END
+                       MOVE INVALID-LIT TO COMM-ACTION-NOT-AVAIL-SW
+                  WHEN COMM-ACTION-SELECTED = AAB-VALUES(ACTION-INDEX)
+                       SET COMM-ACTION-INDEX TO ACTION-INDEX.
+
+       SEARCH-ACTION-TABLE-EXIT.
+           EXIT.
+
+       SEARCH-BASE-TABLE SECTION.
+
+           SEARCH BASE-DATA VARYING BASE-INDEX
+                  AT END
+                       MOVE NOT-AVAILABLE TO COMM-ACTION-NOT-AVAIL-SW
+                  WHEN COMM-BASE-IND =
+                       BASE-ENTRIES(ACTION-INDEX, BASE-INDEX)
+                       MOVE BASE-PANEL-IND TO COMM-PANEL-TYPE
+                       MOVE BASE-PROG(ACTION-INDEX, BASE-INDEX) TO
+                                                 COMM-NEXT-PROGRAM
+                       SET COMM-BASE-INDEX TO BASE-INDEX.
+
+       SEARCH-BASE-TABLE-EXIT.
+           EXIT.
+
+
+       SEARCH-SELECTION-TABLE SECTION.
+
+           SEARCH SEL-DATA
+                  VARYING SELECTION-INDEX
+                  AT END
+                        PERFORM SEARCH-FK-TABLE
+                  WHEN COMM-SELECTION =
+                       SEL-NUM(ACTION-INDEX,
+                               BASE-INDEX, SELECTION-INDEX)
+                       MOVE SEL-PROG(ACTION-INDEX,
+                                     BASE-INDEX, SELECTION-INDEX)
+                                     TO COMM-NEXT-PROGRAM
+                       MOVE SEL-PROG-TYPE(ACTION-INDEX,
+                                     BASE-INDEX, SELECTION-INDEX)
+                                     TO COMM-PANEL-TYPE
+                       SET COMM-SELECTION-INDEX TO SELECTION-INDEX.
+
+           EVALUATE TRUE
+              WHEN SEL-PROG(ACTION-INDEX,
+                       BASE-INDEX, SELECTION-INDEX)
+                    = 'TURNDOFF'
+                MOVE NOT-AVAILABLE TO COMM-SEL-NOT-AVAIL-SW
+                MOVE PULL-DOWN-HANDLER TO COMM-NEXT-PROGRAM
+              WHEN ((LIST-PANEL-PROCESSING
+              OR   LIST-PANEL-DISPLAYED)
+              AND (COMM-SELECTION = OPEN-FOR-BROWSE-LIT
+                   OR               OPEN-FOR-UPDATE-LIT)
+              AND (COMM-ACTION-SELECTED = FILE-DISPLAYED))
+                MOVE NOT-AVAILABLE TO COMM-SEL-NOT-AVAIL-SW
+                MOVE PULL-DOWN-HANDLER TO COMM-NEXT-PROGRAM
+              WHEN COMM-SELECTION = ZERO
+                MOVE INVALID-LIT TO COMM-SEL-NOT-AVAIL-SW
+                MOVE PULL-DOWN-HANDLER TO COMM-NEXT-PROGRAM
+           END-EVALUATE.
+
+       SEARCH-SELECTION-TABLE-EXIT.
+           EXIT.
+
+       SEARCH-FK-TABLE SECTION.
+
+           SET FK-INDEX TO +1.
+           SEARCH FK-DATA
+                  VARYING FK-INDEX
+                  AT END
+                       MOVE INVALID-LIT TO COMM-SEL-NOT-AVAIL-SW
+                       MOVE PULL-DOWN-HANDLER TO COMM-NEXT-PROGRAM
+                  WHEN COMM-SELECTION = FK(FK-INDEX)
+                       MOVE FK-PROG-TYPE(FK-INDEX) TO
+                                                COMM-PANEL-TYPE
+                       MOVE FK-PROGRAM(FK-INDEX) TO
+                                                COMM-NEXT-PROGRAM.
+
+       SEARCH-FK-TABLE-EXIT.
+           EXIT.

@@ -1,0 +1,896 @@
+ CBL CICS('FEPI,COBOL3')
+ CBL MAP,OBJ,RENT,NODYNAM,OPT,LIB,DATA(31),LIST,APOST
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+      *****************************************************************
+       PROGRAM-ID.                      DFH0VZUX .
+       DATE-COMPILED.
+      *REMARKS.
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VZUX                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS/ESA (FEPI) - Sample Program:          *
+      *                    Monitor and unsolicited data handler.      *
+      *                    COBOL version                              *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *      Licensed Materials - Property of IBM                     *
+      *                                                               *
+      *      "Restricted Materials of IBM"                            *
+      *                                                               *
+      *      5655-Y04                                                 *
+      *                                                               *
+      *      (C) Copyright IBM Corp. 1992, 2001"                      *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * TRANSACTION NAME = CZUX                                       *
+      *                                                               *
+      * TS QUEUE NAME    = MONITOR                                    *
+      *                                                               *
+      * FUNCTION = This program monitors unexpected events and        *
+      *            handles unsolicited data for the FEPI sample       *
+      *            programs.                                          *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      * This handles                                                  *
+      *  - unexpected events that are reported by FEPI to a TD queue, *
+      *    which triggers this transaction                            *
+      *  - unsolicited data from a back-end system, for which FEPI    *
+      *    starts this transaction.                                   *
+      * Because the event descriptions provided by FEPI and the       *
+      * processing required is basically the same for both cases,     *
+      * this common program is used.                                  *
+      *                                                               *
+      * ASSIGN STARTCODE is used to determine how the transaction was *
+      * started, and ASSIGN QNAME to determine what TD queue          *
+      * what TD queue triggered it.  Details of the event are in the  *
+      * start data or the TD queue record as the case may be.         *
+      *                                                               *
+      * For illustration purposes, all events are handled similarly   *
+      * by simply reporting their details to a TS queue named         *
+      * 'MONITOR', which can be browsed using CEBR.  In practice,     *
+      * for any of the events you can do whatever extra or different  *
+      * processing you require, or (except for unsolicited data) you  *
+      * can ignore the event.                                         *
+      *                                                               *
+      * For unsolicited data, the conversation started by FEPI        *
+      * MUST be accessed so that FEPI knows that the data is being    *
+      * handled.  The data itself should be received, or else FEPI    *
+      * will end and restart the session.  For illustration purposes, *
+      * this program simply discards the data;  in practice, you      *
+      * would probably want to process the data in some way.          *
+      * (Of course, if you did simply want to discard such data, you  *
+      * should specify no unsolicited data handling and use the       *
+      * UNSOLDATACK property to tell FEPI what action to take - as    *
+      * is done for SLU P mode by these samples.)                     *
+      *                                                               *
+      * The general format of the TS queue records is:                *
+      *                                                               *
+      * date time CZUX description                                    *
+      *           Event type..ACQFAIL      Pool........POOLNAME       *
+      *           Target......TGTNAME      Node........NODENAME       *
+      *           Device......T3278M2      Event data..X'00000000'    *
+      *           Format......0            Event value.176            *
+      *                                                               *
+      * The actual details for each event vary.  Events with similar  *
+      * details are grouped together for processing.  The groups are: *
+      *   -  unknown event - an event that is not recognized          *
+      *   -  unsolicited data                                         *
+      *   -  session lost                                             *
+      *   -  standard events - all other events                       *
+      * The groups also determine any additional processing needed.   *
+      * Only unsolicited data actually needs any processing.          *
+      *                                                               *
+      * If any errors occur, they are reported to the TS queue.       *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * PROGRAM LOGIC                                                 *
+      *                                                               *
+      *   Main procedure:                                             *
+      *                                                               *
+      *     Determine how transaction was started using ASSIGN        *
+      *     If started with data by FEPI                              *
+      *         RETRIEVE start data                                   *
+      *     If triggered by TD queue                                  *
+      *         READ the queue record                                 *
+      *     Otherwise                                                 *
+      *         Report start code                                     *
+      *         RETURN                                                *
+      *                                                               *
+      *     TD-LOOP:                                                  *
+      *                                                               *
+      *     Locate event type                                         *
+      *     Locate device type                                        *
+      *     Build description of event:  event type, device type,     *
+      *         format, event value, date/time, transaction           *
+      *                                                               *
+      *     Call UNKNOWN-EVENT, UNSOLDATA, STANDARD-EVENT, or         *
+      *         SESSION-LOST according to event group                 *
+      *                                                               *
+      *     If triggered by TD queue                                  *
+      *         READ the next queue record                            *
+      *         If one exists, loop to TD-LOOP                        *
+      *                                                               *
+      *     RETURN                                                    *
+      *                                                               *
+      *   UNKNOWN-EVENT routine:                                      *
+      *                                                               *
+      *     Write event details to TS queue:  description and         *
+      *         event value                                           *
+      *                                                               *
+      *   UNSOLDATA routine:                                          *
+      *                                                               *
+      *     Write event details to TS queue:  description, event      *
+      *         type, pool, target, and node                          *
+      *     Access conversation using FEPI ALLOCATE with PASSCONVID   *
+      *     FEPI RECEIVE unsolicited data                             *
+      *     Free conversation                                         *
+      *     Handle data as required                                   *
+      *                                                               *
+      *   STANDARD-EVENT routine:                                     *
+      *                                                               *
+      *     Write event details to TS queue:  description, event      *
+      *         type, pool, target, node, device, event data,         *
+      *         format, and event value                               *
+      *                                                               *
+      *   SESSION-LOST routine:                                       *
+      *                                                               *
+      *     Write event details to TS queue:  description, event      *
+      *         type, pool, target, node, device, and format          *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *     $MOD(DFH0VZUX),COMP(FEPI),PROD(CICS TS ):                 *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      *    $P0= .      320 920906        : CREATED.                   *
+      *    $P1= M81413 410 920611 HDDFJLW: PROGRAM ERROR.             *
+      *                                                               *
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       DATA DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+       WORKING-STORAGE SECTION.
+      *===============================================================*
+      *
+       01  W00-EYECATCHER         PIC X(32)   VALUE
+                 '******* WORKING STORAGE ********'.
+      *
+       01  W01-PROGID             PIC X(8) VALUE 'DFH0VZUX'.
+      *
+      * Table of event types.
+      * Each event type is associated with an event group
+      * which determines the processing to be carried out.
+      * (The first entry is used when the event is unknown.)
+      *
+       01  W02-TABLE.
+           05  W02-EVENT-NOTFOUND.
+             10 FILLER  PIC S9(8) COMP VALUE ZERO.
+             10 FILLER  PIC X          VALUE '1'.
+           05  W02-TABENT-1.
+             10 FILLER  PIC S9(8) COMP VALUE DFHVALUE(INSTALLFAIL).
+             10 FILLER  PIC X          VALUE '3'.
+           05  FILLER.
+             10 FILLER  PIC S9(8) COMP VALUE DFHVALUE(DISCARDFAIL).
+             10 FILLER  PIC X          VALUE '3'.
+           05  FILLER.
+             10 FILLER  PIC S9(8) COMP VALUE DFHVALUE(SETFAIL).
+             10 FILLER  PIC X          VALUE '3'.
+           05  FILLER.
+             10 FILLER  PIC S9(8) COMP VALUE DFHVALUE(ACQFAIL).
+             10 FILLER  PIC X          VALUE '3'.
+           05  FILLER.
+             10 FILLER  PIC S9(8) COMP VALUE DFHVALUE(SESSIONLOST).
+             10 FILLER  PIC X          VALUE '4'.
+           05  FILLER.
+             10 FILLER  PIC S9(8) COMP VALUE DFHVALUE(SESSIONFAIL).
+             10 FILLER  PIC X          VALUE '3'.
+           05  FILLER.
+             10 FILLER  PIC S9(8) COMP VALUE DFHVALUE(ADDFAIL).
+             10 FILLER  PIC X          VALUE '3'.
+           05  FILLER.
+             10 FILLER  PIC S9(8) COMP VALUE DFHVALUE(DELETEFAIL).
+             10 FILLER  PIC X          VALUE '1'.
+           05  FILLER.
+             10 FILLER  PIC S9(8) COMP VALUE DFHVALUE(ACQFAIL).
+             10 FILLER  PIC X          VALUE '3'.
+           05  FILLER.
+             10 FILLER  PIC S9(8) COMP VALUE DFHVALUE(UNSOLDATA).
+             10 FILLER  PIC X          VALUE '2'.
+      *
+      * Redefinition of above table.
+      *
+       01  W02-EVENTTYPE-TABLE REDEFINES W02-TABLE.
+           05  W02-EVENTTYPE-TABLE-ENTRY
+                          OCCURS 16
+                          INDEXED BY W02-INDEX.
+             10 W02-EVENTTYPE     PIC S9(8) COMP.
+             10 W02-EVENTGRP      PIC X(1).
+               88 W02-GROUP1 VALUE '1'.
+               88 W02-GROUP2 VALUE '2'.
+               88 W02-GROUP3 VALUE '3'.
+               88 W02-GROUP4 VALUE '4'.
+      *
+      * Table of devices, used to show details of the device
+      * type used.
+      * (The first entry is used when the device is unknown.)
+      *
+       01  W03-TABLE.
+           05 FILLER  PIC S9(8) COMP VALUE ZERO.
+           05 FILLER  PIC S9(8) COMP VALUE ZERO.
+           05 FILLER  PIC S9(8) COMP VALUE DFHVALUE(T3278M2).
+           05 FILLER  PIC S9(8) COMP VALUE DFHVALUE(T3278M3).
+           05 FILLER  PIC S9(8) COMP VALUE DFHVALUE(T3278M4).
+           05 FILLER  PIC S9(8) COMP VALUE DFHVALUE(T3278M5).
+           05 FILLER  PIC S9(8) COMP VALUE DFHVALUE(T3279M2).
+           05 FILLER  PIC S9(8) COMP VALUE DFHVALUE(T3279M3).
+           05 FILLER  PIC S9(8) COMP VALUE DFHVALUE(T3279M4).
+           05 FILLER  PIC S9(8) COMP VALUE DFHVALUE(T3279M5).
+           05 FILLER  PIC S9(8) COMP VALUE DFHVALUE(LUP).
+      *
+      * Redefinition of above table.
+      *
+       01  W03-DEVICE-TABLE REDEFINES W03-TABLE.
+           05  W03-DEVICE
+                          OCCURS 10
+                          INDEXED BY W03-INDEX
+                          PIC S9(8) COMP.
+      *
+      * W04 is used for building TS queue records.
+      *
+       01  W04-HOLD-VALUES.
+           05  W04-DEVICE         PIC X(12).
+           05  W04-FORMAT         PIC X(12).
+           05  W04-EVENTT         PIC X(12).
+           05  W04-EVENTV         PIC Z(7)9.
+           05  W04-UTIME          PIC S9(15) COMP-3.
+      *
+      * Formats for the TS queue records.
+      *
+       01  W04-OUTPUT-MSG         PIC X(76).
+      *
+       01  W04-OUTPUT-MSG1 REDEFINES W04-OUTPUT-MSG.
+           05  W04-DATE           PIC X(8).
+           05  FILLER             PIC X(1).
+           05  W04-TIME           PIC X(8).
+           05  FILLER             PIC X(1).
+           05  W04-TRANS          PIC X(4).
+           05  FILLER             PIC X(1).
+           05  W04-DESC           PIC X(40).
+           05  FILLER             PIC X(14).
+      *
+       01  W04-OUTPUT-MSG2 REDEFINES W04-OUTPUT-MSG.
+           05  FILLER             PIC X(18).
+           05  W04-DESC1          PIC X(12).
+           05  W04-DATA1          PIC X(12).
+           05  FILLER             PIC X(1).
+           05  W04-DESC2          PIC X(12).
+           05  W04-DATA2          PIC X(19).
+           05  FILLER             PIC X(2).
+      *
+      * W05 is used for reformatting numeric values.
+      *
+       01  W05-NUMERIC.
+           05  W05-NUMBER    PIC Z(7)9.
+           05  W05-INTEGER   PIC 9(4).
+      *
+      * W06 holds values for CICS commands.
+      *
+       01  W06-RESP          PIC S9(8) COMP.
+       01  W06-ENDSTATUS     PIC S9(8) COMP.
+       01  W06-MAXFLENGTH    PIC S9(8) COMP VALUE 2048.
+       01  W06-DISCARD       PIC X(2048).
+       01  W06-FLENGTH       PIC S9(8) COMP.
+      *
+      * W07 has ASSIGN option values.
+      *
+       01  W07-STARTCODE     PIC  X(2).
+         88  W07-STARTED-WITH-DATA-BY-FEPI VALUE 'SZ'.
+         88  W07-STARTED-BY-TRANSIENT-DATA VALUE 'QD'.
+       01  W07-QNAME         PIC  X(4).
+      *
+      * W08 is used for reformatting hexdecimal values.
+      *
+       01  W08-EVENTDATA.
+           05  W08-EVENTCHAR    PIC X     OCCURS 8.
+       01  W08-SUB1             PIC S9(4) COMP.
+       01  W08-SUB2             PIC S9(4) COMP.
+       01  W08-SUB3             PIC S9(4) COMP.
+       01  W08-OUTPUT-HEX.
+           05  W08-OUTPUT-HEX-CHAR
+                                OCCURS 19
+                                PIC X(1).
+       01  W08-INPUT-BIN.
+           05  W08-INPUT-BINARY PIC S9(4) COMP.
+       01  W08-INPUT-CHAR REDEFINES W08-INPUT-BIN.
+           05  W08-INPUT-CHAR1  PIC X.
+           05  W08-INPUT-CHAR2  PIC X.
+       01  W08-FILLER           PIC X(16)
+                                VALUE '0123456789ABCDEF'.
+       01  W08-FILLER-RED REDEFINES W08-FILLER.
+           05  W08-HEX-CHAR     OCCURS 16
+                                PIC X(1).
+      *
+      * DFHSZAPO defines the FEPI RESP2 values and
+      * the FEPI start data and TD queue record layout.
+      *
+       COPY DFHSZAPO.
+      *
+      *
+      *===============================================================*
+      *=       Constants                                             =*
+      *===============================================================*
+      *
+      * DFH0BZCO defines the customizable constants used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZCO.
+      *
+      * DFH0BZMO defines the messages and other text used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZMO.
+      *
+      *
+      *****************************************************************
+       PROCEDURE DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+      *=       Main procedure                                        =*
+      *===============================================================*
+      *
+      * This section controls processing, getting event data from the
+      * appropriate source, and processing each event according to
+      * its event group.
+      *
+      * It is repeated until all queued events have been handled.
+      *
+       A-MAIN SECTION.
+       A-010.
+      *
+      * Determine how transaction was started.
+      *
+           EXEC CICS ASSIGN
+               STARTCODE(W07-STARTCODE)
+           END-EXEC
+      *
+      * If STARTed with data, get the start data.
+      *
+           IF W07-STARTED-WITH-DATA-BY-FEPI THEN
+               EXEC CICS RETRIEVE
+                   INTO (DFHSZ-DATA)
+                   RESP(W06-RESP)
+               END-EXEC
+      *
+      * If triggered from a TD queue, get the queue name,
+      * and then read the queue data.
+      *
+           ELSE
+               IF W07-STARTED-BY-TRANSIENT-DATA THEN
+                   EXEC CICS ASSIGN
+                       QNAME(W07-QNAME)
+                   END-EXEC
+                   EXEC CICS READQ
+                       TD
+                       QUEUE(W07-QNAME)
+                       INTO(DFHSZ-DATA)
+                       RESP(W06-RESP)
+                   END-EXEC
+      *
+      * Otherwise, report start code and exit.
+      *
+               ELSE
+                   MOVE SPACES        TO W04-OUTPUT-MSG
+                   MOVE DFH0BZMO-OPFD-STARTCODE TO W04-DESC1
+                   MOVE W07-STARTCODE TO W04-DATA1
+                   MOVE DFH0BZMO-OPFD-QNAME     TO W04-DESC2
+                   MOVE W07-QNAME     TO W04-DATA2
+                   PERFORM C-WRITE-TSQ
+      *
+                   EXEC CICS RETURN
+                   END-EXEC
+               END-IF
+           END-IF.
+      *
+      * Loop-back point for reading multiple TD queue records.
+      *
+       A-TD-LOOP.
+      *
+      * If error in getting start data or TD queue record, exit.
+      *
+           IF W06-RESP NOT = DFHRESP(NORMAL)
+           THEN
+               EXEC CICS RETURN
+               END-EXEC
+           END-IF
+      *
+      * Locate the event type in the event table.
+      *
+           SET W02-INDEX TO 2.
+           SEARCH W02-EVENTTYPE-TABLE-ENTRY
+               VARYING W02-INDEX
+               AT END
+                   SET W02-INDEX TO 1
+               WHEN W02-EVENTTYPE(W02-INDEX) = DFHSZ-DATA-EVENTTYPE
+                   NEXT SENTENCE.
+      *
+      * Locate the device type in the device table.
+      *
+           SET W03-INDEX TO 2.
+           SEARCH W03-DEVICE
+               VARYING W03-INDEX
+               AT END
+                   SET W03-INDEX TO 1
+               WHEN W03-DEVICE(W03-INDEX) = DFHSZ-DATA-DEVICE
+                   NEXT SENTENCE.
+      *
+      * Build a description of the event.
+      * First clear TS queue record area.
+      *
+           MOVE SPACES TO W04-OUTPUT-MSG
+      *
+      * Translate the event type.
+      * If unknown (W02-INDEX=1), report the EVENTTYPE number.
+      *
+           IF W02-INDEX = 1
+               MOVE DFHSZ-DATA-EVENTTYPE TO W05-NUMBER
+               MOVE W05-NUMBER TO W04-EVENTT
+           ELSE
+               SET DFH0BZMO-EVENT-INDEX TO W02-INDEX
+               MOVE DFH0BZMO-EVENT-DESC(DFH0BZMO-EVENT-INDEX)
+                               TO W04-EVENTT
+           END-IF.
+      *
+      * Translate the device type.
+      * If unknown (W03-INDEX=1), report the DEVICE number.
+      *
+           IF W03-INDEX = 1
+               MOVE DFHSZ-DATA-DEVICE TO W05-NUMBER
+               MOVE W05-NUMBER TO W04-DEVICE
+           ELSE
+               SET DFH0BZMO-DEVICE-INDEX TO W03-INDEX
+               MOVE DFH0BZMO-DEVICE-DESC(DFH0BZMO-DEVICE-INDEX)
+                                                      TO W04-DEVICE
+           END-IF.
+      *
+      * Translate the conversation format.
+      *
+           IF DFHSZ-DATA-FORMAT = DFHVALUE(FORMATTED)
+               MOVE DFH0BZMO-FORMATTED-LITERAL TO W04-FORMAT
+           ELSE
+           IF DFHSZ-DATA-FORMAT = DFHVALUE(DATASTREAM)
+               MOVE DFH0BZMO-DATASTREAM-LITERAL TO W04-FORMAT
+           ELSE
+               MOVE DFHSZ-DATA-FORMAT    TO W05-NUMBER
+               MOVE W05-NUMBER TO W04-FORMAT
+           END-IF.
+      *
+      * Reformat EVENTVALUE information.
+      *
+           MOVE DFHSZ-DATA-EVENTVALUE    TO W04-EVENTV
+      *
+      * Format date and time.
+      *
+           EXEC CICS ASKTIME
+               ABSTIME(W04-UTIME)
+           END-EXEC.
+           EXEC CICS FORMATTIME
+               ABSTIME(W04-UTIME)
+               DATE(W04-DATE) DATESEP('/')
+               TIME(W04-TIME) TIMESEP(':')
+           END-EXEC.
+      *
+      * Complete description with the transaction name.
+      *
+           MOVE DFH0BZCO-MONITOR-TRANSID TO W04-TRANS
+      *
+      * Perform additional processing according to the event group.
+      *
+           EVALUATE TRUE
+           WHEN W02-GROUP1 (W02-INDEX)
+               PERFORM B-UNKNOWN-EVENT
+           WHEN W02-GROUP2 (W02-INDEX)
+               PERFORM B-UNSOLDATA
+           WHEN W02-GROUP3 (W02-INDEX)
+               PERFORM B-STANDARD-EVENT
+           WHEN W02-GROUP4 (W02-INDEX)
+               PERFORM B-SESSION-LOST
+           END-EVALUATE.
+      *
+      * If the transaction was triggered by a TD queue,
+      * read next queue record.
+      * Loop back to process it if there is one.
+      *
+           IF W07-STARTED-BY-TRANSIENT-DATA THEN
+               EXEC CICS READQ
+                   TD
+                   QUEUE(W07-QNAME)
+                   INTO(DFHSZ-DATA)
+                   RESP(W06-RESP)
+               END-EXEC
+               IF W06-RESP NOT = DFHRESP(QZERO) THEN
+                   GO TO A-TD-LOOP
+               END-IF
+           END-IF
+      *
+      * Not triggered by a TD queue or TD queue empty - exit.
+      *
+           EXEC CICS RETURN
+           END-EXEC.
+      *
+       A-EXIT.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Unknown event routine                                 =*
+      *===============================================================*
+      *
+      * This section processes unknown events.
+      *
+      * It writes details to the TS queue.
+      *
+       B-UNKNOWN-EVENT SECTION.
+       B-A10.
+      *
+      * Write event description.
+      *
+           MOVE DFH0BZMO-MSGI TO W04-DESC.
+           PERFORM C-WRITE-TSQ.
+      *
+      * Write event value information.
+      *
+           MOVE SPACES TO W04-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-EVENTV TO W04-DESC1.
+           MOVE W04-EVENTV TO W04-DATA1.
+           PERFORM C-WRITE-TSQ.
+      *
+       B-A90.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Unsolicited data routine                              =*
+      *===============================================================*
+      *
+      * This section processes unsolicited data.
+      *
+      * It writes details to the TS queue, starts a conversation
+      * and gets the unsolicited data, ready to be handled as required.
+      *
+       B-UNSOLDATA SECTION.
+       B-C10.
+      *
+      * Write event description.
+      *
+           MOVE DFH0BZMO-MSGL TO W04-DESC.
+           PERFORM C-WRITE-TSQ.
+      *
+      * Write event type and pool information.
+      *
+           MOVE SPACES TO W04-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-EVENT TO W04-DESC1.
+           MOVE W04-EVENTT TO W04-DATA1.
+           MOVE DFH0BZMO-OPFD-POOL TO W04-DESC2.
+           MOVE DFHSZ-DATA-POOL TO W04-DATA2.
+           PERFORM C-WRITE-TSQ.
+      *
+      * Write target and node information.
+      *
+           MOVE SPACES TO W04-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-TARGET TO W04-DESC1.
+           MOVE DFHSZ-DATA-TARGET TO W04-DATA1.
+           MOVE DFH0BZMO-OPFD-NODE TO W04-DESC2.
+           MOVE DFHSZ-DATA-NODE TO W04-DATA2.
+           PERFORM C-WRITE-TSQ.
+      *
+      * Access the unsolicited-data conversation started by FEPI
+      * using FEPI ALLOCATE with PASSCONVID.
+      * The conversation ID is obtained from the start data.
+      *
+           EXEC CICS FEPI ALLOCATE
+               PASSCONVID(DFHSZ-DATA-CONVID)
+               RESP(W06-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check that a good response was obtained.
+      *
+           IF W06-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG4 TO W04-OUTPUT-MSG2
+               PERFORM C-REPORT-RESP
+               GO TO B-C90
+           END-IF.
+      *
+      * Get the unsolicited data with FEPI RECEIVE.
+      * FORMATTED or DATASTREAM must be used as appropriate.
+      *
+           IF DFHSZ-DATA-FORMAT = DFHVALUE(FORMATTED)
+               PERFORM WITH TEST AFTER
+                   UNTIL W06-RESP NOT = DFHRESP(NORMAL)
+                   OR W06-ENDSTATUS = DFHVALUE(CD)
+                   OR W06-ENDSTATUS = DFHVALUE(EB)
+                   EXEC CICS FEPI RECEIVE FORMATTED
+                       CONVID(DFHSZ-DATA-CONVID)
+                       TIMEOUT(DFH0BZCO-TIMEOUT)
+                       MAXFLENGTH(W06-MAXFLENGTH)
+                       INTO(W06-DISCARD) FLENGTH(W06-FLENGTH)
+                       ENDSTATUS(W06-ENDSTATUS)
+                       RESP(W06-RESP)
+                       RESP2(DFHSZ-RESP2)
+                   END-EXEC
+               END-PERFORM
+      *
+           ELSE
+               PERFORM WITH TEST AFTER
+                   UNTIL W06-RESP NOT = DFHRESP(NORMAL)
+                   OR W06-ENDSTATUS = DFHVALUE(CD)
+                   OR W06-ENDSTATUS = DFHVALUE(EB)
+                   EXEC CICS FEPI RECEIVE DATASTREAM
+                       CONVID(DFHSZ-DATA-CONVID)
+                       TIMEOUT(DFH0BZCO-TIMEOUT)
+                       MAXFLENGTH(W06-MAXFLENGTH)
+                       INTO(W06-DISCARD) FLENGTH(W06-FLENGTH)
+                       ENDSTATUS(W06-ENDSTATUS)
+                       RESP(W06-RESP)
+                       RESP2(DFHSZ-RESP2)
+                   END-EXEC
+               END-PERFORM
+           END-IF
+      *
+      * Check that a good response was obtained.
+      *
+           IF W06-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG3  TO W04-OUTPUT-MSG2
+               PERFORM C-REPORT-RESP
+               GO TO B-C90
+           END-IF
+      *
+      * Free the conversation.
+      *
+           EXEC CICS FEPI FREE
+               CONVID(DFHSZ-DATA-CONVID)
+               RESP(W06-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check that a good response was obtained.
+      *
+               MOVE DFH0BZMO-MSG5 TO W04-OUTPUT-MSG2
+               PERFORM C-REPORT-RESP
+               GO TO B-C90.
+      *
+      * Handle the data as required.
+      * You can supply here whatever processing you want -
+      * or none, if you just want to discard the data.
+      * If you are going to process the data, you must save the data
+      * from each individual FEPI RECEIVE before continuing the
+      * PERFORM loops above.
+      *
+      * ...
+      *
+       B-C90.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Standard event routine                                =*
+      *===============================================================*
+      *
+      * This section processes standard events.
+      *
+      * It writes details to the TS queue.
+      *
+       B-STANDARD-EVENT SECTION.
+       B-D10.
+      *
+      * Write event description.
+      *
+           MOVE DFH0BZMO-MSGK TO W04-DESC.
+           PERFORM C-WRITE-TSQ.
+      *
+      * Write event type and pool information.
+      *
+           MOVE SPACES TO W04-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-EVENT TO W04-DESC1.
+           MOVE W04-EVENTT TO W04-DATA1.
+           MOVE DFH0BZMO-OPFD-POOL TO W04-DESC2.
+           MOVE DFHSZ-DATA-POOL TO W04-DATA2.
+           PERFORM C-WRITE-TSQ.
+      *
+      * Write target and node information.
+      *
+           MOVE SPACES TO W04-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-TARGET TO W04-DESC1.
+           MOVE DFHSZ-DATA-TARGET TO W04-DATA1.
+           MOVE DFH0BZMO-OPFD-NODE TO W04-DESC2.
+           MOVE DFHSZ-DATA-NODE TO W04-DATA2.
+           PERFORM C-WRITE-TSQ.
+      *
+      * Write device and event data information.
+      *
+           MOVE SPACES TO W04-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-DEVICE TO W04-DESC1.
+           MOVE W04-DEVICE TO W04-DATA1.
+           MOVE DFH0BZMO-OPFD-EVENTD TO W04-DESC2.
+           MOVE DFHSZ-DATA-EVENTDATA TO W08-EVENTDATA.
+           PERFORM C-CONVERT-TO-HEX.
+           MOVE W08-OUTPUT-HEX TO W04-DATA2.
+           PERFORM C-WRITE-TSQ.
+      *
+      * Write format and event value information.
+      *
+           MOVE SPACES TO W04-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-FORMAT TO W04-DESC1.
+           MOVE W04-FORMAT TO W04-DATA1.
+           MOVE DFH0BZMO-OPFD-EVENTV TO W04-DESC2.
+           MOVE W04-EVENTV TO W04-DATA2.
+           PERFORM C-WRITE-TSQ.
+      *
+       B-D90.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Session lost routine                                  =*
+      *===============================================================*
+      *
+      * This section processes lost session events.
+      *
+      * It writes details to the TS queue.
+      *
+       B-SESSION-LOST SECTION.
+       B-E10.
+      *
+      * Write event description.
+      *
+           MOVE DFH0BZMO-MSGJ TO W04-DESC.
+           PERFORM C-WRITE-TSQ.
+      *
+      * Write event type and pool information.
+      *
+           MOVE SPACES TO W04-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-EVENT TO W04-DESC1.
+           MOVE W04-EVENTT TO W04-DATA1.
+           MOVE DFH0BZMO-OPFD-POOL TO W04-DESC2.
+           MOVE DFHSZ-DATA-POOL TO W04-DATA2.
+           PERFORM C-WRITE-TSQ.
+      *
+      * Write target and node information.
+      *
+           MOVE SPACES TO W04-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-TARGET TO W04-DESC1.
+           MOVE DFHSZ-DATA-TARGET TO W04-DATA1.
+           MOVE DFH0BZMO-OPFD-NODE TO W04-DESC2.
+           MOVE DFHSZ-DATA-NODE TO W04-DATA2.
+           PERFORM C-WRITE-TSQ.
+      *
+      * Write device and format information.
+      *
+           MOVE SPACES TO W04-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-DEVICE TO W04-DESC1.
+           MOVE W04-DEVICE TO W04-DATA1.
+           MOVE DFH0BZMO-OPFD-FORMAT TO W04-DESC2.
+           MOVE W04-FORMAT TO W04-DATA2.
+           PERFORM C-WRITE-TSQ.
+      *
+       B-E90.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Write TS queue routine                                =*
+      *===============================================================*
+      *
+      * This section writes to a TS queue.
+      *
+       C-WRITE-TSQ SECTION.
+       C-010.
+      *
+      * Write to TS queue.
+      *
+           EXEC CICS WRITEQ
+               TS
+               QUEUE(DFH0BZCO-MONITOR-TSQ)
+               FROM(W04-OUTPUT-MSG)
+               LENGTH(LENGTH OF W04-OUTPUT-MSG)
+               RESP(W06-RESP)
+           END-EXEC.
+      *
+      * If the write fails, tell the operator.
+      *
+           IF W06-RESP NOT = DFHRESP(NORMAL)
+               EXEC CICS WRITE OPERATOR
+                   TEXT(DFH0BZMO-MSGH)
+               END-EXEC
+           END-IF.
+      *
+       C-090.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Report RESP code routine                              =*
+      *===============================================================*
+      *
+      * This section reports on bad response codes.
+      *
+      * It writes details to the TS queue.
+      *
+       C-REPORT-RESP SECTION.
+       C-510.
+      *                                                          @P1A
+           PERFORM C-WRITE-TSQ.
+           MOVE SPACES TO W04-OUTPUT-MSG
+      *                                                          @P1A
+           MOVE DFH0BZMO-OPFD-RESP TO W04-DESC1
+           MOVE W06-RESP    TO W05-NUMBER
+           MOVE W05-NUMBER  TO W04-DATA1
+           MOVE DFH0BZMO-OPFD-RESP2 TO W04-DESC2
+           MOVE DFHSZ-RESP2 TO W05-NUMBER
+           MOVE W05-NUMBER  TO W04-DATA2
+           PERFORM C-WRITE-TSQ.
+      *
+       C-590.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Convert hexadecimal routine                           =*
+      *===============================================================*
+      *
+      * This section converts computational fields to hexadecimal
+      * display format.
+      *
+       C-CONVERT-TO-HEX SECTION.
+       C-610.
+      *
+           MOVE ALL ZEROES TO W08-OUTPUT-HEX.
+           MOVE DFH0BZMO-HEX-X-LITERAL TO W08-OUTPUT-HEX-CHAR(1)
+           MOVE QUOTE TO W08-OUTPUT-HEX-CHAR(2)
+                         W08-OUTPUT-HEX-CHAR(19).
+           MOVE 3 TO W08-SUB1.
+           MOVE 1 TO W08-SUB2.
+      *
+           PERFORM 8 TIMES
+               MOVE ZERO TO W08-INPUT-BINARY
+               MOVE W08-EVENTCHAR(W08-SUB2) TO W08-INPUT-CHAR2
+               DIVIDE W08-INPUT-BINARY BY 16
+                   GIVING W08-INPUT-BINARY
+                   REMAINDER W08-SUB3
+               ADD 1 TO W08-SUB3 W08-INPUT-BINARY
+               MOVE W08-HEX-CHAR(W08-INPUT-BINARY)
+                   TO W08-OUTPUT-HEX-CHAR(W08-SUB1)
+               MOVE W08-HEX-CHAR(W08-SUB3)
+                   TO W08-OUTPUT-HEX-CHAR(W08-SUB1 + 1)
+               ADD 1 TO W08-SUB2
+               ADD 2 TO W08-SUB1
+           END-PERFORM.
+       C-690.
+           EXIT.
+      *
+      *
+      *****************************************************************
+      *        End of program DFH0VZUX                                *
+      *****************************************************************

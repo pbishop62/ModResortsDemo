@@ -1,0 +1,562 @@
+ CBL CICS('FEPI,COBOL3')
+ CBL MAP,OBJ,RENT,NODYNAM,OPT,LIB,DATA(31),LIST,APOST
+      *****************************************************************
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994"                             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *   STATUS = 7.2.0                                              *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *   $MOD(DFH0VZQS),COMP(FEPI),PROD(CICS TS ):                   *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $L0= Base   410 94     HD5VDLA : Base                         *
+      *                                                               *
+      *****************************************************************
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+      *****************************************************************
+       PROGRAM-ID.                      DFH0VZQS .
+       DATE-COMPILED.
+      *REMARKS.
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VZQS                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample Program:          *
+      *                    STSN handler.                              *
+      *                    COBOL version                              *
+      *                                                               *
+      *                                                               *
+      * TRANSACTION NAME = CZQS                                       *
+      *                                                               *
+      * TS QUEUE NAME    = SESSION                                    *
+      *                                                               *
+      * FUNCTION = This program handles STSN processing for the       *
+      *            FEPI sample application programs.                  *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      * This transaction is started by FEPI when a request for        *
+      * message resynchronization ('set and test sequence number',    *
+      * STSN) or a 'start data traffic' indication is received from   *
+      * a back-end IMS system.                                        *
+      *                                                               *
+      * The conversation passed by FEPI MUST be accessed so that      *
+      * FEPI knows that the event is being handled.  The processing   *
+      * required depends on the STSN status, which is obtained using  *
+      * FEPI EXTRACT STSN.                                            *
+      *                                                               *
+      * For STSNSTATUS=NOSTSN, the transaction was started because    *
+      * 'start data traffic' arrived.  A DR1 normal response must be  *
+      * sent.                                                         *
+      *                                                               *
+      * For STSNSTATUS=STSNSET, a positive STSN response must be      *
+      * sent.                                                         *
+      *                                                               *
+      * For STSNSTATUS=STSNTEST, processing would typically involve   *
+      * comparing saved sequence numbers with those received from     *
+      * the back-end IMS system to determine what response to send.   *
+      * The IMS Customization Guide gives advice on the appropriate   *
+      * action.                                                       *
+      *                                                               *
+      * After the processing, the response is sent using FEPI ISSUE.  *
+      * A report is written to a TS queue named 'SESSION', which can  *
+      * be browsed using CEBR.  The general format of the TS queue    *
+      * records is:                                                   *
+      *                                                               *
+      * date time CZQS STSN processing completed                      *
+      *           Target......TGTNAME      Node........NODENAME       *
+      *           Seqnumin....nnnn         Seqnumout...nnnn           *
+      *           STSN status.XXXXXXX      Response....XXXXXXXX       *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      *                                                               *
+      *  PROGRAM LOGIC                                                *
+      *                                                               *
+      *    Main procedure:                                            *
+      *                                                               *
+      *      RETRIEVE start data                                      *
+      *      Access conversation using FEPI ALLOCATE with PASSCONVID  *
+      *      Get STSN status using FEPI EXTRACT STSN                  *
+      *      Call NOSTSN, STSNSET, or STSNTEST                        *
+      *          according to STSN status                             *
+      *      Send response using FEPI ISSUE CONTROL                   *
+      *      Write event details to TS queue                          *
+      *      Free conversation, keeping session                       *
+      *      RETURN                                                   *
+      *                                                               *
+      *    NOSTSN routine:                                            *
+      *                                                               *
+      *      Build DR1 normal response                                *
+      *                                                               *
+      *    STSNSET routine:                                           *
+      *                                                               *
+      *      Build STSN positive response                             *
+      *                                                               *
+      *    STSNTEST routine:                                          *
+      *                                                               *
+      *      Handle as required                                       *
+      *      Build required response                                  *
+      *                                                               *
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       DATA DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+       WORKING-STORAGE SECTION.
+      *===============================================================*
+      *
+       01  W00-EYECATCHER         PIC X(32)   VALUE
+                 '******* WORKING STORAGE ********'.
+      *
+       01  W01-PROGID             PIC X(8) VALUE 'DFH0VZQS'.
+      *
+      * W02 is used for building TS queue records.
+      *
+       01  W02-HOLD-VALUES.
+           05  W02-HOLD-RESP      PIC S9(8) COMP.
+           05  W02-HOLD-RESP2     PIC S9(8) COMP.
+           05  W02-HOLD-DATA1     PIC X(12).
+           05  W02-HOLD-DATA2     PIC X(12).
+           05  W02-UTIME          PIC S9(15) COMP-3.
+      *
+      * Formats for the TS queue records.
+      *
+       01  W02-OUTPUT.
+           05  W02-DATE           PIC X(8).
+           05  FILLER             PIC X(1).
+           05  W02-TIME           PIC X(8).
+           05  FILLER             PIC X(1).
+           05  W02-OUTPUT-MSG     PIC X(56).
+      *
+           05  W02-OUTPUT-MSG2 REDEFINES W02-OUTPUT-MSG.
+               10  W02-TRANSID    PIC X(4).
+               10  FILLER         PIC X(1).
+               10  W02-DESC       PIC X(51).
+      *
+           05  W02-OUTPUT-MSG3 REDEFINES W02-OUTPUT-MSG.
+               10  W02-DESC1      PIC X(12).
+               10  W02-DATA1      PIC X(12).
+               10  FILLER         PIC X(1).
+               10  W02-DESC2      PIC X(12).
+               10  W02-DATA2      PIC X(12).
+               10  FILLER         PIC X(7).
+      *
+      * W03 is used for reformatting numeric values.
+      *
+       01  W03-NUMERIC.
+           05  W03-NUMBER    PIC Z(7)9.
+           05  W03-INTEGER   PIC 9(4).
+      *
+      * W04 holds values for CICS commands.
+      *
+       01  W04-RESP          PIC S9(8) COMP.
+       01  W04-STSNSTATUS    PIC S9(8) COMP.
+       01  W04-SEQNUMIN      PIC S9(8) COMP.
+       01  W04-SEQNUMOUT     PIC S9(8) COMP.
+       01  W04-STSNV         PIC S9(8) COMP.
+       01  W04-IVALUE        PIC S9(8) COMP.
+      *
+      * DFHSZAPO defines the FEPI RESP2 values and
+      * the FEPI start data layout.
+      *
+       COPY DFHSZAPO.
+      *
+      *
+      *===============================================================*
+      *=       Constants                                             =*
+      *===============================================================*
+      *
+      * DFH0BZCO defines the customizable constants used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZCO.
+      *
+      * DFH0BZMO defines the messages and other text used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZMO.
+      *
+      *
+      *****************************************************************
+       PROCEDURE DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+      *=       Main procedure                                        =*
+      *===============================================================*
+      *
+      * This section controls processing, getting the start data and
+      * processing the STSN as required.
+      *
+       A-MAIN SECTION.
+       A-010.
+      *
+      * Clear the TS queue record area.
+      *
+           MOVE SPACES TO W02-OUTPUT.
+      *
+      * Format date and time.
+      *
+           EXEC CICS ASKTIME
+               ABSTIME(W02-UTIME)
+           END-EXEC.
+           EXEC CICS FORMATTIME
+               ABSTIME(W02-UTIME)
+               DATE(W02-DATE) DATESEP('/')
+               TIME(W02-TIME) TIMESEP(':')
+           END-EXEC.
+      *
+      * Get transaction name.
+      *
+           MOVE DFH0BZCO-STSN-TRANSID TO W02-TRANSID
+      *
+      * Get the start data.
+      *
+           EXEC CICS RETRIEVE
+               INTO (DFHSZ-DATA)
+               RESP(W04-RESP)
+           END-EXEC
+      *
+      * Check the command completed successfully.
+      *
+           IF W04-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG8 TO W02-DESC
+               PERFORM B-REPORT-ERROR
+               GO TO A-090
+           END-IF
+      *
+      * Access the STSN conversation passed by FEPI
+      * using FEPI ALLOCATE with PASSCONVID.
+      * The conversation ID is obtained from the start data.
+      *
+           EXEC CICS FEPI ALLOCATE
+               PASSCONVID(DFHSZ-DATA-CONVID)
+               RESP(W04-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the command completed successfully.
+      *
+           IF W04-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG4 TO W02-DESC
+               PERFORM B-REPORT-ERROR
+               GO TO A-090
+           END-IF.
+      *
+      * Check that the transaction was started for STSN processing.
+      *
+           IF DFHSZ-DATA-EVENTTYPE NOT = DFHVALUE(STSN)
+               MOVE DFH0BZMO-MSG9 TO W02-DESC
+               PERFORM B-REPORT-ERROR
+               GO TO A-090
+           END-IF.
+      *
+      * Extract STSN status and data.
+      *
+           EXEC CICS FEPI EXTRACT STSN
+               CONVID(DFHSZ-DATA-CONVID)
+               STSNSTATUS(W04-STSNSTATUS)
+               SEQNUMIN(W04-SEQNUMIN)
+               SEQNUMOUT(W04-SEQNUMOUT)
+               RESP(W04-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the command completed successfully.
+      *
+           IF W04-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSGD TO W02-DESC
+               PERFORM B-REPORT-ERROR
+               GO TO A-090
+           END-IF.
+      *
+      * Process according to the STSN status.
+      *
+           EVALUATE W04-STSNSTATUS
+           WHEN DFHVALUE(NOSTSN)
+               PERFORM B-NOSTSN
+           WHEN DFHVALUE(STSNSET)
+               PERFORM B-STSNSET
+           WHEN DFHVALUE(STSNTEST)
+               PERFORM B-STSNTEST
+           END-EVALUATE.
+      *
+      * Send response to STSN using FEPI ISSUE CONTROL.
+      *
+           EXEC CICS FEPI ISSUE
+               CONTROL(W04-STSNV)
+               CONVID(DFHSZ-DATA-CONVID)
+               VALUE(W04-IVALUE)
+               RESP(W04-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the command completed successfully.
+      *
+           IF W04-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSGE TO W02-DESC
+               PERFORM B-REPORT-ERROR
+               GO TO A-090
+           END-IF.
+      *
+      * Make the session avaiable for further processing.
+      * Use the HOLD option;  the RELEASE option would end the session.
+      *
+           EXEC CICS FEPI FREE
+               HOLD
+               CONVID(DFHSZ-DATA-CONVID)
+               RESP(W04-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the command completed successfully.
+      *
+           IF W04-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG5 TO W02-DESC
+               PERFORM B-REPORT-ERROR
+               GO TO A-090
+           END-IF.
+      *
+      * Record successful STSN processing.
+      *
+           MOVE DFH0BZMO-MSGN TO W02-DESC
+           PERFORM B-WRITE-REPORT.
+      *
+      * Return to CICS.
+      *
+       A-090.
+           EXEC CICS RETURN
+           END-EXEC.
+      *
+       A-EXIT.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       No STSN routine.                                      =*
+      *===============================================================*
+      *
+      * This section handles NOSTSN.
+      *
+       B-NOSTSN SECTION.
+       B-A10.
+      *
+      * If the STSN status is NOSTSN, the transaction was started
+      * because 'start data traffic' was received.
+      * A DR1 normal response is required.
+      *
+           MOVE DFHVALUE(NORMALRESP) TO W04-STSNV
+           MOVE DFHVALUE(DEFRESP1)   TO W04-IVALUE
+           MOVE DFH0BZMO-DEFRESP1-LITERAL TO W02-HOLD-DATA2
+           MOVE DFH0BZMO-SDT-LITERAL      TO W02-HOLD-DATA1.
+      *
+       B-A90.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       STSN set routine                                      =*
+      *===============================================================*
+      *
+      * This section handles STSNSET.
+      *
+       B-STSNSET SECTION.
+       B-C10.
+      *
+      * If the STSN status is STSNSET,
+      * a positive STSN response is required.
+      *
+           MOVE DFHVALUE(STSN)       TO W04-STSNV
+           MOVE DFHVALUE(POSITIVE)   TO W04-IVALUE
+           MOVE DFH0BZMO-POSITIVE-LITERAL TO W02-HOLD-DATA2
+           MOVE DFH0BZMO-STSN-SET-LITERAL TO W02-HOLD-DATA1.
+      *
+       B-C90.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       STSN test routine                                     =*
+      *===============================================================*
+      *
+      * This section handles STSNTEST.
+      *
+       B-STSNTEST SECTION.
+       B-D10.
+      *
+      * If the STSN status is STSNSET,
+      * the sequence numbers from the IMS back-end system must be
+      * compared with the front-end sequence numbers to determine what
+      * response to send.  This is dependent on local requirements
+      * and so is not illustrated here.  Advice on the appropriate
+      * action is given in the IMS Customization Guide.
+      *
+      * Applications participating in message resynchronization
+      * would typically need to save sequence numbers on some
+      * recoverable medium, so that this STSN transaction could read
+      * the appropriate sequence numbers for comparison with the
+      * sequence numbers sent from the back-end IMS system, and then
+      * send the appropriate response:  POSITIVE, NEGATIVE, RESET, or
+      * INVALID.
+      *
+      *
+      * You can supply here whatever processing you want.
+      *
+      * ...
+      *
+      * Send required STSN response.
+      * (For illustration purposes, POSITIVE is sent.)
+      *
+           MOVE DFHVALUE(STSN)       TO W04-STSNV
+           MOVE DFHVALUE(POSITIVE)   TO W04-IVALUE
+           MOVE DFH0BZMO-POSITIVE-LITERAL  TO W02-HOLD-DATA2
+           MOVE DFH0BZMO-STSN-TEST-LITERAL TO W02-HOLD-DATA1.
+      *
+       B-D90.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Write report routine                                  =*
+      *===============================================================*
+      *
+      * This section builds a report and writes it to a TS queue.
+      *
+       B-WRITE-REPORT SECTION.
+       B-510.
+      *
+      * The TS queue record already contains the event description.
+      *
+      * Write completed description.
+      *
+           PERFORM C-WRITE-TSQ
+      *
+      * Write target and node information.
+      *
+           MOVE SPACE TO W02-OUTPUT
+           MOVE DFH0BZMO-OPFD-TARGET TO W02-DESC1
+           MOVE DFHSZ-DATA-TARGET TO W02-DATA1
+           MOVE DFH0BZMO-OPFD-NODE TO W02-DESC2
+           MOVE DFHSZ-DATA-NODE TO W02-DATA2
+           PERFORM C-WRITE-TSQ
+      *
+      * Write sequence number information, if applicable.
+      *
+           IF W04-STSNSTATUS NOT = DFHVALUE(NOSTSN)
+               MOVE SPACE TO W02-OUTPUT
+               MOVE DFH0BZMO-OPFD-SEQIN TO W02-DESC1
+               MOVE W04-SEQNUMIN TO W03-INTEGER
+               MOVE W03-INTEGER TO W02-DATA1
+               MOVE DFH0BZMO-OPFD-SEQOUT TO W02-DESC2
+               MOVE W04-SEQNUMOUT TO W03-INTEGER
+               MOVE W03-INTEGER TO W02-DATA2
+               PERFORM C-WRITE-TSQ
+           END-IF
+      *
+      * Write response information.
+      *
+           MOVE SPACE TO W02-OUTPUT
+           MOVE DFH0BZMO-OPFD-STSNSTAT TO W02-DESC1
+           MOVE W02-HOLD-DATA1 TO W02-DATA1
+           MOVE DFH0BZMO-OPFD-RESPONSE TO W02-DESC2
+           MOVE W02-HOLD-DATA2 TO W02-DATA2
+           PERFORM C-WRITE-TSQ.
+      *
+       B-590.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Report error routine                                  =*
+      *===============================================================*
+      *
+      * This section writes an error report to a TS queue.
+      *
+       B-REPORT-ERROR SECTION.
+       B-510.
+      *
+      * The TS queue record already contains the error description.
+      *
+      * Save RESP values.
+      *
+           MOVE W04-RESP TO W02-HOLD-RESP
+           MOVE DFHSZ-RESP2 TO W02-HOLD-RESP2
+      *
+      * Write completed report.
+      *
+           PERFORM C-WRITE-TSQ.
+      *
+      * Write RESP information.
+      *
+           MOVE SPACE TO W02-OUTPUT
+           MOVE DFH0BZMO-OPFD-RESP TO W02-DESC1
+           MOVE W02-HOLD-RESP TO W03-NUMBER
+           MOVE W03-NUMBER  TO W02-DATA1
+           MOVE DFH0BZMO-OPFD-RESP2 TO W02-DESC2
+           MOVE W02-HOLD-RESP2 TO W03-NUMBER
+           MOVE W03-NUMBER  TO W02-DATA2
+           PERFORM C-WRITE-TSQ.
+      *
+       B-590.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Write TS queue routine                                =*
+      *===============================================================*
+      *
+      * This section writes to a TS queue.
+      *
+       C-WRITE-TSQ SECTION.
+       C-010.
+      *
+      * Write to TS queue.
+      *
+           EXEC CICS WRITEQ
+               TS
+               QUEUE(DFH0BZCO-STSN-TSQ)
+               FROM(W02-OUTPUT)
+               LENGTH(LENGTH OF W02-OUTPUT)
+               RESP(W04-RESP)
+           END-EXEC.
+      *
+      * If the write fails, tell the operator.
+      *
+           IF W04-RESP NOT = DFHRESP(NORMAL)
+               EXEC CICS WRITE OPERATOR
+                   TEXT(DFH0BZMO-MSGH)
+               END-EXEC
+           END-IF.
+      *
+       C-090.
+           EXIT.
+      *
+      *
+      *****************************************************************
+      *        End of program DFH0VZQS                                *
+      *****************************************************************

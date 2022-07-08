@@ -1,0 +1,707 @@
+ CBL CICS('FEPI,COBOL3')
+ CBL MAP,OBJ,RENT,NODYNAM,OPT,LIB,DATA(31),LIST,APOST
+      *****************************************************************
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994"                             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *   STATUS = 7.2.0                                              *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *   $MOD(DFH0VZPA),COMP(FEPI),PROD(CICS TS ):                   *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $L0= Base   410 94     HD5VDLA : Base                         *
+      *                                                               *
+      *****************************************************************
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+      *****************************************************************
+       PROGRAM-ID.                      DFH0VZPA .
+       DATE-COMPILED.
+      *REMARKS.
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VZPA                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample program:          *
+      *                    SLU P pseudoconversational.                *
+      *                    COBOL version                              *
+      *                                                               *
+      *                                                               *
+      * FUNCTION = This sample program demonstrates using FEPI to     *
+      *            obtain data from an IMS back-end transaction.      *
+      *            It is in pseudoconversational style, using the     *
+      *            FEPI START command to schedule itself when the     *
+      *            results arrive.                                    *
+      *                                                               *
+      * TRANSACTION NAME = CZPA                                       *
+      *                                                               *
+      * MAP NAME = DFH0MZ5                                            *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      * On the first invocation of the program, a map is sent to the  *
+      * front-end terminal.                                           *
+      *                                                               *
+      * When there is input from the front-end terminal, CICS         *
+      * reinvokes the program.  After establishing a conversation,    *
+      * an inquiry is sent to the back-end system.  FEPI START is     *
+      * issued to start this program again when the results arrive.   *
+      * Meanwhile it returns to CICS to await them, so releasing      *
+      * CICS resources.                                               *
+      *                                                               *
+      * When the results arrive, FEPI starts the program again.       *
+      * The results are obtained using FEPI RECEIVE, and sent on to   *
+      * the front-end terminal.  The conversation is freed and the    *
+      * program returns to CICS to await more input.  If the back-end *
+      * system sends an IMS message, it is sent on to the front-end   *
+      * terminal and the transaction ends.                            *
+      *                                                               *
+      * When PF3 or CLEAR is received from the front-end terminal,    *
+      * the trasnaction ends.  If there is an error, the front-end    *
+      * map is reset.  These situations are detected using HANDLE     *
+      * CONDITION.                                                    *
+      *                                                               *
+      * For clarity, error checking is minimal except for the FEPI    *
+      * commands.                                                     *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * PROGRAM LOGIC                                                 *
+      *                                                               *
+      *   MAIN procedure:                                             *
+      *                                                               *
+      *     If started from terminal                                  *
+      *                                                               *
+      *         Test COMMAREA                                         *
+      *         If transaction not previously invoked                 *
+      *             Call SEND-NEW-MAP                                 *
+      *                                                               *
+      *         Set up exceptional condition handling:                *
+      *             Map error - SEND-NEW-MAP                          *
+      *             CLEAR/PF3 - END-PROG                              *
+      *                                                               *
+      *         RECEIVE map from front-end terminal                   *
+      *                                                               *
+      *         FEPI ALLOCATE conversation with back-end system       *
+      *         Build SLU P data stream to request time               *
+      *         FEPI SEND data stream to back-end system              *
+      *         FEPI START transaction                                *
+      *                                                               *
+      *         RETURN                                                *
+      *                                                               *
+      *     If started by FEPI                                        *
+      *                                                               *
+      *         RETRIEVE start data                                   *
+      *         Reaccess conversation using FEPI ALLOCATE PASSCONVID  *
+      *                                                               *
+      *         If EVENTTYPE = data received                          *
+      *             FEPI RECEIVE data stream from back-end system     *
+      *             FEPI FREE conversation                            *
+      *             If IMS message received                           *
+      *                 SEND message to front-end terminal            *
+      *                 RETURN                                        *
+      *             Build data for front-end terminal map             *
+      *             SEND map to front-end terminal                    *
+      *             RETURN TRANSID(CZPA) with COMMAREA                *
+      *                                                               *
+      *         Otherwise (time out or session loss)                  *
+      *             SEND map with message to front-end terminal       *
+      *             RETURN (freeing conversation implicitly)          *
+      *                                                               *
+      *   SEND-NEW-MAP routine:                                       *
+      *                                                               *
+      *     SEND new map                                              *
+      *     RETURN TRANSID(CZPA) with COMMAREA                        *
+      *                                                               *
+      *   END-PROG routine:                                           *
+      *                                                               *
+      *     Clear front-end terminal                                  *
+      *     RETURN                                                    *
+      *                                                               *
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       DATA DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+       WORKING-STORAGE SECTION.
+      *===============================================================*
+      *
+       01  W00-EYECATCHER          PIC X(32)   VALUE
+                 '* ***** WORKING STORAGE ***** *'.
+      *
+       01  W01-PROGID               PIC X(8) VALUE 'DFH0VZPA'.
+       01  W01-MAPNAME              PIC X(7) VALUE 'DFH0MZ5'.
+       01  W01-UTIME                PIC 9(8) COMP-3.
+       01  W01-FTIME                PIC X(8) VALUE SPACES.
+       01  W01-FDATE                PIC X(8) VALUE SPACES.
+       01  W01-TIME                 PIC X(8) VALUE SPACES.
+       01  W01-DATE                 PIC X(8) VALUE SPACES.
+       01  W01-TIME-FORMATTED.
+           03  W01-TIME-HH          PIC X(2) VALUE SPACES.
+           03  FILLER               PIC X    VALUE ':'.
+           03  W01-TIME-MM          PIC X(2) VALUE SPACES.
+           03  FILLER               PIC X    VALUE ':'.
+           03  W01-TIME-SS          PIC X(2) VALUE SPACES.
+       01  W01-DATE-FORMATTED.
+           03  W01-DATE-DD          PIC X(2) VALUE SPACES.
+           03  FILLER               PIC X    VALUE '/'.
+           03  W01-DATE-MM          PIC X(2) VALUE SPACES.
+           03  FILLER               PIC X    VALUE '/'.
+           03  W01-DATE-YY          PIC X(2) VALUE SPACES.
+      *
+      * W02 holds the data streams for the IMS system.
+      *
+      * The following data stream is used to run the back-end
+      * transaction.
+      *
+       01  W02-DATASTREAM-OUT.
+           05  W02-HEADER-LENGTH    PIC S9(4) COMP VALUE 40.
+           05  FILLER               PIC S9(4) COMP VALUE ZEROES.
+           05  W02-IMS-TRANSACTION  PIC X(8).
+           05  W02-DATE-DDMMYY      PIC X(6)       VALUE SPACES.
+           05  W02-TIME-HHMMSS      PIC X(6)       VALUE SPACES.
+           05  W02-STATUS           PIC X(8).
+           05  FILLER               PIC X(8)       VALUE SPACES.
+      *
+      * The following area is used to hold the returned data stream.
+      *
+       01  W02-DATASTREAM-IN1.
+           05  W02-IN1-FMH.
+               07  FILLER           PIC 9(2).
+               07  W02-IMS-MSG-BYTE PIC X.
+                   88  W02-GOOD-DATA               VALUE X'00'.
+               07  FILLER           PIC 9(2).
+           05  W02-IN1-IMS-TRAN     PIC X(8)       VALUE SPACES.
+           05  W02-IN1-DATE-DDMMYY.
+               07  W02-IN1-DATE-DD  PIC X(2)       VALUE SPACES.
+               07  W02-IN1-DATE-MM  PIC X(2)       VALUE SPACES.
+               07  W02-IN1-DATE-YY  PIC X(2)       VALUE SPACES.
+           05  W02-IN1-TIME-HHMMSS.
+               07  W02-IN1-TIME-HH  PIC X(2)       VALUE SPACES.
+               07  W02-IN1-TIME-MM  PIC X(2)       VALUE SPACES.
+               07  W02-IN1-TIME-SS  PIC X(2)       VALUE SPACES.
+           05  W02-IN1-STATUS       PIC X(8).
+           05  FILLER               PIC X(8)       VALUE SPACES.
+      *
+       01  W02-DATASTREAM-IN2 REDEFINES W02-DATASTREAM-IN1.
+           05  W02-IN2-FMH.
+               07  FILLER           PIC 9(6).
+           05  W02-IN2-DATA.
+               07  FILLER           PIC X(80).
+      *
+      * W03 holds the values for CICS commands.
+      *
+       01  W03-CONVID               PIC X(8).
+       01  W03-RESP                 PIC S9(7) COMP.
+       01  W03-LENGTHRETD           PIC S9(8) COMP.
+       01  W03-LENGTHSENT           PIC S9(8) COMP.
+       01  W03-DFHSZ-DATA-LENGTH    PIC S9(4) COMP.
+       01  W03-STARTCODE            PIC X(2) VALUE SPACES.
+           88  W03-STARTED-BY-FEPI      VALUE 'SZ'.
+           88  W03-STARTED-BY-TERMINAL  VALUE 'TD'.
+       01  W03-SPACE                PIC X    VALUE SPACE.
+      *
+      * W04 determines if there has been a problem.
+      *
+       01  W04-PROBLEM-FLAG         PIC 9.
+       01  W04-NO-PROBLEM           PIC 9 VALUE 0.
+       01  W04-PROBLEM              PIC 9 VALUE 1.
+      *
+      * DFH0BZ5O defines the layout of the front-end terminal map.
+      *
+       COPY DFH0BZ5O.
+      *
+      *
+      *===============================================================*
+      *=       Constants                                             =*
+      *===============================================================*
+      *
+      * DFH0BZCO defines the customizable constants used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZCO.
+      *
+      * DFH0BZMO defines the messages and other text used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZMO.
+      *
+      * DFHSZAPO defines the FEPI RESP2 values and
+      * the FEPI start data layout.
+      *
+       COPY DFHSZAPO.
+      *
+      * DFHAID defines the standard attention identifiers (AIDs).
+      *
+       COPY DFHAID.
+      *
+      * DFHBMSCA defines the standard BMS attributes.
+      *
+       COPY DFHBMSCA.
+      *
+      *
+      *===============================================================*
+       LINKAGE SECTION.
+      *===============================================================*
+      *
+      * The COMMAREA is used to pass the transaction ID between
+      * invocations of the transaction.
+      *
+       01  DFHCOMMAREA.
+           03  COMMAREA-TRANSID       PIC X(4).
+      *
+      *
+      *****************************************************************
+       PROCEDURE DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+      *=       Main Procedure                                        =*
+      *===============================================================*
+      *
+      * This section controls processing.  It determines how the
+      * transaction was started.
+      *
+       A-MAIN SECTION.
+       A-010.
+      *
+      * Set flag to show no problems.
+      *
+           MOVE W04-NO-PROBLEM TO W04-PROBLEM-FLAG.
+      *
+      * Obtain the start code to determine how the transaction was
+      * started.
+      *
+           EXEC CICS ASSIGN STARTCODE(W03-STARTCODE)
+           END-EXEC
+      *
+      * Started by terminal:  process and exit.
+      *
+           IF W03-STARTED-BY-TERMINAL
+               PERFORM B-TERMINAL-INPUT
+               EXEC CICS RETURN
+               END-EXEC
+           END-IF
+      *
+      * Started by FEPI:  process and wait for more input.
+      *
+           IF W03-STARTED-BY-FEPI
+               PERFORM D-FEPI-INPUT
+               EXEC CICS RETURN
+                   TRANSID(DFH0BZCO-FULL-LUP-TRANSID)
+                   COMMAREA(DFH0BZCO-FULL-LUP-TRANSID)
+               END-EXEC
+           END-IF.
+      *
+       A-EXIT.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Terminal input routine                                =*
+      *===============================================================*
+      *
+      * This section handles processing when started by terminal input.
+      * Depending on information
+      * in the COMMAREA, it sends a new map to the front-end terminal
+      * to get input, or it processes that input, building data stream
+      * to send to the back-end.
+      *
+      * It sets up exceptional condition handling for common errors.
+      *
+       B-TERMINAL-INPUT SECTION.
+       B-010.
+      *
+      * If this transaction has not previously been invoked
+      * (no COMMAREA, implying no transaction in progress),
+      * send a new map to the front-end terminal and exit.
+      *
+           IF EIBCALEN IS ZERO
+           OR DFH0BZCO-FULL-LUP-TRANSID IS NOT = COMMAREA-TRANSID
+               GO TO Z-SEND-NEW-MAP
+           END-IF.
+      *
+      * Set up exceptional condition handling for maps.
+      *
+           EXEC CICS HANDLE CONDITION
+               MAPFAIL(Z-SEND-NEW-MAP)
+           END-EXEC.
+      *
+           EXEC CICS HANDLE AID
+               PF3(Z-END-PROG)
+               CLEAR(Z-END-PROG)
+           END-EXEC.
+      *
+      * RECEIVE map from front-end terminal.
+      *
+           EXEC CICS RECEIVE MAP(W01-MAPNAME)
+               INTO(DFH0MZ5I)
+           END-EXEC.
+      *
+      * Start the conversation with the back-end system using
+      * FEPI ALLOCATE.  The POOL and TARGET options specify which
+      * back-end system is to be accessed.
+      *
+           EXEC CICS FEPI ALLOCATE
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               POOL(DFH0BZCO-LUP-POOL)
+               TARGET(DFH0BZCO-TARGET-IMS)
+               CONVID(W03-CONVID)
+               RESP(W03-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the response - exit with message if error.
+      *
+           IF NOT DFHSZ-RESPX-OK
+               MOVE W04-PROBLEM TO W04-PROBLEM-FLAG
+               MOVE DFH0BZMO-MSG4 TO MMSGO
+               GO TO B-099
+           END-IF.
+      *
+      * Send inquiry to the back-end system.
+      * In a more typical case, data from the map would be used in the
+      * inquiry.  However, in this illustration, no data is required.
+      *
+           PERFORM B-BUILD-DATASTREAM-AND-SEND.
+           IF W04-PROBLEM-FLAG = W04-PROBLEM
+               GO TO B-099
+           END-IF.
+      *
+      * Request that this transaction to be started to handle the
+      * returned data, or if no data arrives in 20 seconds.
+      *
+           EXEC CICS FEPI START
+               CONVID(W03-CONVID)
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               TRANSID(DFH0BZCO-FULL-LUP-TRANSID)
+               TERMID(EIBTRMID)
+               RESP(W03-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the response - exit with message if error.
+      *
+           IF NOT DFHSZ-RESPX-OK
+               MOVE W04-PROBLEM TO W04-PROBLEM-FLAG
+               MOVE DFH0BZMO-MSG7 TO MMSGO
+               GO TO B-099
+           END-IF
+           GO TO B-EXIT.
+      *
+      * Send error message to front-end terminal.
+      * Exit - with own transaction ID to continue the transaction
+      * when the user responds.
+      *
+       B-099.
+           MOVE EIBTRNID TO LUPTRANO
+           EXEC CICS SEND MAP(W01-MAPNAME)
+               FROM(DFH0MZ5O)
+               ERASE
+           END-EXEC.
+      *
+           EXEC CICS RETURN
+               TRANSID(DFH0BZCO-FULL-LUP-TRANSID)
+               COMMAREA(DFH0BZCO-FULL-LUP-TRANSID)
+           END-EXEC.
+      *
+      * Exit from routine.
+      *
+       B-EXIT.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Build data stream and SEND routine                    =*
+      *===============================================================*
+      *
+      * This section builds the data stream which asks the time from
+      * the back-end IMS transaction, and then sends it.
+      *
+       B-BUILD-DATASTREAM-AND-SEND SECTION.
+       B-210.
+      *
+      * Get front-end date and time.
+      *
+           EXEC CICS ASKTIME ABSTIME(W01-UTIME)
+           END-EXEC.
+           EXEC CICS FORMATTIME ABSTIME(W01-UTIME)
+                  TIME(W01-TIME)
+                DDMMYY(W01-DATE)
+           END-EXEC.
+      *
+      * Complete the data stream with the front-end time and the
+      * back-end transaction name.
+      *
+           MOVE W01-TIME TO W02-TIME-HHMMSS.
+           MOVE W01-DATE TO W02-DATE-DDMMYY.
+           MOVE DFH0BZCO-IMS-TRANSID TO W02-IMS-TRANSACTION.
+           MOVE DFH0BZMO-STARTED-LITERAL TO W02-STATUS.
+           MOVE LENGTH OF W02-DATASTREAM-OUT TO W03-LENGTHSENT.
+      *
+      * Send the data stream to the back-end system.
+      *
+           EXEC CICS FEPI SEND DATASTREAM
+               INVITE
+               CONVID(W03-CONVID)
+               FROM(W02-DATASTREAM-OUT)
+               FLENGTH(W03-LENGTHSENT)
+               RESP(W03-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the response - exit with message if error.
+      *
+           IF NOT DFHSZ-RESPX-OK
+               MOVE W04-PROBLEM TO W04-PROBLEM-FLAG
+               MOVE DFH0BZMO-MSG6 TO MMSGO
+           END-IF.
+      *
+       B-299-EXIT.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       FEPI-started routine                                  =*
+      *===============================================================*
+      *
+      * This section handles processing when started by FEPI.
+      * It receives the data from the back-end system and sends
+      * it on to the front-end terminal.
+      *
+       D-FEPI-INPUT SECTION.
+       D-010.
+      *
+      * Retrieve the CICS start data.
+      *
+           MOVE LENGTH OF DFHSZ-DATA TO W03-DFHSZ-DATA-LENGTH.
+           EXEC CICS RETRIEVE
+               INTO(DFHSZ-DATA)
+               LENGTH(W03-DFHSZ-DATA-LENGTH)
+               RESP(W03-RESP)
+           END-EXEC.
+      *
+      * Check the response - exit with message if error.
+      *
+           IF W03-RESP NOT = DFHRESP(NORMAL)
+               MOVE W04-PROBLEM TO W04-PROBLEM-FLAG
+               MOVE DFH0BZMO-MSG8 TO MMSGO
+               GO TO D-099
+           END-IF.
+      *
+      * Obtain control of the conversation
+      * using FEPI ALLOCATE with PASSCONVID.
+      * The CONVID is obtained from the start data.
+      *
+           EXEC CICS FEPI ALLOCATE
+               PASSCONVID(DFHSZ-DATA-CONVID)
+               RESP(W03-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the response - exit with message if error.
+      *
+           IF NOT DFHSZ-RESPX-OK
+               MOVE W04-PROBLEM TO W04-PROBLEM-FLAG
+               MOVE DFH0BZMO-MSG4 TO MMSGO
+               GO TO D-099
+           END-IF.
+      *
+      * If data has arrived from the back-end system process it.
+      *
+           IF DFHSZ-DATA-EVENTTYPE = DFHVALUE(DATA)
+               PERFORM D-RECEIVE-FEPI-DATA
+               IF W04-PROBLEM-FLAG = W04-PROBLEM
+                   GO TO D-099
+               END-IF
+      *
+      * Extract results from the returned data stream.
+      *
+               MOVE W02-IN1-TIME-HH        TO W01-TIME-HH
+               MOVE W02-IN1-TIME-MM        TO W01-TIME-MM
+               MOVE W02-IN1-TIME-SS        TO W01-TIME-SS
+               MOVE W01-TIME-FORMATTED     TO LUPTIMEO
+               MOVE W02-IN1-DATE-DD        TO W01-DATE-DD
+               MOVE W02-IN1-DATE-MM        TO W01-DATE-MM
+               MOVE W02-IN1-DATE-YY        TO W01-DATE-YY
+               MOVE W01-DATE-FORMATTED     TO LUPDATEO
+               MOVE W02-IN1-STATUS         TO LUPSTATEO
+      *
+      * No data arrived - there has been a time out or a session loss.
+      * Exit with a message.
+      *
+           ELSE
+               MOVE W04-PROBLEM TO W04-PROBLEM-FLAG
+               MOVE DFH0BZMO-MSGA TO MMSGO
+           END-IF.
+      *
+      * Send map (with results or message) to the front-end terminal.
+      *
+       D-099.
+           MOVE EIBTRNID TO LUPTRANO
+           EXEC CICS SEND MAP(W01-MAPNAME)
+               FROM(DFH0MZ5O)
+               ERASE
+           END-EXEC.
+      *
+       D-EXIT.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Get data stream routine                               =*
+      *===============================================================*
+      *
+      * This section examines the returned data stream.
+      *
+       D-RECEIVE-FEPI-DATA SECTION.
+       D-110.
+      *
+      * Get the returned data stream.
+      *
+           MOVE LENGTH OF W02-DATASTREAM-IN1 TO W03-LENGTHRETD.
+           EXEC CICS FEPI RECEIVE DATASTREAM
+               UNTILCDEB
+               CONVID(DFHSZ-DATA-CONVID)
+               INTO(W02-DATASTREAM-IN1)
+               MAXFLENGTH(W03-LENGTHRETD)
+               RESP(W03-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the response - exit with message if error.
+      *
+           IF NOT DFHSZ-RESPX-OK
+               MOVE W04-PROBLEM TO W04-PROBLEM-FLAG
+               MOVE DFH0BZMO-MSG3 TO MMSGO
+               GO TO D-199
+           END-IF.
+      *
+      * End the conversation.
+      *
+           EXEC CICS FEPI FREE
+               CONVID(DFHSZ-DATA-CONVID)
+               RESP(W03-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the response - exit with message if error.
+      *
+           IF NOT DFHSZ-RESPX-OK
+               MOVE W04-PROBLEM TO W04-PROBLEM-FLAG
+               MOVE DFH0BZMO-MSG5 TO MMSGO
+               GO TO D-199
+           END-IF.
+      *
+      * Check for normal response by testing byte 3 of the output.
+      * If non-zero, the FMH is 6 bytes long and the data is an IMS
+      * system message - display it and exit.
+      *
+           IF NOT W02-GOOD-DATA
+               MOVE W04-PROBLEM TO W04-PROBLEM-FLAG
+               MOVE W02-IN2-DATA TO MMSGO
+           END-IF.
+      *
+       D-199.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       End program routine                                   =*
+      *===============================================================*
+      *
+      * This section gets control if PF3 or CLEAR is input at the
+      * front-end terminal.
+      *
+      * The program exits after clearing the screen.
+      *
+       Z-END-PROG SECTION.
+      *
+       Z-B10.
+           EXEC CICS SEND FROM(W03-SPACE)
+               LENGTH(0)
+               ERASE
+           END-EXEC.
+      *
+           EXEC CICS RETURN
+           END-EXEC.
+      *
+       Z-B99.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Send new map routine                                  =*
+      *===============================================================*
+      *
+      * This section gets control if the MAPFAIL condition is raised
+      * or if the transaction has not previously been invoked.
+      *
+      * It sends a new map to the front-end terminal and returns to
+      * CICS to await the user input.
+      *
+       Z-SEND-NEW-MAP SECTION.
+       Z-C10.
+      *
+      * Get date and time.
+      *
+           EXEC CICS ASKTIME ABSTIME(W01-UTIME)
+           END-EXEC.
+      *
+           EXEC CICS FORMATTIME ABSTIME(W01-UTIME)
+               TIME(W01-FTIME) TIMESEP
+               DDMMYY(W01-FDATE) DATESEP
+           END-EXEC.
+      *
+      * Build map data and send map.
+      *
+           MOVE EIBTRNID         TO LUPTRANO
+           MOVE W01-FTIME        TO LUPTIMEO.
+           MOVE DFHBMPRF         TO LUPTIMEA.
+           MOVE W01-FDATE        TO LUPDATEO.
+           MOVE DFHBMPRF         TO LUPDATEA.
+           MOVE DFH0BZMO-NOTSTARTED-LITERAL TO LUPSTATEO.
+      *
+           EXEC CICS SEND MAP(W01-MAPNAME)
+               FROM(DFH0MZ5O)
+               ERASE
+           END-EXEC.
+      *
+      * Exit - with own transaction ID to continue the transaction
+      * when the user responds.
+      *
+           EXEC CICS RETURN
+               TRANSID(DFH0BZCO-FULL-LUP-TRANSID)
+               COMMAREA(DFH0BZCO-FULL-LUP-TRANSID)
+           END-EXEC.
+      *
+       Z-C99.
+           EXIT.
+      *
+      *
+      *****************************************************************
+      *      End of program DFH0VZPA                                  *
+      *****************************************************************

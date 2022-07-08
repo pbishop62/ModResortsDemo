@@ -1,0 +1,767 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VRIO                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Customer Data File Handler for Sample App  *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION :                                                 *
+      *                                                               *
+      *  This module is the remote I/O handling module. It processes  *
+      *  the I/O functions for the Customer File (DFH0FCUS) and its'  *
+      *  secondary index (DFH0FCAI).                                  *
+      *                                                               *
+      *  For a full description of the program operation see the      *
+      *  CICS/ESA Book entitled "Sample Applications Guide" Version 3 *
+      *  Release 2, Document Number SC33-0731.                        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *     $MOD(DFH0VRIO),COMP(SAMPLES),PROD(CICS TS ):              *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900906        : Created.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0VRIO.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  ONX                             PIC X     VALUE '1'.
+       77  CUST-FILE-NAME                  PIC X(8)  VALUE 'DFH0FCUS'.
+       77  CUSTAIX                         PIC X(8)  VALUE 'DFH0FCAI'.
+       77  CUSTFILE                        PIC X(8)  VALUE 'DFH0FCUS'.
+       77  UPD                             PIC X(3)  VALUE 'UPD'.
+       77  NOT-AVAILABLE                   PIC X(20) VALUE
+           'Record not available'.
+       77  SAVED-CUSTOMER-NUMBER           PIC 9(8)       VALUE ZERO.
+       77  KEY-LENGTH                      PIC S9(4) COMP VALUE +0.
+       77  AST-FOUND                       PIC S9(4) COMP VALUE +0.
+       77  ITEM-1                          PIC S9(4) COMP VALUE +1.
+       77  FILL-LNGTH                      PIC S9(4) COMP VALUE +0.
+       77  FILL-NO                         PIC S9(4) COMP VALUE +0.
+       01  HOLD-CUST-NAME                  PIC X(20) VALUE SPACES.
+       01  FILL-SPACES REDEFINES HOLD-CUST-NAME.
+           05  FILLER OCCURS 20 TIMES INDEXED BY FILL-I.
+               10  FILL-CHAR               PIC X.
+       01  SHORT-KEY                       PIC X(20) VALUE SPACES.
+       01  CTR                             PIC S9(4) COMP VALUE +0.
+       01  ITEMERR-SW                      PIC X     VALUE SPACE.
+           88  ITEMERR-RAISED              VALUE '1'.
+       01  OUT-OF-RANGE-SW                 PIC X     VALUE SPACE.
+           88  OUT-OF-RANGE                VALUE '1'.
+       01  READ-WHOLE-FILE-SW              PIC X     VALUE SPACE.
+           88  READ-WHOLE-FILE             VALUE '1'.
+       01  RECORD-NUMBER-AVAILABLE-SW      PIC X     VALUE SPACE.
+           88  RECORD-NUMBER-FOUND         VALUE '1'.
+           COPY DFH0BCA.
+           COPY DFH0BTSQ.
+           COPY DFH0BCR.
+           COPY DFHAID.
+           COPY DFHBMSCA.
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           05  COMM-DATA-AREA     PIC X(200).
+
+       PROCEDURE DIVISION.
+
+       MAIN-SECTION SECTION.
+
+           MOVE DFHCOMMAREA TO WS-HOLD-AREA.
+
+           EVALUATE TRUE
+              WHEN COMM-IO-TYPE = READ-RECORD
+               EVALUATE TRUE
+                  WHEN COMM-CUST-NAME NOT = LOW-VALUES
+                  AND COMM-CUST-NAME NOT = SPACES
+                   PERFORM PROCESS-ALTERNATE-INDEX
+                  WHEN COMM-RANGE-STOP > 0
+                   PERFORM PROCESS-STARTBR
+                  WHEN COMM-BR-UPD = UPD
+                   PERFORM READ-RECORD-TSQ
+                   PERFORM PROCESS-READ-FOR-UPDATE
+                  WHEN OTHER
+                   PERFORM PROCESS-READ,
+               END-EVALUATE
+              WHEN COMM-IO-TYPE = READ-FOR-UPDATE
+              OR                  UPDATE-VALIDATION
+               PERFORM READ-RECORD-TSQ
+               PERFORM PROCESS-READ-FOR-UPDATE,
+              WHEN COMM-IO-TYPE = FREE-RECORD
+               PERFORM PROCESS-FREE-RECORD,
+              WHEN COMM-IO-TYPE = ALLOCATE-RECORD
+               PERFORM READ-RECORD-TSQ
+               PERFORM PROCESS-ALLOCATE-RECORD-NUMBER,
+              WHEN COMM-IO-TYPE = WRITE-RECORD
+               PERFORM READ-RECORD-TSQ,
+               PERFORM PROCESS-WRITE,
+              WHEN COMM-IO-TYPE = DELETE-RECORD
+               PERFORM READ-RECORD-TSQ,
+               MOVE CUSTREC-ACCNO TO COMM-CUSTOMER-NUMBER
+               PERFORM PROCESS-DELETE,
+              WHEN COMM-IO-TYPE = SAVE-RECORD
+               PERFORM PROCESS-READ-FOR-UPDATE,
+           END-EVALUATE.
+
+           EVALUATE TRUE
+              WHEN LIST-PANEL-PROCESSING
+               CONTINUE,
+              WHEN COMM-ITEM-TOTAL = +1
+              AND  COMM-IO-TYPE    = READ-RECORD
+               PERFORM READ-LIST-TSQ
+               MOVE CUSTFILE TO CUST-FILE-NAME
+               MOVE LISTTSQ-ACCNO TO COMM-CUSTOMER-NUMBER
+               IF COMM-BR-UPD = UPD
+                   PERFORM READ-RECORD-TSQ
+                   PERFORM PROCESS-READ-FOR-UPDATE
+               ELSE
+                   PERFORM PROCESS-READ
+               END-IF
+               PERFORM DELETE-TSQ
+           END-EVALUATE.
+
+           MOVE WS-HOLD-AREA TO DFHCOMMAREA.
+
+           EXEC CICS RETURN
+                END-EXEC.
+
+           GOBACK.
+
+       END-MAIN-SECTION.
+           EXIT.
+
+       PROCESS-READ SECTION.
+
+           PERFORM READ-RECORD-TSQ.
+           MOVE LENGTH OF ACTUAL-RECORD TO READ-LENGTH.
+
+           EXEC CICS READ INTO(CUSTREC-LAYOUT)
+                          FILE(CUST-FILE-NAME)
+                          LENGTH(READ-LENGTH)
+                          RIDFLD(COMM-CUSTOMER-NUMBER)
+                          RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               PERFORM WRITE-RECORD-TSQ
+              WHEN OTHER
+               MOVE 'RIO01' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       PROCESS-READ-EXIT.
+           EXIT.
+
+       PROCESS-ALTERNATE-INDEX SECTION.
+
+           MOVE CUSTAIX TO CUST-FILE-NAME.
+
+           UNSTRING COMM-CUST-NAME DELIMITED BY '*' INTO
+                     SHORT-KEY COUNT IN KEY-LENGTH
+                               TALLYING IN AST-FOUND.
+
+           EVALUATE TRUE
+              WHEN KEY-LENGTH = LENGTH OF CUSTREC-SNAME
+               EXEC CICS STARTBR FILE(CUST-FILE-NAME)
+                                 RIDFLD(COMM-CUST-NAME)
+                                 GTEQ
+                                 RESP(COMM-RESPONSE)
+                         END-EXEC
+               EVALUATE COMM-RESPONSE
+                  WHEN DFHRESP(NORMAL)
+                   ADD +1 TO KEY-LENGTH
+                   PERFORM PROCESS-READNEXT-CUST-NAME
+                                           UNTIL(OUT-OF-RANGE)
+                  WHEN OTHER
+                   MOVE 'RIO02' TO COMM-CALL-NUMBER
+                   MOVE EIBRSRCE TO COMM-RESOURCE
+               END-EVALUATE
+              WHEN KEY-LENGTH > 0 AND AST-FOUND > +0
+               EXEC CICS STARTBR FILE(CUST-FILE-NAME)
+                                 RIDFLD(SHORT-KEY)
+                                 KEYLENGTH(KEY-LENGTH)
+                                 GENERIC
+                                 GTEQ
+                                 RESP(COMM-RESPONSE)
+                         END-EXEC
+               EVALUATE COMM-RESPONSE
+                  WHEN DFHRESP(NORMAL)
+                   ADD +1 TO KEY-LENGTH
+                   MOVE SHORT-KEY TO COMM-CUST-NAME
+                   PERFORM PROCESS-READNEXT-CUST-NAME
+                                           UNTIL(OUT-OF-RANGE)
+                  WHEN OTHER
+                   MOVE 'RIO03' TO COMM-CALL-NUMBER
+                   MOVE EIBRSRCE TO COMM-RESOURCE
+               END-EVALUATE
+              WHEN KEY-LENGTH = 0 AND AST-FOUND > +0
+               MOVE LOW-VALUES TO SHORT-KEY
+               EXEC CICS STARTBR FILE(CUST-FILE-NAME)
+                                 RIDFLD(SHORT-KEY)
+                                 GTEQ
+                                 RESP(COMM-RESPONSE)
+                         END-EXEC
+               EVALUATE COMM-RESPONSE
+                  WHEN DFHRESP(NORMAL)
+                   ADD +1 TO KEY-LENGTH
+                   MOVE SHORT-KEY TO COMM-CUST-NAME
+                   MOVE ONX       TO READ-WHOLE-FILE-SW
+                   PERFORM PROCESS-READNEXT-CUST-NAME
+                                           UNTIL(OUT-OF-RANGE)
+                  WHEN OTHER
+                   MOVE 'RIO04' TO COMM-CALL-NUMBER
+                   MOVE EIBRSRCE TO COMM-RESOURCE
+               END-EVALUATE
+           END-EVALUATE.
+
+       PROCESS-ALT-INDEX-EXIT.
+           EXIT.
+
+       PROCESS-READNEXT-CUST-NAME SECTION.
+
+           EXEC CICS READNEXT INTO(CUSTREC-LAYOUT)
+                              FILE(CUST-FILE-NAME)
+                              LENGTH(LENGTH OF ACTUAL-RECORD)
+                              RIDFLD(COMM-CUST-NAME)
+                              RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               PERFORM BUILD-WRITE-TSQ
+              WHEN DFHRESP(DUPKEY)
+               PERFORM BUILD-WRITE-TSQ
+              WHEN DFHRESP(ENDFILE)
+               MOVE ONX TO OUT-OF-RANGE-SW
+               MOVE DFHRESP(NORMAL) TO COMM-RESPONSE
+              WHEN OTHER
+               PERFORM WRITE-LIST-TSQ
+               MOVE ONX TO OUT-OF-RANGE-SW
+           END-EVALUATE.
+
+       PROCESS-READNXT-CUST-NAM-EXIT.
+           EXIT.
+
+       PROCESS-READ-FOR-UPDATE SECTION.
+
+           MOVE LENGTH OF ACTUAL-RECORD TO READ-LENGTH.
+
+           EXEC CICS READ INTO(CUSTREC-LAYOUT)
+                          FILE(CUST-FILE-NAME)
+                          LENGTH(READ-LENGTH)
+                          RIDFLD(COMM-CUSTOMER-NUMBER)
+                          RESP(COMM-RESPONSE)
+                          UPDATE
+                     END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               EVALUATE TRUE
+                  WHEN COMM-IO-TYPE = SAVE-RECORD
+                   PERFORM READ-RECORD-TSQ,
+                   MOVE SPACES TO CUSTREC-USERTERMID,
+                   PERFORM PROCESS-REWRITE,
+                  WHEN OTHER
+                   MOVE ZERO TO COMM-RC
+                   PERFORM CHECK-RECORD-IN-USE
+               END-EVALUATE
+              WHEN DFHRESP(NOTFND)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'RIO05' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       PROCESS-READ-FOR-UPDATE-EXIT.
+           EXIT.
+
+       PROCESS-ALLOCATE-RECORD-NUMBER SECTION.
+
+           MOVE +0 TO COMM-CUSTOMER-NUMBER.
+
+           MOVE +99999999 TO COMM-RANGE-STOP.
+
+           PERFORM PROCESS-STARTBR.
+
+           PERFORM PROCESS-READNEXT-CUST-NUMBER
+                                UNTIL(RECORD-NUMBER-FOUND).
+
+       PROCESS-ALLOCATE-REC-NUM-EXIT.
+           EXIT.
+
+       PROCESS-FREE-RECORD SECTION.
+
+           MOVE LENGTH OF ACTUAL-RECORD TO READ-LENGTH.
+
+           EXEC CICS READ INTO(CUSTREC-LAYOUT)
+                          FILE(CUST-FILE-NAME)
+                          LENGTH(READ-LENGTH)
+                          RIDFLD(COMM-CUSTOMER-NUMBER)
+                          RESP(COMM-RESPONSE)
+                          UPDATE
+                     END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               IF CUSTREC-USERTERMID = EIBTRMID
+                  MOVE SPACES TO CUSTREC-USERTERMID
+                  PERFORM PROCESS-REWRITE
+               END-IF
+              WHEN OTHER
+               MOVE 'RIO06' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       PROCESS-FREE-RECORD-EXIT.
+           EXIT.
+
+       PROCESS-READNEXT-CUST-NUMBER SECTION.
+
+           MOVE COMM-CUSTOMER-NUMBER TO SAVED-CUSTOMER-NUMBER.
+
+           EXEC CICS READNEXT FILE(CUST-FILE-NAME)
+                              INTO(CUSTREC-LAYOUT)
+                              LENGTH(LENGTH OF ACTUAL-RECORD)
+                              RIDFLD(COMM-CUSTOMER-NUMBER)
+                              RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               EVALUATE TRUE
+                  WHEN COMM-IO-TYPE = READ-RECORD
+                   IF COMM-CUSTOMER-NUMBER > COMM-RANGE-STOP
+                       IF COMM-ITEM-TOTAL = +0
+                           MOVE DFHRESP(NOTFND) TO COMM-RESPONSE
+                       END-IF
+                       MOVE ONX TO OUT-OF-RANGE-SW
+                       PERFORM ENDBR-CUSTFILE
+                   ELSE
+                       PERFORM WRITE-LIST-TSQ
+                   END-IF
+                  WHEN COMM-IO-TYPE = ALLOCATE-RECORD
+                   ADD +1, SAVED-CUSTOMER-NUMBER
+                                GIVING SAVED-CUSTOMER-NUMBER
+                   IF COMM-CUSTOMER-NUMBER > SAVED-CUSTOMER-NUMBER
+                       MOVE ONX TO RECORD-NUMBER-AVAILABLE-SW
+                       MOVE LOW-VALUES TO CUSTREC-LAYOUT
+                       MOVE SAVED-CUSTOMER-NUMBER TO
+                                         COMM-CUSTOMER-NUMBER
+                       MOVE NOT-AVAILABLE TO CUSTREC-SNAME
+                       MOVE SAVED-CUSTOMER-NUMBER TO
+                                                    CUSTREC-ACCNO
+                       MOVE EIBTRMID TO CUSTREC-USERTERMID
+                       PERFORM ENDBR-CUSTFILE
+                       PERFORM PROCESS-WRITE
+                       IF COMM-RESPONSE = DFHRESP(NORMAL)
+                           PERFORM WRITE-RECORD-TSQ
+                       END-IF
+                   END-IF
+               END-EVALUATE
+              WHEN DFHRESP(ENDFILE)
+               EVALUATE TRUE
+                  WHEN COMM-IO-TYPE = READ-RECORD
+                   MOVE ONX TO OUT-OF-RANGE-SW
+                   MOVE DFHRESP(NORMAL) TO COMM-RESPONSE
+                   PERFORM ENDBR-CUSTFILE
+                  WHEN COMM-IO-TYPE = ALLOCATE-RECORD
+                   IF SAVED-CUSTOMER-NUMBER < 99999999
+                       MOVE ONX TO RECORD-NUMBER-AVAILABLE-SW
+                       MOVE LOW-VALUES TO CUSTREC-LAYOUT
+                       ADD +1, SAVED-CUSTOMER-NUMBER
+                                    GIVING SAVED-CUSTOMER-NUMBER
+                       MOVE SAVED-CUSTOMER-NUMBER TO CUSTREC-ACCNO
+                       MOVE NOT-AVAILABLE TO CUSTREC-SNAME
+                       MOVE SAVED-CUSTOMER-NUMBER TO
+                                          COMM-CUSTOMER-NUMBER
+                       MOVE EIBTRMID TO CUSTREC-USERTERMID
+                       PERFORM ENDBR-CUSTFILE
+                       PERFORM PROCESS-WRITE
+                       IF COMM-RESPONSE = DFHRESP(NORMAL)
+                           PERFORM WRITE-RECORD-TSQ
+                       END-IF
+                   ELSE
+                       MOVE '16' TO COMM-RC
+                       MOVE ONX TO RECORD-NUMBER-AVAILABLE-SW
+                   END-IF
+               END-EVALUATE
+              WHEN OTHER
+               MOVE 'RIO07' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+               MOVE ONX TO OUT-OF-RANGE-SW
+               MOVE ONX TO RECORD-NUMBER-AVAILABLE-SW
+           END-EVALUATE.
+
+       PROCESS-READNXT-CUST-NUM-EXIT.
+           EXIT.
+
+       PROCESS-REWRITE SECTION.
+
+           EXEC CICS REWRITE FILE(CUST-FILE-NAME)
+                             FROM(CUSTREC-LAYOUT)
+                             LENGTH(LENGTH OF ACTUAL-RECORD)
+                             RESP(COMM-RESPONSE)
+                       END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'RIO08' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       PROCESS-REWRITE-EXIT.
+           EXIT.
+
+       PROCESS-WRITE SECTION.
+
+           EXEC CICS WRITE FILE(CUST-FILE-NAME)
+                           FROM(CUSTREC-LAYOUT)
+                           RIDFLD(COMM-CUSTOMER-NUMBER)
+                           LENGTH(LENGTH OF ACTUAL-RECORD)
+                           KEYLENGTH(LENGTH OF CUSTREC-ACCNO)
+                           RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'RIO09' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       PROCESS-WRITE-EXIT.
+           EXIT.
+
+       PROCESS-DELETE SECTION.
+
+           EXEC CICS DELETE FILE(CUST-FILE-NAME)
+                            RIDFLD(COMM-CUSTOMER-NUMBER)
+                            KEYLENGTH(LENGTH OF COMM-CUSTOMER-NUMBER)
+                            RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN DFHRESP(NOTFND)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'RIO10' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       PROCESS-DELETE-EXIT.
+           EXIT.
+
+       PROCESS-STARTBR SECTION.
+
+           EXEC CICS STARTBR FILE(CUST-FILE-NAME)
+                             RIDFLD(COMM-CUSTOMER-NUMBER)
+                             GTEQ
+                             RESP(COMM-RESPONSE)
+                     END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               EVALUATE TRUE
+                  WHEN COMM-IO-TYPE = READ-RECORD
+                   PERFORM PROCESS-READNEXT-CUST-NUMBER
+                                           UNTIL(OUT-OF-RANGE)
+                  WHEN OTHER
+                   CONTINUE,
+               END-EVALUATE
+              WHEN DFHRESP(NOTFND)
+               IF COMM-IO-TYPE = ALLOCATE-RECORD
+                   MOVE LOW-VALUES TO CUSTREC-LAYOUT
+                   MOVE +1 TO CUSTREC-ACCNO,
+                              COMM-CUSTOMER-NUMBER
+                   MOVE NOT-AVAILABLE TO CUSTREC-SNAME
+                   MOVE EIBTRMID TO CUSTREC-USERTERMID
+                   MOVE DFHRESP(NORMAL) TO COMM-RESPONSE
+                   MOVE ONX TO RECORD-NUMBER-AVAILABLE-SW
+                   PERFORM PROCESS-WRITE
+                   PERFORM WRITE-RECORD-TSQ
+               END-IF
+              WHEN OTHER
+               MOVE 'RIO11' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       PROCESS-STARTBR-EXIT.
+           EXIT.
+
+       ENDBR-CUSTFILE SECTION.
+
+           EXEC CICS ENDBR FILE(CUST-FILE-NAME)
+                 END-EXEC.
+
+       ENDBR-CUSTFILE-EXIT.
+           EXIT.
+
+       CHECK-RECORD-IN-USE SECTION.
+
+           IF CUSTREC-USERTERMID = EIBTRMID
+               PERFORM WRITE-RECORD-TSQ
+           ELSE
+               IF CUSTREC-USERTERMID NOT = SPACES
+                   MOVE CUSTREC-USERTERMID TO COMM-USERTERMID
+                   MOVE '04' TO COMM-RC
+                   PERFORM WRITE-RECORD-TSQ
+               ELSE
+                   MOVE EIBTRMID TO CUSTREC-USERTERMID
+                   PERFORM WRITE-RECORD-TSQ
+                   PERFORM PROCESS-REWRITE
+               END-IF
+           END-IF.
+
+       CHECK-RECORD-IN-USE-EXIT.
+           EXIT.
+
+       BUILD-WRITE-TSQ SECTION.
+
+           MOVE COMM-CUST-NAME TO HOLD-CUST-NAME.
+           ADD LENGTH OF CUSTREC-SNAME, +1 GIVING FILL-LNGTH.
+           PERFORM FILL-CUST-NAME VARYING FILL-I FROM KEY-LENGTH
+                    BY +1 UNTIL(FILL-I = FILL-LNGTH).
+           IF HOLD-CUST-NAME = SHORT-KEY
+           OR READ-WHOLE-FILE
+               PERFORM WRITE-LIST-TSQ
+           ELSE
+               IF COMM-ITEM-TOTAL = +0
+                   MOVE DFHRESP(NOTFND) TO COMM-RESPONSE
+               END-IF
+               MOVE ONX TO OUT-OF-RANGE-SW
+           END-IF.
+
+       BUILD-WRITE-TSQ-EXIT.
+           EXIT.
+
+       FILL-CUST-NAME SECTION.
+
+           MOVE SPACE TO FILL-CHAR(FILL-I).
+
+       FILL-CUST-NAME-EXIT.
+           EXIT.
+
+       READ-RECORD-TSQ SECTION.
+
+           PERFORM READ-TRACK-TSQ.
+
+           EVALUATE TRUE
+              WHEN COMM-IO-TYPE = SAVE-RECORD
+              OR                  DELETE-RECORD
+              OR                  UPDATE-VALIDATION
+              OR                  SAVED-AS-5
+               CONTINUE
+              WHEN OTHER
+               ADD +1 TO COMM-RECORD-ITEM-CTR
+           END-EVALUATE.
+
+           MOVE RECD TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+           MOVE LENGTH OF CUSTREC-LAYOUT TO READQ-LENGTH.
+
+           EXEC CICS READQ TS QUEUE(TSQ-NAME)
+                              INTO(CUSTREC-LAYOUT)
+                              LENGTH(READQ-LENGTH)
+                              ITEM(COMM-RECORD-ITEM-CTR)
+                              RESP(COMM-RESPONSE)
+                        END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               IF SAVED-AS-5
+                   MOVE COMM-CUSTOMER-NUMBER TO CUSTREC-ACCNO
+               END-IF
+              WHEN DFHRESP(ITEMERR)
+               MOVE ONX TO ITEMERR-SW
+              WHEN OTHER
+               MOVE 'RIO12' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       READ-RECORD-TSQ-EXIT.
+           EXIT.
+
+       WRITE-RECORD-TSQ SECTION.
+
+           MOVE RECD TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           IF ITEMERR-RAISED
+               EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                                   FROM(CUSTREC-LAYOUT)
+                                   LENGTH(LENGTH OF CUSTREC-LAYOUT)
+                                   ITEM(COMM-RECORD-ITEM-CTR)
+                                   RESP(COMM-RESPONSE)
+                            END-EXEC
+           ELSE
+               EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                                   FROM(CUSTREC-LAYOUT)
+                                   LENGTH(LENGTH OF CUSTREC-LAYOUT)
+                                   ITEM(COMM-RECORD-ITEM-CTR)
+                                   REWRITE
+                                   RESP(COMM-RESPONSE)
+                            END-EXEC
+           END-IF.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               IF LIST-PANEL-PROCESSING
+                   PERFORM REWRITE-TRACK-TSQ
+               END-IF
+              WHEN OTHER
+               MOVE 'RIO13' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       WRITE-RECORD-TSQ-EXIT.
+           EXIT.
+
+       READ-TRACK-TSQ SECTION.
+
+           MOVE RECD TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+           MOVE LENGTH OF TRACK-LAYOUT TO READQ-LENGTH.
+
+           EXEC CICS READQ TS QUEUE(TSQ-NAME)
+                              INTO(TRACK-LAYOUT)
+                              LENGTH(READQ-LENGTH)
+                              ITEM(ITEM-1)
+                              RESP(COMM-RESPONSE)
+                        END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'RIO14' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       READ-TRACK-TSQ-EXIT.
+           EXIT.
+
+       REWRITE-TRACK-TSQ SECTION.
+
+           MOVE COMM-RECORD-ITEM-CTR TO
+                             TRACK-RECORD-ITEM-NO(COMM-DEPTH-CTR).
+           MOVE RECD TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                               FROM(TRACK-LAYOUT)
+                               LENGTH(LENGTH OF TRACK-LAYOUT)
+                               ITEM(ITEM-1)
+                               REWRITE
+                               RESP(COMM-RESPONSE)
+                       END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'RIO15' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       REWRITE-TRACK-TSQ-EXIT.
+           EXIT.
+
+       DELETE-TSQ SECTION.
+
+           MOVE LIST TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+
+           EXEC CICS DELETEQ TS QUEUE(TSQ-NAME)
+                                RESP(COMM-RESPONSE)
+                        END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN DFHRESP(QIDERR)
+               MOVE DFHRESP(NORMAL) TO COMM-RESPONSE
+              WHEN OTHER
+               MOVE 'RIO16' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       DELETE-TSQ-EXIT.
+           EXIT.
+
+       READ-LIST-TSQ SECTION.
+
+           MOVE LIST TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+           MOVE LENGTH OF LISTTSQ-LAYOUT TO READQ-LENGTH.
+
+           EXEC CICS READQ TS QUEUE(TSQ-NAME)
+                              INTO(LISTTSQ-LAYOUT)
+                              ITEM(ITEM-1)
+                              LENGTH(READQ-LENGTH)
+                              RESP(COMM-RESPONSE)
+                        END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'RIO17' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       READ-LIST-TSQ-EXIT.
+           EXIT.
+
+       WRITE-LIST-TSQ SECTION.
+
+           MOVE LIST TO TSQ-PREFIX.
+           MOVE EIBTRMID TO TSQ-TRMID.
+           MOVE SPACE         TO LISTTSQ-ACTION.
+           MOVE CUSTREC-ACCNO TO LISTTSQ-ACCNO.
+           MOVE CUSTREC-SNAME TO LISTTSQ-SNAME.
+           MOVE CUSTREC-FNAME TO LISTTSQ-FNAME.
+
+           EXEC CICS WRITEQ TS QUEUE(TSQ-NAME)
+                               FROM(LISTTSQ-LAYOUT)
+                               ITEM(COMM-ITEM-TOTAL)
+                               LENGTH(LENGTH OF LISTTSQ-LAYOUT)
+                               RESP(COMM-RESPONSE)
+                        END-EXEC.
+
+           EVALUATE COMM-RESPONSE
+              WHEN DFHRESP(NORMAL)
+               CONTINUE,
+              WHEN OTHER
+               MOVE 'RIO18' TO COMM-CALL-NUMBER
+               MOVE EIBRSRCE TO COMM-RESOURCE
+           END-EVALUATE.
+
+       WRITE-LIST-TSQ-EXIT.
+           EXIT.

@@ -1,0 +1,720 @@
+ CBL CICS('FEPI,COBOL3')
+ CBL MAP,OBJ,RENT,NODYNAM,OPT,LIB,DATA(31),LIST,APOST
+      *****************************************************************
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994"                             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *   STATUS = 7.2.0                                              *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *   $MOD(DFH0VZTS),COMP(FEPI),PROD(CICS TS ):                   *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $L0= Base   410 94     HD5VDLA : Base                         *
+      *                                                               *
+      *****************************************************************
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+      *****************************************************************
+       PROGRAM-ID.                      DFH0VZTS .
+       DATE-COMPILED.
+      *REMARKS.
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VZTS                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample program:          *
+      *                    Screen image SEND and START.               *
+      *                    COBOL version                              *
+      *                                                               *
+      *                                                               *
+      * FUNCTION = This sample program demonstrates using FEPI to     *
+      *            send formatted data to a back-end transaction,     *
+      *            and requesting a transaction to be started when    *
+      *            the response to the data arrives.                  *
+      *                                                               *
+      * TRANSACTION NAME = CZTS                                       *
+      *                                                               *
+      * MAP NAME = DFH0MZ2                                            *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      * This program is the SEND part of a SEND-RECEIVE pair of       *
+      * programs, the RECEIVE part being DFH0VZTR.                    *
+      *                                                               *
+      * On the first invocation of this send transaction,             *
+      * a map is sent to the front-end terminal.                      *
+      *                                                               *
+      * When there is input from the front-end terminal, CICS         *
+      * reinvokes this send transaction.  The customer number is      *
+      * extracted from the input.  Using FEPI ALLOCATE a conversation *
+      * is started with the back-end system.  Then FEPI SEND with     *
+      * screen image data is used to start a back-end transaction.    *
+      * FEPI START is issued to specify that the receive transaction  *
+      * is to be started when the back-end system responds.           *
+      *                                                               *
+      * In due course, the receive transaction will be started and    *
+      * XCTLs to this send transaction.  The customer number can      *
+      * now be sent to the back-end system using FEPI SEND with       *
+      * screen image data.  FEPI START is again issued.               *
+      *                                                               *
+      * The receive transaction will get the results from the         *
+      * back-end system and send them on to the front-end terminal.   *
+      *                                                               *
+      * When there is more input from the front-end terminal, CICS    *
+      * reinvokes this transaction.  The conversation is reaccessed   *
+      * using FEPI ALLOCATE with PASSCONVID, then the customer number *
+      * is sent to the back-end system as before.  The cycle goes on  *
+      * until PF3 or CLEAR is received.  These are passed on to the   *
+      * the receive transaction (using the FEPI START user data) and  *
+      * to the back-end transaction to indicate that it is to end.    *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * PROGRAM LOGIC                                                 *
+      *                                                               *
+      *   MAIN procedure:                                             *
+      *                                                               *
+      *     Test COMMAREA                                             *
+      *     If transaction not previously invoked                     *
+      *         Call SEND-MAP                                         *
+      *     If first customer number to process                       *
+      *         Call CONTINUE-CONVERSATION                            *
+      *                                                               *
+      *     Set up exceptional condition handling:                    *
+      *         Map error - SEND-MAP                                  *
+      *         PF3/CLEAR - CONTINUE-CONVERSATION                     *
+      *                                                               *
+      *     RECEIVE MAP from front-end terminal                       *
+      *                                                               *
+      *     If conversation not started                               *
+      *         Call INITIATE-CONVERSATION                            *
+      *     Else                                                      *
+      *         Call CONTINUE-CONVERSATION                            *
+      *                                                               *
+      *   SEND-MAP routine:                                           *
+      *                                                               *
+      *     SEND new map to front-end terminal                        *
+      *     RETURN TRANSID(CZTS) with COMMAREA                        *
+      *                                                               *
+      *   INITIATE-CONVERSATION routine:                              *
+      *                                                               *
+      *     FEPI ALLOCATE conversation with back-end system           *
+      *     Build screen image to invoke back-end transaction         *
+      *     FEPI SEND screen image to back-end system                 *
+      *     FEPI START the receive transaction                        *
+      *     RETURN                                                    *
+      *                                                               *
+      *   CONTINUE-CONVERSATION routine:                              *
+      *                                                               *
+      *     Unless first customer number                              *
+      *         Reaccess conversation with FEPI ALLOCATE PASSCONVID   *
+      *     Build screen image to send customer number                *
+      *     FEPI SEND screen image to back-end system                 *
+      *     FEPI START the receive transaction                        *
+      *     RETURN                                                    *
+      *                                                               *
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       DATA DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+       WORKING-STORAGE SECTION.
+      *===============================================================*
+      *
+       01  W00-EYECATCHER         PIC X(32)   VALUE
+                 '******* WORKING STORAGE ********'.
+      *
+       01  W01-PROGID             PIC X(8) VALUE 'DFH0VZTS'.
+       01  W01-MAPNAME            PIC X(7) VALUE 'DFH0MZ2'.
+      *
+      * W02 holds the values for CICS commands.
+      *
+       01  W02-RESP1              PIC S9(8) COMP.
+       01  W02-LENGTHSENT         PIC S9(8) COMP.
+       01  W02-LENGTHRETD         PIC S9(8) COMP.
+       01  W02-LENGTHPASSED       PIC S9(8) COMP.
+       01  W02-TRANSID            PIC X(4).
+       01  W02-TERMID             PIC X(4).
+       01  W02-SPACE              PIC X VALUE SPACE.
+      *
+      * The data sent to the back-end system is in screen image format,
+      * represented by an 80-column 24-line table.
+      * Only those fields that require to be changed are defined here.
+      *
+       01  W03-SCREEN.
+           05 W03-L1.
+      * MTRN is the transaction ID.
+              10  W03-MTRNA       PIC X(1).
+              10  W03-MTRNI       PIC X(4).
+              10  FILLER          PIC X(75).
+           05 W03-L2              PIC X(80).
+           05 W03-L3              PIC X(80).
+           05 W03-L4              PIC X(80).
+           05 W03-L5              PIC X(80).
+           05 W03-L6.
+              10  FILLER          PIC X(27).
+      * MCUSTNO is the customer number.
+              10  W03-MCUSTNOA    PIC X.
+              10  W03-MCUSTNOO    PIC X(4).
+              10  FILLER          PIC X(48).
+      *
+      * W04-MSG is used to pass the AID key pressed to the
+      * receive transaction.
+      *
+       01  W04-MSG.
+           05 W04-AID             PIC X(1).
+           05 W04-CUSTNO          PIC X(4).
+      *
+      * W05 is used to build messages for display.
+      *
+       01  W05-MSG                PIC X(60).
+      *
+      * W06 contains switches controlling processing.
+      *
+       01  W06-SWITCHES.
+           05 W06-ALLOCATE-SW     PIC X(1).
+           05 W06-ALLOCATED       PIC X(1) VALUE 'Y'.
+           05 W06-NOT-ALLOCATED   PIC X(1) VALUE 'N'.
+      *
+      * W07 is a COMMAREA used when this transaction is invoked
+      * for the first time.  It also holds the conversation ID.
+      *
+       01  W07-COMMAREA.
+           05 W07-TRANSID         PIC X(4).
+           05 W07-CONVID          PIC X(8).
+           05 W07-CUSTNO          PIC X(4).
+      *
+      * DFH0BZ2O defines the layout of the front-end terminal map.
+      *
+       COPY DFH0BZ2O.
+      *
+      *
+      *===============================================================*
+      *=       Constants                                             =*
+      *===============================================================*
+      *
+      * DFH0BZCO defines the customizable constants used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZCO.
+      *
+      * DFH0BZMO defines the messages and other text used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZMO.
+      *
+      * DFHSZAPO defines the FEPI RESP2 values.
+      *
+       COPY DFHSZAPO.
+      *
+      * DFHAID defines the standard attention identifiers (AIDs).
+      *
+       COPY DFHAID.
+      *
+      *
+      *===============================================================*
+       LINKAGE SECTION.
+      *===============================================================*
+      *
+      * The COMMAREA is used to pass the processing state between
+      * invocations of the transaction and the receive part.
+      *
+       01  DFHCOMMAREA.
+           05 COMMAREA-TRANSID    PIC X(4).
+           05 COMMAREA-CONVID     PIC X(8).
+           05 COMMAREA-CUSTNO     PIC X(4).
+           05 COMMAREA-SCREEN     PIC X(480).
+      *
+      *
+      *****************************************************************
+       PROCEDURE DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+      *=       Main procedure                                        =*
+      *===============================================================*
+      *
+      * This section controls processing.  Depending on information
+      * in the COMMAREA, it sends a new map to the front-end terminal
+      * to get input, or it processes that input and sends data to the
+      * back-end system.
+      *
+      * It sets up exceptional condition handling for common errors.
+      *
+       A-MAIN SECTION.
+       A-010.
+      *
+      * If this transaction has not previously been invoked
+      * (no COMMAREA, implying no transaction in progress),
+      * send a new map to the front-end terminal and exit.
+      *
+           IF EIBCALEN = ZERO
+               GO TO B-SEND-MAP-AND-RETURN
+           END-IF.
+      *
+      * If transaction has not been invoked unexpectedly
+      * (not from the SEND or the RECEIVE transaction),
+      * send a new map to the front-end terminal and exit.
+      *
+           IF COMMAREA-TRANSID NOT = DFH0BZCO-SEND-TRANSID
+           AND NOT = DFH0BZCO-RECEIVE-TRANSID
+               GO TO B-SEND-MAP-AND-RETURN
+           END-IF.
+      *
+      * If the conversation has started but the customer number has not
+      * been processed (COMMAREA has a customer number),
+      * send the customer number to the back-end system
+      * and start the receive transaction.
+      *
+           MOVE COMMAREA-SCREEN TO W03-SCREEN
+           IF COMMAREA-CUSTNO NOT = SPACE
+               GO TO B-CONTINUE-CONVERSATION
+           END-IF.
+      *
+      * Set up exceptional condition handling for maps.
+      *
+           EXEC CICS HANDLE CONDITION
+               MAPFAIL(B-SEND-MAP-AND-RETURN)
+           END-EXEC.
+      *
+           EXEC CICS HANDLE AID
+               PF3(B-CHECK-AID)
+               CLEAR(B-CHECK-AID)
+           END-EXEC.
+      *
+      * RECEIVE map from front-end terminal.
+      *
+           EXEC CICS RECEIVE MAP(W01-MAPNAME)
+               INTO(DFH0MZ2I)
+           END-EXEC
+      *
+      * If the transaction has been invoked by itself,
+      * start the conversation.
+      * Otherwise, it has been invoked by the receive transaction:
+      * continue the conversation.
+      *
+           IF COMMAREA-TRANSID = DFH0BZCO-SEND-TRANSID
+               PERFORM B-INITIATE-CONVERSATION
+           ELSE
+               PERFORM B-CONTINUE-CONVERSATION
+           END-IF.
+      *
+       A-EXIT.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Initiate conversation routine                         =*
+      *===============================================================*
+      *
+      * This section starts the conversation with the back-end system.
+      *
+       B-INITIATE-CONVERSATION SECTION.
+       B-010.
+      *
+      * Set switch to show state of conversation.
+      *
+           MOVE W06-NOT-ALLOCATED TO W06-ALLOCATE-SW
+      *
+      * Start the conversation with FEPI ALLOCATE.
+      * The POOL and TARGET options specify which back-end system is
+      * to be accessed.
+      *
+           EXEC CICS FEPI ALLOCATE
+               POOL(DFH0BZCO-FORMATTED-POOL)
+               TARGET(DFH0BZCO-TARGET-CICS)
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               CONVID(W07-CONVID)
+               RESP(W02-RESP1)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check for a time-out - if so, send message and exit.
+      *
+           IF DFHSZ-RESPA-TIMEOUT
+           THEN
+               MOVE DFH0BZMO-MSGC TO W05-MSG
+               GO TO C-DISPLAY-PROBLEM
+           END-IF
+      *
+      * Check for other error - if so, send message and exit.
+      *
+           IF NOT DFHSZ-RESPX-OK
+           THEN
+               MOVE DFH0BZMO-MSG4 TO W05-MSG
+               GO TO C-DISPLAY-PROBLEM
+           END-IF
+      *
+      * Set switch to show state of conversation.
+      *
+           MOVE W06-ALLOCATED TO W06-ALLOCATE-SW
+      *
+      * Build initial request to invoke the back-end transaction.
+      * A screen image of just 4 characters is sufficient.
+      *
+           MOVE DFH0BZCO-BACKEND-TRANSID TO W03-L1
+           MOVE      4 TO W02-LENGTHSENT
+      *
+      * The FEPI SEND FORMMATED command is used to send the data
+      * to the back-end system.
+      *
+      * Basic command, specifying that fromatted data is used.
+      *    EXEC CICS FEPI SEND FORMATTED
+      *
+      * CONVID identifies the conversation which has previously
+      * been allocated.
+      *        CONVID(W07-CONVID)
+      *
+      * The AID used is set to DFHENTER.  Using the AID option
+      * also specifies that the data is a screen image.
+      *        AID(DFHENTER)
+      *
+      * The FROM area is where the screen image is sent from.
+      *        FROM(W03-SCREEN)
+      *
+      * FLENGTH is the screen image length.
+      *        FLENGTH(LENGTH OF W03-SCREEN)
+      *
+      * The cursor position is not passed in this case - it does not
+      * affect the processing of the back-end transaction.
+      *
+      * The RESP option returns DFHRESP(NORMAL) or DFHRESP(INVREQ).
+      * In the latter case, further information can be obtained
+      * from the RESP2 option.
+      *        RESP(W02-RESP1)
+      *        RESP2(DFHSZ-RESP2)
+      *
+           EXEC CICS FEPI SEND FORMATTED
+               CONVID(W07-CONVID)
+               AID(DFHENTER)
+               FROM(W03-SCREEN)
+               FLENGTH(W02-LENGTHSENT)
+               RESP(W02-RESP1)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check for error - if so, send message and exit.
+      *
+           IF NOT DFHSZ-RESPX-OK
+           THEN
+               MOVE DFH0BZMO-MSG6 TO W05-MSG
+               GO TO C-DISPLAY-PROBLEM
+           END-IF.
+      *
+      * Set user data to pass to receive transaction.
+      *
+           MOVE EIBAID   TO W04-AID
+           MOVE SPACE    TO W04-CUSTNO
+      *
+      * Start the receive transaction to handle the returned data.
+      *
+           MOVE EIBAID   TO W04-AID
+           MOVE MCUSTNOI TO W04-CUSTNO
+           EXEC CICS FEPI START
+               CONVID(W07-CONVID)
+               TRANSID(DFH0BZCO-RECEIVE-TRANSID)
+               TERMID(EIBTRMID)
+               USERDATA(W04-MSG)
+               FLENGTH(LENGTH OF W04-MSG)
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               RESP(W02-RESP1)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check for error - if so, send message and exit.
+      *
+           IF NOT DFHSZ-RESPX-OK
+           THEN
+               MOVE DFH0BZMO-MSG7 TO W05-MSG
+               GO TO C-DISPLAY-PROBLEM
+           END-IF.
+      *
+      * Exit.
+      *
+           EXEC CICS RETURN
+           END-EXEC.
+      *
+       B-099.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Continue conversation routine                         =*
+      *===============================================================*
+      *
+      * This section continues the conversation with the back-end.
+      *
+       B-CONTINUE-CONVERSATION SECTION.
+       B-110.
+      *
+      * Note the conversation ID.
+      *
+           MOVE COMMAREA-CONVID TO W07-CONVID
+      *
+      * If started by front-end terminal input,
+      * get access to the conversation using FEPI ALLOCATE PASSCONVID.
+      *
+           IF COMMAREA-CUSTNO = SPACE
+               EXEC CICS FEPI ALLOCATE
+                   PASSCONVID(W07-CONVID)
+                   RESP(W02-RESP1)
+                   RESP2(DFHSZ-RESP2)
+               END-EXEC
+      *
+      * Check for error - if so, send message and exit.
+      *
+               IF W02-RESP1 NOT = DFHRESP(NORMAL)
+                   MOVE DFH0BZMO-MSG4 TO W05-MSG
+                   GO TO C-DISPLAY-PROBLEM
+               END-IF
+           END-IF
+      *
+      * Set switch to show state of conversation.
+      *
+           MOVE W06-ALLOCATED TO W06-ALLOCATE-SW
+      *
+      * Build customer number screen image to send to the back-end.
+      *
+           IF COMMAREA-CUSTNO NOT = SPACE
+               MOVE COMMAREA-CUSTNO TO W03-MCUSTNOO
+           ELSE
+               MOVE MCUSTNOI TO W03-MCUSTNOO
+           END-IF
+      *
+      * The FEPI SEND FORMMATED command is used to send the data
+      * to the back-end system.
+      *
+      * Basic command, specifying that fromatted data is used.
+      *    EXEC CICS FEPI SEND FORMATTED
+      *
+      * CONVID identifies the conversation which has previously
+      * been allocated.
+      *        CONVID(W07-CONVID)
+      *
+      * The EIBAID field is checked to ensure low values have not been
+      * introduced. If they have the EIBAID value is altered to ENTER
+      *        AID(EIBAID)
+      *
+      * The FROM area is where the screen image is sent from.
+      *        FROM(W03-SCREEN)
+      *
+      * FLENGTH is the screen image length.
+      *        FLENGTH(LENGTH OF W03-SCREEN)
+      *
+      * The cursor position is not passed in this case - it does not
+      * affect the processing of the back-end transaction.
+      *
+      * The RESP option returns DFHRESP(NORMAL) or DFHRESP(INVREQ).
+      * In the latter case, further information can be obtained
+      * from the RESP2 option.
+      *        RESP(W02-RESP1)
+      *        RESP2(DFHSZ-RESP2)
+      *
+      *
+      * Check for low values in EIBAID and reset if there are.
+      *
+           IF EIBAID = LOW-VALUES
+           THEN
+               MOVE DFHENTER TO EIBAID
+           END-IF.
+      *
+           EXEC CICS FEPI SEND FORMATTED
+               CONVID(W07-CONVID)
+               AID(EIBAID)
+               FROM(W03-SCREEN)
+               FLENGTH(LENGTH OF W03-SCREEN)
+               RESP(W02-RESP1)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check for error - if so, send message and exit.
+      *
+           IF NOT DFHSZ-RESPX-OK
+           THEN
+               MOVE DFH0BZMO-MSG6 TO W05-MSG
+               GO TO C-DISPLAY-PROBLEM
+           END-IF.
+      *
+      * Set user data to pass to receive transaction.
+      *
+           MOVE EIBAID   TO W04-AID
+           MOVE SPACE    TO W04-CUSTNO
+      *
+      * FEPI START is used to request that the receive transaction
+      * is to be started to handle the returned data.
+      *
+      * TRANSID specifies the transaction to be invoked.
+      *        TRANSID(DFH0BZCO-RECEIVE-TRANSID)
+      *
+      * USERDATA passes the entered attention key.  If it is PF3 it
+      * tells the receive transaction to end.
+      *        USERDATA(W04-MSG)
+      *
+      * TIMEOUT is used to ensure that, in the event of data not being
+      * received in a acceptable time, the application does not hang.
+      *        TIMEOUT(DFH0BZCO-TIMEOUT)
+      *
+           EXEC CICS FEPI START
+               CONVID(W07-CONVID)
+               TRANSID(DFH0BZCO-RECEIVE-TRANSID)
+               TERMID(EIBTRMID)
+               USERDATA(W04-MSG)
+               FLENGTH(LENGTH OF W04-MSG)
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               RESP(W02-RESP1)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check for error - if so, send message and exit.
+      *
+           IF NOT DFHSZ-RESPX-OK
+           THEN
+               MOVE DFH0BZMO-MSG7 TO W05-MSG
+               GO TO C-DISPLAY-PROBLEM
+           END-IF
+      *
+      * Exit.
+      *
+           EXEC CICS RETURN
+           END-EXEC.
+      *
+       B-199.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Send new map routine                                  =*
+      *===============================================================*
+      *
+      * This section gets control if the transaction has not previously
+      * been invoked, or if the MAPFAIL condition is raised.
+      *
+       B-SEND-MAP-AND-RETURN SECTION.
+       B-210.
+      *
+      * Send new map to front-end terminal.
+      *
+           EXEC CICS SEND MAP(W01-MAPNAME)
+               MAPONLY
+               ERASE
+           END-EXEC
+      *
+      * Decide where in the conversation the transaction is,
+      * and return to CICS with the appropriate COMMAREA setting.
+      *
+           IF EIBCALEN NOT = ZERO
+               IF COMMAREA-TRANSID = DFH0BZCO-SEND-TRANSID
+               OR DFH0BZCO-RECEIVE-TRANSID
+                   EXEC CICS RETURN
+                       TRANSID(DFH0BZCO-SEND-TRANSID)
+                       COMMAREA(DFHCOMMAREA)
+                       LENGTH(EIBCALEN)
+                   END-EXEC
+               END-IF
+      *
+           ELSE
+               MOVE SPACE TO W07-COMMAREA
+               MOVE DFH0BZCO-SEND-TRANSID TO W07-TRANSID
+               EXEC CICS RETURN
+                   TRANSID(DFH0BZCO-SEND-TRANSID)
+                   COMMAREA(W07-COMMAREA)
+               END-EXEC
+           END-IF.
+      *
+       B-299.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Check AID routine                                     =*
+      *===============================================================*
+      *
+      * This section gets control if PF3 or CLEAR is input at the
+      * front-end terminal.
+      *
+       B-CHECK-AID SECTION.
+       B-310.
+      *
+      * If conversation has not been started (no CONVID in COMMAREA),
+      * exit after clearing front-end terminal.
+      *
+           IF COMMAREA-CONVID = SPACE
+               EXEC CICS SEND
+                   FROM(W02-SPACE)
+                   LENGTH(1)
+                   ERASE
+               END-EXEC
+               EXEC CICS RETURN
+               END-EXEC
+      *
+      * Otherwise pass AID on through conversation.
+      *
+           ELSE
+               GO TO B-CONTINUE-CONVERSATION
+           END-IF.
+      *
+       B-399.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Display problem routine                               =*
+      *===============================================================*
+      *
+      * This section gets control if there is a command error.
+      *
+       C-DISPLAY-PROBLEM SECTION.
+       C-210.
+      *
+      * Send the map with the message to the front-end terminal.
+      *
+           MOVE W05-MSG TO MMSG2O
+           EXEC CICS SEND MAP(W01-MAPNAME)
+               FROM(DFH0MZ2O)
+           END-EXEC
+      *
+      * If a conversation has been allocated, FREE it.
+      *
+           IF W06-ALLOCATE-SW = W06-ALLOCATED
+               EXEC CICS FEPI FREE
+                   CONVID(W07-CONVID)
+                   RESP(W02-RESP1)
+                   RESP2(DFHSZ-RESP2)
+               END-EXEC
+           END-IF
+      *
+      * Exit.
+      *
+           EXEC CICS RETURN
+           END-EXEC.
+      *
+       C-299.
+           EXIT.
+      *
+      *
+      *****************************************************************
+      *        End of program DFH0VZTS                                *
+      *****************************************************************

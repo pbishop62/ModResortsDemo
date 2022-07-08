@@ -1,0 +1,571 @@
+ CBL CICS('FEPI,COBOL3')
+ CBL MAP,OBJ,RENT,NODYNAM,OPT,LIB,DATA(31),LIST,APOST
+      *****************************************************************
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994"                             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *   STATUS = 7.2.0                                              *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *   $MOD(DFH0VZTR),COMP(FEPI),PROD(CICS TS ):                   *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $L0= Base   410 94     HD5VDLA : Base                         *
+      *                                                               *
+      *****************************************************************
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+      *****************************************************************
+       PROGRAM-ID.                      DFH0VZTR.
+       DATE-COMPILED.
+      *REMARKS.
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VZTR                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample program:          *
+      *                    Screen image RECEIVE and EXTRACT FIELD.    *
+      *                    COBOL version                              *
+      *                                                               *
+      *                                                               *
+      * FUNCTION = This sample program demonstrates using FEPI to     *
+      *            get formatted data from a back-end transaction.    *
+      *                                                               *
+      * TRANSACTION NAME = CZTR                                       *
+      *                                                               *
+      * MAP NAME = DFH0MZ2                                            *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      * This program is the RECEIVE part of a SEND-RECEIVE pair of    *
+      * programs, the SEND part being DFH0VZTS.                       *
+      *                                                               *
+      * This transaction is started by CICS when data is received     *
+      * from the back-end system or if no data is received in the     *
+      * time set in the send transaction.  Which case is determined   *
+      * from the start data, which is obtained with RETRIEVE.  The    *
+      * user data in the start data indicates whether the             *
+      * conversation is starting, continuing, or finishing.           *
+      *                                                               *
+      * A FEPI RECEIVE obtains the screen image from the back-end     *
+      * system and FEPI EXTRACT FIELD is used to obtain information   *
+      * from specific fields.                                         *
+      *                                                               *
+      * If the conversation is starting, control is passed to the     *
+      * send transaction using XCTL to allow an inquiry to be sent    *
+      * to the back-end system.                                       *
+      *                                                               *
+      * If the conversation is continuing, the results from the       *
+      * back-end system are sent on to the front-end terminal.        *
+      * Access to the conversation is relinquished, and control is    *
+      * returned to CICS specifying that the send transaction is to   *
+      * be invoked when there is next user input.                     *
+      *                                                               *
+      * If the conversation has finished, a message is sent to the    *
+      * front-end terminal.  The conversation is freed and the        *
+      * transaction ends.                                             *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * PROGRAM LOGIC                                                 *
+      *                                                               *
+      *   MAIN procedure:                                             *
+      *                                                               *
+      *     RETRIEVE start data                                       *
+      *     Reaccess conversation with FEPI ALLOCATE PASSCONVID       *
+      *                                                               *
+      *     If time out                                               *
+      *         Call REPORT-PROBLEM                                   *
+      *                                                               *
+      *     FEPI RECEIVE back-end screen image                        *
+      *                                                               *
+      *     If conversation ending (PF3 or CLEAR indicated)           *
+      *         Call REPORT-PROBLEM                                   *
+      *                                                               *
+      *     If back-end problem                                       *
+      *     (CICS message or back-end transaction message)            *
+      *         Call REPORT-PROBLEM                                   *
+      *                                                               *
+      *     If conversation starting (user data has customer number)  *
+      *         XCTL to program DFH0VZTS                              *
+      *                                                               *
+      *     If conversation continuing                                *
+      *         Get interesting fields from back-end data using       *
+      *             FEPI EXTRACT FIELD                                *
+      *         Build and send map to front-end terminal              *
+      *         Release conversation using FEPI FREE PASS             *
+      *         RETURN TRANSID(CZTS) with COMMAREA                    *
+      *                                                               *
+      *   REPORT-PROBLEM routine:                                     *
+      *                                                               *
+      *     SEND message to front-end terminal                        *
+      *     FEPI FREE conversation                                    *
+      *     RETURN                                                    *
+      *                                                               *
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       DATA DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+       WORKING-STORAGE SECTION.
+      *===============================================================*
+      *
+       01  W00-EYECATCHER           PIC X(32) VALUE
+                 '******* WORKING STORAGE ********'.
+      *
+       01  W01-PROGID               PIC X(8) VALUE 'DFH0VZTR'.
+       01  W01-SENDNAME             PIC X(8) VALUE 'DFH0VZTS'.
+       01  W01-MAPNAME              PIC X(7) VALUE 'DFH0MZ2'.
+      *
+      * W02 holds the values for CICS commands.
+      *
+       01  W02-RESP                 PIC S9(8) COMP.
+       01  W02-FIELDLOC             PIC S9(8) COMP.
+       01  W02-FLENGTH              PIC S9(8) COMP.
+      *
+      * The returned data from the back-end system is in screen
+      * image format, represented by an 80-column 24-line table.
+      *
+       01  W03-SCREEN.
+           05 W03-LINE OCCURS 24    PIC X(80).
+       01  W03-SCREEN-LENGTH        PIC S9(8) COMP.
+      *
+      * W04 is a COMMAREA passed to the send transaction:
+      * CONVID identifies the conversation, TRANSID identifies
+      * the next processing for the send transaction.  The customer
+      * number contains data when the back-end transaction is being
+      * initially invoked, otherwise it contains spaces.
+      *
+       01  W04-COMMAREA.
+           05  W04-TRANSID          PIC  X(4).
+           05  W04-CONVID           PIC  X(8).
+           05  W04-CUSTNO           PIC  X(4).
+           05  W04-TOP-OF-SCREEN    PIC  X(480).
+      *
+      * UNSTRING area for CICS messages.
+      *
+       01  W05-WASTE                PIC X.
+       01  W05-DFH-MESSAGE.
+           05  W05-DFH              PIC X(3).
+           05  W05-TEXT             PIC X(76).
+       01  W05-CICS-ID              PIC X(3) VALUE 'DFH'.
+      *
+      * W06 is used to build messages for the front-end terminal.
+      *
+       01  W06-MSG                  PIC X(79).
+      *
+      * W07 defines field locations for FEPI EXTRACT FIELD.
+      *
+       01  W07-FIELDLOC-MESSAGE     PIC S9(8) COMP VALUE 1760.
+       01  W07-FIELDNUM-CUSTNO      PIC S9(8) COMP VALUE 5.
+       01  W07-FIELDNUM-CUSTNAME    PIC S9(8) COMP VALUE 8.
+       01  W07-FIELDNUM-CUSTBAL     PIC S9(8) COMP VALUE 10.
+      *
+      * DFH0BZ2O defines the layout of the front-end terminal map.
+      *
+       COPY DFH0BZ2O.
+      *
+      * DFHSZAPO defines the FEPI RESP2 values and
+      * the FEPI start data layout.
+      * W07 defines the user data layout.
+      *
+       COPY DFHSZAPO.
+           02  FILLER REDEFINES DFHSZ-DATA-USERDATA.
+               05  W08-USERDATA-AID     PIC X(1).
+               05  W08-USERDATA-CUSTNO  PIC X(4).
+               05  FILLER               PIC X(123).
+      *
+      *
+      *===============================================================*
+      *=       Constants                                             =*
+      *===============================================================*
+      *
+      * DFH0BZCO defines the customizable constants used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZCO.
+      *
+      * DFH0BZMO defines the messages and other text used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZMO.
+      *
+      * DFHAID defines the standard attention identifiers (AIDs).
+      *
+       COPY DFHAID.
+      *
+      *
+      *****************************************************************
+       PROCEDURE DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+      *=       Main procedure                                        =*
+      *===============================================================*
+      *
+      * This section controls processing depnding on the state of the
+      * conversation.
+      *
+       A-MAIN SECTION.
+       A-010.
+      *
+      * Ensure clear map.
+      *
+           MOVE LOW-VALUES            TO DFH0MZ2O
+      *
+      * Retrieve the CICS start data.
+      *
+           EXEC CICS RETRIEVE INTO(DFHSZ-DATA)
+               RESP(W02-RESP)
+           END-EXEC
+      *
+      * Check for success - exit with message if not.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG8 TO W06-MSG
+               GO TO B-REPORT-PROBLEM
+           END-IF
+      *
+      * Obtain control of the conversation using
+      * FEPI ALLOCATE with PASSCONVID.
+      * The CONVID is obtained from the start data.
+      *
+           EXEC CICS FEPI ALLOCATE
+               PASSCONVID(DFHSZ-DATA-CONVID)
+               RESP(W02-RESP)
+           END-EXEC
+      *
+      * Check for success - exit with message if not.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG4 TO W06-MSG
+               GO TO B-REPORT-PROBLEM
+           END-IF
+      *
+      * Test the event type in the start data.
+      * If it is not DATA, there has been a time out or session
+      * loss.  Exit with message if so.
+      *
+           IF DFHSZ-DATA-EVENTTYPE NOT = DFHVALUE(DATA)
+               MOVE DFH0BZMO-MSGA TO W06-MSG
+               GO TO B-REPORT-PROBLEM
+           END-IF
+      *
+      * Get the data from the back-end system as a screen image.
+      * (Although the FEPI RECEIVE has to be done, it is not
+      * necessary to get the screen image itself if data is going
+      * to be obtained field-by-field using FEPI EXTRACT FIELD.
+      * However, the screen image is used here in order to find any
+      * CICS messages from the back-end system.)
+      *
+           MOVE LOW-VALUES TO W03-SCREEN
+           EXEC CICS FEPI RECEIVE FORMATTED
+               CONVID(DFHSZ-DATA-CONVID)
+               MAXFLENGTH(LENGTH OF W03-SCREEN)
+               INTO(W03-SCREEN)
+               FLENGTH(W03-SCREEN-LENGTH)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check for success - exit with message if not.
+      *
+           IF NOT DFHSZ-RESPX-OK
+               MOVE DFH0BZMO-MSG3 TO W06-MSG
+               GO TO B-REPORT-PROBLEM
+           END-IF
+      *
+      * If the conversation has finished,
+      * the AID passed from the send transaction is PF3 or CLEAR.
+      * Exit with a message.
+      *
+           IF W08-USERDATA-AID = DFHPF3 OR DFHCLEAR
+           THEN
+               MOVE DFH0BZMO-MSGB TO W06-MSG
+               GO TO B-REPORT-PROBLEM
+           END-IF
+      *
+      * The conversation is starting or continuing:
+      * check for a back-end problem.
+      *
+           PERFORM B-CHECK-FOR-GOOD-COMPLETION
+      *
+      * No problem at the back-end system.
+      *
+      * If the conversation is starting,
+      * the start data contains a customer number,
+      * and there is no data to be extracted.
+      * XCTL to the send transaction, passing the customer number
+      * in the COMMAREA to show the state of the conversation.
+      *
+           IF W08-USERDATA-CUSTNO NOT = SPACE
+               MOVE EIBTRNID TO W04-TRANSID
+               MOVE W08-USERDATA-CUSTNO TO W04-CUSTNO
+               MOVE DFHSZ-DATA-CONVID TO W04-CONVID
+               MOVE W03-SCREEN TO W04-TOP-OF-SCREEN
+               EXEC CICS XCTL
+                   PROGRAM(W01-SENDNAME)
+                   COMMAREA(W04-COMMAREA)
+               END-EXEC
+           END-IF.
+      *
+      * The conversation is continuing:
+      * extract the data required from the back-end screen
+      * and send it to the front-end terminal.
+      *
+           PERFORM B-EXTRACT-DATA-AND-SEND
+      *
+      * Release the conversation using FEPI FREE PASS,
+      * so that the send transaction can use it.
+      *
+           EXEC CICS FEPI FREE
+               PASS
+               CONVID(DFHSZ-DATA-CONVID)
+           END-EXEC
+      *
+      * RETURN to CICS, specifying that the send transaction is to
+      * be invoked next.  Pass the conversation ID in the COMMAREA.
+      *
+           MOVE DFHSZ-DATA-CONVID TO W04-CONVID
+           MOVE EIBTRNID TO W04-TRANSID
+           MOVE SPACE    TO W04-CUSTNO
+           MOVE W03-SCREEN TO W04-TOP-OF-SCREEN
+           EXEC CICS RETURN
+               TRANSID(DFH0BZCO-SEND-TRANSID)
+               COMMAREA(W04-COMMAREA)
+           END-EXEC.
+      *
+       A-EXIT.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Good completion routine                               =*
+      *===============================================================*
+      *
+      * This section searches the back-end screen for a message
+      * from CICS or the back-end transaction.
+      *
+       B-CHECK-FOR-GOOD-COMPLETION SECTION.
+       B-010.
+      *
+      * Examine the screen image for a CICS message,
+      * using the UNSTRING command.
+      *
+           MOVE SPACE TO W05-DFH
+           UNSTRING W03-SCREEN
+               DELIMITED BY W05-CICS-ID
+               INTO
+                   W05-WASTE
+                       DELIMITER IN W05-DFH
+                   W05-TEXT
+           END-UNSTRING.
+      *
+      * If a CICS message was present it is
+      * doubtful that the transaction completed, so send the
+      * message to the front-end terminal and exit.
+      *
+           IF W05-DFH IS NOT EQUAL TO SPACE
+               MOVE W05-DFH-MESSAGE TO W06-MSG
+               GO TO B-REPORT-PROBLEM
+           END-IF.
+      *
+      * Check the message line on the back-end transaction screen.
+      * If there is a message, there is a problem with the back-end
+      * transaction.
+      * FEPI EXTRACT FIELD is used to obtain the message field and
+      * its length.
+      *
+           MOVE W07-FIELDLOC-MESSAGE TO W02-FIELDLOC.
+           EXEC CICS FEPI EXTRACT FIELD
+               CONVID(DFHSZ-DATA-CONVID)
+               FIELDLOC(W02-FIELDLOC)
+               INTO(W06-MSG)
+               FLENGTH(W02-FLENGTH)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * If the message field is not blank,
+      * there is a problem with the data or the transaction.
+      * First check for data problems:  if so, continue and pass
+      * message on to front-end terminal.
+      *
+           IF W06-MSG = DFH0BZMO-MSGO
+               GO TO B-099
+           END-IF.
+      *
+      * Check for transaction problems:  if so, exit with message.
+      *
+           IF W06-MSG IS NOT = SPACE
+           AND IS NOT = LOW-VALUES
+               GO TO B-REPORT-PROBLEM
+           END-IF.
+      *
+       B-099.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Extract data routine                                  =*
+      *===============================================================*
+      *
+      * This section extracts data from the back-end screen
+      * and sends it in a map to the front-end terminal.
+      *
+       B-EXTRACT-DATA-AND-SEND SECTION.
+       B-110.
+      *
+      * FEPI EXTRACT FIELD is used to obtain the required fields.
+      *
+      * Customer number.
+      *
+               EXEC CICS FEPI EXTRACT FIELD
+                   CONVID(DFHSZ-DATA-CONVID)
+                   FIELDNUM(W07-FIELDNUM-CUSTNO)
+                   INTO(MCUSTNOO)
+                   FLENGTH(W02-FLENGTH)
+                   RESP(W02-RESP)
+                   RESP2(DFHSZ-RESP2)
+               END-EXEC
+      *
+      * Check for success - exit with message if not.
+      *
+               IF NOT DFHSZ-RESPX-OK
+                   MOVE DFH0BZMO-MSGD TO W06-MSG
+                   GO TO B-REPORT-PROBLEM
+               END-IF
+      *
+      * Customer name.
+      *
+               EXEC CICS FEPI EXTRACT FIELD
+                   CONVID(DFHSZ-DATA-CONVID)
+                   FIELDNUM(W07-FIELDNUM-CUSTNAME)
+                   INTO(MCUSTNMO)
+                   FLENGTH(W02-FLENGTH)
+                   RESP(W02-RESP)
+                   RESP2(DFHSZ-RESP2)
+               END-EXEC
+      *
+      * Check for success - exit with message if not.
+      *
+               IF NOT DFHSZ-RESPX-OK
+                   MOVE DFH0BZMO-MSGD TO W06-MSG
+                   GO TO B-REPORT-PROBLEM
+               END-IF
+      *
+      * Customer balance.
+      *
+               EXEC CICS FEPI EXTRACT FIELD
+                   CONVID(DFHSZ-DATA-CONVID)
+                   FIELDNUM(W07-FIELDNUM-CUSTBAL)
+                   INTO(MCUSTBLO)
+                   FLENGTH(W02-FLENGTH)
+                   RESP(W02-RESP)
+                   RESP2(DFHSZ-RESP2)
+               END-EXEC
+      *
+      * Check for success - exit with message if not.
+      *
+               IF NOT DFHSZ-RESPX-OK
+                   MOVE DFH0BZMO-MSGD TO W06-MSG
+                   GO TO B-REPORT-PROBLEM
+               END-IF
+      *
+      * Pass on any data problem message.
+      *
+               MOVE W06-MSG TO MMSG2O
+      *
+      * Put the send transaction name in the map.
+      *
+               MOVE DFH0BZCO-SEND-TRANSID TO MTRNO
+      *
+      * Send the map to the front-end termianl.
+      *
+               EXEC CICS SEND MAP(W01-MAPNAME)
+                   FROM(DFH0MZ2O)
+                   ERASE
+               END-EXEC.
+      *
+       B-199.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Report problem routine                                =*
+      *===============================================================*
+      *
+      * This section sends a message to the front-end terminal,
+      * frees the conversation, and ends the transaction.
+      *
+       B-REPORT-PROBLEM SECTION.
+       B-210.
+      *
+      * If conversation is ending (PF3 or CLEAR indicated),
+      * SEND MAP is not appropriate.
+      * Send message directly to front-end terminal.
+      *
+           IF W08-USERDATA-AID = DFHPF3 OR DFHCLEAR
+               EXEC CICS SEND
+                   FROM(W06-MSG)
+                   LENGTH(LENGTH OF W06-MSG)
+                   ERASE
+               END-EXEC
+           ELSE
+      *
+      * Otherwise, send map with message to front-end terminal.
+      *
+               MOVE W06-MSG TO MMSG2O
+               EXEC CICS SEND MAP(W01-MAPNAME)
+                   FROM(DFH0MZ2O)
+                   DATAONLY
+               END-EXEC
+      *
+           END-IF
+      *
+      * Free the conversation.
+      * RELEASE is used to force the session to end, so that any
+      * subsequent conversation will cause begin-session processing
+      * to occur.  This ensures that the back-end screen is cleared
+      * of messages in the event of an abend.
+      *
+           EXEC CICS FEPI FREE
+               CONVID(DFHSZ-DATA-CONVID)
+               RELEASE
+               RESP(W02-RESP)
+           END-EXEC
+      *
+      * End the transaction.
+      *
+           EXEC CICS RETURN
+           END-EXEC.
+      *
+       B-299.
+           EXIT.
+      *
+      *
+      *****************************************************************
+      *        End of program DFH0VZTR                                *
+      *****************************************************************

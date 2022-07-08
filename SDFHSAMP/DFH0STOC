@@ -1,0 +1,259 @@
+       CBL CICS('COBOL3')
+       TITLE 'CICS BTS - SAMPLE PROGRAM - COBOL'
+      ******************************************************************
+      *                                                                *
+      * MODULE NAME = DFH0STOC                                         *
+      *                                                                *
+      * DESCRIPTIVE NAME = CICS TS  SAMPLE PROGRAM FOR CICS BTS        *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *     Licensed Materials - Property of IBM                       *
+      *                                                                *
+      *     "Restricted Materials of IBM"                              *
+      *                                                                *
+      *     5655-Y04                                                   *
+      *                                                                *
+      *     (C) Copyright IBM Corp. 1998, 2002"                        *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      * STATUS = 7.2.0                                                 *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *                                                                *
+      * CHANGE ACTIVITY :                                              *
+      *                                                                *
+      * $MOD(DFH0STOC),COMP(SAMPLES),PROD(CICS TS ):                   *
+      *                                                                *
+      * PN= REASON REL YYMMDD HDXXIII : REMARKS                        *
+      * $D1= I07267 630 020403 HDHYJB  : Compile all samples          *
+      * $P0= M30594 530 981105 HDGLTJB : Supply and ship CICS BTS      *
+      * $P1= M31610 530 990211 HDGLTJB : fix invalid lengthon tdq err *
+      *$P2= D08874 %AT 031023 HDHYJB  : Change CBL XOPTS to CBL CICS   *
+      *                                :                 Samples       *
+      *                                                                *
+      *----------------------------------------------------------------*
+      ******************************************************************
+      *             PROGRAM MAINTENANCE HISTORY                        *
+      ******************************************************************
+      *                                                                *
+      * THIS PROGRAM IS USED TO CHECK THE STATUS OF THE STOCK FOR THE  *
+      * ORDERED WIDGETS.                                               *
+      * IT GETS THE PROCESS CONTAINER FOR INFORMATION IT MAY REQUIRE.  *
+      * THE MESSAGE IT CREATES AND WRITES TO THE CICS LOG IS FOR       *
+      * MONITORING PURPOSES ONLY.                                      *
+      *                                                                *
+      * THE APPLICATION LOGIC TO CHECK THE STOCK AND DECIDE WHAT TO DO *
+      * MUST BE ADDED BY YOURSELVES.                                   *
+      *                                                                *
+      ******************************************************************
+       IDENTIFICATION DIVISION.
+      *
+       PROGRAM-ID. DFH0STOC.
+      *
+       AUTHOR.     IBM.
+      *
+       DATE-COMPILED.
+      *
+      *REMARKS.
+      ******************************************************************
+      *                                                                *
+      *                                                                *
+      ******************************************************************
+      *
+       ENVIRONMENT DIVISION.
+      *
+       CONFIGURATION SECTION.
+      *
+       SPECIAL-NAMES.
+      *
+       DATA DIVISION.
+
+       WORKING-STORAGE SECTION.
+
+       01  WS-START                        PIC X(44)
+           VALUE '*** DFH0STOC WORKING STORAGE STARTS HERE ***'.
+      *
+       01  RESP-AREA                       PIC S9(8) comp.
+       01  RESP2-AREA                      PIC S9(8) comp.
+       01  PROCESS-NAME.
+           03  PROCESS-ID                  PIC X(5)  VALUE 'SALES'.
+           03  ORDER-NUMBER                PIC 9(6).
+           03  FILLER                      PIC X(25) VALUE SPACES.
+      *
+      *     EVENTS
+      *
+       01  EVENT-NAME                      PIC X(16).
+           88 DFH-INITIAL                  VALUE 'DFHINITIAL'.
+      *
+      *     CONTAINERS
+      *
+       COPY DFH0CONT.
+      *
+      *     MESSAGES
+      *
+       01  BAD-RETRIEVE                    PIC X(47) VALUE
+           'DFH0STOC - BAD RETURN CODE FROM RETRIEVE ATTACH'.
+       01  BAD-RETRIEVE-LEN                PIC S9(4) VALUE +47 COMP.
+      *
+       01  INVALID-EVENT                   PIC X(27) VALUE
+           'DFH0STOC - UNEXPECTED EVENT'.
+       01  INVALID-EVENT-LEN               PIC S9(4) VALUE +27 COMP.
+      *
+       01  WS-DISPLAY-MESSAGE.
+           03  WS-DISPLAY-PROGRAM          PIC X(8).
+           03  WS-DISPLAY-DASH1            PIC X(3)  VALUE ' - '.
+           03  WS-DISPLAY-OKAY             PIC X(11) VALUE
+               'RAN OKAY - '.
+           03  WS-DISPLAY-TRAN             PIC X(4).
+           03  WS-DISPLAY-DASH2            PIC X(3)  VALUE ' - '.
+           03  WS-DISPLAY-TIME             PIC X(8).
+           03  WS-DISPLAY-DASH3            PIC X(3)  VALUE ' - '.
+           03  WS-DISPLAY-DATE             PIC X(10).
+
+       01  WS-ASK-TIME                     PIC S9(15) COMP-3.
+       01  WS-DISPLAY-LENGTH               PIC S9(4) VALUE +50 COMP.
+
+       LINKAGE SECTION.
+      *
+       PROCEDURE DIVISION.
+
+      ******************************************************************
+      *BEGIN-PROCESS                                                   *
+      *RETRIEVE EVENT, WE ARE ONLY EXPECTING DFHINITIAL                *
+      ******************************************************************
+       BEGIN-PROCESS.
+
+           EXEC CICS RETRIEVE REATTACH EVENT(EVENT-NAME)
+                              RESP(RESP-AREA)
+                              RESP2(RESP2-AREA)
+           END-EXEC.
+           IF RESP-AREA NOT = DFHRESP(NORMAL) THEN
+
+             EXEC CICS WRITEQ TD
+                              QUEUE('CSMT')
+                              FROM(BAD-RETRIEVE)
+                              LENGTH(BAD-RETRIEVE-LEN)
+                              RESP(RESP-AREA)
+                              RESP2(RESP2-AREA)
+             END-EXEC
+
+             PERFORM ABEND-PROCESS
+
+           END-IF.
+
+           EVALUATE TRUE
+             WHEN DFH-INITIAL
+               PERFORM INITIAL-ACTIVITY
+             WHEN OTHER
+
+      ******************************************************************
+      *     UNEXPECTED EVENT                                           *
+      * WRITE ERROR MESSAGE TO CICS LOG                                *
+      ******************************************************************
+
+               EXEC CICS WRITEQ TD
+                                QUEUE('CSMT')
+                                FROM(INVALID-EVENT)
+                                LENGTH(INVALID-EVENT-LEN)
+                                RESP(RESP-AREA)
+                                RESP2(RESP2-AREA)
+               END-EXEC
+
+             PERFORM ABEND-PROCESS
+
+           END-EVALUATE.
+
+           PERFORM DISPLAY-OKAY-MESSAGE.
+
+           EXEC CICS RETURN ENDACTIVITY
+           END-EXEC.
+
+      ******************************************************************
+      *INITIAL-ACTIVITY                                                *
+      *GET PROCESS NAME AND READ PROCESS CONTAINER.                    *
+      *INSERT APPLICATION LOGIC IN CORRECT PLACE                       *
+      *BY DEFAULT WE SET 'Y' IN THE PROCESS CONTAINER                  *
+      ******************************************************************
+       INITIAL-ACTIVITY.
+           EXEC CICS ASSIGN PROCESS(PROCESS-NAME)
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS GET CONTAINER(PROCESS-NAME)
+                         INTO(PROCESS-CONTAINER)
+                         FLENGTH(PC-LENGTH)
+                         PROCESS
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *  DO APPLICATION L0GIC HERE TO VALIDATE                         *
+      *  ITEMS ARE IN STOCK.                                           *
+      *  THE RESULT OF THIS ACTIVITY CAN EITHER BE RECORDED IN A       *
+      *  CONTAINER OR THE CHECK COMMAND MAY BE USED IN THE PARENT      *
+      *  ACTIVITY.                                                     *
+      ******************************************************************
+
+           MOVE 'Y' TO CREDIT-STOCK-OK.
+
+           EXEC CICS PUT CONTAINER('STOCK-CONTAINER')
+                         FROM(STOCK-CHECK-CONTAINER)
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *ABEND-PROCESS                                                   *
+      *ABEND WITH U001                                                 *
+      ******************************************************************
+       ABEND-PROCESS.
+
+               EXEC CICS ABEND ABCODE('U001') NODUMP
+               END-EXEC.
+
+      ******************************************************************
+      *DISPLAY-OKAY-MESSAGE                                            *
+      *DISPLAY MESSAGE ON CICS CONSOLE FOR TRACE PURPOSES              *
+      ******************************************************************
+       DISPLAY-OKAY-MESSAGE.
+           EXEC CICS ASSIGN
+                     PROGRAM(WS-DISPLAY-PROGRAM)
+                     RESP(RESP-AREA)
+                     RESP2(RESP2-AREA)
+           END-EXEC.
+           EXEC CICS ASKTIME
+                     ABSTIME(WS-ASK-TIME)
+                     RESP(RESP-AREA)
+                     RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS FORMATTIME
+                     ABSTIME(WS-ASK-TIME)
+                     TIME(WS-DISPLAY-TIME)
+                     TIMESEP
+                     DDMMYYYY(WS-DISPLAY-DATE)
+                     RESP(RESP-AREA)
+                     RESP2(RESP2-AREA)
+           END-EXEC.
+
+           MOVE EIBTRNID TO WS-DISPLAY-TRAN.
+
+           EXEC CICS WRITEQ TD
+                     QUEUE('CSMT')
+                     FROM(WS-DISPLAY-MESSAGE)
+                     LENGTH(WS-DISPLAY-LENGTH)
+                     RESP(RESP-AREA)
+                     RESP2(RESP2-AREA)
+           END-EXEC.
+      ******************************************************************
+      *DUMMY-GOBACK                                                    *
+      *BECAUSE SOME COMPILERS NEED IT                                  *
+      ******************************************************************
+       DUMMY-GOBACK.
+           GOBACK.
+      *

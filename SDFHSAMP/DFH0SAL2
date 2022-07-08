@@ -1,0 +1,812 @@
+       CBL CICS('COBOL3')
+       TITLE 'CICS BTS - SAMPLE PROGRAM - COBOL'
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0SAL2                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  SAMPLE PROGRAM FOR CICS BTS       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1998, 2009"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      * $MOD(DFH0SAL2),COMP(SAMPLES),PROD(CICS TS ):                  *
+      *                                                               *
+      * PN= REASON REL YYMMDD HDXXIII : REMARKS                       *
+      * $P0= M30594 530 981105 HDGLTJB : Supply and ship CICS BTS     *
+      * $P1= M31555 530 990203 HDGLTJB : Supply CICS BTS Repository f *
+      * $P2= D08874 630 031023 HDHYJB  : Change CBL XOPTS to CBL CICS *
+      * $D1= I07267 630 020403 HDHYJB  : Compile all samples          *
+      * $L1= 907    660 090130 HD4PALS : change userid to user0001    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *****************************************************************
+      *             PROGRAM MAINTENANCE HISTORY                       *
+      *****************************************************************
+      *                                                               *
+      *   CICS BTS SAMPLE ROOT ACTIVITY FOR THE SALES SAMPLE.         *
+      *                                                               *
+      * THIS PROGRAM IS THE ROOT ACTIVITY FOR THE SALES PROCESS CALLED*
+      * 'SALESxxxxxx' WHERE xxxxxx IS THE UNIQUE ORDER NUMBER. THIS   *
+      * PROCESS IS INVOKED BY THE PROGRAM 'DFH0SAL1', A PROCESS       *
+      * CONTAINER WITH THE ORDER DETAILS HAS ALREADY BEEN WRITTEN.    *
+      * WE GET THE PROCESS CONTAINER WITH THE ORDER DETAILS.          *
+      * THIS ACTIVITY WILL RUN A COMBINATION OF SYNCHRONOUS, AND      *
+      * ASYNCHRONOUS ACTIVITIES.                                      *
+      * IT USES INPUT, TIMER AND COMPOSITE EVENTS.                    *
+      * FIRST WE WILL RUN THE CREDIT LIMIT CHECK ACTIVITY FOLLOWED BY *
+      * STOCK CHECK ACTIVITY BOTH WILL BE RUN SYNCHRONOUSLY, WE       *
+      * WILL ONLY CONTINUE IF BOTH CHECKS ARE OKAY.                   *
+      * IF BOTH CHECKS ARE OKAY THEN WE GO AHEAD AND PRODUCE THE      *
+      * DELIVERY INSTRUCTIONS AND THE INVOICE. THESE TWO TASKS CAN BE *
+      * RUN IN PARALLEL SO WE WILL DEFINE A COMPOSITE EVENT AND RUN   *
+      * DELIVERY INSTRUCTIONS AND THE INVOICE ACTIVITIES              *
+      * ASYNCHRONOUSLY.                                               *
+      * ACTIVITY CONTAINERS WILL BE USED TO PASS DISCRETE             *
+      * BITS OF INFORMATION BETWEEN PARENT AND CHILD ACTIVITIES.      *
+      * THE PROCESS CONTAINER WILL BE USED TO HOLD THE MAIN INPUT DATA*
+      * AND ORDER DETAILS.                                            *
+      * WE WILL USE A CONTAINER TO HOLD STATE INFORMATION, THIS IS    *
+      * PARTICULARLY USEFUL FOR WEB BASED APPLICATIONS.               *
+      *                                                               *
+      *****************************************************************
+      * THERE IS AN EVENT CALLED CBAM-INSPECT COMMENTED OUT IN THIS   *
+      * APPLICATION. IF ACTIVATED IT WILL STOP THE PROCESS FROM       *
+      * COMPLETING AND DISAPPEARING FROM CICS. THEREFORE IF IT IS     *
+      * ACTIVATED THE PROCESS WILL STAY IN A WAIT STATE, THIS IS      *
+      * USEFUL IF YOU WANT TO EXAMINE THE PROCESS USING THE CBAM      *
+      * TRANSACTION.                                                  *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+      *
+       PROGRAM-ID.  DFH0SAL2.
+      *
+       AUTHOR.      IBM.
+      *
+       DATE-COMPILED.
+      *
+      *REMARKS.
+      *****************************************************************
+      *                                                               *
+      *                                                               *
+      *****************************************************************
+      *
+       ENVIRONMENT DIVISION.
+      *
+       CONFIGURATION SECTION.
+      *
+       SPECIAL-NAMES.
+      *
+       DATA DIVISION.
+
+       WORKING-STORAGE SECTION.
+
+       01  WS-START                        PIC X(44)
+           VALUE '*** DFH0SAL2 WORKING STORAGE STARTS HERE ***'.
+      *
+       01  WS-STATUS                       PIC S9(8) comp.
+       01  EVENT-TYPE                      PIC S9(8) comp.
+       01  RESP-AREA                       PIC S9(8) comp.
+       01  RESP2-AREA                      PIC S9(8) comp.
+       01  ABEND-CODE                      PIC X(4).
+       01  PROCESS-NAME.
+           03  PROCESS-ID                  PIC X(5) VALUE 'SALES'.
+           03  ORDER-NUMBER                PIC 9(6).
+           03  FILLER                      PIC X(25) VALUE SPACES.
+      *
+      *     EVENTS
+      *
+       01  EVENT-NAME                      PIC x(16).
+           88 DFH-INITIAL                  value 'DFHINITIAL'.
+           88 DEL-INV-COMPLETE             value 'DEL-INV-COMPLETE'.
+           88 SEND-PAY-REMINDER            value 'SEND-PAY-REM'.
+           88 REMINDER-COMPLETE            value 'REM-COMPLETE'.
+           88 DELETE-TIMER                 value 'DELETE-TIMER'.
+           88 CBAM-INSPECTION              value 'CBAM-INSPECT'.
+
+       01  SUB-EVENT-NAME                  PIC x(16).
+           88 DELIVERY-COMPLETE            value 'DEL-COMPLETE'.
+           88 INVOICE-COMPLETE             value 'INVOICE-COMPLETE'.
+      *
+      *     CONTAINERS
+      *
+       COPY DFH0CONT.
+
+      *
+      *     ERROR AND TRACE MESSAGES
+      *
+       01  COMMON-MSG-AREA.
+           03  COMMON-MSG                  PIC X(40) VALUE SPACES.
+       01  COMMON-MSG-LEN                  PIC S9(4) VALUE +40 COMP.
+
+       01  TRACE-MSG-AREA.
+           03  TRACE-MSG                   PIC X(40) VALUE SPACES.
+       01  TRACE-MSG-LEN                   PIC S9(4) VALUE +40 COMP.
+
+       01  INVALID-EVENT.
+           03  IE-MESSAGE                  PIC X(40) VALUE
+               'INVALID EVENT RECEIVED                  '.
+
+       01  NO-CREDIT-MESSAGE.
+           03  NC-MESSAGE                  PIC X(40) VALUE
+               'NO CREDIT LEFT FOR THIS CUSTOMER        '.
+
+       01  NO-STOCK-MESSAGE.
+           03  NS-MESSAGE                  PIC X(40) VALUE
+               'NO STOCK  LEFT FOR THIS ORDER           '.
+
+       01  NO-DELIVERY-MESSAGE.
+           03  ND-MESSAGE                  PIC X(40) VALUE
+               'DELIVERY NOTE NOT COMPLETE              '.
+
+       01  NO-INVOICE-MESSAGE.
+           03  NI-MESSAGE                  PIC X(40) VALUE
+               'INVOICE PROCESSING NOT COMPLETE         '.
+       01  BAD-RETRIEVE-MESSAGE.
+           03  BAD-RETRIEVE-MSG            PIC X(40) VALUE
+               'UNKNOWN EVENT FROM RETRIEVE IN SAL002   '.
+       01  INV-OKAY-MESSAGE.
+           03  INV-OKAY-MSG                PIC X(40) VALUE
+               'DFH0SAL2 - INVOICE OKAY                 '.
+       01  INV-NOT-OKAY-MESSAGE.
+           03  INV-NOT-OKAY-MSG            PIC X(40) VALUE
+               'DFH0SAL2 - INVOICE NOT OKAY             '.
+       01  DEL-OKAY-MESSAGE.
+           03  DEL-OKAY-MSG                PIC X(40) VALUE
+               'DFH0SAL2 - DELIVERY OKAY                '.
+       01  DEL-NOT-OKAY-MESSAGE.
+           03  DEL-NOT-OKAY-MSG            PIC X(40) VALUE
+               'DFH0SAL2 - DELIVERY NOT OKAY            '.
+       01  PP-OKAY-MESSAGE.
+           03  PP-OKAY-MSG                 PIC X(40) VALUE
+               'DFH0SAL2 - PP OKAY - DO REMINDER        '.
+       01  PP-NOT-OKAY-MESSAGE.
+           03  PP-NOT-OKAY-MSG             PIC X(40) VALUE
+               'DFH0SAL2 - PP NOT OKAY - NO REMINDER    '.
+       01  NO-PAYMENT-MESSAGE.
+           03  NO-PAYMENT-MSG              PIC X(40) VALUE
+               'DFH0SAL2 - NO PAYMENT RECEIVED - WARNING'.
+
+       LINKAGE SECTION.
+
+       PROCEDURE DIVISION.
+
+      ******************************************************************
+      *BEGIN-PROCESS                                                   *
+      *RETRIEVE EVENT THERE ARE SEVERAL INCLUDING A COMPOSITE, TIMER   *
+      *AND INPUT.                                                      *
+      ******************************************************************
+       BEGIN-PROCESS.
+
+           EXEC CICS RETRIEVE REATTACH EVENT(EVENT-NAME)
+                              RESP(RESP-AREA)
+                              RESP2(RESP2-AREA)
+           END-EXEC.
+           IF RESP-AREA NOT = DFHRESP(NORMAL) THEN
+
+             MOVE BAD-RETRIEVE-MESSAGE TO COMMON-MSG
+
+             PERFORM ABEND-PROCESS
+           END-IF.
+
+           EVALUATE TRUE
+             WHEN DFH-INITIAL
+               PERFORM INITIAL-ACTIVITY
+               PERFORM CHECK-CREDIT-STOCK-ACTIVITY
+             WHEN DEL-INV-COMPLETE
+               PERFORM DEL-INV-CHECK
+             WHEN SEND-PAY-REMINDER
+               PERFORM SEND-REMINDER
+             WHEN REMINDER-COMPLETE
+      ******************************************************************
+      *  REPEAT REMINDER UNTIL PAYMENT ROUTINE IS COMPLETE             *
+      ******************************************************************
+               PERFORM DEL-REM-COMPLETE
+               PERFORM DELETE-TIMER-EVENT
+               PERFORM SET-TIMER-EVENT
+
+             WHEN DELETE-TIMER
+               PERFORM DEL-TIMER-AND-EVENTS
+               PERFORM DELETE-PROCESS-CONTAINER
+      *        PERFORM DEFINE-CBAM-EVENT
+             WHEN OTHER
+      ******************************************************************
+      *  UNEXPECTED EVENT - WRITE ERROR MESSAGE TO CICS CONSOLE        *
+      ******************************************************************
+
+             MOVE INVALID-EVENT TO COMMON-MSG
+             PERFORM ABEND-PROCESS
+
+           END-EVALUATE.
+
+           EXEC CICS RETURN
+           END-EXEC.
+
+      ******************************************************************
+      *DEL-INV-CHECK                                                   *
+      *RETRIEVE AND CHECK THE SUB EVENTS FROM THE COMPOSITE EVENT.     *
+      ******************************************************************
+       DEL-INV-CHECK.
+
+           EXEC CICS RETRIEVE SUBEVENT(SUB-EVENT-NAME)
+                              EVENT(EVENT-NAME)
+                              EVENTTYPE(EVENT-TYPE)
+                              RESP(RESP-AREA)
+                              RESP2(RESP2-AREA)
+           END-EXEC.
+
+           IF RESP-AREA NOT = DFHRESP(NORMAL)
+             MOVE INVALID-EVENT TO COMMON-MSG
+             PERFORM ABEND-PROCESS
+           END-IF.
+
+           EVALUATE TRUE
+             WHEN INVOICE-COMPLETE
+               PERFORM INVOICE-CHECK
+             WHEN DELIVERY-COMPLETE
+               PERFORM DELIVERY-CHECK
+             WHEN OTHER
+      ******************************************************************
+      *  UNEXPECTED SUBEVENT                                           *
+      ******************************************************************
+               MOVE INVALID-EVENT TO COMMON-MSG
+               PERFORM ABEND-PROCESS
+
+           END-EVALUATE.
+
+      ******************************************************************
+      * ALL COMPOSITE SUB-EVENTS OKAY DELETE COMPOSITE EVENT           *
+      ******************************************************************
+
+           PERFORM GET-TEMP-CONTAINER.
+
+           IF INV-OKAY = 'Y' AND
+              DEL-OKAY = 'Y' THEN
+             MOVE PP-OKAY-MESSAGE TO TRACE-MSG
+      *      PERFORM DISPLAY-TRACE-MESSAGE
+             EXEC CICS DELETE EVENT('DEL-INV-COMPLETE')
+                              RESP(RESP-AREA)
+                              RESP2(RESP2-AREA)
+             END-EXEC
+
+             PERFORM SET-TIMER-EVENT
+
+      ******************************************************************
+      *  DEFINE INPUT EVENT TO BE TRIGGERED WHEN THE PAYMENT IS        *
+      *  RECEIVED.                                                     *
+      ******************************************************************
+             EXEC CICS DEFINE INPUT EVENT('DELETE-TIMER')
+                              RESP(RESP-AREA)
+                              RESP2(RESP2-AREA)
+             END-EXEC
+
+           ELSE
+             MOVE PP-NOT-OKAY-MESSAGE TO TRACE-MSG
+      *      PERFORM DISPLAY-TRACE-MESSAGE
+           END-IF.
+
+      ******************************************************************
+      *INITIAL-ACTIVITY                                                *
+      *GET PROCESS NAME AND READ PROCESS CONTAINER                     *
+      ******************************************************************
+       INITIAL-ACTIVITY.
+           EXEC CICS ASSIGN PROCESS(PROCESS-NAME)
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS GET CONTAINER(PROCESS-NAME)
+                         INTO(PROCESS-CONTAINER)
+                         FLENGTH(PC-LENGTH)
+                         PROCESS
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      * CHECK-CREDIT-STOCK-ACTIVITY                                    *
+      * DEFINE AND RUN TWO SYNCHRONOUS ACTIVITIES FOR THE CREDIT AND   *
+      * STOCK CHECK TASKS,  IF BOTH ARE OKAY THEN                      *
+      * DEFINE AND RUN TWO ASYNCHRONOUS ACTIVITIES FOR THE INVOICE AND *
+      * DELIVERY NOTE TASKS, THESE ACTIVITIES WILL BE COMBINED INTO A  *
+      * COMPOSITE EVENT WITH TWO SUB EVENTS.                           *
+      * THE ACTIVITY CHECK-CREDIT IS RUN WITH A DIFFERENT USERID       *
+      * FOR SECURITY REASONS. THIS WILL CAUSE A CONTEXT SWITCH.        *
+      * THE NEW USERID IS SPECIFIED ON THE DEFINE ACTIVITY STATEMENT.  *
+      ******************************************************************
+
+       CHECK-CREDIT-STOCK-ACTIVITY.
+
+
+           EXEC CICS DEFINE ACTIVITY('CREDIT-CHECK')
+                            TRANSID('RED1')
+                            PROGRAM('DFH0RED1')
+                            USERID('USER0001')
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS RUN ACTIVITY('CREDIT-CHECK')
+                         SYNCHRONOUS
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS CHECK ACTIVITY('CREDIT-CHECK')
+                           COMPSTATUS(WS-STATUS)
+                           ABCODE(ABEND-CODE)
+                           RESP(RESP-AREA)
+                           RESP2(RESP2-AREA)
+           END-EXEC.
+
+           IF WS-STATUS NOT = DFHVALUE(NORMAL) THEN
+
+      ******************************************************************
+      *    DO LOGIC TO HANDLE BAD COMPLETION OF TASK                   *
+      ******************************************************************
+
+             PERFORM ABEND-PROCESS
+
+           ELSE
+
+             EXEC CICS GET CONTAINER('CREDIT-CONTAINER')
+                           ACTIVITY('CREDIT-CHECK')
+                           INTO (CREDIT-CHECK-CONTAINER)
+                           RESP(RESP-AREA)
+                           RESP2(RESP2-AREA)
+             END-EXEC
+
+           END-IF.
+
+      ******************************************************************
+      * CHECK-STOCK-ACTIVITY.                                          *
+      ******************************************************************
+
+           EXEC CICS DEFINE ACTIVITY('STOCK-CHECK')
+                            TRANSID('STOC')
+                            PROGRAM('DFH0STOC')
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS RUN ACTIVITY('STOCK-CHECK')
+                         SYNCHRONOUS
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS CHECK ACTIVITY('STOCK-CHECK')
+                           COMPSTATUS(WS-STATUS)
+                           ABCODE(ABEND-CODE)
+                           RESP(RESP-AREA)
+                           RESP2(RESP2-AREA)
+           END-EXEC.
+
+           IF WS-STATUS NOT = DFHVALUE(NORMAL) THEN
+
+      ******************************************************************
+      * DO LOGIC FOR BAD RETURN FROM STOCK CHECK ACTIVITY              *
+      ******************************************************************
+
+             PERFORM ABEND-PROCESS
+           ELSE
+             EXEC CICS GET CONTAINER('STOCK-CONTAINER')
+                           ACTIVITY('STOCK-CHECK')
+                           INTO (STOCK-CHECK-CONTAINER)
+                           RESP(RESP-AREA)
+                           RESP2(RESP2-AREA)
+             END-EXEC
+
+             IF STOCK-ALL-GONE OR CREDIT-BROKE THEN
+               PERFORM ORDER-NOT-ACCEPTED
+             ELSE
+               PERFORM ORDER-ACCEPTED-PROC
+               PERFORM DEL-NOTE-AND-INVOICE-ACTIVITY
+             END-IF
+
+           END-IF.
+
+      ******************************************************************
+      *DEL-NOTE-AND-INVOICE-ACTIVITY.                                  *
+      * STOCK AND CREDIT LIMITS OKAY SO WE WILL NOW DEFINE AND RUN     *
+      * THE DELIVERY NOTE AND INVOICE ACTIVITIES AS A COMPOSITE EVENT. *
+      ******************************************************************
+
+       DEL-NOTE-AND-INVOICE-ACTIVITY.
+
+           EXEC CICS DEFINE ACTIVITY('DELIV-NOTE')
+                            EVENT('DEL-COMPLETE')
+                            TRANSID('DEL1')
+                            PROGRAM('DFH0DEL1')
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS DEFINE ACTIVITY('INVOICE-BUILD')
+                            EVENT('INVOICE-COMPLETE')
+                            TRANSID('INV1')
+                            PROGRAM('DFH0INV1')
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      * NOW DEFINE A COMPOSITE EVENT FOR THE                           *
+      * BUILD OF THE DELIVERY NOTE AND THE INVOICE ACTIVITIES          *
+      ******************************************************************
+
+           EXEC CICS DEFINE COMPOSITE EVENT('DEL-INV-COMPLETE') AND
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS ADD SUBEVENT('DEL-COMPLETE')
+                         EVENT('DEL-INV-COMPLETE')
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS ADD SUBEVENT('INVOICE-COMPLETE')
+                         EVENT('DEL-INV-COMPLETE')
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      * WRITE OUT A TEMPORARY STATE CONTAINER BEFORE                   *
+      * RUNNING THE ACTIVITIES ASYNCHRONOUSLY                          *
+      ******************************************************************
+
+           PERFORM PUT-TEMP-CONTAINER.
+
+           EXEC CICS RUN ACTIVITY('INVOICE-BUILD')
+                         ASYNCHRONOUS
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS RUN ACTIVITY('DELIV-NOTE')
+                         ASYNCHRONOUS
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *ORDER-NOT-ACCEPTED                                              *
+      *IF CREDIT OR STOCK CHECK NOT OKAY RETURN NOT ACCEPTED TO        *
+      *REQUESTER.                                                      *
+      ******************************************************************
+       ORDER-NOT-ACCEPTED.
+
+           MOVE 'N' TO ORDER-ACCEPTED.
+           MOVE CREDIT-LIMIT-OK TO CREDIT-LIMIT-IND.
+           MOVE CREDIT-STOCK-OK TO STOCK-LIMIT-IND.
+
+           EXEC CICS PUT CONTAINER(PROCESS-NAME)
+                         FROM(PROCESS-CONTAINER)
+                         FLENGTH(PC-LENGTH)
+                         PROCESS
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *ORDER-ACCEPTED-PROC                                             *
+      *IF CREDIT OR STOCK CHECK ARE OKAY RETURN ACCEPTED TO REQUESTER  *
+      ******************************************************************
+       ORDER-ACCEPTED-PROC.
+
+           MOVE 'Y' TO ORDER-ACCEPTED.
+           MOVE CREDIT-LIMIT-OK TO CREDIT-LIMIT-IND.
+           MOVE CREDIT-STOCK-OK TO STOCK-LIMIT-IND.
+
+           EXEC CICS PUT CONTAINER(PROCESS-NAME)
+                         FROM(PROCESS-CONTAINER)
+                         FLENGTH(PC-LENGTH)
+                         PROCESS
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *DELIVERY-CHECK                                                  *
+      *CHECK COMPLETION OF DELIVERY NOTE ACTIVITY                      *
+      *UPDATE TEMPORARY CONTAINER WITH RESULTS                         *
+      ******************************************************************
+       DELIVERY-CHECK.
+
+           EXEC CICS CHECK ACTIVITY('DELIV-NOTE')
+                           COMPSTATUS(WS-STATUS)
+                           ABCODE(ABEND-CODE)
+                           RESP(RESP-AREA)
+                           RESP2(RESP2-AREA)
+           END-EXEC.
+
+           IF WS-STATUS NOT = DFHVALUE(NORMAL) THEN
+             PERFORM DEL-NOT-COMPLETE
+           ELSE
+             MOVE DEL-OKAY-MESSAGE TO TRACE-MSG
+             PERFORM DISPLAY-TRACE-MESSAGE
+             PERFORM DEL-COMPLETE
+           END-IF.
+
+      ******************************************************************
+      *INVOICE-CHECK                                                   *
+      *CHECK COMPLETION OF INVOICE ACTIVITY                            *
+      *UPDATE TEMPORARY CONTAINER WITH RESULTS                         *
+      ******************************************************************
+       INVOICE-CHECK.
+
+           EXEC CICS CHECK ACTIVITY('INVOICE-BUILD')
+                           COMPSTATUS(WS-STATUS)
+                           ABCODE(ABEND-CODE)
+                           RESP(RESP-AREA)
+                           RESP2(RESP2-AREA)
+           END-EXEC.
+
+           IF WS-STATUS NOT = DFHVALUE(NORMAL) THEN
+             MOVE INV-NOT-OKAY-MESSAGE TO TRACE-MSG
+             PERFORM DISPLAY-TRACE-MESSAGE
+             PERFORM INV-NOT-COMPLETE
+           ELSE
+             MOVE INV-OKAY-MESSAGE TO TRACE-MSG
+             PERFORM DISPLAY-TRACE-MESSAGE
+             PERFORM INV-COMPLETE
+           END-IF.
+
+      ******************************************************************
+      *SEND-REMINDER                                                   *
+      *IF FIRST TIME THROUGH DEFINE SEND-REMINDER ACTIVITY AND RUN     *
+      *ASYNCHRONOUSLY.                                                 *
+      *IF NOT FIRST TIME THROUGH SKIP DEFINE ACTIVITY BUT RESET IT.    *
+      *THIS ROUTINE IS SET TO RUN UP TO THREE TIMES, AFTER THAT INSERT *
+      *APPLICATION LOGIC TO HANDLE A NON PAYMENT SITUATION.            *
+      ******************************************************************
+
+       SEND-REMINDER.
+
+           PERFORM GET-TEMP-CONTAINER.
+
+           IF REM-IND NOT = 'Y' THEN
+             MOVE 'Y' TO REM-IND
+             EXEC CICS DEFINE ACTIVITY('SEND-REMINDER')
+                              TRANSID('REM1')
+                              PROGRAM('DFH0REM1')
+                              EVENT('REM-COMPLETE')
+                              RESP(RESP-AREA)
+                              RESP2(RESP2-AREA)
+             END-EXEC
+           END-IF.
+
+           IF REM-COUNT > 0 AND < 3 THEN
+
+             EXEC CICS RESET ACTIVITY('SEND-REMINDER')
+                             RESP(RESP-AREA)
+                             RESP2(RESP2-AREA)
+             END-EXEC
+           END-IF.
+
+           IF REM-COUNT NOT > 2 THEN
+
+             ADD 1 TO REM-COUNT
+             PERFORM PUT-TEMP-CONTAINER
+
+             EXEC CICS RUN ACTIVITY('SEND-REMINDER')
+                           ASYNCHRONOUS
+                           RESP(RESP-AREA)
+                           RESP2(RESP2-AREA)
+             END-EXEC
+           ELSE
+      ******************************************************************
+      *      YOU HAVE NOW SENT OUT THREE REMINDERS AND                 *
+      *      NOT RECEIVED ANY PAYMENT.  PUT YOUR LOGIC                 *
+      *      HERE AS PER YOUR BUSINESS REQUIREMENTS.                   *
+      ******************************************************************
+             MOVE NO-PAYMENT-MESSAGE TO TRACE-MSG
+             PERFORM DISPLAY-TRACE-MESSAGE
+           END-IF.
+
+      ******************************************************************
+      *DEL-REM-COMPLETE                                                *
+      * CHECK RESULT FROM SEND REMINDER ACTIVITY                       *
+      ******************************************************************
+       DEL-REM-COMPLETE.
+
+           EXEC CICS CHECK ACTIVITY('SEND-REMINDER')
+                           COMPSTATUS(WS-STATUS)
+                           ABCODE(ABEND-CODE)
+                           RESP(RESP-AREA)
+                           RESP2(RESP2-AREA)
+           END-EXEC.
+      ******************************************************************
+      *PUT CODE HERE TO ENSURE REMINDER ACTIVITY COMPLETED OKAY, IF    *
+      *NOT YOU MAY WISH TO RETRY THE ACTIVITY OR PUT OUT AN MESSAGE    *
+      *FOR THIS SAMPLE WE WILL ASSUME IT HAS WORKED OKAY.              *
+      ******************************************************************
+
+      ******************************************************************
+      *SET-TIMER-EVENT                                                 *
+      * WHEN BOTH INVOICE AND DELIVERY NOTE ACTIVITIES ARE COMPLETE    *
+      * START TIMER EVENT FOR 28 DAYS.                                 *
+      * THIS EVENT WILL BE CANCELLED BY ANOTHER PROCESS                *
+      * WHEN THE PAYMENT HAS BEEN RECEIVED OKAY.                       *
+      * I HAVE CODED TWO TIMERS HERE ONE FOR 28 DAYS AS PER THE        *
+      * APPLICATION AND ANOTHER FOR 5 SECONDS  FOR TESTING PURPOSES.   *
+      * COMMENT OUT THE ONE YOU DO NOT REQUIRE.                        *
+      ******************************************************************
+       SET-TIMER-EVENT.
+
+      *      EXEC CICS DEFINE TIMER('REM-TIMER')
+      *                       EVENT('SEND-PAY-REM')
+      *                       AFTER DAYS(28)
+      *                       RESP(RESP-AREA)
+      *                       RESP2(RESP2-AREA)
+      *      END-EXEC.
+
+             EXEC CICS DEFINE TIMER('REM-TIMER')
+                              EVENT('SEND-PAY-REM')
+                              AFTER SECONDS(5)
+                              RESP(RESP-AREA)
+                              RESP2(RESP2-AREA)
+             END-EXEC.
+
+      ******************************************************************
+      *DELETE-TIMER-EVENT                                              *
+      * DELETE TIMER WHEN NO LONGER REQUIRED                           *
+      ******************************************************************
+       DELETE-TIMER-EVENT.
+           EXEC CICS DELETE TIMER('REM-TIMER')
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *DEL-TIMER-AND-EVENTS                                            *
+      * DELETE TIMER AND REMINDER EVENT WHEN NO LONGER REQUIRED        *
+      ******************************************************************
+       DEL-TIMER-AND-EVENTS.
+
+           EXEC CICS DELETE TIMER('REM-TIMER')
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+           EXEC CICS DELETE EVENT('DELETE-TIMER')
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *DELETE-PROCESS-CONTAINER                                        *
+      * DELETE PROCESS CONTAINER                                       *
+      ******************************************************************
+       DELETE-PROCESS-CONTAINER.
+
+           EXEC CICS ASSIGN PROCESS(PROCESS-NAME)
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+           EXEC CICS DELETE CONTAINER(PROCESS-NAME)
+                            PROCESS
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *
+      *DEFINE-CBAM-EVENT IF NEEDED.
+      *    EXEC CICS DEFINE INPUT EVENT('CBAM-INSPECT')
+      *                     RESP(RESP-AREA)
+      *                     RESP2(RESP2-AREA)
+      *    END-EXEC.
+      *
+      ******************************************************************
+
+      ******************************************************************
+      *DEL-NOT-COMPLETE                                                *
+      *SET DELIVERY NOT OKAY IN TEMPORARY CONTAINER                    *
+      ******************************************************************
+       DEL-NOT-COMPLETE.
+           PERFORM GET-TEMP-CONTAINER.
+           MOVE 'N' TO DEL-OKAY.
+           PERFORM PUT-TEMP-CONTAINER.
+
+      ******************************************************************
+      *DEL-COMPLETE                                                    *
+      *SET DELIVERY OKAY IN TEMPORARY CONTAINER                        *
+      ******************************************************************
+       DEL-COMPLETE.
+           PERFORM GET-TEMP-CONTAINER.
+           MOVE 'Y' TO DEL-OKAY.
+           PERFORM PUT-TEMP-CONTAINER.
+
+      ******************************************************************
+      *INV-NOT-COMPLETE                                                *
+      *SET INVOICE NOT OKAY IN TEMPORARY CONTAINER                     *
+      ******************************************************************
+       INV-NOT-COMPLETE.
+           PERFORM GET-TEMP-CONTAINER.
+           MOVE 'N' TO INV-OKAY.
+           PERFORM PUT-TEMP-CONTAINER.
+
+      ******************************************************************
+      *INV-COMPLETE                                                    *
+      *SET INVOICE OKAY IN TEMPORARY CONTAINER                         *
+      ******************************************************************
+       INV-COMPLETE.
+           PERFORM GET-TEMP-CONTAINER.
+           MOVE 'Y' TO INV-OKAY.
+           PERFORM PUT-TEMP-CONTAINER.
+
+      ******************************************************************
+      *GET-TEMP-CONTAINER                                              *
+      *READ TEMPORARY CONTAINER                                        *
+      ******************************************************************
+       GET-TEMP-CONTAINER.
+           EXEC CICS GET CONTAINER('TEMP-CONTAINER')
+                         INTO(TEMP-CONTAINER)
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *PUT-TEMP-CONTAINER                                              *
+      *WRITE TEMPORARY CONTAINER                                       *
+      ******************************************************************
+       PUT-TEMP-CONTAINER.
+           EXEC CICS PUT CONTAINER('TEMP-CONTAINER')
+                         FROM(TEMP-CONTAINER)
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *ABEND-PROCESS                                                   *
+      *ABEND WITH U001 AND WRITE MESSAGE TO CICS CONSOLE               *
+      ******************************************************************
+       ABEND-PROCESS.
+           EXEC CICS WRITEQ TD
+                            QUEUE('CSMT')
+                            FROM(COMMON-MSG-AREA)
+                            LENGTH(COMMON-MSG-LEN)
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EXEC CICS ABEND ABCODE('U001') NODUMP
+           END-EXEC.
+
+      ******************************************************************
+      *DISPLAY-TRACE-MESSAGE                                           *
+      *WRITE MESSAGE TO CICS CONSOLE FOR TRACE PURPOSES                *
+      ******************************************************************
+       DISPLAY-TRACE-MESSAGE.
+           EXEC CICS WRITEQ TD
+                            QUEUE('CSMT')
+                            FROM(TRACE-MSG-AREA)
+                            LENGTH(TRACE-MSG-LEN)
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+      *
+      ******************************************************************
+      *DUMMY-GOBACK                                                    *
+      *BECAUSE SOME COMPILERS NEED IT                                  *
+      ******************************************************************
+       DUMMY-GOBACK.
+            GOBACK.
+      *

@@ -1,0 +1,750 @@
+CBL CICS('APOST,COBOL3') LIST TRUNC(OPT)
+      ******************************************************************
+      *
+      * MODULE NAME = DFH0W2F1
+      *
+      * DESCRIPTIVE NAME = CICS TS  (W2) FILEA RESTful interactions
+      *
+      *
+      *
+      *      Licensed Materials - Property of IBM
+      *
+      *      "Restricted Materials of IBM"
+      *
+      *      5655-Y04
+      *
+      *      (C) Copyright IBM Corp. 2008, 2009"
+      *
+      *
+      *
+      *
+      * STATUS = 7.2.0
+      *
+      * TRANSACTION NAME = CW2A
+      *
+      * FUNCTION = FILEA RESTful interactions
+      *
+      * NOTES :
+      *  DEPENDENCIES = z/Arch
+      *  MODULE TYPE = Executable
+      *  PROCESSOR = COBOL
+      *  ATTRIBUTES = Read only, Serially Reusable
+      *
+      *---------------------------------------------------------------
+      *
+      * DESCRIPTION
+      *    This program provides RESTful interfaces to the FILEA file.
+      *
+      *-----------------------------------------------------------------
+      *
+      *     $MOD(DFH0W2F1),COMP(WEB2.0),PROD(CICS TS ):
+      *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS
+      * $L0= 923    660 080924 HD2JPEH : FILEA sample REST program
+      * $P3= D26303 660 090507 HDILMWC : Program improvements
+      * $P4= D26648 660 090527 HDILMWC : Return selector if required
+      *
+      ******************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID.    DFH0W2F1.
+       DATE-WRITTEN.  March 2008.
+       DATE-COMPILED. June  2009.
+      ******************************************************************
+      ****                                                          ****
+      ****       R E S T F U L   A C C E S S   TO   F I L E A       ****
+      ****                                                          ****
+      ****                                                          ****
+      ****   This program is a demonstration of how to use the      ****
+      ****   RESTful Atom interfaces with an ATOMSERVICE to access  ****
+      ****   the sample FILEA file.                                 ****
+      ****                                                          ****
+      ****   It is not a generalized file access program, but       ****
+      ****   very much customized to the FILEA file to demonstrate  ****
+      ****   the custom program interface.                          ****
+      ****                                                          ****
+      ******************************************************************
+
+       ENVIRONMENT DIVISION.
+
+       DATA DIVISION.
+
+       WORKING-STORAGE SECTION.
+       COPY DFHW2CNO.
+
+        77 I                  PIC S9(8) COMP-4 SYNC.
+        77 J                  PIC S9(8) COMP-4 SYNC.
+        77 K                  PIC S9(8) COMP-4 SYNC.
+        77 L                  PIC S9(8) COMP-4 SYNC.
+        77 ATOM-PARMS-PTR     USAGE IS POINTER.
+        77 ATOM-PARMS-LEN     PIC S9(8) COMP-4 SYNC.
+        77 CNTNR-PTR          USAGE IS POINTER.
+        77 NAVIGATION-PTR     USAGE IS POINTER.
+        77 FILE-PTR           USAGE IS POINTER.
+        77 CNTNR-LEN          PIC S9(8) COMP-4 SYNC.
+        77 RESPONSE           PIC S9(8) COMP-4 SYNC.
+        77 CHECK-SUM          PIC S9(8) COMP-4 SYNC.
+        77 XML-INDEX          PIC S9(8) COMP-4 SYNC VALUE 0.
+        77 HTTP-METHOD        PIC X(8).
+        77 IF-MATCH-VALUE     PIC X(28).
+        77 FILE-KEY           PIC X(6).
+
+      * Space for some status tracking
+        01 STATUS-FLAGS.
+           02 IN-CONTENT          PIC X.
+           02 PARSE-ERROR         PIC X.
+           02 READ-ERROR          PIC X.
+           02 WRITE-ERROR         PIC X.
+           02 PRECONDITION-ERROR  PIC X.
+           02 NOT-FOUND           PIC X.
+           02 NOT-AUTHORIZED      PIC X.
+           02 ALREADY-EXISTS      PIC X.
+           02 FILE-DISABLED       PIC X.
+
+      * Include the FILEA record layout definition.
+      * This is padded with an additional eight bytes of spaces
+      * so that the checksum calculation doesn't need to worry
+      * about crossing a word boundary at the end of the record.
+        01 FILEA.
+           COPY DFH0CFIL.
+           02 FILLER      PIC X(8) VALUE SPACES.
+
+      * The following structure is a prototype for the atom:content
+      * container to be returned to the feed program DFH$W2FD.
+      * The X'0D25' fields are Carriage-Return/Line-Feed sequences
+      * that are used to delimit the lines of XML.
+        01 ATOM-CONTENT-ELEMENT.
+           02 FILLER      PIC X(25) VALUE '<content type="text/xml">'.
+           02 FILLER      PIC X(2)  VALUE X'0D25'.
+           02 FILLER      PIC X(8)  VALUE '<status>'.
+           02 ACE-STATUS  PIC X.
+           02 FILLER      PIC X(9)  VALUE '</status>'.
+           02 FILLER      PIC X(2)  VALUE X'0D25'.
+           02 FILLER      PIC X(8)  VALUE '<number>'.
+           02 ACE-NUMBER  PIC X(6).
+           02 FILLER      PIC X(9)  VALUE '</number>'.
+           02 FILLER      PIC X(2)  VALUE X'0D25'.
+           02 FILLER      PIC X(6)  VALUE '<name>'.
+           02 ACE-NAME    PIC X(20).
+           02 FILLER      PIC X(7)  VALUE '</name>'.
+           02 FILLER      PIC X(2)  VALUE X'0D25'.
+           02 FILLER      PIC X(9)  VALUE '<address>'.
+           02 ACE-ADDRESS PIC X(20).
+           02 FILLER      PIC X(10) VALUE '</address>'.
+           02 FILLER      PIC X(2)  VALUE X'0D25'.
+           02 FILLER      PIC X(7)  VALUE '<phone>'.
+           02 ACE-PHONE   PIC X(8).
+           02 FILLER      PIC X(8)  VALUE '</phone>'.
+           02 FILLER      PIC X(2)  VALUE X'0D25'.
+           02 FILLER      PIC X(6)  VALUE '<date>'.
+           02 ACE-DATE    PIC X(8).
+           02 FILLER      PIC X(7)  VALUE '</date>'.
+           02 FILLER      PIC X(2)  VALUE X'0D25'.
+           02 FILLER      PIC X(8)  VALUE '<amount>'.
+           02 ACE-AMOUNT  PIC X(8).
+           02 FILLER      PIC X(9)  VALUE '</amount>'.
+           02 FILLER      PIC X(2)  VALUE X'0D25'.
+           02 FILLER      PIC X(9)  VALUE '<comment>'.
+           02 ACE-COMMENT PIC X(9).
+           02 FILLER      PIC X(10) VALUE '</comment>'.
+           02 FILLER      PIC X(2)  VALUE X'0D25'.
+           02 FILLER      PIC X(10) VALUE '</content>'.
+           02 FILLER      PIC X(2)  VALUE X'0D25'.
+
+        01 RECORD-TITLE.
+           02 FILLER      PIC X(7)  VALUE 'Record '.
+           02 TITLE-NUM   PIC X(6).
+           02 FILLER      PIC X(5)  VALUE ' for '.
+           02 TITLE-NAME  PIC X(20).
+
+        01 RECORD-SUMMARY.
+           02 SUMMARY-NAME PIC X(20).
+           02 FILLER       PIC X VALUE SPACE.
+           02 SUMMARY-ADDR PIC X(20).
+
+        01 XML-STACK.
+           02 XML-STACK-ELEMENT PIC X(16) OCCURS 32.
+
+        01 ETAG-STRUCTURE.
+           02 ETAG-VALUE  PIC X(28).
+           02 ETAG-CHAR   REDEFINES ETAG-VALUE PIC X OCCURS 28.
+
+        01 HEX-CHARS.
+           02 HEX-VALUES  PIC X(16) VALUE '0123456789ABCDEF'.
+           02 HEX         REDEFINES HEX-VALUES PIC X OCCURS 16.
+
+       LINKAGE SECTION.
+      * Include the definition of the DFHATOMPARAMS container.
+       COPY DFHW2APO.
+
+      * Define a variable-length parameter string value.
+        01 ATMP-PARAMETER-VALUE.
+           02 FILLER PIC X OCCURS 1 TO 32767
+                           DEPENDING ON ATMP-PARAMETER-LEN.
+
+      * Define the variable-length DFHREQUEST container.
+        01 DFHREQUEST-CONTAINER.
+           02 FILLER PIC X OCCURS 1 TO 32767
+                           DEPENDING ON CNTNR-LEN.
+
+      * Define an array of binary words for the checksum calculation.
+        01 WORD-ARRAY.
+           02 WORD-ELEMENT PIC S9(8) COMP-4 OCCURS 256.
+
+      * Define a storage area in which to return the navigation keys.
+        01 FILE-KEYS.
+           02 NAVIGATION-KEYS.
+              03 FIRST-KEY    PIC X(6).
+              03 LAST-KEY     PIC X(6).
+              03 NEXT-KEY     PIC X(6).
+              03 PREVIOUS-KEY PIC X(6).
+           02 CURRENT-SELECTOR.
+              03 SELECTOR     PIC X(6).
+
+      ******************************************************************
+      ****                                                          ****
+      ****  Start of executable code.                               ****
+      ****                                                          ****
+      ******************************************************************
+       PROCEDURE DIVISION.
+       MAINLINE-PROGRAM SECTION.
+           MOVE SPACES TO FILEA.
+           MOVE 'N' TO PARSE-ERROR, READ-ERROR, WRITE-ERROR,
+                       NOT-FOUND, NOT-AUTHORIZED, ALREADY-EXISTS,
+                       FILE-DISABLED.
+
+           SET ATOM-PARMS-PTR TO NULLS.
+           EXEC CICS GET CONTAINER('DFHATOMPARMS')
+                     SET(ATOM-PARMS-PTR) FLENGTH(ATOM-PARMS-LEN)
+           END-EXEC.
+           SET ADDRESS OF ATMP-PARAMETER-LIST  TO ATOM-PARMS-PTR.
+
+      * The navigation keys are stored temporarily in the Transaction
+      * Work Area. CW2A is defined with a 512 byte TWA for use by
+      * service routines for this purpose. (CICS base code does not
+      * use the TWA, so you can use it for any purpose.)
+           EXEC CICS ADDRESS TWA(NAVIGATION-PTR) END-EXEC.
+           SET ADDRESS OF FILE-KEYS TO NAVIGATION-PTR.
+
+      * Get the selector value passed from the feed manager.
+      * It may be the final segment of the request URL or the value
+      * of a selected keyword in the querystring, depending on the
+      * cics:selector style attribute in the Atom configuration file.
+      * This is used as the key value for the file.
+      * If the selector is absent, use the key of the first record.
+           SET ADDRESS OF ATMP-PARAMETER       TO ATMP-SELECTOR.
+           SET ADDRESS OF ATMP-PARAMETER-VALUE TO ATMP-PARAMETER-PTR.
+           IF ATMP-PARAMETER-LEN IS NOT ZERO
+              MOVE ATMP-PARAMETER-VALUE(1:ATMP-PARAMETER-LEN)
+                   TO SELECTOR, FILE-KEY
+           ELSE
+              PERFORM READ-FIRST-RECORD
+              MOVE FILE-KEY TO SELECTOR
+              SET ATMP-PARAMETER-PTR TO ADDRESS OF SELECTOR
+              MOVE LENGTH OF SELECTOR TO ATMP-PARAMETER-LEN
+           END-IF.
+
+      * Save the value from the If-Match header.
+           SET ADDRESS OF ATMP-PARAMETER       TO ATMP-ETAGVAL.
+           SET ADDRESS OF ATMP-PARAMETER-VALUE TO ATMP-PARAMETER-PTR.
+           MOVE ATMP-PARAMETER-VALUE(1:8) TO IF-MATCH-VALUE.
+           MOVE SPACES TO ATMP-PARAMETER-VALUE(1:16).
+
+      * Get the requested HTTP method.
+           SET ADDRESS OF ATMP-PARAMETER       TO ATMP-HTTPMETH.
+           SET ADDRESS OF ATMP-PARAMETER-VALUE TO ATMP-PARAMETER-PTR.
+           MOVE ATMP-PARAMETER-VALUE(1:ATMP-PARAMETER-LEN)
+                TO HTTP-METHOD.
+
+      * Use the HTTP method to drive the RESTful access to the file.
+           EVALUATE HTTP-METHOD
+             WHEN 'GET'    PERFORM PROCESS-GET-REQUEST
+             WHEN 'PUT'    PERFORM PROCESS-PUT-REQUEST
+             WHEN 'POST'   PERFORM PROCESS-POST-REQUEST
+             WHEN 'DELETE' PERFORM PROCESS-DELETE-REQUEST
+           END-EVALUATE.
+
+           EXEC CICS RETURN
+           END-EXEC.
+
+      *****************************************************************
+      * Handle an HTTP GET request.
+      * Read the file record and return its contents.
+      *****************************************************************
+       PROCESS-GET-REQUEST.
+           PERFORM READ-FILE-RECORD.
+           EVALUATE 'Y'
+             WHEN NOT-FOUND
+               PERFORM RETURN-NOT-FOUND
+             WHEN NOT-AUTHORIZED
+               PERFORM RETURN-NOT-AUTHORIZED
+             WHEN FILE-DISABLED
+               PERFORM RETURN-DISABLED
+             WHEN READ-ERROR
+               PERFORM RETURN-MEDIA-ERROR
+             WHEN OTHER
+               PERFORM RETURN-FILE-CONTENT
+           END-EVALUATE.
+
+      *****************************************************************
+      * Handle an HTTP PUT request.
+      * Read the file record for update, apply the updates,
+      * and then rewrite. Return the rewritten contents.
+      *****************************************************************
+       PROCESS-PUT-REQUEST.
+           MOVE 'N' TO PRECONDITION-ERROR.
+           PERFORM READ-FILE-FOR-UPDATE.
+           IF READ-ERROR EQUAL 'N'
+              PERFORM CALCULATE-DIGEST
+              IF ETAG-VALUE EQUAL IF-MATCH-VALUE OR
+                 IF-MATCH-VALUE EQUAL '*' THEN
+                 PERFORM PARSE-REQUEST-BODY
+              ELSE
+                 MOVE 'Y' TO PRECONDITION-ERROR
+                 PERFORM RETURN-PRECONDITION-FAILED
+           END-IF.
+
+           EVALUATE 'Y'
+             WHEN NOT-FOUND
+               PERFORM RETURN-NOT-FOUND
+             WHEN READ-ERROR
+               PERFORM RETURN-MEDIA-ERROR
+             WHEN NOT-AUTHORIZED
+               PERFORM RETURN-NOT-AUTHORIZED
+             WHEN FILE-DISABLED
+               PERFORM RETURN-DISABLED
+             WHEN PRECONDITION-ERROR
+               PERFORM UNLOCK-FILE-RECORD
+               PERFORM RETURN-FILE-CONTENT
+             WHEN PARSE-ERROR
+               PERFORM UNLOCK-FILE-RECORD
+               PERFORM RETURN-PARSE-ERROR
+             WHEN OTHER
+               PERFORM REWRITE-FILE-RECORD
+               PERFORM RETURN-FILE-CONTENT
+           END-EVALUATE.
+
+      *****************************************************************
+      * Handle an HTTP POST request.
+      * Create a new file record from the contents of DFHREQUEST
+      * and return its contents.
+      * Using NUMB as the key is very specific to FILEA.
+      *****************************************************************
+       PROCESS-POST-REQUEST.
+           PERFORM PARSE-REQUEST-BODY.
+           IF PARSE-ERROR EQUAL 'N' THEN
+              MOVE NUMB OF FILEREC  TO FILE-KEY, SELECTOR
+              PERFORM CREATE-FILE-RECORD
+           EVALUATE 'Y'
+             WHEN ALREADY-EXISTS
+               PERFORM RETURN-DUPLICATE-STATUS
+               PERFORM READ-FILE-RECORD
+               PERFORM RETURN-FILE-CONTENT
+             WHEN PARSE-ERROR
+               PERFORM RETURN-PARSE-ERROR
+             WHEN WRITE-ERROR
+               PERFORM RETURN-MEDIA-ERROR
+             WHEN NOT-AUTHORIZED
+               PERFORM RETURN-NOT-AUTHORIZED
+             WHEN FILE-DISABLED
+               PERFORM RETURN-DISABLED
+             WHEN OTHER
+               PERFORM RETURN-FILE-CONTENT
+           END-EVALUATE.
+
+      *****************************************************************
+      * Handle an HTTP DELETE request.
+      * Delete the requested file record.
+      *****************************************************************
+       PROCESS-DELETE-REQUEST.
+           PERFORM DELETE-FILE-RECORD.
+           EVALUATE 'Y'
+             WHEN NOT-FOUND
+               PERFORM RETURN-NOT-FOUND
+             WHEN NOT-AUTHORIZED
+               PERFORM RETURN-NOT-AUTHORIZED
+             WHEN FILE-DISABLED
+               PERFORM RETURN-DISABLED
+             WHEN READ-ERROR
+               PERFORM RETURN-MEDIA-ERROR
+             WHEN OTHER
+               PERFORM RETURN-FILE-CONTENT
+           END-EVALUATE.
+
+      *****************************************************************
+      * Get the HTTP request body from the DFHREQUEST container
+      * and parse it using the Cobol XML PARSE verb.
+      *****************************************************************
+       PARSE-REQUEST-BODY.
+           MOVE 'N' TO IN-CONTENT, PARSE-ERROR.
+           EXEC CICS GET CONTAINER('DFHREQUEST')
+                         SET(CNTNR-PTR) FLENGTH(CNTNR-LEN) NOHANDLE
+           END-EXEC.
+           SET ADDRESS OF DFHREQUEST-CONTAINER TO CNTNR-PTR.
+           XML PARSE DFHREQUEST-CONTAINER
+               PROCESSING PROCEDURE XML-HANDLER
+               EXCEPTION
+                 DISPLAY 'Atom request parse error' XML-CODE
+                 MOVE 'Y' TO PARSE-ERROR
+               NOT EXCEPTION
+                 DISPLAY 'Atom request successfully parsed'
+           END-XML.
+
+      *****************************************************************
+      * Return the structured response in the ATOMCONTENT container.
+      * Also calculate the digest for the file record and return it
+      * as the Etag value.
+      *****************************************************************
+       RETURN-FILE-CONTENT.
+           SET ADDRESS OF ATMP-OPTIONS-WORDS TO ATMP-OPTIONS.
+           MOVE ZERO TO ATMP-OPTIONS-OUT.
+
+           MOVE STAT    IN FILEA TO ACE-STATUS.
+           MOVE NUMB    IN FILEA TO ACE-NUMBER.
+           MOVE NAME    IN FILEA TO ACE-NAME.
+           MOVE ADDRX   IN FILEA TO ACE-ADDRESS.
+           MOVE PHONE   IN FILEA TO ACE-PHONE.
+           MOVE DATEX   IN FILEA TO ACE-DATE.
+           MOVE AMOUNT  IN FILEA TO ACE-AMOUNT.
+           MOVE COMMENT IN FILEA TO ACE-COMMENT.
+           EXEC CICS PUT CONTAINER('DFHATOMCONTENT')
+                         FROM(ATOM-CONTENT-ELEMENT)
+                         FROMCCSID(1047) NOHANDLE END-EXEC.
+
+           MOVE NUMB    IN FILEA TO TITLE-NUM.
+           MOVE NAME    IN FILEA TO TITLE-NAME.
+           EXEC CICS PUT CONTAINER('DFHATOMTITLE')
+                         FROM(RECORD-TITLE)
+                         FROMCCSID(1047) NOHANDLE END-EXEC.
+           ADD OPTTITLE-NUM TO ATMP-OPTIONS-OUT.
+
+           MOVE NAME    IN FILEA TO SUMMARY-NAME.
+           MOVE ADDRX   IN FILEA TO SUMMARY-ADDR.
+           EXEC CICS PUT CONTAINER('DFHATOMSUMMARY')
+                         FROM(RECORD-SUMMARY)
+                         FROMCCSID(1047) NOHANDLE END-EXEC.
+           ADD OPTSUMMA-NUM TO ATMP-OPTIONS-OUT.
+
+           PERFORM CALCULATE-DIGEST.
+           SET ADDRESS OF ATMP-PARAMETER       TO ATMP-ETAGVAL.
+           SET ADDRESS OF ATMP-PARAMETER-VALUE TO ATMP-PARAMETER-PTR.
+           MOVE ETAG-VALUE TO ATMP-PARAMETER-VALUE(1:28)
+           MOVE LENGTH OF ETAG-VALUE TO ATMP-PARAMETER-LEN.
+           PERFORM ADD-NAVIGATION-LINKS.
+
+      *****************************************************************
+      * If things went wrong, set an appropriate return code.
+      *****************************************************************
+       RETURN-MEDIA-ERROR.
+           SET ADDRESS OF ATMP-RESPONSES TO ATMP-RESPONSE.
+           MOVE ATMP-RESP-ACCESS-ERROR TO ATMP-RESPONSE-CODE.
+
+       RETURN-PRECONDITION-FAILED.
+           SET ADDRESS OF ATMP-RESPONSES TO ATMP-RESPONSE.
+           MOVE ATMP-RESP-ETAG-NO-MATCH TO ATMP-RESPONSE-CODE.
+
+       RETURN-DUPLICATE-STATUS.
+           SET ADDRESS OF ATMP-RESPONSES TO ATMP-RESPONSE.
+           MOVE ATMP-RESP-ALREADY-EXISTS TO ATMP-RESPONSE-CODE.
+
+       RETURN-NOT-FOUND.
+           SET ADDRESS OF ATMP-RESPONSES TO ATMP-RESPONSE.
+           MOVE ATMP-RESP-NOT-FOUND TO ATMP-RESPONSE-CODE.
+
+       RETURN-NOT-AUTHORIZED.
+           SET ADDRESS OF ATMP-RESPONSES TO ATMP-RESPONSE.
+           MOVE ATMP-RESP-NOT-AUTH TO ATMP-RESPONSE-CODE.
+
+       RETURN-DISABLED.
+           SET ADDRESS OF ATMP-RESPONSES TO ATMP-RESPONSE.
+           MOVE ATMP-RESP-DISABLED TO ATMP-RESPONSE-CODE.
+
+       RETURN-PARSE-ERROR.
+           SET ADDRESS OF ATMP-RESPONSES TO ATMP-RESPONSE.
+           MOVE ATMP-RESP-CONVERSION-FAILED TO ATMP-RESPONSE-CODE.
+
+      *****************************************************************
+      * Calculate the SHA-1 digest of the file record,
+      * which is to be used as the entity tag.
+      *****************************************************************
+       CALCULATE-DIGEST.
+           EXEC CICS BIF DIGEST BASE64
+                     RECORD(FILEA) RECORDLEN(LENGTH OF FILEA)
+                     RESULT(ETAG-VALUE) NOHANDLE
+           END-EXEC.
+           IF EIBRESP NOT EQUAL DFHRESP(NORMAL) THEN
+             PERFORM CALCULATE-CHECKSUM.
+
+      ****************************************************************
+      * If the BIF DIGEST command returns an exception, it is
+      * because the current hardware does not support the required
+      * Message-Security Assist feature.
+      * In this case, calculate a checksum of the file record, then
+      * convert it to hexadecimal to be used as the Entity Tag value.
+      * Note that the file record is padded with an extra eight
+      * spaces so that we can use records that are not a multiple
+      * of four. (This is not applicable to FILEA, but might be in
+      * the more general case.)
+      ****************************************************************
+       CALCULATE-CHECKSUM.
+           SET ADDRESS OF WORD-ARRAY TO ADDRESS OF FILEA.
+           MOVE ZERO TO CHECK-SUM.
+           PERFORM VARYING I FROM 1 BY 1
+                           UNTIL I > (LENGTH OF FILEA) / 4
+             ADD WORD-ELEMENT(I) TO CHECK-SUM
+           END-PERFORM.
+           MOVE CHECK-SUM TO L.
+           MOVE SPACES TO ETAG-VALUE.
+           PERFORM VARYING I FROM 8 BY -1 UNTIL I = 0
+             DIVIDE L BY 16 GIVING K REMAINDER J
+             MOVE HEX(J + 1) TO ETAG-CHAR(I)
+             MOVE K TO L
+           END-PERFORM.
+
+      *****************************************************************
+      * The following routines actually access
+      * the file in various ways.
+      *****************************************************************
+       READ-FILE-RECORD.
+           EXEC CICS READ    FILE('FILEA') RIDFLD(FILE-KEY)
+                             INTO(FILEREC) NOHANDLE END-EXEC.
+           PERFORM CHECK-READ.
+
+       READ-FILE-FOR-UPDATE.
+           EXEC CICS READ    FILE('FILEA') RIDFLD(FILE-KEY)
+                             INTO(FILEREC) UPDATE NOHANDLE END-EXEC.
+           PERFORM CHECK-READ.
+
+       READ-FIRST-RECORD.
+           MOVE LOW-VALUES TO FILE-KEY.
+           EXEC CICS STARTBR  FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE END-EXEC.
+           EXEC CICS READNEXT FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE SET(FILE-PTR) END-EXEC.
+           PERFORM CHECK-READ.
+           EXEC CICS ENDBR    FILE('FILEA') NOHANDLE END-EXEC.
+
+       REWRITE-FILE-RECORD.
+           EXEC CICS REWRITE FILE('FILEA')
+                             FROM(FILEREC) NOHANDLE END-EXEC.
+           PERFORM CHECK-WRITE.
+
+       CREATE-FILE-RECORD.
+           EXEC CICS WRITE   FILE('FILEA') RIDFLD(FILE-KEY)
+                             FROM(FILEREC) NOHANDLE END-EXEC.
+           PERFORM CHECK-WRITE.
+
+       DELETE-FILE-RECORD.
+           EXEC CICS DELETE  FILE('FILEA') RIDFLD(FILE-KEY)
+                             NOHANDLE END-EXEC.
+           PERFORM CHECK-READ.
+
+       UNLOCK-FILE-RECORD.
+           EXEC CICS UNLOCK  FILE('FILEA')
+                             NOHANDLE END-EXEC.
+
+       CHECK-READ.
+           EVALUATE EIBRESP
+             WHEN DFHRESP(NORMAL)
+               CONTINUE
+             WHEN DFHRESP(NOTFND)
+               MOVE 'Y' TO NOT-FOUND, READ-ERROR
+             WHEN DFHRESP(FILENOTFOUND)
+               MOVE 'Y' TO NOT-FOUND, READ-ERROR
+             WHEN DFHRESP(NOTAUTH)
+               MOVE 'Y' TO NOT-AUTHORIZED
+             WHEN DFHRESP(DISABLED)
+               MOVE 'Y' TO FILE-DISABLED
+             WHEN OTHER
+               MOVE 'Y' TO READ-ERROR
+           END-EVALUATE.
+
+       CHECK-WRITE.
+           EVALUATE EIBRESP
+             WHEN DFHRESP(NORMAL)
+               CONTINUE
+             WHEN DFHRESP(FILENOTFOUND)
+               MOVE 'Y' TO NOT-FOUND, WRITE-ERROR
+             WHEN DFHRESP(DUPREC)
+               MOVE 'Y' TO ALREADY-EXISTS, WRITE-ERROR
+             WHEN DFHRESP(NOTAUTH)
+               MOVE 'Y' TO NOT-AUTHORIZED
+             WHEN DFHRESP(DISABLED)
+               MOVE 'Y' TO FILE-DISABLED
+             WHEN OTHER
+               MOVE 'Y' TO WRITE-ERROR
+           END-EVALUATE.
+
+      *****************************************************************
+      * Return selector links to be used for construction the
+      * navigation links specified in RFC2053. The are used to
+      * locate the first, last, next, and previous records.
+      * Note that, unlike the TSQ sample, the references are in their
+      * natural order by key value, not reversed by chronology, as
+      * there is no natural time-based ordering of the file records.
+      *****************************************************************
+       ADD-NAVIGATION-LINKS.
+           MOVE SPACES TO NAVIGATION-KEYS.
+
+           MOVE LOW-VALUES TO FILE-KEY.
+           EXEC CICS STARTBR  FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE END-EXEC.
+           EXEC CICS READNEXT FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE SET(FILE-PTR) END-EXEC.
+           MOVE FILE-KEY TO FIRST-KEY.
+
+           MOVE HIGH-VALUES TO FILE-KEY.
+           EXEC CICS RESETBR  FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE END-EXEC.
+           EXEC CICS READPREV FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE SET(FILE-PTR) END-EXEC.
+           MOVE FILE-KEY TO LAST-KEY.
+
+           MOVE SELECTOR TO FILE-KEY.
+           EXEC CICS RESETBR  FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE END-EXEC.
+           EXEC CICS READNEXT FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE SET(FILE-PTR) END-EXEC.
+           EXEC CICS READNEXT FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE SET(FILE-PTR) END-EXEC.
+           MOVE FILE-KEY TO NEXT-KEY.
+
+           MOVE SELECTOR TO FILE-KEY.
+           EXEC CICS RESETBR  FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE END-EXEC.
+           EXEC CICS READPREV FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE SET(FILE-PTR) END-EXEC.
+           EXEC CICS READPREV FILE('FILEA') RIDFLD(FILE-KEY)
+                              NOHANDLE SET(FILE-PTR) END-EXEC.
+           MOVE FILE-KEY TO PREVIOUS-KEY.
+
+           EXEC CICS ENDBR    FILE('FILEA') NOHANDLE END-EXEC.
+
+           SET ADDRESS OF ATMP-PARAMETER TO ATMP-FIRSTSEL.
+           SET ATMP-PARAMETER-PTR TO ADDRESS OF FIRST-KEY.
+           MOVE LENGTH OF FIRST-KEY TO ATMP-PARAMETER-LEN.
+
+           SET ADDRESS OF ATMP-PARAMETER TO ATMP-LASTSEL.
+           SET ATMP-PARAMETER-PTR TO ADDRESS OF LAST-KEY.
+           MOVE LENGTH OF LAST-KEY TO ATMP-PARAMETER-LEN.
+
+           SET ADDRESS OF ATMP-PARAMETER TO ATMP-NEXTSEL.
+           SET ATMP-PARAMETER-PTR TO ADDRESS OF NEXT-KEY.
+           MOVE LENGTH OF NEXT-KEY TO ATMP-PARAMETER-LEN.
+
+           SET ADDRESS OF ATMP-PARAMETER TO ATMP-PREVSEL.
+           SET ATMP-PARAMETER-PTR TO ADDRESS OF PREVIOUS-KEY.
+           MOVE LENGTH OF PREVIOUS-KEY TO ATMP-PARAMETER-LEN.
+
+      *****************************************************************
+      * Analyze each subelement of the content element, and
+      * update the corresponding field in the FILEA record being
+      * constructed. This is very specific to the FILEA sample file.
+      * A more generic file handler would have to do name-to-offset
+      * resolution using an XMLTRANSFORM resource.
+      * Note than the names used are slightly more user-friendly
+      * than the names of the fields in the DFH0CFIL copybook.
+      * This would not be an available option if you used the
+      * XMLTRANSFORM API to perform the conversion.
+      * The DISPLAY command is used to show an unexpected tag within
+      * the content and should be removed if this sample is to be
+      * frequently.
+      *****************************************************************
+       UPDATE-RECORD-FIELD.
+           EVALUATE XML-STACK-ELEMENT(XML-INDEX)
+              WHEN 'status'
+                MOVE XML-TEXT TO STAT    IN FILEA
+              WHEN 'number'
+                MOVE XML-TEXT TO NUMB    IN FILEA
+              WHEN 'name'
+                MOVE XML-TEXT TO NAME    IN FILEA
+              WHEN 'address'
+                MOVE XML-TEXT TO ADDRX   IN FILEA
+              WHEN 'phone'
+                MOVE XML-TEXT TO PHONE   IN FILEA
+              WHEN 'date'
+                MOVE XML-TEXT TO DATEX   IN FILEA
+              WHEN 'amount'
+                MOVE XML-TEXT TO AMOUNT  IN FILEA
+              WHEN 'comment'
+                MOVE XML-TEXT TO COMMENT IN FILEA
+              WHEN OTHER
+                CONTINUE
+           END-EVALUATE.
+
+      *****************************************************************
+      * This is the XML SAX handler, which gets driven for each
+      * parsing event as the parser runs through the request body.
+      * Note that this program assumes that the atom tags in the
+      * request are prefixed with the "atom" namespace prefix or
+      * that they have the atom namespace as default.
+      * (The Cobol parser is not XML-namespace aware.)
+      * DISPLAY commands are uses to show the parse results.
+      * These should be removed if this sample is to be used
+      * frequently.
+      *****************************************************************
+       XML-HANDLER SECTION.
+           EVALUATE XML-EVENT
+              WHEN 'START-OF-ELEMENT'
+                 DISPLAY 'START ELEMENT TAG: <' XML-TEXT '>'
+                 ADD 1 TO XML-INDEX
+                 MOVE XML-TEXT TO XML-STACK-ELEMENT(XML-INDEX)
+                 IF XML-TEXT EQUAL 'atom:content' OR
+                    XML-TEXT EQUAL 'content' THEN
+                   MOVE 'Y' TO IN-CONTENT
+                 END-IF
+              WHEN 'END-OF-ELEMENT'
+                 DISPLAY 'END ELEMENT TAG:   </' XML-TEXT '> '
+                         IN-CONTENT
+                 MOVE SPACES TO XML-STACK-ELEMENT(XML-INDEX)
+                 SUBTRACT 1 FROM XML-INDEX
+                 IF XML-TEXT EQUAL 'atom:content' OR
+                    XML-TEXT EQUAL 'content' THEN
+                   MOVE 'N' TO IN-CONTENT
+                 END-IF
+              WHEN 'CONTENT-CHARACTERS'
+                 DISPLAY 'CONTENT CHARACTERS:<' XML-TEXT '>'
+                 IF IN-CONTENT EQUAL 'Y' THEN
+                    PERFORM UPDATE-RECORD-FIELD
+                 END-IF
+              WHEN 'ATTRIBUTE-CHARACTERS'
+                 DISPLAY 'ATTRIBUTE VALUE CHARACTERS:<' XML-TEXT '>'
+              WHEN 'START-OF-DOCUMENT'
+                 DISPLAY 'START OF DOCUMENT.'
+              WHEN 'END-OF-DOCUMENT'
+                 DISPLAY 'END OF DOCUMENT.'
+              WHEN 'VERSION-INFORMATION'
+                 DISPLAY 'VERSION:<' XML-TEXT '>'
+              WHEN 'ENCODING-DECLARATION'
+                 DISPLAY 'ENCODING:<' XML-TEXT '>'
+              WHEN 'STANDALONE-DECLARATION'
+                 DISPLAY 'STANDALONE:<' XML-TEXT '>'
+              WHEN 'ATTRIBUTE-NAME'
+                 DISPLAY 'ATTRIBUTE NAME:<' XML-TEXT '>'
+              WHEN 'ATTRIBUTE-CHARACTER'
+                 DISPLAY 'ATTRIBUTE VALUE CHARACTER:<' XML-TEXT '>'
+              WHEN 'START-OF-CDATA-SECTION'
+                 DISPLAY 'START OF CDATA:<' XML-TEXT '>'
+              WHEN 'END-OF-CDATA-SECTION'
+                 DISPLAY 'END OF CDATA:<' XML-TEXT '>'
+              WHEN 'PROCESSING-INSTRUCTION-TARGET'
+                 DISPLAY 'PI TARGET:<' XML-TEXT '>'
+              WHEN 'PROCESSING-INSTRUCTION-DATA'
+                 DISPLAY 'PI-DATA:<' XML-TEXT '>'
+              WHEN 'COMMENT'
+                 DISPLAY 'COMMENT:<' XML-TEXT '>'
+              WHEN 'EXCEPTION'
+      *
+      * XML-CODEs 70-73 mean that the code page being used does not
+      * match the one specified in the document. This is expected
+      * since it has been translated to EBCDIC since we received it.
+      *
+                 IF 70 <= XML-CODE AND XML-CODE <= 73
+                   MOVE ZERO TO XML-CODE
+                 ELSE
+                   MOVE 'Y' TO PARSE-ERROR
+                   DISPLAY 'UNEXPECTED XML EXCEPTION:' XML-CODE
+                 END-IF
+              WHEN OTHER
+                 DISPLAY 'UNEXPECTED XML EVENT:' XML-EVENT '.'
+           END-EVALUATE.
+       XML-HANDLER-END. EXIT.

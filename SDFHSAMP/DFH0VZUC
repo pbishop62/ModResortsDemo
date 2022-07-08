@@ -1,0 +1,751 @@
+ CBL CICS('FEPI,COBOL3')
+ CBL MAP,OBJ,RENT,NODYNAM,OPT,LIB,DATA(31),LIST,APOST
+      *****************************************************************
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994"                             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *   STATUS = 7.2.0                                              *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *   $MOD(DFH0VZUC),COMP(FEPI),PROD(CICS TS ):                   *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $L0= Base   410 94     HD5VDLA : Base                         *
+      *                                                               *
+      *****************************************************************
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+      *****************************************************************
+       PROGRAM-ID.                      DFH0VZUC .
+       DATE-COMPILED.
+      *REMARKS.
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0VZUC                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample Program:          *
+      *                    Begin-session handler.                     *
+      *                    COBOL version                              *
+      *                                                               *
+      *                                                               *
+      * TRANSACTION NAME = CZUC                                       *
+      *                                                               *
+      * TS QUEUE NAME    = SESSION                                    *
+      *                                                               *
+      * FUNCTION = This program prepares sessions for use by the      *
+      *            FEPI sample application programs.                  *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      * This transaction is started by FEPI when it begins a new      *
+      * session.                                                      *
+      *                                                               *
+      * The conversation started by FEPI MUST be accessed so that     *
+      * FEPI knows that the event is being handled.  The processing   *
+      * required depends on what data mode and type the session uses  *
+      * (which is obtained from the start data), and whether the      *
+      * back-end system is IMS or CICS.                               *
+      *                                                               *
+      * For SLU P mode (necessarily IMS), processing depends entirely *
+      * on local requirements, and could typically be used for        *
+      * handling security.  For illustration purposes, this program   *
+      * simply gets and discards the initial data.  (Note that the    *
+      * setup for these samples does not specify a begin-session      *
+      * transaction for SLU P mode.)                                  *
+      *                                                               *
+      * For SLU2 mode with CICS using formatted data, there is a      *
+      * CICS 'good morning' message waiting.  The message is          *
+      * received, and the back-end screen is cleared and left ready   *
+      * for a transaction ID to be entered.                           *
+      *                                                               *
+      * For SLU2 mode with CICS using data stream, there may be a     *
+      * 'read partition' request waiting which requires a reply (for  *
+      * example, if your pool has device T3279Mx or TPS55Mx specified,*
+      * or if the logon mode table being used has 'extended data      *
+      * stream' specified).  Then there is a CICS 'good morning'      *
+      * message to be received.  A reply is sent to any 'read         *
+      * partition' query request, the 'good morning' message is       *
+      * received, and the back-end screen is cleared and left ready   *
+      * for a transaction ID to be entered.                           *
+      *                                                               *
+      * For SLU2 mode with IMS, no processing is illustrated.         *
+      *                                                               *
+      * After the processing, the conversation is freed with the HOLD *
+      * option, which leaves it ready for use by applications.  A     *
+      * report is written to a TS queue named 'SESSION', which can be *
+      * browsed using CEBR.  The format of the TS queue records is:   *
+      *                                                               *
+      * date time CZUC Begin-session handling completed               *
+      *           RESP........0            RESP2.......0              *
+      *           Target......TGTNAME      Node........NODENAME       *
+      *           Pool........POOLNAME                                *
+      *                                                               *
+      * If any errors occur, a report is written to the TS queue,     *
+      * and the conversation is freed with the RELEASE option, so     *
+      * that the session is ended.                                    *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * PROGRAM LOGIC                                                 *
+      *                                                               *
+      *   Main procedure:                                             *
+      *                                                               *
+      *     RETRIEVE start data                                       *
+      *     Access conversation using FEPI ALLOCATE with PASSCONVID   *
+      *     Call PROCESS-LUP, PROCESS-FORMATTED, or                   *
+      *         PROCESS-DATASTREAM according to data mode and type    *
+      *     Free conversation, keeping session                        *
+      *     Write event details to TS queue                           *
+      *     RETURN                                                    *
+      *                                                               *
+      *   PROCESS-LUP routine:                                        *
+      *                                                               *
+      *     FEPI RECEIVE initial data                                 *
+      *     Handle data as required                                   *
+      *                                                               *
+      *   PROCESS-FORMATTED routine:                                  *
+      *                                                               *
+      *     FEPI RECEIVE initial data                                 *
+      *     Clear back-end screen and make ready for transaction ID   *
+      *       to be entered, using FEPI CONVERSE                      *
+      *                                                               *
+      *   PROCESS-DATASTREAM routine:                                 *
+      *                                                               *
+      *     FEPI RECEIVE                                              *
+      *     If 'read partition' query                                 *
+      *         FEPI CONVERSE query reply and get acknowledgement     *
+      *         FEPI RECEIVE initial data                             *
+      *     Clear back-end screen and make ready for transaction ID   *
+      *       to be entered, using FEPI CONVERSE                      *
+      *                                                               *
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       ENVIRONMENT DIVISION.
+      *****************************************************************
+      *
+      *
+      *****************************************************************
+       DATA DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+       WORKING-STORAGE SECTION.
+      *===============================================================*
+      *
+       01  W00-EYECATCHER         PIC X(32)   VALUE
+                 '******* WORKING STORAGE ********'.
+      *
+       01  W01-PROGID             PIC X(8) VALUE 'DFH0VZUC'.
+      *
+      * W02 holds values for CICS commands.
+      *
+       01  W02-RESP               PIC S9(8) COMP.
+       01  W02-LENGTH             PIC S9(4) COMP.
+       01  W02-MAXFLENGTH         PIC S9(8) COMP VALUE 2048.
+       01  W02-ENDSTATUS          PIC S9(8) COMP.
+         88  W02-CDEB         VALUE DFHVALUE(CD), DFHVALUE(EB).
+         88  W02-EB           VALUE DFHVALUE(EB).
+       01  W02-FLENGTH            PIC S9(8) COMP.
+       01  W02-FROMFLENGTH        PIC S9(8) COMP.
+      *
+      * W03 is used for building TS queue records.
+      *
+       01  W03-HOLD-VALUES.
+           05  W03-RESP           PIC Z(7)9.
+           05  W03-RESP2          PIC Z(7)9.
+           05  W03-UTIME          PIC S9(15) COMP-3.
+      *
+       01  W03-OUTPUT-MSG         PIC X(70).
+      *
+       01  W03-OUTPUT-MSG1 REDEFINES W03-OUTPUT-MSG.
+           05  W03-DATE           PIC X(8).
+           05  FILLER             PIC X(1).
+           05  W03-TIME           PIC X(8).
+           05  FILLER             PIC X(1).
+           05  W03-TRANSID        PIC X(4).
+           05  FILLER             PIC X(1).
+           05  W03-DESC           PIC X(40).
+      *
+       01  W03-OUTPUT-MSG2 REDEFINES W03-OUTPUT-MSG.
+           05  FILLER             PIC X(18).
+           05  W03-DESC1          PIC X(12).
+           05  W03-DATA1          PIC X(12).
+           05  FILLER             PIC X(1).
+           05  W03-DESC2          PIC X(12).
+           05  W03-DATA2          PIC X(12).
+      *
+      * W04 contains send data values.
+      *
+       01  W04-REQUEST-FORMATTED-CLEAR   PIC X(3) VALUE '&CL'.
+       01  W04-REQUEST-DATASTREAM-CLEAR  PIC X(3) VALUE SPACES.
+       01  W04-REQUEST-QUERY-REPLY       PIC X(5) VALUE X'88000481FF'.
+      *
+      * W05 is used for receiving data.
+      *
+       01  W05-DATA               PIC X(2048).
+       01  W05-DATA-CHAR2         REDEFINES W05-DATA PIC X(2).
+         88  W05-DATA-QUERY-REPLY-ACK        VALUE X'F1C2'.
+       01  W05-SF                 REDEFINES W05-DATA.
+           05  W05-SF-COMMAND     PIC X(1).
+             88  W05-SF-COMMAND-WSF          VALUE X'F3'.
+           05  W05-SF-LENGTH      PIC X(2).
+           05  W05-SF-OPERATION   PIC X(3).
+             88  W05-SF-READ-PTN-QUERY   VALUE X'01FF02', X'01FF03'.
+      *
+      * DFHSZAPO defines the FEPI RESP2 values and
+      * the FEPI start data layout.
+      *
+       COPY DFHSZAPO.
+      *
+      *
+      *===============================================================*
+      *=       Constants                                             =*
+      *===============================================================*
+      *
+      * DFH0BZCO defines the customizable constants used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZCO.
+      *
+      * DFH0BZMO defines the messages and other text used by the
+      * FEPI sample programs.
+      *
+       COPY DFH0BZMO.
+      *
+      * DFHAID defines the standard attention identifiers (AIDs).
+      *
+       COPY DFHAID.
+      *
+      *
+      *****************************************************************
+       PROCEDURE DIVISION.
+      *****************************************************************
+      *
+      *===============================================================*
+      *=       Main procedure                                        =*
+      *===============================================================*
+      *
+      * This section controls processing, getting the start data, and
+      * starting the new session according to its data type and mode.
+      *
+       A-MAIN SECTION.
+       A-010.
+      *
+      * Clear the TS queue record area.
+      *
+           MOVE SPACE TO W03-OUTPUT-MSG.
+      *
+      * Get the start data.
+      *
+           MOVE LENGTH OF DFHSZ-DATA TO W02-LENGTH
+           EXEC CICS RETRIEVE INTO(DFHSZ-DATA)
+               LENGTH(W02-LENGTH)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG8 TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO A-090
+           END-IF
+      *
+      * Access the begin-session conversation started by FEPI
+      * using FEPI ALLOCATE with PASSCONVID.
+      * The conversation ID is obtained from the start data.
+      *
+           EXEC CICS FEPI ALLOCATE
+               PASSCONVID(DFHSZ-DATA-CONVID)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSGF TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO C-END
+           END-IF.
+      *
+      * Process according to the data type and mode of the seesion,
+      * as obtained from the start data.
+      *
+           EVALUATE TRUE
+           WHEN DFHSZ-DATA-DEVICE = DFHVALUE(LUP)
+               PERFORM B-PROCESS-LUP
+           WHEN DFHSZ-DATA-FORMAT = DFHVALUE(FORMATTED)
+               PERFORM B-PROCESS-FORMATTED
+           WHEN DFHSZ-DATA-FORMAT = DFHVALUE(DATASTREAM)
+               PERFORM B-PROCESS-DATASTREAM
+           END-EVALUATE.
+      *
+      * Make the session available to applications.
+      * Use the HOLD option;  the RELEASE option would end the session.
+      *
+           EXEC CICS FEPI FREE
+               HOLD
+               CONVID(DFHSZ-DATA-CONVID)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG5 TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO A-090
+           END-IF
+      *
+      * Record successful begin-session processing.
+      *
+           MOVE DFH0BZMO-MSGG TO W03-DESC.
+           PERFORM C-WRITE-REPORT.
+      *
+      * Return to CICS.
+      *
+       A-090.
+           EXEC CICS RETURN
+           END-EXEC.
+       A-EXIT.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       SLU P processing routine                              =*
+      *===============================================================*
+      *
+      * This section handles sessions which are SLU P mode.
+      *
+       B-PROCESS-LUP SECTION.
+       B-010.
+      *
+      * SLU P begin-session processing could typically be used for
+      * security purposes, enabling signon to be done when a
+      * connection is acquired.  This is dependent on local
+      * requirements and so is not illustrated here.
+      * A typical sequence would involve a conversation passing
+      * a user ID and password to the back-end system, and performing
+      * some error routine if there is a rejection.
+      *
+      *
+      * Get the initial data.
+      *
+           EXEC CICS FEPI RECEIVE DATASTREAM
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               CONVID(DFHSZ-DATA-CONVID)
+               UNTILCDEB
+               MAXFLENGTH(W02-MAXFLENGTH)
+               INTO(W05-DATA)
+               FLENGTH(W02-FLENGTH)
+               ENDSTATUS(W02-ENDSTATUS)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check valid response.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG3 TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO C-END
+           END-IF.
+      *
+      * Handle data as required.
+      * You can supply here whatever processing you want.
+      *
+      * ...
+      *
+       B-099.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       SLU2 formatted processing routine                     =*
+      *===============================================================*
+      *
+      * This section handles sessions which are SLU2 mode
+      * with formatted data.
+      *
+       B-PROCESS-FORMATTED SECTION.
+       B-110.
+      *
+      * Although both IMS and CICS back-end systems can use SLU2 mode,
+      * only processing for CICS is illustrated here.
+      *
+      * There is a CICS 'good morning' message from the back-end system
+      * waiting to be received.  This receives that message, and
+      * then leaves the back-end screen blank and expecting
+      * input, ready for a transaction ID to be entered.
+      *
+      *
+      * Get the 'good morning' message.
+      *
+           EXEC CICS FEPI RECEIVE FORMATTED
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               CONVID(DFHSZ-DATA-CONVID)
+               MAXFLENGTH(W02-MAXFLENGTH)
+               INTO(W05-DATA)
+               FLENGTH(W02-FLENGTH)
+               ENDSTATUS(W02-ENDSTATUS)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG3 TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO C-END
+           END-IF
+      *
+      * Handle 'good morning' message as required.
+      * You can supply here whatever processing you want.
+      *
+      * ...
+      *
+      * Using FEPI CONVERSE with key stroke data, clear the
+      * back-end screen and leave the session in a state ready
+      * for a transaction ID to be sent to the back-end system.
+      *
+           MOVE W04-REQUEST-FORMATTED-CLEAR TO W05-DATA
+           MOVE LENGTH OF W04-REQUEST-FORMATTED-CLEAR TO W02-FROMFLENGTH
+           MOVE LENGTH OF W05-DATA TO W02-FLENGTH
+           EXEC CICS FEPI CONVERSE FORMATTED
+               KEYSTROKES
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               CONVID(DFHSZ-DATA-CONVID)
+               FROM(W05-DATA) FROMFLENGTH(W02-FROMFLENGTH)
+               MAXFLENGTH(W02-MAXFLENGTH)
+               INTO(W05-DATA)
+               TOFLENGTH(W02-FLENGTH)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG2 TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO C-END
+           END-IF.
+      *
+       B-199.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       SLU2 data stream processing routine                   =*
+      *===============================================================*
+      *
+      * This section handles sessions which are SLU2 mode
+      * with data stream.
+      *
+       B-PROCESS-DATASTREAM SECTION.
+       B-210.
+      *
+      * Although both IMS and CICS back-end systems can use SLU2 mode,
+      * only processing for CICS is illustrated here.
+      *
+      * There may be a 'read partition' request from the back-end
+      * system waiting which requires a reply.  This could be the case
+      * if, for example, your pool has device T3279Mx or TPS55Mx
+      * specified, or if the logon mode table being used has
+      * 'extended data stream' specified.  Then there is a CICS
+      * 'good morning' message from the back-end system to be received.
+      *
+      * The waiting data is received.  If it is a 'read partition'
+      * request, a reply to the query is sent.  For illustration
+      * purposes, a null reply is used;  if you need to support
+      * some or all of the queried device features, you must send
+      * the appropriate more-detailed reply.  After the acceptance
+      * of the reply by the back-end system is received and discarded,
+      * the 'good morning' message is received.  Finally, the
+      * back-end screen is left blank and expecting input, ready
+      * for a transaction ID to be entered.
+      *
+      *
+      * Get the waiting data.
+      * The data area size is adequate for any 'read partition'
+      * request that CICS sends, which should consist of
+      * a single query operation.
+      *
+           EXEC CICS FEPI RECEIVE DATASTREAM
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               CONVID(DFHSZ-DATA-CONVID)
+               UNTILCDEB
+               MAXFLENGTH(W02-MAXFLENGTH)
+               INTO(W05-DATA)
+               ENDSTATUS(W02-ENDSTATUS)
+               FLENGTH(W02-FLENGTH)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG3 TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO C-END
+           END-IF
+      *
+      * Look for a structured field.
+      * If not found, the data is the 'good morning' message.
+      *
+           IF NOT W05-SF-COMMAND-WSF
+               GO TO B-250
+           END-IF
+      *
+      * Look for a 'read partition' query operation.
+      * If not found or the data is incomplete, there is an error.
+      *
+           IF NOT W05-SF-READ-PTN-QUERY
+           OR NOT W02-CDEB
+               MOVE DFH0BZMO-MSGR TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO C-END
+           END-IF
+      *
+      * Using FEPI CONVERSE, send the reply to the query
+      * and receive the acknowledgement from the back-end system.
+      *
+           EXEC CICS FEPI CONVERSE DATASTREAM
+               UNTILCDEB
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               CONVID(DFHSZ-DATA-CONVID)
+               FROM(W04-REQUEST-QUERY-REPLY)
+               FROMFLENGTH(LENGTH OF W04-REQUEST-QUERY-REPLY)
+               MAXFLENGTH(W02-MAXFLENGTH)
+               INTO(W05-DATA)
+               TOFLENGTH(W02-FLENGTH)
+               ENDSTATUS(W02-ENDSTATUS)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG2 TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO C-END
+           END-IF
+      *
+      * Check for good acknowledgement and 'end bracket'.
+      *
+           IF NOT W05-DATA-QUERY-REPLY-ACK
+           OR NOT W02-EB
+               MOVE DFH0BZMO-MSGQ TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO C-END
+           END-IF.
+      *
+      * Get the 'good morning' message.
+      * It may have to be received in several pieces, depending on
+      * how the back-end system sends it and how large it is.
+      *
+       B-240.
+           EXEC CICS FEPI RECEIVE DATASTREAM
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               CONVID(DFHSZ-DATA-CONVID)
+               UNTILCDEB
+               MAXFLENGTH(W02-MAXFLENGTH)
+               INTO(W05-DATA)
+               FLENGTH(W02-FLENGTH)
+               ENDSTATUS(W02-ENDSTATUS)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG3 TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO C-END
+           END-IF.
+      *
+      * Loop if not all the data was received (CD or EB not indicated).
+      *
+       B-250.
+           IF NOT W02-CDEB
+               GO TO B-240
+           END-IF.
+      *
+      * Handle 'good morning' message as required.
+      * You can supply here whatever processing you want.
+      *
+      * ...
+      *
+      * Using FEPI CONVERSE, clear the
+      * back-end screen and leave the session in a state ready
+      * for a transaction ID to be sent to the back-end system.
+      *
+           MOVE DFHCLEAR TO W04-REQUEST-DATASTREAM-CLEAR.
+           EXEC CICS FEPI CONVERSE DATASTREAM
+               UNTILCDEB
+               TIMEOUT(DFH0BZCO-TIMEOUT)
+               CONVID(DFHSZ-DATA-CONVID)
+               FROM(W04-REQUEST-DATASTREAM-CLEAR)
+               FROMFLENGTH(LENGTH OF W04-REQUEST-DATASTREAM-CLEAR)
+               MAXFLENGTH(W02-MAXFLENGTH)
+               INTO(W05-DATA)
+               TOFLENGTH(W02-FLENGTH)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC.
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSG2 TO W03-DESC
+               PERFORM C-WRITE-REPORT
+               GO TO C-END
+           END-IF.
+      *
+       B-299.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Write report routine                                  =*
+      *===============================================================*
+      *
+      * This section builds a report and writes it to a TS queue.
+      *
+       C-WRITE-REPORT SECTION.
+       C-010.
+      *
+      * The TS queue record area already contains the event description.
+      *
+      * Format data and time.
+      *
+           EXEC CICS ASKTIME
+               ABSTIME(W03-UTIME)
+           END-EXEC.
+           EXEC CICS FORMATTIME
+               ABSTIME(W03-UTIME)
+               DATE(W03-DATE) DATESEP('/')
+               TIME(W03-TIME) TIMESEP(':')
+           END-EXEC.
+      *
+      * Transaction name.
+      *
+           MOVE DFH0BZCO-BEGNSESS-TRANSID TO W03-TRANSID
+      *
+      * Save RESP values.
+      *
+           MOVE W02-RESP TO W03-RESP
+           MOVE DFHSZ-RESP2 TO W03-RESP2
+      *
+      * Write completed description.
+      *
+           PERFORM D-WRITE-TSQ.
+      *
+      * Write RESP information.
+      *
+           MOVE SPACES TO W03-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-RESP TO W03-DESC1.
+           MOVE W03-RESP  TO W03-DATA1.
+           MOVE DFH0BZMO-OPFD-RESP2 TO W03-DESC2.
+           MOVE W03-RESP2  TO W03-DATA2.
+           PERFORM D-WRITE-TSQ.
+      *
+      * Write target and node information.
+      *
+           MOVE SPACES TO W03-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-TARGET TO W03-DESC1.
+           MOVE DFHSZ-DATA-TARGET TO W03-DATA1.
+           MOVE DFH0BZMO-OPFD-NODE TO W03-DESC2.
+           MOVE DFHSZ-DATA-NODE   TO W03-DATA2.
+           PERFORM D-WRITE-TSQ.
+      *
+      * Write pool information.
+      *
+           MOVE SPACES TO W03-OUTPUT-MSG
+           MOVE DFH0BZMO-OPFD-POOL TO W03-DESC1.
+           MOVE DFHSZ-DATA-POOL   TO W03-DATA1.
+           PERFORM D-WRITE-TSQ.
+      *
+       C-099.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Error routine                                         =*
+      *===============================================================*
+      *
+      * This section handles errors after they have been reported.
+      *
+       C-END SECTION.
+       C-110.
+      *
+      * Free the conversation with RELEASE to force a new session.
+      *
+           EXEC CICS FEPI FREE
+               RELEASE
+               CONVID(DFHSZ-DATA-CONVID)
+               RESP(W02-RESP)
+               RESP2(DFHSZ-RESP2)
+           END-EXEC
+      *
+      * Check the command completed successfully.
+      *
+           IF W02-RESP NOT = DFHRESP(NORMAL)
+               MOVE DFH0BZMO-MSGM TO W03-DESC
+               PERFORM C-WRITE-REPORT
+           END-IF
+      *
+      * Return to CICS.
+      *
+           EXEC CICS RETURN
+           END-EXEC.
+      *
+       C-199.
+           EXIT.
+      *
+      *
+      *===============================================================*
+      *=       Write TS queue routine                                =*
+      *===============================================================*
+      *
+      * This section writes to a TS queue.
+      *
+       D-WRITE-TSQ SECTION.
+       D-010.
+      *
+           EXEC CICS WRITEQ
+               TS
+               QUEUE(DFH0BZCO-BEGNSESS-TSQ)
+               FROM(W03-OUTPUT-MSG)
+           END-EXEC.
+      *
+       D-090.
+           EXIT.
+      *
+      *
+      *****************************************************************
+      *        End of program DFH0VZUC                                *
+      *****************************************************************

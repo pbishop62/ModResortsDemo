@@ -1,0 +1,236 @@
+      CBL CICS('COBOL3')
+      ******************************************************************
+      *                                                                *
+      *MODULE NAME = DFH0WBHO                                          *
+      *                                                                *
+      *DESCRIPTIVE NAME = CICS TS  (WB) Web Chunking Sample            *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *        Licensed Materials - Property of IBM                    *
+      *                                                                *
+      *        "Restricted Materials of IBM"                           *
+      *                                                                *
+      *        5655-Y04                                                *
+      *                                                                *
+      *        (C) Copyright IBM Corp. 2006, 2008"                     *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *STATUS = %CER0                                                  *
+      *                                                                *
+      *FUNCTION = CICS COBOL Program that performs CHUNKING from a web *
+      *           server.                                              *
+      *                                                                *
+      *  Versions of this program in other languages are also provided:*
+      *     ASM   - DFH$WBHA                                           *
+      *     C     - DFH$WBHC                                           *
+      *                                                                *
+      *NOTES :                                                         *
+      *DEPENDENCIES = S/390                                            *
+      *MODULE TYPE = Executable                                        *
+      *PROCESSOR = COBOL                                               *
+      *ATTRIBUTES = Read only, Serially Reusable                       *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *DESCRIPTION                                                     *
+      *                                                                *
+      * This program is a sample version in COBOL of a program that is *
+      * invoked by a web client and performs chunking back to that     *
+      * client.  It ignores the incoming data and returns a message    *
+      * containing the APPLID of the region and adds trailer headers.  *
+      * The sample if run from a browser may return the above or an    *
+      * error message saying that the browser does not support trailer *
+      * headers.                                                       *
+      *                                                                *
+      * To use this application in conjunction with the client samples *
+      * DFH$URI4 will have to be installed.                            *
+      *                                                                *
+      * For more information on Chunking see RFC2616                   *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *                                                                *
+      * CHANGE ACTIVITY :                                              *
+      *                                                                *
+      *        $MOD(DFH0WBHO),COMP(CICSWEB),PROD(CICS TS ):            *
+      *                                                                *
+      *   PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      *  $L0= 873    650 060605 HDJBAC  : Web Samples of Chunking      *
+      *  $P1= D21124 660 080602 HDJBAC  : Fix compiler error           *
+      ******************************************************************
+      *
+      *
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0WBHO.
+      *----------------------------------------------------------------*
+      *                                                                *
+      * Main Procedure                                                 *
+      *                                                                *
+      *----------------------------------------------------------------*
+       ENVIRONMENT DIVISION.
+      *
+       DATA DIVISION.
+      *
+       WORKING-STORAGE SECTION.
+      *
+       01  ws.
+         03  ws-resp                   pic s9(8) BINARY.
+         03  ws-resp2                  pic s9(8) BINARY.
+         03  ws-applid                 pic x(8) VALUE SPACE.
+         03  ws-statustext             pic x(10) VALUE 'OK'.
+         03  ws-doctext                pic x(15).
+         03  ws-statuslength           pic s9(8) BINARY VALUE 2.
+         03  ws-statuscode             pic s9(8) BINARY VALUE 200.
+         03  ws-mediatype              pic x(56).
+         03  ws-fromdata               pic x(46).
+         03  ws-errordata              pic x(100).
+         03  ws-recdata                pic x(200) VALUE SPACE.
+         03  ws-maxlen                 pic s9(8) BINARY.
+         03  ws-reclen                 pic s9(8) BINARY VALUE 200.
+         03  ws-valuelen               pic s9(8) BINARY VALUE 8.
+      *
+       LINKAGE SECTION.
+      *
+       PROCEDURE DIVISION.
+      *
+       DFH0WBPO-MAIN SECTION.
+      *
+       DFH0WBPO-00.
+      *----------------------------------------------------------------*
+      * Main code for DFH0WBHO                                         *
+      *                                                                *
+      * Address the EIB.                                               *
+      *                                                                *
+      * Use the Web Send Chunk commands to chunk the separate chunks   *
+      * back to the client                                             *
+      *                                                                *
+      * Receive any data that has been sent                            *
+      *----------------------------------------------------------------*
+           move 200 to ws-maxlen.
+           EXEC CICS WEB RECEIVE
+                         INTO(ws-recdata)
+                         LENGTH(ws-reclen)
+                         MAXLENGTH(ws-maxlen)
+                         CHARACTERSET('ISO-8859-1')
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Read the Passed APPLID on the Headers                          *
+      *----------------------------------------------------------------*
+           EXEC CICS WEB READ HTTPHEADER('Applid')
+                         VALUE(ws-applid)
+                         VALUELENGTH(ws-valuelen)
+                         RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Using EXEC CICS ASSIGN extract the CICS APPLID                 *
+      *----------------------------------------------------------------*
+           EXEC CICS ASSIGN APPLID(ws-applid)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Setup the Trailer Header                                       *
+      *----------------------------------------------------------------*
+           EXEC CICS WEB WRITE HTTPHEADER('Trailer')
+                 VALUE('Check,Applid')
+                 RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+
+           perform trailerError.
+      *----------------------------------------------------------------*
+      * Use the WEB SEND CHUNK commands to chunk the separate chunks   *
+      * back to the client                                             *
+      *----------------------------------------------------------------*
+           move 'text/html' to ws-mediatype.
+           move '<TITLE>DFH0WBHO</TITLE><H1>DFH0WBHO on system ' to
+                 ws-fromdata.
+
+           EXEC CICS WEB SEND FROM(ws-fromdata)
+                 FROMLENGTH(length of ws-fromdata)
+                 STATUSTEXT(ws-statustext)
+                 MEDIATYPE(ws-mediatype)
+                 LENGTH(ws-statuslength)
+                 STATUSCODE(ws-statuscode)
+                 CHARACTERSET('ISO-8859-1')
+                 CHUNKYES
+                 RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Specify First trailer header                                   *
+      *----------------------------------------------------------------*
+           EXEC CICS WEB WRITE HTTPHEADER('Applid')
+                 VALUE(ws-applid)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Send the Second Chunk containing the Applid                    *
+      *----------------------------------------------------------------*
+           EXEC CICS WEB SEND FROM(ws-applid)
+                 FROMLENGTH(length of ws-applid)
+                 CHUNKYES
+                 RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Send the Third chunk containing the remaining Text             *
+      *----------------------------------------------------------------*
+           move ' successfully invoked through CICS Web' to ws-fromdata
+
+           EXEC CICS WEB SEND FROM(ws-fromdata)
+                 FROMLENGTH(length of ws-fromdata)
+                 CHUNKYES
+                 RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *
+           move ' Support using Chunking.</H1>' to ws-fromdata
+
+           EXEC CICS WEB SEND FROM(ws-fromdata)
+                 FROMLENGTH(length of ws-fromdata)
+                 CHUNKYES
+                 RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Specify Second trailer header                                  *
+      *----------------------------------------------------------------*
+           EXEC CICS WEB WRITE HTTPHEADER('Check')
+                 VALUE('12345')
+           END-EXEC.
+      *----------------------------------------------------------------*
+      * Finally send the CHUNKEND response.                            *
+      *----------------------------------------------------------------*
+           EXEC CICS WEB SEND
+                 CHUNKEND
+                 RESP(ws-resp) RESP2(ws-resp2)
+           END-EXEC.
+      *
+           EXEC CICS RETURN
+           END-EXEC.
+       DFH0WBHO-END. EXIT.
+             EJECT.
+       trailerError section.
+       trailerError-00.
+      *----------------------------------------------------------------*
+      * Check the resp values                                          *
+      *----------------------------------------------------------------*
+           if ws-resp not equal ZERO
+      *
+             move 'text/html' to ws-mediatype
+             move '<TITLE>Error</TITLE><H1>Error</H1> Trailer Headers
+      -           ' are not supported by this client' to ws-errordata
+
+             EXEC CICS WEB SEND FROM(ws-errordata)
+                   FROMLENGTH(length of ws-errordata)
+                   STATUSTEXT(ws-statustext)
+                   MEDIATYPE(ws-mediatype)
+                   LENGTH(ws-statuslength)
+                   STATUSCODE(ws-statuscode)
+                   CHARACTERSET('ISO-8859-1')
+                   RESP(ws-resp) RESP2(ws-resp2)
+             END-EXEC
+      *
+             EXEC CICS RETURN
+             END-EXEC
+      *
+           end-if.
+      *
+       trailerError-end. exit.
+             eject.
