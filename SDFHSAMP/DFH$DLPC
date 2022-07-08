@@ -1,0 +1,593 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$DLPC                                           */
+ /*                                                                  */
+ /* Descriptive Name = Call DL/I Sample Program                      */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1987, 2012"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /*                      DATABASE  STRUCTURE                         */
+ /*                                                                  */
+ /*                         *************                            */
+ /*                         *           *                            */
+ /*                         *  PARTROOT *                            */
+ /*                         *           *                            */
+ /*                         *************                            */
+ /*                               *                                  */
+ /*                               *                                  */
+ /*                 *****************************                    */
+ /*                 *                           *                    */
+ /*                 *                           *                    */
+ /*                 *                           *                    */
+ /*           *************               *************              */
+ /*           *           *               *           *              */
+ /*           *  STANINFO *               *  STOKSTAT *              */
+ /*           *           *               *           *              */
+ /*           *************               *************              */
+ /*                                             *                    */
+ /*                                             *                    */
+ /*                                             *                    */
+ /*                                      ***************             */
+ /*                                      *             *             */
+ /*                                      *             *             */
+ /*                                ************* *************       */
+ /*                                *           * *           *       */
+ /*                                *  CYCCOUNT * *  BACKORDR *       */
+ /*                                *           * *           *       */
+ /*                                ************* *************       */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /*                                                                  */
+ /*  $MOD(DFH$DLPC),COMP(SAMPLES),PROD(CICS TS ):                    */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 210 870225 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $P2= D04025 630 020522 HD2WPGK : fix RC4                        */
+ /*  $P3= D08705 670 091202 HD2GJST: Add count to schedule call      */
+ /*  $D1= I07267 630 020411 HDHYJB  : Compile all samples            */
+ /*       R40551 680 120423 HDLISJH: Remove *PROCESS                 */
+ /*                                                                  */
+ /********************************************************************/
+         DFHDLPC:  PROCEDURE OPTIONS(MAIN,REENTRANT);
+          /**/
+         DCL PLIXOPT CHAR(15) VAR STATIC EXTERNAL
+                             INIT('NOSTAE,NOREPORT');
+         DCL PLITDLI EXTERNAL ENTRY;
+         /**/
+         /*                  USER WORK AREA                         */
+         /**/
+         DCL 1 PSBNAME CHAR(8);
+         DCL 1 STOCKCNT DEC FIXED(1);
+         DCL 1 WORK CHAR(16);
+         DCL 1 INPUT_AREA,
+               2    INPUT CHAR(80);
+         /*                                               */
+         /*    THE FOLLOWING REDEFINES THE INPUT AREA     */
+         /*                                               */
+         DCL 1 INPUT_1 DEF INPUT_AREA,
+               2    TRAN  CHAR(4),     /*    01-04     */
+               2    CODE  CHAR(3),     /*    05-07     */
+               2    PARTNBR CHAR(17),  /*    08-24     */
+               2    DESC CHAR(20),     /*    25-44     */
+               2    INVKEY  CHAR(16),  /*    45-60     */
+               2    PROC CHAR(2),      /*    61-62     */
+               2    DISB CHAR(1),      /*    63-63     */
+               2    QUANT     CHAR(4), /*    64-67     */
+               2    FILLER1 CHAR(13);  /*    68-80     */
+         DCL 1 SEGRETRN CHAR(160);
+         /*                                                */
+         /*  THESE AREA REDEFINE THE SEGMENT RETURN AREA   */
+         /*                                                */
+         DCL 1 SEGROOT BASED(SEGREG),                   /* POSITION  */
+               2  SEGNO CHAR(17),                       /*  001-017  */
+               2  SEGF1 CHAR(9),                        /*  018-026  */
+               2  SEGDESC CHAR(20),                     /*  027-046  */
+               2  SEGF1A  CHAR(4);                      /*  047-050  */
+         DCL 1 SEGSTAT BASED(SEGREG),                   /*  POSITION */
+               2  SEGTYPE CHAR(2),                      /*  001-002  */
+               2  SEGAREA CHAR(1),                      /*  003-003  */
+               2  SEGDEPT CHAR(2),                      /*  004-005  */
+               2  SEGPROJ CHAR(3),                      /*  006-008  */
+               2  SEGDIV CHAR(2),                       /*  009-010  */
+               2  SEGF2  CHAR(12),                      /*  011-022  */
+               2  SEGPRICE             PIC '9999V99T',  /*  023-029  */
+               2  SEGF3  CHAR(4),                       /*  030-033  */
+               2  SEGUNIT CHAR(4),                      /*  034-037  */
+               2  SEGF4  CHAR(37),                      /*  038-074  */
+               2  SEGCOUNT  CHAR(3),                    /*  075-077  */
+               2  SEGF5  CHAR(12),                      /*  078-089  */
+               2  SEGCREQ              PIC '9999999T',  /*  090-097  */
+               2  SEGFREQ              PIC '9999999T',  /*  098-105  */
+               2  SEGORDER             PIC '9999999T',  /*  106-113  */
+               2  SEGSTOCK             PIC '9999999T',  /*  114-121  */
+               2  SEGPDISB             PIC '9999999T',  /*  122-129  */
+               2  SEGUDISB             PIC '9999999T',  /*  130-137  */
+               2  SEGF5A  CHAR(13);                     /*  138-150  */
+         DCL 1 SEGINFO BASED(SEGREG),                   /* POSITION  */
+               2  SEGCODE CHAR(2),                      /*  001-002  */
+               2  SEGF6  CHAR(16),                      /*  003-018  */
+               2  SEGPCODE CHAR(2),                     /*  019-020  */
+               2  SEGDCODE CHAR(1),                     /*  021-021  */
+               2  SEGF7  CHAR(64);                      /*  022-085  */
+         DCL 1 SSA1_AREA,
+               2    SSA1 ,
+                    3    SSA1N1 CHAR (8),
+                    3    SSA1D1 CHAR (1),
+                    3    SSA1N2 CHAR (8),
+                    3    SSA1D2 CHAR (2),
+                    3    SSA1KEY CHAR (17),
+                    3    SSA1D3 CHAR (1);
+         DCL 1 SSA2_AREA,
+               2    SSA2 ,
+                    3    SSA2N1 CHAR (8),
+                    3    SSA2D1 CHAR (1),
+                    3    SSA2N2 CHAR (8),
+                    3    SSA2D2 CHAR (2),
+                    3    SSA2KEY CHAR (16),
+                    3    SSA2D3 CHAR (1);
+         DCL 1 SSA3_AREA,
+               2    SSA3 ,
+                    3    SSA3N1 CHAR (9);
+         /*                                                    */
+         /*    THE FOLLOWING ARE REDEFINITIONS OF SSA_AREAS    */
+         /*                                                    */
+         DCL 1 SSA1X_AREA DEF SSA1_AREA,
+               2  SSA1_TWA CHAR(36),
+               2  SSA1_END CHAR(1);
+         DCL 1 SSA2X_AREA DEF SSA2_AREA,
+               2  SSA2_TWA CHAR(35),
+               2  SSA2_END CHAR(1);
+         /*                                                     */
+         DCL 1 OUTREC,
+               2  MSG  CHAR(80);
+         /*                                                     */
+         /*    THE FOLLOWING ARE REDEFINITIONS OF OUTREC        */
+         /*                                                     */
+         DCL 1 LINE_1 DEF OUTREC,
+               2  #1_F1  CHAR(8),
+               2  #1_F2  CHAR(18),
+               2  #1_F3  CHAR(20),
+               2  #1_F4  CHAR(14),
+               2  #1_F5  CHAR(20);
+         DCL 1 LINE_2 DEF OUTREC,
+               2  #2_F1  PICTURE '9V.',
+               2  FILL10 CHAR(3),
+               2  #2_F2 CHAR(1),
+               2  FILL11 CHAR(3),
+               2  #2_F3 CHAR(2),
+               2  FILL12 CHAR(3),
+               2  #2_F4 CHAR(3),
+               2  FILL13 CHAR(3),
+               2  #2_F5 CHAR(2),
+               2  #2_F6  PICTURE 'ZZZZZ9V.999',
+               2 #2_F7  PICTURE 'ZZZZZZZ9',
+               2  #2_F8  PICTURE  'ZZZZZZZZ9',
+               2  #2_F9  PICTURE 'ZZZZZZZZ9',
+               2  FILL13A CHAR(1),
+               2  #2_F10 PICTURE  'ZZZZZZZ9',
+               2  FILL14 CHAR(3),
+               2  #2_F11  PICTURE 'XXXXXX',
+               2  #2_F12  PICTURE 'XXXX';
+         DCL 1 MSG_OUT DEF OUTREC,
+               2  MSG_F1,
+                 3 MSG_F1A CHAR(10),
+                 3 MSG_F1B,
+                   4 MSG_F1B1 CHAR(20),
+                   4 MSG_F1B2 CHAR(20),
+                   4 MSG_F1B3 CHAR(30);
+         DCL 1 MSG_COPY DEF OUTREC,
+               2  MSG_HEAD CHAR(7),
+               2  MSG_BODY CHAR(73);
+         /**/
+         /*   U I B  AND  P C B  D U M M Y  S E C T I O N S         */
+         %INCLUDE DLIUIB;
+         DCL 1  PCB_POINTERS BASED (UIBPCBAL),
+                2  PCB1_PTR POINTER;
+         DCL 1  PCB1 BASED (PCB1_PTR),
+                2  DLIPCB,
+                   3  DLIFILE   CHAR(8),
+                   3  DLISGLEV  CHAR(2),
+                   3  DLISTAT   CHAR(2),
+                   3  DLIPROC   CHAR(4),
+                   3  DLIRESV POINTER,
+                   3  DLISEGFB  CHAR(8);
+         /**/
+         /*    COMMAND CODES FOR THE DL/1 CALLS              */
+         DCL 1 PCB  CHAR(4) INITIAL ('PCB ');
+         DCL 1 GU   CHAR(4) INITIAL ('GU  ');
+         DCL 1 GN   CHAR(4) INITIAL ('GN  ');
+         DCL 1 GHU  CHAR(4) INITIAL ('GHU ');
+         DCL 1 ISRT CHAR(4) INITIAL ('ISRT');
+         DCL 1 REPL CHAR(4) INITIAL ('REPL');
+         DCL 1 DLET CHAR(4) INITIAL ('DLET');
+         DCL 1 TERM CHAR(4) INITIAL ('TERM');
+         DCL 1 GOOD_RETURN BIT(8) INIT('0'B);
+         DCL 1 INVALID_REQUEST BIT(8) INIT('00001000'B);
+         DCL 1 NOT_OPEN BIT(8) INIT('00001100'B);
+         DCL 1 ONE   FIXED BINARY(31) INITIAL (1);        /*@BA69004A*/
+         DCL 1 TWO   FIXED BINARY(31) INITIAL (2);
+         DCL 1 THREE FIXED BINARY(31) INITIAL (3);
+         DCL 1 FOUR  FIXED BINARY(31) INITIAL (4);
+         DCL 1 FIVE  FIXED BINARY(31) INITIAL (5);
+         DCL 1 INMSGLEN FIXED BINARY(15) INITIAL(80);
+         DCL 1 MSGLEN80 FIXED BINARY(15) INITIAL(80);
+         DCL 1 SSAMASK1 CHAR (36) INITIAL ('PARTROOT(PARTKEY  =');
+                                                               /*@P2C*/
+         DCL 1 SSAMASK2 CHAR (35) INITIAL ('STOKSTAT(STOCKEY  =');
+                                                               /*@P2C*/
+         DCL 1 SSAMASK3 CHAR (9) INITIAL ('STOKSTAT ');
+         DCL 1 HEAD1 CHAR(80) INITIAL('   AREA  INV  PROJ  DIV    UNIT
+   CURRENT    ON       IN      TOTAL  COUNT BACK');
+         DCL 1 HEAD2 CHAR(80) INITIAL('        DEPT   CD          PRICE
+   REQMTS    ORDER    STOCK  DISBURSE TAKEN ORDR');
+         /*    */                  ;;
+  DFHDLPC :
+          /* ***************************************************** */
+          /*                                                       */
+          /*                                                       */
+          /*        THIS IS THE MAIN LINE LOGIC OF DFH$DLPC        */
+          /*                                                       */
+          /*                                                       */
+          /* ***************************************************** */
+         INMSGLEN = MSGLEN80;
+         INPUT = ' ';
+         EXEC CICS RECEIVE INTO(INPUT) LENGTH(INMSGLEN);
+         MSG = ' ';
+         CALL OUTRTN;              /*  PRINT THE BLANK SPACING LINE  */
+         MSG_HEAD = 'INPUT: ';
+         MSG_BODY = SUBSTR(INPUT,1,73);                        /*@P2C*/
+         SEGREG = ADDR(SEGRETRN);  /* PRIME THE SEGMENT BASE POINTER */
+         CALL OUTRTN;              /*  PRINT THE INPUT RECORD */
+         STOCKCNT = 0;
+         SSA1_TWA = SSAMASK1;
+         SSA1_END = ')';
+         SSA2_TWA = SSAMASK2;
+         SSA2_END = ')';
+         SSA3 = SSAMASK3;
+         SELECT (CODE);
+            WHEN ('DPA') CALL DSPALLI;
+            WHEN ('DPI') CALL DSPINV;
+            WHEN ('ADD') CALL ADDPART;
+            WHEN ('DEL') CALL DELPART;
+            WHEN ('DSB') CALL DSBURSE;
+            OTHERWISE CALL TRANERR;
+         END; /*SELECT */
+         /**/
+         /* END THIS TRANSACTION */
+         /**/
+         EXEC CICS RETURN;
+         /************************************************************/
+    DSPALLI:PROCEDURE;
+         DCL STANINFO_FND BIT(1),
+             STOKSTAT_FND BIT(1),
+             TRUE  BIT(1) INITIAL('1'B),
+             FALSE BIT(1) INITIAL('0'B);
+         /**/
+         PSBNAME = 'DFHSAM15';
+         CALL  SCHED;
+         SSA1KEY = PARTNBR;
+         CALL PLITDLI (FOUR,GU,DLIPCB,SEGRETRN,SSA1);
+         CALL  CALLRET;
+         IF DLISTAT ^= '  '    /* TWO BLANKS  */
+            THEN DO;
+                 MSG = 'GU ERROR IN DSPALLI';
+                 CALL  ABEND1   ;
+                 END;
+         MSG_F1A = 'PART NO =';
+         MSG_F1B1 = PARTNBR;
+         MSG_F1B2 = 'DESCRIPTION = ';
+         MSG_F1B3 = SEGDESC;
+         CALL OUTRTN;
+         MSG = HEAD1;
+         CALL OUTRTN;
+         MSG = HEAD2;
+         CALL OUTRTN;
+         STANINFO_FND = TRUE;
+         DO WHILE (STANINFO_FND);
+            CALL PLITDLI (THREE,GN,DLIPCB,SEGRETRN);
+            CALL CALLRET;
+            IF (DLISTAT = '  ')
+               THEN IF (DLISEGFB = 'STANINFO')
+                    THEN;
+                    ELSE STANINFO_FND = FALSE;
+               ELSE IF (DLISTAT = 'GK')
+                       THEN STANINFO_FND = FALSE;
+                       ELSE DO;           /* ELSE AN ERROR OCCURED  */
+                            CALL STKERR;
+                            RETURN;
+                            END;
+         END; /*WHILE*/
+         IF (DLISEGFB ^= 'STOKSTAT')
+            THEN DO;
+                 CALL STKERR;
+                 RETURN;
+                 END;
+         STOKSTAT_FND = TRUE;
+         DO WHILE (STOKSTAT_FND);
+         /* FORMAT THE STATUS OUTPUT MESSAGE  */
+            STOCKCNT  = STOCKCNT+1;
+            #2_F1 = STOCKCNT;         /* LINE COUNT */
+            #2_F2 = SEGAREA;
+            #2_F3 = SEGDEPT;
+            #2_F4 = SEGPROJ;
+            #2_F5 = SEGDIV;
+            #2_F6 = SEGPRICE;
+            #2_F7 = (SEGCREQ + SEGFREQ);
+            #2_F8 = SEGORDER;
+            #2_F9 = SEGSTOCK;
+            #2_F10 = (SEGPDISB + SEGUDISB);
+            #2_F11 = SEGCOUNT;
+            #2_F12 = 'N/A';
+            CALL OUTRTN;
+            CALL  PLITDLI (THREE,GN,DLIPCB,SEGRETRN);
+            CALL  CALLRET;
+            IF ((DLISTAT = '  ') & (DLISEGFB = 'STOKSTAT'))
+              THEN;
+              ELSE STOKSTAT_FND = FALSE; /*END OF STATUS FOR THIS PART*/
+         END; /*WHILE*/
+         CALL TERMSCD;
+         CALL OUTRTN;
+         /**/
+    STKERR:PROCEDURE;
+         CALL TERMSCD;
+         MSG = 'NO INVENTORY FOR THIS PART';
+         CALL OUTRTN;
+         END STKERR;
+         END DSPALLI;
+         /**/
+    DSBURSE:PROCEDURE;
+         PSBNAME= 'DFHSAM14';
+         CALL  SCHED;
+         SSA1KEY = PARTNBR;
+         SSA2KEY = INVKEY;
+         CALL  PLITDLI (FIVE,GHU,DLIPCB,SEGRETRN,SSA1,SSA2);
+         CALL  CALLRET;
+         IF DLISTAT ^= '  '
+            THEN DO;
+                 MSG = 'GHU ERROR IN DSBURSE';
+                 CALL  ABEND1;
+                 END;
+         IF (DISB = 'P')
+            THEN SEGPDISB = (SEGPDISB + QUANT);
+            ELSE IF (DISB = 'U')
+                 THEN SEGUDISB = (SEGUDISB + QUANT);
+                 ELSE DO;
+                      MSG = 'WRONG DSBURSE CODE--ONLY P OR U ALLOWED';
+                      CALL TERMSCD;
+                      CALL  OUTRTN;
+                      RETURN;
+                      END;
+         CALL PLITDLI (THREE,REPL,DLIPCB,SEGRETRN);
+         CALL  CALLRET;
+         IF (DLISTAT ^= '  ')
+            THEN DO;
+                 MSG = 'REPLACE ERROR FOR DSBURSE';
+                 CALL  ABEND1;
+                 END;
+         CALL TERMSCD;
+         MSG = 'DSBURSE COMPLETED';
+         CALL  OUTRTN;
+         END DSBURSE;
+         /**/
+    DELPART:PROCEDURE;
+         PSBNAME = 'DFHSAM14';
+         CALL  SCHED;
+         SSA1KEY = PARTNBR;
+         CALL PLITDLI (FOUR,GHU,DLIPCB,SEGRETRN,SSA1);
+         CALL  CALLRET;
+         IF (DLISTAT ^= '  ')
+            THEN DO;
+                 MSG = 'GHU ERROR IN DELPART';
+                 CALL ABEND1;
+                 END;
+         CALL PLITDLI (THREE,DLET,DLIPCB,SEGRETRN);
+         CALL CALLRET;
+         IF (DLISTAT ^= '  ')
+            THEN DO;
+                 MSG = 'DELETE FAILED';
+                 CALL  ABEND1;
+                 END;
+         CALL TERMSCD;
+         MSG_F1A = 'PART NO.';
+         MSG_F1B1 = PARTNBR;
+         MSG_F1B3 = 'DELETED FROM DATA BASE';
+         CALL  OUTRTN;
+         END DELPART;
+         /**/
+    ADDPART:PROCEDURE;
+         PSBNAME = 'DFHSAM14';
+         CALL SCHED;
+         SSA1D1 = ' '  ;     /* UNQUALIFY THE SSA  */
+         SEGROOT = ' ';      /* CLEAR THE I/O AREA */
+         SEGNO = PARTNBR;
+         SEGDESC = DESC;
+         CALL  PLITDLI (FOUR,ISRT,DLIPCB,SEGRETRN,SSA1);
+         SSA1D1 = '(';       /* RE-QUALIFY THE SSA */
+         CALL  CALLRET;
+         IF DLISTAT ^= '  '
+            THEN IF DLISTAT = 'II'
+                 THEN DO;
+                      CALL TERMSCD;
+                      MSG = 'SEGMENT ALREADY EXISTS';
+                      CALL  OUTRTN;
+                      RETURN;
+                      END;
+                 ELSE CALL ISRTERR; /* ELSE AN ERROR OCCURED   */
+         SSA1KEY = PARTNBR;
+         SSA2N1 = 'STANINFO';
+         SSA2D1 = ' ';       /* DEQUALIFY THE SSA2 */
+         SEGINFO = ' ';      /* CLEAR THE I/O AREA */
+         SEGCODE = '02';
+         SEGPCODE = PROC;
+         CALL  PLITDLI (FIVE,ISRT,DLIPCB,SEGRETRN,SSA1,SSA2) ;
+         SSA2N1 = 'STOKSTAT';
+         SSA2D1 = '(';       /* REQUALIFY THE SSA2 */
+         CALL  CALLRET;
+         IF DLISTAT ^= '  '
+            THEN IF DLISTAT = 'II'
+                 THEN DO;
+                      CALL TERMSCD;
+                      MSG = 'STANINFO SEGMENT ALREADY EXISTS'  ;
+                      CALL  OUTRTN;
+                      RETURN;
+                      END;
+                 ELSE CALL ISRTERR; /* ELSE AN ERROR OCCURED   */
+         CALL TERMSCD;
+         MSG_F1A = 'PART NO.';
+         MSG_F1B1 = PARTNBR;
+         MSG_F1B2 = 'ADDED TO DATA BASE';
+         CALL OUTRTN;
+    ISRTERR:PROCEDURE;
+         MSG = 'INSERT RULES VIOLATED';
+         CALL OUTRTN;
+         /* PRINT THE PCB FOR THE USER  */
+         #1_F1 = DLIFILE;
+         #2_F3 = DLISGLEV;
+         FILL12 = DLISTAT;
+         #2_F4 = SUBSTR(DLIPROC,1,3);                          /*@P2C*/
+         #1_F3 = DLISEGFB;
+         CALL ABEND1;
+         END ISRTERR;
+         END ADDPART;
+         /**/
+    DSPINV:PROCEDURE;
+         PSBNAME = 'DFHSAM15';
+         CALL SCHED;
+         SSA1KEY = PARTNBR;
+         CALL PLITDLI (FOUR,GU,DLIPCB,SEGRETRN,SSA1);
+         CALL CALLRET;
+         IF DLISTAT ^= '  '
+            THEN DO;
+                 MSG = 'GU ERROR IN DSPINV';
+                 CALL ABEND1;
+                 END;
+         MSG_F1A = 'PART NO =';
+         MSG_F1B1 = SEGNO;
+         MSG_F1B2 = 'PART DESCRIPTION = ';
+         MSG_F1B3 = SEGDESC;
+         CALL  OUTRTN;
+         SSA2KEY = INVKEY;
+         SSA1KEY = PARTNBR;
+         CALL PLITDLI (FIVE,GU,DLIPCB,SEGRETRN,SSA1,SSA2);
+         CALL CALLRET;
+         IF DLISTAT ^= '  '
+            THEN DO;
+                 MSG = 'GU ERROR IN DSPINV';
+                 CALL ABEND1;
+                 END;
+         CALL TERMSCD;
+         MSG = HEAD1;
+         CALL OUTRTN;
+         MSG = HEAD2;
+         CALL  OUTRTN;
+         #2_F2 = SEGAREA;
+         #2_F3 = SEGDEPT;
+         #2_F4 = SEGPROJ;
+         #2_F5 = SEGDIV;
+         #2_F6 = SEGPRICE;
+         #2_F7 = (SEGCREQ + SEGFREQ);
+         #2_F8 = SEGORDER;
+         #2_F9 = SEGSTOCK;
+         #2_F10 = (SEGPDISB + SEGUDISB);
+         #2_F11 = SEGCOUNT;
+         #2_F12 = 'N/A';
+         CALL  OUTRTN;
+         MSG = 'UNIT = ';
+         FILL11 = SUBSTR(SEGUNIT,1,3);                         /*@P2C*/
+         MSG_F1B1 = '  PLANNED DISBURSALS';
+         #2_F7 = SEGPDISB;
+         MSG_F1B3 = 'UNPLANNED';
+         #2_F10 = SEGUDISB;
+         CALL OUTRTN;
+         END DSPINV;
+         /**/
+    TRANERR: PROCEDURE;
+         MSG_F1A = TRAN||CODE;       /* DISPLAY INCORRECT CODE */
+         MSG_F1B1 = 'WRONG TRANCODE USED';
+         CALL OUTRTN;
+         END TRANERR;
+         /**/
+    ABEND1: PROCEDURE;
+         CALL OUTRTN;
+         EXEC CICS ABEND ABCODE('DL41');
+         END   ABEND1;
+         /**/
+    CALLRET: PROCEDURE;
+         IF UIBFCTR = INVALID_REQUEST
+            THEN DO;
+                 MSG_F1B3 = 'INVALID REQUEST';
+                 GO TO DBERROR;
+                 END;
+         IF UIBFCTR = NOT_OPEN
+            THEN DO;
+                 MSG_F1B3 = 'DATABASE NOT OPEN';
+                 GO TO DBERROR;
+                 END;
+         IF (DLISTAT = 'GB')
+            THEN DO;
+                 CALL TERMSCD;
+                 MSG = 'END OF DATA BASE REACHED';
+                 CALL OUTRTN;
+                 EXEC CICS RETURN;
+                 END;
+         IF (DLISTAT = 'GE')
+            THEN DO;
+                 CALL TERMSCD;
+                 MSG = 'RECORD NOT FOUND FOR PART NO=';
+                 #1_F3 = PARTNBR;
+                 CALL OUTRTN;
+                 EXEC CICS RETURN;
+                 END;
+         RETURN;
+       DBERROR:
+         CALL TERMSCD;
+         MSG      = 'D/B CALL ERROR -PSBNAME = ';
+         MSG_F1B2 = PSBNAME;
+         CALL OUTRTN;
+         CALL ABEND1;
+         END CALLRET;
+         /**/
+    OUTRTN: PROCEDURE;
+         EXEC CICS SEND FROM(OUTREC) LENGTH(MSGLEN80);
+         MSG = ' ';                /*  BLANK OUT THE I/O AREA  */
+         END OUTRTN;
+         /**/
+    SCHED: PROCEDURE;
+         CALL PLITDLI (THREE,PCB,PSBNAME,UIBPTR);
+         IF UIBFCTR = GOOD_RETURN
+            THEN RETURN;
+         IF UIBFCTR = INVALID_REQUEST
+            THEN DO;
+                 MSG = 'SCHEDULE ERROR- PSBNAME=';
+                 MSG_F1B2 = PSBNAME;
+                 CALL OUTRTN;
+                 CALL ABEND1;
+                 END;
+         END SCHED;
+         /**/
+    TERMSCD: PROCEDURE;
+         CALL PLITDLI (ONE,TERM);                         /*@BA69004C*/
+         IF UIBFCTR = GOOD_RETURN
+            THEN RETURN;
+         MSG = 'PSB TERMINATION ERROR';
+         CALL OUTRTN;
+         CALL ABEND1;
+         END TERMSCD;
+         END DFHDLPC;

@@ -1,0 +1,1241 @@
+*ASM XOPTS(EXCI)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$AXCC                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Assembler Sample Batch client sample             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1993, 1998"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION =  This module shows users how to code a simple batch type *
+*             application program using the EXCI call level and EXEC  *
+*             level batch Dpl API.  This assembler version will use   *
+*             the API to call into a target CICS system and invoke    *
+*             the EXCI sample server program resident on the system   *
+*             to perform tasks according to a message sent via the    *
+*             commarea.  Appropriate to each task, the return commarea*
+*             will contain data specific to the call-type requested.  *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*    RESTRICTIONS = This program must be loaded below the 16MB line   *
+*                   because it uses BSAM macros. It must however run  *
+*                   amode 31 in order to use the External CICS        *
+*                   Interface. Hence it should be linkedited with     *
+*                   attributes AMODE(31),RMODE(24).                   *
+*    REGISTER CONVENTIONS = R3,R4    Base registers.                  *
+*                           R5       Message length                   *
+*                           R6       Message pointer.                 *
+*                           R7       For arithmetic.                  *
+*                           R8       Used in amode switch.            *
+*                           R9       -->EXEC return area.             *
+*                           R11      -->Call level return area.       *
+*                           R12      -->Dpl return area.              *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable,                       *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* ENTRY POINT = DFH$AXCC                                              *
+*                                                                     *
+* DESCRIPTION :   The program is simply broken down into three        *
+*                 sections.  Section I performs a single EXEC level   *
+*                 EXCI call into the target CICS system, while        *
+*                 Sections II and III together include the code       *
+*                 required to manually set up a Pipe connection to a  *
+*                 remote CICS, and to perform multiple Dpl calls via  *
+*                 this single connection.  the following is a basic   *
+*                 outline of each section's logic;                    *
+*                                                                     *
+*    SECTION_I:   Set up the message in the commarea to include the   *
+*                 server call type of INIT, and the name of the target*
+*                 file to be initialised.                             *
+*                                                                     *
+*                 Perform the EXEC CICS LINK request.                 *
+*                                                                     *
+*                 If the Link failed, then abort proceedings.         *
+*                                                                     *
+*                 (else) Check on the response from the server;       *
+*                                                                     *
+*                 If the server response is bad(i.e. File not found,  *
+*                    File not initialised, or a serious error found)  *
+*                 Then abort proceedings.                             *
+*                                                                     *
+*                 End of Section I processing.                        *
+*                                                                     *
+*                                                                     *
+*                 The EXEC level EXCI call requires very little effort*
+*                 in the setting up of many parameters, as is         *
+*                 exemplified in the simplicity of this section, and  *
+*                 as it performs an Init_User, Allocate, Open, Dpl,   *
+*                 Close and Deallocate Pipe call form every invocation*
+*                 it's use is generally limited to 'single shot' Dpl  *
+*                 calls of this type.                                 *
+*                                                                     *
+*   SECTION_II:   Set up and perform the Init_User call.              *
+*                                                                     *
+*                 Set up and perform the Allocate_Pipe call.          *
+*                                                                     *
+*                 Set up and perform the Open_Pipe call.              *
+*                                                                     *
+*                 If the Pipe has been successfully created then      *
+*                    get the target file from the target CICS system. *
+*                                                                     *
+*                 Perform Section III for backout purposes.           *
+*                                                                     *
+*                                                                     *
+*                 With the Call level EXCI link, care must be taken   *
+*                 to allocate storage for call level specific         *
+*                 parameters such as the User token and Pipe Token,   *
+*                 as well as others i.e. version number, userid (for  *
+*                 security purposes) the Allocate option and Dpl      *
+*                 option bits, the unit of work id, and also both high*
+*                 and low level return code areas.  It is obvious that*
+*                 the Call level EXCI link requires more setting up,  *
+*                 but because the user can decide how to go about     *
+*                 allocating or using pipes, a greater flexibility and*
+*                 efficiency can be achieved for multiple Dpl calls,  *
+*                 as exemplified here.                                *
+*                                                                     *
+*   SECTION III:  Set up the message in the commarea with a call type *
+*                 of CLOS, and the name of the file to be closed.     *
+*                                                                     *
+*                 Set up and perform the closing DPl Request.         *
+*                                                                     *
+*                 Set up and perform the Close_Pipe call.             *
+*                                                                     *
+*                 Set up and perform the Deallocate_Pipe call.        *
+*                                                                     *
+*                 Exit.                                               *
+*                                                                     *
+*                                                                     *
+*                 Section III will be called regardless of the degree *
+*                 of success achieved by processing in Section II, as *
+*                 no assumptions can be made if any part of Section II*
+*                 fails as to how far successful processing occured.  *
+*                 Hence it is assumed that all Section II processing  *
+*                 was successful, so backout of the target file is    *
+*                 attempted before the Pipe is dismantled, and the    *
+*                 program ends.                                       *
+*                                                                     *
+*  INPUT PARAMETERS:                                                  *
+*                                                                     *
+*    The only input to this program is supplied by the JCL PARM       *
+*    parameter.  This must contain the applid of the target CICS      *
+*    system and, optionally, the userid under which the DPL program   *
+*    must run, separated from the applid by a single comma.           *
+*    If the applid is omitted, a default of DBDCCICS is used.         *
+*    If the userid is omitted, the default is the userid of the       *
+*    job within which this program is executing.                      *
+*    The parameters must be passed in the form                        *
+*            APPLID,USERID                                            *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+**                                                                    *
+*        $MOD(DFH$AXCC),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 660    410 930325 HDELDPG : Create sample batch application *
+*    $P1= M83133 410 930709 HDELDPG : Fix parameter parsing           *
+*    $P2= M83339 410 930729 HD2GJST : Remove UOWID, take default      *
+*    $P3= M84316 410 931029 HD2GJST : Correct EXEC_MSG_LEN use.       *
+*    $P4= M84399 410 931103 HD2GJST : Use equates in DFHXCRCD         *
+*    $P5= M84855 410 931207 HD5KASR : Force RMODE(24) for BSAM        *
+*    $P6= M84895 410 931208 HD5KASR : Fix abort msg MVC length        *
+*    $P7= M95900 510 951205 HD2JPEH : Pass userid in PARM field       *
+*    $P9= M29674 530 980818 HD4OGB  : DFH$AXCC Needs AMODE 31         *
+*    $PA= M27373 530 980820 HDNONEHM: Allow USERID, print parameters  *
+***********************************************************************
+*
+*=====================================================================*
+*   Include the standard copybook for EXCI return codes and DSECTS.   *
+*=====================================================================*
+*
+          COPY DFHXCRCD
+*=====================================================================*
+*   Include the standard copybook for EXCI Parameter list equates.    *
+*=====================================================================*
+*
+          COPY DFHXCPLD
+*
+*
+*=====================================================================*
+*                                                                     *
+*         >>>>>>>>>>>>>> MAINLINE CODE <<<<<<<<<<<<<<<<               *
+*                                                                     *
+*=====================================================================*
+DFH$AXCC AMODE 31                                                  @P9C
+DFH$AXCC RMODE 24                                                  @P9A
+DFH$AXCC DFHEIENT CODEREG=(R3,R4)
+         MVC   TARGET_USERID,BLANKS         Blank target userid    @P7A
+         MVC   MSG32(18),MSGPARM            Set up Parm message    @PAA
+         MVC   MSG32E(28),MSGLAST                                  @PAA
+         MVC   MSG32A(7),NOAPP              Parameters None        @PAA
+*
+*=====================================================================*
+*   Retrieve the target CICS Applid and Userid, passed in PARM.       *
+*=====================================================================*
+*                                           *=========================*
+         L     R1,0(,R1)                    | R1-->JCL Plist.         |
+         XR    R7,R7                        | Clear R7            @P1A|
+         ICM   R7,B'0011',0(R1)             |  Pick up parm length    |
+         BZ    NOPARM                       | Was a CICS name passed? |
+         MVC   TARGET_SYSTEM(8),BLANKS      | Yes: Pad with blanks    |
+         LA    R6,2(,R1)          -> Character at PARM start       @P7A
+         LA    R2,2-1(,R1)        -> Character before PARM start   @P7A
+         LA    R15,2-1(R7,R1)     -> Last PARM character           @P7A
+         LA    R14,1              Set scan increment               @P7A
+SCANAPPL DS    0H                 Scan through source applid       @P7A
+         BXH   R2,R14,ENDAPPL     Exit loop at end of PARM         @P7A
+         CLI   0(R2),C','         Is there a comma?                @P7A
+         BNE   SCANAPPL           No, keep searching               @P7A
+ENDAPPL  DS    0H                 End of applid found              @P7A
+         LR    R7,R2              Save address reached             @P7A
+         SR    R7,R6              Subtract start address           @P7A
+         BNP   DONEAPPL           If zero length, no applid        @P7A
+         LA    R0,L'TARGET_SYSTEM Set length of target field       @P7A
+         CR    R7,R0              Is PARM too long?                @P7A
+         BNH   SETAPPL            No, use length found             @P7A
+         LR    R7,R0              Truncate to target length        @P7A
+SETAPPL  DS    0H                 Set up target applid             @P7A
+         BCTR  R7,0                         |  decrement length   @P1A|
+         EX    R7,GETNAME                   |  Retrieve CICS name     |
+DONEAPPL DS    0H                 Finished applid                  @P7A
+         LA    R6,1(,R2)          Start of next PARM (userid)      @P7A
+SCANUSER DS    0H                 Scan through source userid       @P7A
+         BXH   R2,R14,ENDUSER     Exit loop at end of PARM         @P7A
+         CLI   0(R2),C','         Is there a comma?                @P7A
+         BNE   SCANUSER           No, keep searching               @P7A
+ENDUSER  DS    0H                 End of userid reached            @P7A
+         LR    R7,R2              Save address reached             @P7A
+         SR    R7,R6              Subtract start address           @P7A
+         BNP   DONEUSER           No userid text left              @P7A
+         LA    R0,L'TARGET_USERID Set length of target field       @P7A
+         CR    R7,R0              Is PARM too long?                @P7A
+         BNH   SETUSER            No, use length found             @P7A
+         LR    R7,R0              Truncate to target length        @P7A
+SETUSER  DS    0H                 Set up target userid             @P7A
+         BCTR  R7,0               Decrement length                 @P7A
+         EX    R7,GETUSER         Copy target userid               @P7A
+DONEUSER DS    0H                 Finished with userid             @P7A
+         CLI   TARGET_SYSTEM,C' ' Was a target applid found?       @P7A
+         BE    NOPARM             No, use default                  @P7A
+         MVC   MSG32A(7),FILLAPP  Set up message                   @PAA
+         MVC   MSG32B(8),TARGET_SYSTEM   Set Up Message Applid     @PAA
+         CLI   TARGET_USERID,C' ' Was a target userid found?       @PAA
+         BE    NOUPARM            No                               @PAA
+USERMSG  DS    0H
+         MVC   MSG32C(11),FILLUSD Set up message                   @PAA
+         MVC   MSG32D(8),TARGET_USERID  Set up Message Userid      @PAA
+         B     OPENSYS                      |  Continue...            |
+GETNAME  MVC   TARGET_SYSTEM(0),2(R1)       |                      @P7A
+GETUSER  MVC   TARGET_USERID(0),0(R6)       |                      @P7A
+NOPARM   DS    0H                           | No: Default CICSname.   |
+         MVC   TARGET_SYSTEM(8),DEFAULT_SYSTEM                        |
+         MVC   MSG32B,BLANKS      Blank out Applid in Message      @PAA
+         CLI   TARGET_USERID,C' ' Was a target userid found?       @PAA
+         BNE   USERMSG            Yes                              @PAA
+NOUPARM  DS    0H                 No Userid parameter              @PAA
+         MVC   MSG32C,NOUSD       Set Message Userid to blank      @PAA
+         MVC   MSG32D,BLANKS      Blank Out Userid in Message      @PAA
+*                                           *_________________________*
+*=====================================================================*
+*   Set the output SYSPRINT log open.                                 *
+*=====================================================================*
+*
+OPENSYS  DS    0H                           *=========================*
+         MVC   DCBPARM,OUTPUT               | load DCB                |
+         LA    R7,DCBPARM                   |                         |
+         MVC   OPENPARM,OPENLIST            | Initialise plist        |
+         LA    R1,OPENPARM                  | Address Plist           |
+         OPEN ((R7),(OUTPUT)),              | Call macro.             |*
+               MODE=31,                     |                         |*
+               MF=(E,(1))                   *_________________________*
+*
+*=====================================================================*
+*   Put out Entry message.                                            *
+*=====================================================================*
+*
+         MVC   PRTRECORD(80),MSG00          *=========================*
+         L     R15,=A(X'80000000'+PRINT)    |                         |
+         BALR  R14,R15                      | Msg='   '               |
+         MVC   PRTRECORD(80),MSG01          |                         |
+         L     R15,=A(X'80000000'+PRINT)    | Msg='EXCI Sample...'    |
+         BALR  R14,R15                      *_________________________*
+         MVC   PRTRECORD(80),MSG02          |                     @PAA|
+         L     R15,=A(X'80000000'+PRINT)    | Msg='    '          @PAA|
+         BALR  R14,R15                      *_____________________@PAA*
+         MVC   PRTRECORD(80),MSG32          |                     @PAA|
+         L     R15,=A(X'80000000'+PRINT)    | Msg='Parameters:   '@PAA|
+         BALR  R14,R15                      *_____________________@PAA*
+*
+*=====================================================================*
+*   Clear Working Storage;                                            *
+*=====================================================================*
+*                                              *======================*
+         LA    R9,EXEC_RETAREA                 | R9--> EXEC returns   |
+         USING EXCI_EXEC_RETURN_CODE,R9        |                      |
+         LA    R11,CALL_RETAREA                | R11-->Call returns   |
+         USING EXCI_RETURN_CODE,R11            |                      |
+         LA    R12,DPL_RETAREA                 | R12--> DPL returns   |
+         USING EXCI_DPL_RETAREA,R12            *______________________*
+         XC    CLEAR_START(CLEAR_LEN),CLEAR_START
+         MVC   STOREYE(8),=C'STORAGE:'
+         MVC   TOKENEYE(8),=C'TOKENS:-'
+         MVC   COMMEYE(8),=C'COMM:-  '
+         XC    CALL,CALL
+         MVC   FILE(8),=C'xxxxxxxx'
+         MVC   RID(6),=C'000001'
+         MVC   RECORD(120),=CL120' '
+         MVC   PARMEYE(8),=C'CPLIST :'
+         MVC   EXECEYE(8),=C'EXECRet:'
+         MVC   EXCIEYE(8),=C'EXCIRet:'
+         MVC   DPL_EYE(8),=C'DPL_Ret:'
+*
+*=====================================================================*
+*                                                                     *
+*   SECTION I:                                                        *
+*                                                                     *
+*   Perform first EXEC level DPL request to ascertain the nature of   *
+*   the target FILE.  If this call fails in any way, the program wil  *
+*   be terminated.                                                    *
+*   Only if the FILE is found to exist, and has succesfully been set  *
+*   into a browsable state will the client program continue processing*
+*   the FILE into the next section.                                   *
+*                                                                     *
+*=====================================================================*
+*
+         MVC   PRTRECORD(80),MSG02           *========================*
+         L     R15,=A(X'80000000'+PRINT)     |                        |
+         BALR  R14,R15                       | Msg='*    *'           |
+         MVC   PRTRECORD(80),MSG03           |                        |
+         L     R15,=A(X'80000000'+PRINT)     |                        |
+         BALR  R14,R15                       | Msg='EXEC call...'     |
+         MVC   PRTRECORD(80),MSG04           |                        |
+         L     R15,=A(X'80000000'+PRINT)     | Msg='Setting up parms' |
+         BALR  R14,R15                       *________________________*
+*
+*=====================================================================*
+*   Set up the Outbound Commarea parameters for the server program.   *
+*                                                                     *
+*   PARAMETER LIST;  BIT:  0 1 2 3 4 5 6 7 8 9 A B C D E F 10 11 12 13*
+*                    PARM:|  CALL |  FILENAME     |   RID             |
+*                                                                     *
+*=====================================================================*
+*                                    *================================*
+         LA    R7,INITCALL           |Set up calltype to server as    |
+         ST    R7,CALL               |an INITBRZ call.                |
+         MVC   FILE(8),TARGET_FILE   |Load FILE into Outbound Commarea|
+*                                    *________________________________*
+*=====================================================================*
+*   Perform LINK request.                                             *
+*=====================================================================*
+         EXEC CICS LINK PROGRAM(TARGET_PROGRAM)                        *
+               TRANSID(TARGET_TRANSID)                                 *
+               APPLID(TARGET_SYSTEM)                                   *
+               COMMAREA(COMMAREA)                                      *
+               LENGTH(EXEC_COM_LEN)                                    *
+               DATALENGTH(EXEC_DAT_LEN)                                *
+               RETCODE(EXEC_RETAREA)                                   *
+               SYNCONRETURN
+*=====================================================================*
+*   Did the call fail?  Check the Return Codes.                       *
+*=====================================================================*
+*
+         CLC   EXEC_RESP,ZERO
+         BE    PARSE1
+*
+*=====================================================================*
+*   YES:  output reason and abort processing.                         *
+*=====================================================================*
+*
+LINKFAIL DS    0H                         *===========================*
+         MVC   SAVED_RESP,EXEC_RESP       | Save a copy of rc         |
+         MVC   PRTRECORD(80),MSG11        | Msg='The link has failed' |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXEC_RESP               | Convert Return codes to   |
+         CVD   R5,WORK1                   |   displayable Decimal.    |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG(16),MSG12A          | Msg='*    Resp='          |
+         MVC   ERRMSG1(8),WORK2           | EXEC_RESP                 |
+         L     R5,EXEC_RESP2              |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG2(10),MSG12C         | Msg='*   Resp2='          |
+         MVC   ERRMSG3(8),WORK2           | EXEC_RESP2                |
+         MVC   ERRMSG4(16),MSG12E         | Msg='*   Abend:'          |
+         MVC   ERRMSG5(8),MSG00           | blank out all 8 bytes.    |
+         MVC   ERRMSG5(4),EXEC_ABCODE     | EXEC_ABCODE               |
+         MVC   ERRMSG6(16),MSG12G         |                           |
+         MVC   PRTRECORD(80),ERRMSG       | Msg=Return codes.         |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    | Has CICS issued a message?|
+         CLC   EXEC_MSG_PTR,ZERO          |                           |
+         BE    NOMSG1                     | No: Continue.             |
+MSG1     MVC   PRTRECORD(80),MSG13        | Yes: Msg='A message...'   |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG02        | Msg='*    *'              |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXEC_MSG_PTR            | Get message pointer and   |
+         L     R6,EXEC_MSG_LEN            | length                    |
+LOOP     DS    0H                         |                           |
+         LR    R8,R6                      | Start with length = msg l |
+         LA    R7,80                      |                           |
+         CR    R6,R7                      | Is it > 80 ?              |
+         BL    SMLMSG                     |                           |
+         LA    R8,80                      | Yes - move first 80       |
+SMLMSG   DS    0H                         | No - move whole message   |
+         BCTR  R8,0                       | Less one for MVC          |
+         EX    R8,PRTMSG1                 | Move in message           |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    | Send message              |
+         MVC   PRTRECORD(80),MSG00        | Clear buffer              |
+         LA    R5,80(,R5)                 | Bump message pointer      |
+         SR    R6,R7                      | and decrement length      |
+         BP    LOOP                       | Loop if more message      |
+         MVC   PRTRECORD(80),MSG02        | Msg='*    *'              |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+NOMSG1   MVC   PRTRECORD(80),MSG14        | Yes: Msg='Aborting...'    |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     EXIT                       |                           |
+PRTMSG1  MVC   PRTRECORD(0),0(R5)         *___________________________*
+*
+*=====================================================================*
+*   NO:  Parse out State codes from the Commarea passed back.         *
+*=====================================================================*
+*
+PARSE1   DS    0H                         *===========================*
+         MVC   PRTRECORD(80),MSG05        | Msg='Link worked ok'      |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG06        | Msg='Server response'     |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,CALL                    | Get server return code.   |
+         ST    R5,CALL_RETCODE            *___________________________*
+*
+*=====================================================================*
+*   Has the file been sucessfully processed, and is browsable?        *
+*=====================================================================*
+*
+         CLC   CALL_RETCODE,RET_BROWSE
+         BE    SECTION2
+*
+*=====================================================================*
+*   NO:  output reason and exit.                                      *
+*=====================================================================*
+*
+         CLC   CALL_RETCODE,RET_NOBRWS
+         BE    NOBRWS
+         CLC   CALL_RETCODE,RET_NOFILE
+         BE    NOFILE                        *========================*
+ERROR    MVC   PRTRECORD(80),MSG10           |                        |
+         L     R15,=A(X'80000000'+PRINT)     | Msg='A serious error'  |
+         BALR  R14,R15                       |                        |
+         MVC   PRTRECORD(80),MSG14           | Msg='Aborting...'      |
+         L     R15,=A(X'80000000'+PRINT)     |                        |
+         BALR  R14,R15                       |                        |
+         MVC   SAVED_RESP,=AL4(16)           | Set bad return code    |
+         B     EXIT                          |                        |
+NOBRWS   DS    0H                            |                        |
+         MVC   PRTRECORD(80),MSG09           |                        |
+         L     R15,=A(X'80000000'+PRINT)     | Msg='Not initialised'  |
+         BALR  R14,R15                       |                        |
+         MVC   PRTRECORD(80),MSG14           | Msg='Aborting...'      |
+         L     R15,=A(X'80000000'+PRINT)     |                        |
+         BALR  R14,R15                       |                        |
+         MVC   SAVED_RESP,=AL4(16)           | Set bad return code    |
+         B     EXIT                          |                        |
+NOFILE   DS    0H                            |                        |
+         MVC   PRTRECORD(80),MSG08           |                        |
+         L     R15,=A(X'80000000'+PRINT)     | Msg='Not found.'       |
+         BALR  R14,R15                       |                        |
+         MVC   PRTRECORD(80),MSG14           | Msg='Aborting...'      |
+         L     R15,=A(X'80000000'+PRINT)     |                        |
+         BALR  R14,R15                       |                        |
+         MVC   SAVED_RESP,=AL4(16)           | Set bad return code    |
+         B     EXIT                          *________________________*
+*
+SECTION2 DS    0H
+*=====================================================================*
+*                                                                     *
+*   SECTION II:                                                       *
+*                                                                     *
+*   This section will perform the required Initialise User, Allocate  *
+*   Pipe, and Open pipe calls prior to a looping section of sequential*
+*   DPL calls to the TARGET_PROGRAM program for a READFILE.  Each call*
+*   return a single RECORD from the FILE in sequence, which will be   *
+*   output to the SYSPRINT log.                                       *
+*   No checks are made as to how successful the Initialise_User, and  *
+*   Allocate_Pipe calls have been in this sample, as the check at the *
+*   Open_Pipe call will suffice in this simple linear context of the  *
+*   call API.                                                         *
+*                                                                     *
+*=====================================================================*
+*
+         MVC   PRTRECORD(80),MSG07       *============================*
+         L     R15,=A(X'80000000'+PRINT) | Msg='File browsable'       |
+         BALR  R14,R15                   |                            |
+         MVC   PRTRECORD(80),MSG02       |                            |
+         L     R15,=A(X'80000000'+PRINT) | Msg=''*     *'             |
+         BALR  R14,R15                   |                            |
+         MVC   PRTRECORD(80),MSG15       |                            |
+         L     R15,=A(X'80000000'+PRINT) | Msg='CALL level processor' |
+         BALR  R14,R15                   *____________________________*
+*
+*=====================================================================*
+*   Initialise User call;                                             *
+*=====================================================================*
+*                                         *===========================*
+INITUSER DS    0H                         |  START OF PARAMETERS:     |
+         MVC   VERSION,=AL4(VERSION_1)    |  Set up version num   @P4A|
+         MVC   EXCI_CALL,=AL4(INIT_USER)  |  Load Call-type and   @P4C|
+*                                         *___________________________*
+*
+*
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               APPLICATION),                                           *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+         MVC   PRTRECORD(80),MSG16        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Initialise user call'|
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Allocate Pipe call;                                               *
+*=====================================================================*
+*                                         *===========================*
+ALOCPIPE DS    0H                         |  START OF PARAMETERS:     |
+         MVC   EXCI_CALL,=AL4(ALLOCATE_PIPE) Load call-type and   @P4C|
+         MVC   OPTIONS,=AL1(SPECIFIC_PIPE) | Set specific pipe    @P4C|
+*                                         *___________________________*
+*
+*
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN,                                                *
+               TARGET_SYSTEM,                                          *
+               OPTIONS),                                               *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+         MVC   PRTRECORD(80),MSG17        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Allocate pipe call'  |
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Open Pipe call;                                                   *
+*=====================================================================*
+*                                         *===========================*
+OPENPIPE DS    0H                         |  START OF PARAMETERS:     |
+         MVC   EXCI_CALL,=AL4(OPEN_PIPE)  |  Load call-type and   @P4C|
+*                                         *___________________________*
+*
+*
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN),                                               *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+         MVC   PRTRECORD(80),MSG18        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Mgs='Open pipe call'      |
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Is the Link set up correctly?  If not, then abort the Dpl.        *
+*=====================================================================*
+*
+CHCKLINK DS    0H
+         ICM   R5,15,EXCI_RESPONSE
+         BZ    DPLREQ
+CONNFAIL DS    0H                         *===========================*
+         MVC   SAVED_RESP,EXCI_RESPONSE   | Save a copy of response   |
+         MVC   PRTRECORD(80),MSG23        | Msg='The link has failed' |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXCI_RESPONSE           | Convert Return codes to   |
+         CVD   R5,WORK1                   |   displayable Decimal.    |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG(16),MSG24A          | Msg='*   Response='       |
+         MVC   ERRMSG1(8),WORK2           | EXCI_RESPONSE             |
+         L     R5,EXCI_REASON             |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG2(10),MSG24C         | Msg='*   reason='         |
+         MVC   ERRMSG3(8),WORK2           | EXCI_REASON               |
+         L     R5,EXCI_SUB_REASON1        |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG4(16),MSG24E         | Msg='*   Subreason='      |
+         MVC   ERRMSG5(8),WORK2           | EXCI_SUB_REASON1          |
+         MVC   ERRMSG6(16),MSG12G         | Msg='      *'             |
+         MVC   PRTRECORD(80),ERRMSG       | Msg=Return codes.         |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG14        | Msg='Aborting...'         |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     SECTION3                   |                           |
+*                                         *___________________________*
+DPLREQ   DS    0H
+*=====================================================================*
+*                                                                     *
+*   Dpl Request;                                                      *
+*                                                                     *
+*   This is the multiple Dpl looping section which includes all code  *
+*   to read in the RECORDS, and to print them to the SYSPRINT log.    *
+*                                                                     *
+*=====================================================================*
+*
+         MVC   PRTRECORD(80),MSG19        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Connect successful'  |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG20        |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Target file follows' |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG02        |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg='*               *'   |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG21        |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg='*** Top of File***'  |
+         BALR  R14,R15                    *___________________________*
+*=====================================================================*
+*   Set up Outbound Commarea with parameters.                         *
+*=====================================================================*
+*                                         *===========================*
+         LA    R7,READCALL                |  Set up call type to      |
+         ST    R7,CALL                    |   a READFILE type.        |
+*                                         *___________________________*
+*=====================================================================*
+*   Dpl request;                                                      *
+*      No UOWid is passed on the call. A zero value is specified      *
+*      for this parameter, which causes a null address to             *
+*      be placed in the parameter list and passed to DFHXCIS.         *
+*                                                                     *
+*      A userid is passed if one was provided as the second           *
+*      positional parameter in the PARM field, otherwise a zero       *
+*      value is passed, as above. This causes the current job userid  *
+*      to be used by the EXCI processor.                              *
+*=====================================================================*
+*                                         *===========================*
+DPLCALL  DS    0H                         |  START OF PARAMETERS:     |
+         MVC   EXCI_CALL,=AL4(DPL_REQUEST) | Load call-type and   @P4C|
+         MVC   OPTIONS,=AL1(SYNCONRETURN) |  Set SYNCONRETURN     @P4C|
+*                                         *___________________________*
+*
+*
+MORE_DPL DS    0H
+         SR    R2,R2              Clear userid pointer             @P7A
+         CLI   TARGET_USERID,C' ' Is there a userid?               @P7A
+         BE    DPLUSER            No, leave pointer null           @P7A
+         LA    R2,TARGET_USERID   Yes, point to supplied userid    @P7A
+DPLUSER  DS    0H                 Userid pointer is set            @P7A
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN,                                                *
+               TARGET_PROGRAM,                                         *
+               COMMAREA,                                               *
+               COMM_LENGTH,                                            *
+               DATA_LENGTH,                                            *
+               TARGET_TRANSID,                                         *
+               0,                                                      *
+               (R2),                                                   *
+               DPL_RETAREA,                                            *
+               OPTIONS),                                               *
+               VL,                                                     *
+               MF=(E,PARM_LIST)                                    @P7C
+*
+*=====================================================================*
+*   Did the Dpl Request succeed? We must check both the call and the  *
+*   Dpl return codes to be certain that it did.                       *
+*   End processing if either is non-zero.                             *
+*=====================================================================*
+*
+CHCKDPL  DS    0H
+         MVC   SAVED_RESP,EXCI_RESPONSE   | Save a copy of rc         |
+         CLC   EXCI_RESPONSE,ZERO
+         BNE   DPL_FAIL
+         MVC   SAVED_RESP,EXCI_DPL_RESP   | Save a copy of rc         |
+         CLC   EXCI_DPL_RESP,ZERO
+         BNE   DPL_FAIL
+         B     CHK_SERV
+DPL_FAIL DS    0H                         *===========================*
+         MVC   PRTRECORD(80),MSG00        |                           |
+         MVC   PRTRECORD(80),MSG25        | Msg='The Dpl has failed'  |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG26        | Msg='Link return codes..' |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXCI_RESPONSE           | Convert Return codes to   |
+         CVD   R5,WORK1                   |   displayable Decimal.    |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG(16),MSG24A          | Msg='*   Response='       |
+         MVC   ERRMSG1(8),WORK2           | EXCI_RESPONSE             |
+         L     R5,EXCI_REASON             |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG2(10),MSG24C         | Msg='*   reason='         |
+         MVC   ERRMSG3(8),WORK2           | EXCI_REASON               |
+         L     R5,EXCI_SUB_REASON1        |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG4(16),MSG24E         | Msg='*   Subreason='      |
+         MVC   ERRMSG5(8),WORK2           | EXCI_SUB_REASON1          |
+         MVC   ERRMSG6(16),MSG12G         | Msg='      *'             |
+         MVC   PRTRECORD(80),ERRMSG       | Msg=Return codes.         |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG27        | Msg='Dpl return codes..'  |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXCI_DPL_RESP           | Convert Return codes to   |
+         CVD   R5,WORK1                   |   displayable Decimal.    |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG(16),MSG12A          | Msg='*    Resp='          |
+         MVC   ERRMSG1(8),WORK2           | EXCI_DPL_RESP             |
+         L     R5,EXCI_DPL_RESP2          |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG2(10),MSG12C         | Msg='*   Resp2='          |
+         MVC   ERRMSG3(8),WORK2           | EXCI_DPL_RESP2            |
+         MVC   ERRMSG4(16),MSG12E         | Msg='*   Abend:'          |
+         MVC   ERRMSG5(8),MSG00           | blank out all 8 bytes.    |
+         MVC   ERRMSG5(4),EXCI_DPL_ABCODE | EXCI_DPL_ABCODE           |
+         MVC   ERRMSG6(16),MSG12G         |                           |
+         MVC   PRTRECORD(80),ERRMSG       | Msg=Return codes.         |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    | Has CICS issued a message?|
+         CLC   EXCI_MSG_PTR,ZERO          |                           |
+         BE    NOMSG2                     | No: Continue.             |
+MSG2     MVC   PRTRECORD(80),MSG13        | Yes: Msg='A message...'   |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG02        | Msg='*    *'              |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXCI_MSG_PTR            | Get ptr to message        |
+         LH    R6,0(,R5)                  | Get the length            |
+         LA    R7,4                       |                           |
+         SR    R6,R7                      | Subtract LLBB from length |
+         LA    R5,4(,R5)                  | Bump ptr past the LLBB    |
+LOOP2    DS    0H                         |                           |
+         LR    R8,R6                      | Start with length = msg l |
+         LA    R7,80                      |                           |
+         CR    R6,R7                      | Is it > 80 ?              |
+         BL    SMLMSG2                    |                           |
+         LA    R8,80                      | Yes - move first 80       |
+SMLMSG2  DS    0H                         | No - move whole message   |
+         BCTR  R8,0                       | Less one for MVC          |
+         EX    R8,PRTMSG1                 | Move in message           |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    | Send message              |
+         MVC   PRTRECORD(80),MSG00        | Clear buffer              |
+         LA    R5,80(,R5)                 | Bump message pointer      |
+         SR    R6,R7                      | and decrement length      |
+         BP    LOOP2                      | Loop if more message      |
+EXMSG2   MVC   PRTRECORD(80),MSG02        | Msg='*    *'              |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+NOMSG2   MVC   PRTRECORD(80),MSG14        | Yes: Msg='Aborting...'    |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     SECTION3                   |                           |
+PRTMSG2  MVC   PRTRECORD(0),0(R6)         *___________________________*
+*
+*=====================================================================*
+*   Now, the Dpl was a success, but also check the server return code *
+*   for a serious error.  End processing if it is found.              *
+*=====================================================================*
+*
+CHK_SERV DS    0H                         *===========================*
+         CLC   CALL,RET_ERROR             |                           |
+         BNE   PRT_REC                    |                           |
+         MVC   SAVED_RESP,RET_ERROR       |
+         MVC   PRTRECORD(80),MSG06        |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Server response'     |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG10        |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Serious error'       |
+         BALR  R14,R15                    |                           |
+         B     SECTION3                   *___________________________*
+*
+*=====================================================================*
+*   The call was good;                                                *
+*   Read the record from the commarea, and output to the SYSPRINT log.*
+*=====================================================================*
+*
+PRT_REC  DS    0H                         *===========================*
+         MVC   PRTRECORD(80),RECORD       |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg=file record.          |
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Is EOF reached? i.e. Was this the last record?                    *
+*=====================================================================*
+*                                         *===========================*
+EOF_TEST DS    0H                         |                           |
+         CLC   CALL,RET_EOF               |                           |
+         BNE   NOT_EOF                    | YES: Finish processing.   |
+         MVC   PRTRECORD(80),MSG00        |                           |
+         MVC   PRTRECORD(80),MSG22        | Msg='**End of File**'     |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG02        | Msg='*             *'     |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     SECTION3                   |                           |
+NOT_EOF  DS    0H                         |                           |
+         LA    R7,READCALL                | NO: Set up the server     |
+         ST    R7,CALL                    |   calltype to a READFILE  |
+         B     MORE_DPL                   |   and go again.           |
+*                                         *___________________________*
+SECTION3 DS    0H
+*=====================================================================*
+*                                                                     *
+*   Processing is complete, so tidy up by one further DPL request     *
+*   to the TARGET_PROGRAM  program, which, by passing the CLOS calltype
+*   will close the FILE.  The Link will then be finished with, so     *
+*   it will be terminated by issuing Close, and Deallocate pipe       *
+*   calls.                                                            *
+*                                                                     *
+*=====================================================================*
+*
+*=====================================================================*
+*   Set up Outbound Commarea with parameters.                         *
+*=====================================================================*
+*                                         *===========================*
+         LA    R7,CLOSCALL                |  Set up call type to      |
+         ST    R7,CALL                    |   a CLOSFILE type.        |
+*                                         *___________________________*
+*=====================================================================*
+*   Dpl request;                                                      *
+*=====================================================================*
+*
+CLOSDPL  DS    0H
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN,                                                *
+               TARGET_PROGRAM,                                         *
+               COMMAREA,                                               *
+               COMM_LENGTH,                                            *
+               DATA_LENGTH,                                            *
+               TARGET_TRANSID,                                         *
+               0,                                                      *
+               0,                                                      *
+               DPL_RETAREA,                                            *
+               OPTIONS),                                               *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+         MVC   PRTRECORD(80),MSG28        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Closing Dpl attempted|
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Close Pipe call;                                                  *
+*=====================================================================*
+*                                         *===========================*
+CLOSPIPE DS    0H                         |  START OF PARAMETERS:     |
+         MVC   EXCI_CALL,=AL4(CLOSE_PIPE) |  Load call-type and   @P4C|
+*                                         *___________________________*
+*
+*
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN),                                               *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+         MVC   PRTRECORD(80),MSG29        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Close pipe call'     |
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Deallocate Pipe call;                                             *
+*=====================================================================*
+*                                         *===========================*
+DEALPIPE DS    0H                         |  START OF PARAMETERS:     |
+         MVC   EXCI_CALL,=AL4(DEALLOCATE_PIPE) Load call-type &   @P4C|
+*                                         *___________________________*
+*
+*
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN),                                               *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+         MVC   PRTRECORD(80),MSG30        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Deallocate pipe call'|
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Return caller's registers and return to caller                    *
+*=====================================================================*
+*
+EXIT     DS    0H
+         MVC   PRTRECORD(80),MSG02        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='*        *'          |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG31        |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg='*===End of EXCI ===*'|
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Set the output SYSPRINT log closed.                               *
+*=====================================================================*
+*
+         MVC   CLSEPARM,CLSELIST
+         LA    R1,CLSEPARM
+         CLOSE OUTPUT,                                                 *
+               MODE=31,                                                *
+               MF=(E,(1))
+*
+*=====================================================================*
+*   Set Register 15 to return code and exit.                          *
+*=====================================================================*
+*
+         L     R15,SAVED_RESP
+         DFHEIRET RCREG=(15)
+*
+*=====================================================================*
+*   PRINT subroutine for outputting anything to the SYSPRINT log.     *
+*=====================================================================*
+*
+PRINT    DS    0H                      *==============================*
+         ST    R14,RET_ADDR            | Store return address         |
+         L     R8,=A(PRINT10)          | Get 24 bit address           |
+         BSM   R8,R8                   | Switch to Amode 24           |
+PRINT10  DS    0H                      |                              |
+*                                      |                              1
+         PUT   DCBPARM,PRTRECORD       | Output Print record.         |
+*                                      |                              1
+         N     R8,=X'80000000'         | Isolate saved amode          |
+         O     R8,=A(PRINT20)          | Add address to it            |
+         BSM   0,R8                    | Switch back to original mode |
+PRINT20  DS    0H                      |                              |
+         L     R14,RET_ADDR            | Retrieve return address      |
+         BR    R14                     *______________________________*
+*
+*=====================================================================*
+*                                                                     *
+*    Constants.                                                       *
+*                                                                     *
+*=====================================================================*
+*
+*                                    *===============================*
+TARGET_INFO    DS 0F                 |Target Variable Constants.     |
+TARGET_FILE    DC CL8'FILEA   '      |  Target file.                 |
+TARGET_PROGRAM DC CL8'DFH$AXCS'      |  Server program name .        |
+TARGET_TRANSID DC CL4'EXCI'          |  Name of Target Transaction.  |
+DEFAULT_SYSTEM DC CL8'DBDCCICS'      |  If no CICS name is passed    |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+EXEC_INFO    DS 0F                   |EXEC level specific information|
+EXEC_DAT_LEN DC  AL2(18)             |  Outbound length(EXEC call)   |
+EXEC_COM_LEN DC  AL2(18)             |  Inbound length(EXEC call)    |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+CALL_INFO    DS 0F                   |Call level specific information|
+APPLICATION  DC CL8'BATCHCLI'        |  Client program name.         |
+DATA_LENGTH  DC  AL4(18)             |  Outbound Commarea length.    |
+COMM_LENGTH  DC  AL4(COMMEND-COMMAREA)  Inbound Commarea length.     |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*
+*                                    *===============================*
+*                                    |Server Call Type Definitions;  |
+INITCALL     EQU 1                   |  Initialse file for browsing  |
+READCALL     EQU 2                   |  Read record from file.       |
+CLOSCALL     EQU 3                   |  Close file and end processing|
+*                                    |                               |
+*                                    *_______________________________*
+*
+*
+*                                    *===============================*
+*                                    |Server Return Codes;           |
+RET_BROWSE   DC F'0'                 |   File browsable.             |
+RET_NOBRWS   DC F'4'                 |   File not browsable.         |
+RET_EOF      DC F'8'                 |   End of file found.          |
+RET_NOFILE   DC F'12'                |   File not found.             |
+RET_ERROR    DC F'16'                |   Serious error detected.     |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+PROG_INFO    DS 0F                   |Program specific variables.    |
+ZERO         DC F'0'                 |                               |
+ONE          DC F'1'                 |                               |
+BLANKS       DC CL8'        '        |                               |
+NOUSD        DC CL11'           '    | Blank Userid in message   @PAA|
+NOAPP        DC CL7'       '         | No Parameters provided    @PAA|
+FILLAPP      DC CL7'APPLID='         |                           @PAA|
+FILLUSD      DC CL11'    USERID='    |                           @PAA|
+MSGPARM      DC CL18'*     Parameters: '                         @PAA|
+MSGLAST      DC CL28'                           *'               @PAA|
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+*                                    |DCB for SYSPRINT output file.  |
+OUTPUT   DCB   DSORG=PS,             | Physical sequential           | X
+               DDNAME=SYSPRINT,      | DDNAME                        | X
+               MACRF=(PM),           | PUT MOVE                      | X
+               LRECL=80,             | LOGICAL RECORD LENGTH         | X
+               RECFM=F               | FIXED BLOCK W ASCII CC        |
+DCBLEN   EQU   *-OUTPUT              | Length of storage needed.     |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+*                                    |List form of 31 bit open macro |
+OPENLIST OPEN  OPENLIST,             |                               | X
+               MODE=31,              |                               | X
+               MF=L                  |                               |
+OPENLEN  EQU   *-OPENLIST            | Length of storage needed      |
+*                                    *_______________________________*
+*                                    *===============================*
+*                                    |List form of 31 bit close macro|
+CLSELIST CLOSE CLSELIST,             |                               | X
+               MODE=31,              |                               | X
+               MF=L                  |                               |
+CLSELEN  EQU   *-CLSELIST            | Length of storage needed      |
+*                                    *_______________________________*
+*
+*====================================================================*
+*    Messages for output to the SYSPRINT log.                        *
+*====================================================================*
+*
+MESSAGES DS 0F
+MSG00    DC CL80' '
+MSG01    DC CL40'*===================== EXCI Sample Batch'
+         DC CL40' Client Program =======================*'
+MSG02    DC CL40'*                                       '
+         DC CL40'                                       *'
+MSG03    DC CL40'*  EXEC Level Processor.                '
+         DC CL40'                                       *'
+MSG04    DC CL40'*    Setting up the EXEC level call.    '
+         DC CL40'                                       *'
+MSG05    DC CL40'*    The Link Request has successfully c'
+         DC CL40'ompleted.                              *'
+MSG06    DC CL40'*    Server Response:                   '
+         DC CL40'                                       *'
+MSG07    DC CL40'*      The file is set to a browsable st'
+         DC CL40'ate.                                   *'
+MSG08    DC CL40'*      The file could not be found.    '
+         DC CL40'                                       *'
+MSG09    DC CL40'*      The file could not be successfull'
+         DC CL40'y initialised                          *'
+MSG10    DC CL40'*      A serious error was detected.    '
+         DC CL40'                                       *'
+MSG11    DC CL40'*    The Link Request has failed.  Retur'
+         DC CL40'n codes are;                           *'
+MSG12A   DC CL16'*        Resp = '
+MSG12C   DC CL10'  Resp2 = '
+MSG12E   DC CL14'  Abend Code: '
+MSG12G   DC CL16'               *'
+MSG13    DC CL40'*    A message was received from the tar'
+         DC CL40'get CICS system:                       *'
+MSG14    DC CL40'*    >>>> Aborting further processing <<'
+         DC CL40'<<                                     *'
+MSG15    DC CL40'*  CALL Level Processor.                '
+         DC CL40'                                       *'
+MSG16    DC CL40'*    Initialise_User call complete.     '
+         DC CL40'                                       *'
+MSG17    DC CL40'*    Allocate_Pipe call complete.       '
+         DC CL40'                                       *'
+MSG18    DC CL40'*    Open_Pipe call complete.           '
+         DC CL40'                                       *'
+MSG19    DC CL40'*    The connection has been successful.'
+         DC CL40'                                       *'
+MSG20    DC CL40'*      The target file follows:         '
+         DC CL40'                                       *'
+MSG21    DC CL40'*=========================== Top of File'
+         DC CL40' ======================================*'
+MSG22    DC CL40'*=========================== End of File'
+         DC CL40' ======================================*'
+MSG23    DC CL40'*    The connection has been unsuccessfu'
+         DC CL40'l.  Return codes are:                  *'
+MSG24A   DC CL16'*    Response = '
+MSG24C   DC CL10' Reason = '
+MSG24E   DC CL14' Subreason = '
+MSG25    DC CL40'*      The Dpl request has failed.      '
+         DC CL40'                                       *'
+MSG26    DC CL40'*      Link return codes are:           '
+         DC CL40'                                       *'
+MSG27    DC CL40'*      Dpl return codes are:            '
+         DC CL40'                                       *'
+MSG28    DC CL40'*    Closing Dpl Request has been attemp'
+         DC CL40'ted.                                   *'
+MSG29    DC CL40'*    Close_Pipe call complete.          '
+         DC CL40'                                       *'
+MSG30    DC CL40'*    Deallocate_Pipe call complete.     '
+         DC CL40'                                       *'
+MSG31    DC CL40'*=================== End of EXCI Sample '
+         DC CL40'Batch Client Program ==================*'
+*
+*====================================================================*
+*                                                                    *
+*    Definitions for Working Storage.                                *
+*                                                                    *
+*====================================================================*
+*
+DFHEISTG     DSECT
+CLEAR_START  DS 0F
+STOREYE      DS 8C                   *===============================*
+*                                    |Storage for Tokens;            |
+TOKENEYE     DS 8C                   |                               |
+U_TOKEN      DS F                    |  User token storage.          |
+P_TOKEN      DS F                    |  Pipe token storage.          |
+*                                    |                               |
+*                                    *_______________________________*
+*                                    *===============================*
+*                                    |                               |
+VERSION      DS F                    |  Vehicle for Version num  @P4A|
+EXCI_CALL    DS F                    |  Vehicle for call type.       |
+CALL_RETCODE DS F                    |  Return Code Area.            |
+RET_ADDR     DS F                    |  Print routine return address.|
+SAVED_RESP   DS F                    |  Save area for return code    |
+OPTIONS      DS XL1                  |  Vehicle for dpl,aloc opts.   |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+*                                    | Storage allocation (Return    |
+*                                    |    Codes and parameters.)     |
+EXECEYE      DS 8C                   |                               |
+EXEC_RETAREA DS CL(EXCI_EXEC_RETURN_CODE__LEN)                       |
+             DS 0D
+PARMEYE      DS 8C                   |                               |
+* Reserve storage for CALL API parm list. Use list form of CALL macro
+* for DPL call which has the largest number of parameters.
+PARM_LIST    CALL ,                                                    *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN,                                                *
+               TARGET_PROGRAM,                                         *
+               COMMAREA,                                               *
+               COMM_LENGTH,                                            *
+               DATA_LENGTH,                                            *
+               TARGET_TRANSID,                                         *
+               0,                                                      *
+               0,                                                      *
+               DPL_RETAREA,                                            *
+               OPTIONS),                                               *
+               VL,                                                     *
+               MF=L
+EXCIEYE      DS 8C                   |                               |
+CALL_RETAREA DS CL(EXCI_RETURN_CODE__LEN)                            |
+DPL_EYE      DS 8C                   |                               |
+DPL_RETAREA  DS CL(EXCI_DPL_RETAREA__LEN)                            |
+*                                    |                               |
+CLEAR_LEN    EQU *-CLEAR_START       |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+*                                    |Commarea;                      |
+COMMEYE      DS 8C                   |                               |
+COMMAREA     DS 0F                   |   Commarea for data transfer. |
+CALL         DS F                    |      1st slot for call type.  |
+FILE         DS 8C                   |      2nd slot for file name.  |
+RID          DS 6C                   |      3rd slot for RIDfld var. |
+RECORD       DS 80C                  |      4th slot for record.     |
+COMMEND      EQU *                   |                               |
+*                                    |                               |
+*                                    *_______________________________*
+*
+             DS 0D                   |                               |
+WORK1        DS D                    |  Workarea1 for conversion.    |
+WORK2        DS D                    |  Workarea2 for conversion.    |
+             DS 0F                   |  Error Msg storage.           |
+ERRMSG       DS 16C                  |                               |
+ERRMSG1      DS 8C                   |  first code area.             |
+ERRMSG2      DS 10C                  |                               |
+ERRMSG3      DS 8C                   |  second code area.            |
+ERRMSG4      DS 14C                  |                               |
+ERRMSG5      DS 8C                   |  third/abend code area.       |
+ERRMSG6      DS 16C                  |                               |
+MSG32        DS 18C                  |Set up Parameter message   @PAA|
+MSG32A       DS 7C                   |                           @PAA|
+MSG32B       DS 8C                   |                           @PAA|
+MSG32C       DS 11C                  |                           @PAA|
+MSG32D       DS 8C                   |                           @PAA|
+MSG32E       DS 28C                  |                           @PAA|
+TARGET_SYSTEM DS CL8                 |  Applid of Target CICS      @P7C
+TARGET_USERID DS CL8                 |  Userid on Target CICS      @P7A
+*                                    |                               |
+*                                    *_______________________________*
+*
+*
+*                                    *===============================*
+*                                    |                               |
+PRTRECORD    DS 80C                  | Output buffer for printing.   |
+DCBPARM  DS  CL(DCBLEN)              | Allocation for DCB.           |
+OPENPARM DS  CL(OPENLEN)             | Allocation for open plist     |
+CLSEPARM DS  CL(CLSELEN)             | Allocation for Close plist    |
+*                                    |                               |
+*                                    *_______________________________*
+             DFHREGS
+             END DFH$AXCC

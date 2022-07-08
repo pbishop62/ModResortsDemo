@@ -1,0 +1,659 @@
+*ASM XOPTS(CICS DLI)
+         DFHCOVER OS
+         TITLE 'D F H D L A E     -   S A M P L E   C I C S   -   C O MX
+               M A N D  L E V E L  D L / I  P R O G R A M'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$DLAE                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Command Level DL/I Sample Program                *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1987, 1993"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*                        DATABASE  STRUCTURE                          *
+*                                                                     *
+*                           *************                             *
+*                           *           *                             *
+*                           *  PARTROOT *                             *
+*                           *           *                             *
+*                           *************                             *
+*                                 *                                   *
+*                                 *                                   *
+*                   *****************************                     *
+*                   *                           *                     *
+*                   *                           *                     *
+*                   *                           *                     *
+*             *************               *************               *
+*             *           *               *           *               *
+*             *  STANINFO *               *  STOKSTAT *               *
+*             *           *               *           *               *
+*             *************               *************               *
+*                                               *                     *
+*                                               *                     *
+*                                               *                     *
+*                                        ***************              *
+*                                        *             *              *
+*                                        *             *              *
+*                                  ************* *************        *
+*                                  *           * *           *        *
+*                                  *  CYCCOUNT * *  BACKORDR *        *
+*                                  *           * *           *        *
+*                                  ************* *************        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*  $MOD(DFH$DLAE),COMP(SAMPLES),PROD(CICS TS ):                       *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 210 870225 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*    $P2= M84145 410 931013 HD4OGB : Fix Outrec                       *
+*        D147091 720 180224 HDFVGMB: AMODE 31, RMODE ANY              *
+*                                                                     *
+***********************************************************************
+         EJECT
+DFHEISTG DSECT
+         SPACE
+PSBNAME  DS    CL8                      DLI PSB NAME FOR SCHEDULE CALL
+SEGRETRN DS    CL160                    DLI I/O WORK AREA
+INPUT    DS    0CL80                    INPUT AREA DEFINITION
+TRAN     DS    CL4                      TRANSACTION
+CODE     DS    CL3                      APPLICATION CODE
+PARTNBR  DS    CL17                     PART NUMBER
+DESC     DS    CL20                     DESCRIPTION
+INVKEY   DS    CL16                     INVENTORY KEY
+PROC     DS    CL2                      PROCESS CODE
+DISB     DS    CL1                      DISBURSEMENT CODE
+QUANT    DS    CL4                      QUANTITY DISBURSED
+         DS    CL13
+OUTREC   DS    CL121                    OUTPUT RECORD
+STOCKCNT DS    P'0'
+WORK     DS    CL16                     WORK AREA
+INMSGLEN DS    H                        INPUT MESSAGE LENGTH
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   P R O G R A M   R E G I S T E R   D E F I N I T I O N S           *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+R0       EQU   0                        WORK REGISTER
+R1       EQU   1                        WORK REGISTER
+LINKREG  EQU   9                        PROGRAM LINKAGE REGISTER
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   M A I N   L I N E   P R O G R A M   L O G I C                     *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+DFHSAM40 AMODE 31
+DFHSAM40 RMODE ANY
+DFHSAM40 DFHEIENT CODEREG=(4,7),DATAREG=13,EIBREG=8
+         MVC   INMSGLEN(2),MSGLEN80     ACCEPT UP TO 80 CHAR INPUT
+         EXEC  CICS RECEIVE INTO(INPUT) LENGTH(INMSGLEN)
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         MVI   STOCKCNT,X'0C'           INITIALIZE STOCK COUNT FIELD
+         MVI   OUTREC,X'09'             OUTPUT AN IMAGE OF THE INPUT
+         MVC   OUTREC+1(06),=C'INPUT:'
+         MVC   OUTREC+08(72),INPUT
+         MVC   OUTREC+76(5),=C'     '
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         CLC   CODE,=C'DPA'             CHECK
+         BE    DSPALLI
+         CLC   CODE,=C'DPI'             FOR RESPECTIVE
+         BE    DSPINV
+         CLC   CODE,=C'ADD'             TRANSACTION
+         BE    ADDPART
+         CLC   CODE,=C'DEL'             AND TRANSFER
+         BE    DELPART
+         CLC   CODE,=C'DSB'             CONTROL *
+         BE    DSBURSE
+         MVI   OUTREC,X'19'             SET UP OUTPUT FOR
+         MVC   OUTREC+1(16),TRANFLS     WRONG TRANSACTION CODE
+         MVC   OUTREC+18(4),TRAN        MESSAGE
+         MVC   OUTREC+22(3),CODE
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         B     MORE                     RETURN TO CICS
+OUTLOOP  EQU   *                        OUTPUT LOOP ROUTINE
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+MORE     EQU   *                        MORE PROCESSING ROUTINE
+         EXEC  CICS RETURN
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   P S B   S C H E D U L I N G   S U B R O U T I N E S               *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+SCHEDA   EQU   *                        SCHEDULE 'ALL' PSB
+         MVC   PSBNAME,=CL8'DFHSAM04'   SET UP PSB NAME
+         B     SCHED                    GO TO COMMON SCHEDULE ROUTINE
+SCHEDR   EQU   *                        SCHEDULE READ-ONLY PSB
+         MVC   PSBNAME,=CL8'DFHSAM05'   SET UP PSB NAME
+SCHED    EQU   *                        DLI PSB SCHEDULING ROUTINE
+         EXEC DLI SCHD PSB((PSBNAME))
+SCHEDRET EQU   *                        SCHEDULING RETURN ROUTINE
+         CLC   DIBSTAT,=C'  '           TEST FOR NORMAL RESPONSE
+         BE    SCHEDNOR                 YES, PROCEED
+         CLC   DIBSTAT,=C'TA'           TEST FOR PSB NOT FOUND
+         BE    SCHEDPSB                 YES, SEND PSB NOT FOUND MESSAGE
+         CLC   DIBSTAT,=C'TC'           TEST FOR PSB ALREADY SCHEDULED
+         BE    SCHEDSCH                 YES, SEND ERROR MESSAGE
+         CLC   DIBSTAT,=C'TE'           TEST FOR PSB INIT. FAILURE
+         BE    SCHEDINT                 YES, SEND INIT. FAILURE MESSAGE
+         CLC   DIBSTAT,=C'TY'           TEST FOR DB NOT OPEN
+         BE    SCHEDNOP                 YES, SEND NOT OPEN MESSAGE
+         B     SCHEDNXT                 SEND SCHED ERROR MESSAGE
+SCHEDNOR EQU   *                        NORMAL SCHEDULING RETURN
+         BR    LINKREG                  RETURN TO CALLING ROUTINE
+SCHEDPSB EQU   *                        INVALID SCHEDULING REQUEST
+         MVC   OUTREC+38(13),ERRPSB     SET UP INVALID REQUEST
+         B     SCHEDNXT                 ERROR MESSAGE AND OUTPUT
+SCHEDSCH EQU   *                        PSB ALREADY SCHEDULED
+         MVC   OUTREC+38(21),ERRSCH     SET UP PSB ALREADY SCEHDULED
+         B     SCHEDNXT                 ERROR MESSAGE AND OUTPUT
+SCHEDINT EQU   *                        PSB INIT. FAILURE
+         MVC   OUTREC+38(26),ERRINT     SET UP INITIALIZATION FAILURE
+         B     SCHEDNXT                 MESSAGE AND OUTPUT
+SCHEDNOP EQU   *                        DB NOT OPEN
+         MVC   OUTREC+38(15),ERRNOP     SET UP DB NOT OPEN MESSAGE
+         B     SCHEDNXT                 AND OUTPUT
+SCHEDNXT EQU   *                        SCHEDULING ERROR ROUTINE
+         MVC   OUTREC+1(27),SCHEDERR    FORMAT SCHEDULING ERROR
+         MVC   OUTREC+28(8),PSBNAME     MESSAGE
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         B     ABEND1                   GO TO ABEND TASK
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   T E R M I N A T E   U S E   O F   D L I   P S B                   *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+TERMSCHD EQU   *                        TERMINATE USE OF PSB
+B        EQU   *                        DL/I TERMINATE PSB
+         EXEC DLI TERM
+TERMRET  EQU   *                        CHECK PSB TERMINATION RESULTS
+         CLC   DIBSTAT,=C'  '           TEST FOR NORMAL RESPONSE
+         BE    TERMNOR                  YES, PROCEED
+         B     TERMINV                  YES, SEND ERROR MESSAGE
+TERMNOR  EQU   *                        NORMAL PSB TERMINATION RETURN
+         BR    LINKREG                  RETURN TO CALLING ROUTINE
+TERMINV  EQU   *                        INVALID PSB TERMINATION REQUEST
+         MVC   OUTREC+1(21),TERMERR     SET UP TERM ERROR MESSAGE
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         B     ABEND1                   GO TO ABEND TASK
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   D I S P L A Y   I N V E N T O R Y   -   A L L   L O C A T I O N S *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+DSPALLI  EQU   *                        DISPLAY ALL INVENTORY ROUTINE
+         BAL   LINKREG,SCHEDR           SCHEDULE READ-ONLY PSB
+*
+*                                       GET UNIQUE PARTROOT SEGMENT
+*
+         EXEC DLI GU SEGMENT(PARTROOT)                                 X
+                     INTO(SEGRETRN)                                    X
+                     WHERE(PARTKEY=PARTNBR)
+         CLC   DIBSTAT,=C'  '           WAS CALL OK
+         BE    CALLOK
+         CLC   DIBSTAT,=C'GE'           WAS SEGMENT FOUND
+         BE    NOTFOUND
+         CLC   DIBSTAT,=C'GB'           END OF DATASET
+         BE    ENDDISK
+         MVC   OUTREC+1(19),DSPAERR1    SET UP ERROR MESSAGE
+         B     ABEND1                   GO TO ABEND TASK
+CALLOK   EQU   *                        FORMAT PART AND DESCRIPTION
+         MVI   OUTREC,X'11'             LINE FOR OUTPUT
+         MVC   OUTREC+1(5),=C'PART='
+         MVC   OUTREC+6(17),PARTNBR
+         MVC   OUTREC+23(6),=C'DESC='
+         MVC   OUTREC+29(20),SEGRETRN+26
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         MVI   OUTREC,X'09'             FORMAT HEADING LINE 1
+         MVC   OUTREC+1(80),HEAD1       FOR OUTPUT
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         MVI   OUTREC,X'11'             FORMAT HEADING LINE 2
+         MVC   OUTREC+1(80),HEAD2       FOR OUTPUT
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+*
+*                                       GET NEXT STOKSTAT SEGMENT
+*
+CONT1    EQU   *
+         EXEC DLI GN INTO(SEGRETRN)
+         CLC   DIBSTAT,=C'  '           WAS CALL OK
+         BE    CONT2
+         CLC   DIBSTAT,=C'GK'           DIFFERENT SEG TYPE AT SAME LV
+         BE    CONT3
+         B     STKERR
+CONT2    CLC   DIBSEGM(8),=C'STANINFO'
+         BE    CONT1
+CONT3    CLC   DIBSEGM(8),=C'STOKSTAT'
+         BE    STOKSTAT
+STKERR   EQU   *
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         MVI   OUTREC,X'19'
+         MVC   OUTREC+1(26),DSPAERR2    FORMAT ERROR MESSAGE
+         B     OUTLOOP                  GO TO OUTPUT LOOP
+STOKSTAT EQU   *                        FORMAT INVENTORY STATUS LINE
+         SP    STOCKCNT,=P'1'
+         MVC   OUTREC+1(2),MASK5
+         ED    OUTREC+1(2),STOCKCNT
+         MVI   OUTREC,X'09'
+         MVC   OUTREC+5(1),SEGRETRN+2
+         MVC   OUTREC+10(2),SEGRETRN+3
+         MVC   OUTREC+15(3),SEGRETRN+5
+         MVC   OUTREC+21(2),SEGRETRN+8
+*                                       FORMAT UNIT-PRICE
+         PACK  WORK(8),SEGRETRN+22(7)
+         MVC   OUTREC+24(10),MASK1
+         ED    OUTREC+24(10),WORK+4
+*                                       FORMAT CURRENT-REQUIREMENTS
+         XC    WORK,WORK
+         PACK  WORK(8),SEGRETRN+89(8)
+         PACK  WORK+8(8),SEGRETRN+97(8)
+         AP    WORK(8),WORK+8(8)
+         MVC   OUTREC+33(9),MASK2
+         ED    OUTREC+33(9),WORK+4
+         XC    WORK,WORK
+*                                       FORMAT ON-ORDER
+         PACK  WORK(8),SEGRETRN+105(8)
+         MVC   OUTREC+42(9),MASK2
+         ED    OUTREC+42(9),WORK+4
+         XC    WORK,WORK
+*                                       FORMAT IN-STOCK
+         PACK  WORK(8),SEGRETRN+113(8)
+         MVC   OUTREC+51(9),MASK2
+         ED    OUTREC+51(9),WORK+4
+         XC    WORK,WORK
+*                                       FORMAT TOTAL-DISBURSED
+         PACK  WORK+8(8),SEGRETRN+121(8)
+         PACK  WORK(8),SEGRETRN+129(8)
+         AP    WORK+8(8),WORK(8)
+         MVC   OUTREC+60(8),MASK4
+         ED    OUTREC+60(8),WORK+12
+*                                       FORMAT COUNT-TAKEN
+         MVI   OUTREC+73,X'D5'
+*                                       FORMAT BACK-ORDER
+         MVI   OUTREC+78,X'F0'
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+*
+*                                       GET NEXT SEGMENT
+*
+         EXEC DLI GN INTO(SEGRETRN)
+         CLC   DIBSTAT,=C'  '           WAS CALL OK
+         BNE   TESTEND
+TESTSTCK CLC   DIBSEGM(8),=C'STOKSTAT'
+         BE    STOKSTAT
+TESTEND  MVI   OUTREC,X'13'
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         B     OUTLOOP                  GO TO OUTPUT LOOP
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   D I S P L A Y   I N V E N T O R Y   A T   A   L O C A T I O N     *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+DSPINV   EQU   *                        DISPLAY INVENTORY ROUTINE
+         BAL   LINKREG,SCHEDR           SCHEDULE READ-ONLY PSB
+*
+*                                       GET UNIQUE PARTROOT SEGMENT
+*
+         EXEC DLI GU SEGMENT(PARTROOT) INTO(SEGRETRN)                  X
+                     WHERE(PARTKEY=PARTNBR)
+         CLC   DIBSTAT,=C'  '           WAS CALL OK
+         BE    OK1
+         CLC   DIBSTAT,=C'GE'           WAS SEGMENT FOUND
+         BE    NOTFOUND
+         CLC   DIBSTAT,=C'GB'           END OF DATASET
+         BE    ENDDISK
+         B     DSPINVER
+*                                       FORMAT PART NO AND DESCRIPTION
+OK1      EQU   *
+         MVI   OUTREC,X'11'             FORMAT LINE 1
+         MVC   OUTREC+1(5),=C'PART='    FOR OUTPUT
+         MVC   OUTREC+6(17),PARTNBR
+         MVC   OUTREC+24(5),=C'DESC='
+         MVC   OUTREC+29(20),SEGRETRN+26
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+*
+*                                       GET UNIQUE STOKSTAT SEGMENT
+*
+         EXEC DLI GU SEGMENT(PARTROOT) WHERE(PARTKEY=PARTNBR)          X
+                     SEGMENT(STOKSTAT) WHERE(STOCKEY=INVKEY)           X
+                     INTO(SEGRETRN)
+         CLC   DIBSTAT,=C'  '           WAS CALL OK
+         BE    OK2
+         CLC   DIBSTAT,=C'GE'           WAS SEGMENT FOUND
+         BE    STKERR
+         CLC   DIBSTAT,=C'GB'           END OF DATASET
+         BE    ENDDISK
+DSPINVER MVC   OUTREC+1(18),DSPIERR1    FORMAT ERROR MESSAGE
+         B     ABEND1                   GO TO ABEND THE TASK
+OK2      EQU   *                        FORMAT A PARTS INVENTORY OUTPUT
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         MVI   OUTREC,X'09'             FORMAT LINE 2 FOR OUTPUT
+         MVC   OUTREC+1(5),=C'AREA='
+         MVC   OUTREC+6(1),SEGRETRN+2
+         MVC   OUTREC+10(9),DSPIMSG1
+         MVC   OUTREC+19(2),SEGRETRN+3
+         MVC   OUTREC+24(4),=C'PRJ='
+         MVC   OUTREC+28(3),SEGRETRN+5
+         MVC   OUTREC+33(4),=C'DIV='
+         MVC   OUTREC+37(2),SEGRETRN+8
+         MVC   OUTREC+41(6),=C'PRICE='
+         MVC   OUTREC+47(10),MASK1
+         XC    WORK,WORK
+         PACK  WORK(8),SEGRETRN+22(7)
+         ED    OUTREC+47(10),WORK+4
+         MVC   OUTREC+58(12),DSPIMSG2
+         MVC   OUTREC+70(3),SEGRETRN+74
+         MVC   OUTREC+75(5),=C'UNIT='
+         MVC   OUTREC+80(4),SEGRETRN+34
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         MVI   OUTREC,X'09'
+         MVC   OUTREC+1(12),DSPIMSG3
+         MVC   OUTREC+13(8),MASK4
+         XC    WORK,WORK
+         PACK  WORK(8),SEGRETRN+89(8)
+         ED    OUTREC+13(8),WORK+4
+         MVC   OUTREC+22(9),DSPIMSG4
+         MVC   OUTREC+31(8),MASK4
+         XC    WORK,WORK
+         PACK  WORK(8),SEGRETRN+105(8)
+         ED    OUTREC+31(8),WORK+4
+         MVC   OUTREC+40(12),DSPIMSG5
+         MVC   OUTREC+52(8),MASK4
+         XC    WORK,WORK
+         PACK  WORK(8),SEGRETRN+113(8)
+         ED    OUTREC+52(8),WORK+4
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         MVI   OUTREC,X'19'
+         MVC   OUTREC+1(13),DSPIMSG6
+         MVC   OUTREC+14(8),MASK4
+         XC    WORK,WORK
+         PACK  WORK(8),SEGRETRN+121(8)
+         ED    OUTREC+14(8),WORK+4
+         MVC   OUTREC+23(15),DSPIMSG7
+         MVC   OUTREC+38(8),MASK4
+         XC    WORK,WORK
+         PACK  WORK(8),SEGRETRN+129(8)
+         ED    OUTREC+38(8),WORK+4
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         B     MORE
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   D I S B U R S E   I N V E N T O R Y                               *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+DSBURSE  EQU   *                        DISBURSE INVENTORY ROUTINE
+         BAL   LINKREG,SCHEDA           SCHEDULE 'ALL' PSB
+*
+*                                       GET HOLD UNIQUE STOKSTAT SEG
+*
+         EXEC DLI GU SEGMENT(PARTROOT) WHERE(PARTKEY=PARTNBR)          X
+                     SEGMENT(STOKSTAT) WHERE(STOCKEY=INVKEY)           X
+                     INTO(SEGRETRN)
+         CLC   DIBSTAT,=C'  '           WAS CALL OK
+         BE    DSBOK
+         CLC   DIBSTAT,=C'GE'           WAS SEGMENT FOUND
+         BE    DSBNOTFD
+         CLC   DIBSTAT,=C'GB'           END OF DATASET
+         BE    ENDDISK
+         MVC   OUTREC+1(20),DSBUERR1    FORMAT ERROR MESSAGE
+         B     ABEND1                   GO TO ABEND THE TASK
+ENDDISK  MVI   OUTREC,X'19'
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         MVC   OUTREC+1(16),DSBUERR2    FORMAT ERROR MESSAGE
+         B     OUTLOOP                  GO TO OUTPUT LOOP
+DSBNOTFD MVI   OUTREC,X'19'
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         MVC   OUTREC+1(23),DSBUERR3    FORMAT ERROR MESSAGE
+         B     OUTLOOP                  GO TO OUTPUT LOOP
+DSBOK    CLI   DISB,X'D7'               PLANNED DISBURSEMENT
+         BE    PLANNED
+         CLI   DISB,X'E4'               UNPLANNED DISBURSEMENT
+         BE    PLANOK
+         MVI   OUTREC,X'19'
+         MVC   OUTREC+1(27),DSBUERR4    FORMAT ERROR MESSAGE
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         B     OUTLOOP                  GO TO OUTPUT LOOP
+PLANOK   XC    WORK,WORK
+         PACK  WORK(8),SEGRETRN+129(8)
+         BAL   LINKREG,ADDPK            UPDATE QUANTITY DISBURSED
+         MVC   SEGRETRN+130(7),WORK+9
+         B     REPLACE
+PLANNED  PACK  WORK(8),SEGRETRN+121(8)
+         BAL   LINKREG,ADDPK            UPDATE QUANTITY DISBURSED
+         MVC   SEGRETRN+122(7),WORK+9
+REPLACE  EQU   *
+*
+*                                       REPL STOKSTAT SEGMENT
+*
+         EXEC DLI REPL SEGMENT(STOKSTAT) FROM(SEGRETRN)
+         CLC   DIBSTAT,=C'  '           WAS CALL OK
+         BE    REPLOK
+         MVC   OUTREC+1(26),DSBUERR5    FORMAT ERROR MESSAGE
+         B     ABEND1                   GO TO ABEND THE TASK
+REPLOK   MVI   OUTREC,X'19'
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         MVC   OUTREC+1(15),DSBUMSG1
+         B     OUTLOOP                  GO TO OUTPUT LOOP
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   D E L E T E   A   P A R T   F R O M   T H E   D A T A B A S E     *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+DELPART  EQU   *                        DELETE A PART ROUTINE
+         BAL   LINKREG,SCHEDA           SCHEDULE 'ALL' PSB
+*
+*                                       GET HOLD UNIQUE PARTROOT SEG
+*
+         EXEC DLI GU SEGMENT(PARTROOT) WHERE(PARTKEY=PARTNBR)          X
+                     LOCKED INTO(SEGRETRN)
+         CLC   DIBSTAT,=C'  '           WAS CALL OK
+         BE    DELGETOK
+         CLC   DIBSTAT,=C'GE'           WAS SEGMENT FOUND
+         BE    NOTFOUND
+         CLC   DIBSTAT,=C'GB'           END OF DATASET
+         BE ENDDISK
+         MVC   OUTREC+1(20),DELPERR1    FORMAT ERROR MESSAGE
+         B     ABEND1                   GO TO ABEND THE TASK
+DELGETOK EQU   *
+*
+*                                       DLET PARTROOT SEGMENT
+*
+         EXEC DLI DLET SEGMENT(PARTROOT) FROM(SEGRETRN)
+         CLC   DIBSTAT,=C'  '           WAS CALL OK
+         BE    DELOKMSG
+         MVC   OUTREC+1(13),DELPERR2    FORMAT ERROR MESSAGE
+         B     ABEND1                   GO TO ABEND THE TASK
+DELOKMSG MVI   OUTREC,X'19'
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         MVC   OUTREC+1(52),DELPMSG1    FORMAT OUTPUT MESSAGE
+         MVC   OUTREC+13(17),PARTNBR
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         B     MORE
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   A D D   A   P A R T   T O   T H E   D A T A B A S E               *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+ADDPART  EQU   *                        ADD A PART ROUTINE
+         BAL   LINKREG,SCHEDA           SCHEDULE 'ALL' PSB
+         MVC   SEGRETRN(17),PARTNBR     CONSTRUCT PARTROOT SEGMENT
+         MVC   SEGRETRN+26(20),DESC     FOR INSERT
+         MVI   SEGRETRN+46,X'40'
+         MVC   SEGRETRN+47(112),SEGRETRN+46
+*
+*                                       ISRT PARTROOT SEGMENT
+*
+         EXEC DLI ISRT SEGMENT(PARTROOT) FROM (SEGRETRN)
+         CLC   DIBSTAT,=C'  '           WAS CALL OK
+         BE    ISRTOK
+         CLC   DIBSTAT,=C'II'           SEGMENT ALREADY EXISTS
+         BE    MSGISRT
+ISRTERR  MVC   OUTREC+1(21),ADDPERR1    FORMAT ERROR MESSAGE
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         MVC   OUTREC+27(8),DIBSEGM     PRINT SEGMENT NAME
+         MVC   OUTREC+10(2),DIBSEGLV    PRINT SEGMENT LEVEL
+         MVC   OUTREC+12(3),DIBSTAT     PRINT STATUS CODE
+         B     ABEND1                   GO TO ABEND THE TASK
+MSGISRT  MVI   OUTREC,X'19'
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         MVC   OUTREC+1(22),ADDPERR2    FORMAT ERROR MESSAGE
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         B     MORE
+ISRTOK   EQU   *                        ISRT STANDARD DATA SEGMENT
+         MVC   SEGRETRN(2),=C'02'       CONSTRUCT STANINFO SEGMENT
+         MVC   SEGRETRN+18(2),PROC      FOR INSERT
+         MVI   SEGRETRN+20,X'40'
+         MVC   SEGRETRN+21(138),SEGRETRN+20
+*
+*                                       ISRT STANINFO SEGMENT
+*
+         EXEC DLI ISRT SEGMENT(PARTROOT) WHERE(PARTKEY=PARTNBR)        *
+                       SEGMENT(STANINFO) FROM(SEGRETRN)
+         CLC   DIBSTAT,=C'  '           WAS CALL OK
+         BE    ISRTOKMG
+         CLC   DIBSTAT,=C'II'           SEGMENT ALREADY EXISTS
+         BE    MSGISRTS
+         B     ISRTERR
+MSGISRTS MVI   OUTREC,X'19'
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         MVC   OUTREC+1(23),ADDPERR3    FORMAT ERROR MESSAGE
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         B     MORE
+ISRTOKMG MVI   OUTREC,X'19'
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         MVC   OUTREC+1(48),ADDPMSG1    FORMAT OUTPUT MESSAGE
+         MVC   OUTREC+13(17),PARTNBR
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         B     MORE
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   D A T A B A S E   S E G M E N T   N O T   F O U N D               *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+NOTFOUND MVI   OUTREC,X'19'
+         BAL   LINKREG,TERMSCHD         TERMINATE USE OF PSB
+         MVC   OUTREC+1(44),NOTFMSG1    FORMAT OUTPUT MESSAGE
+         MVC   OUTREC+18(17),PARTNBR
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         B     MORE
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   A B N O R M A L   T A S K   T E R M I N A T I O N                 *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+ABEND1   MVI   OUTREC,X'19'
+         BAL   LINKREG,OUTRTN           LINK TO OUTPUT ROUTINE
+         EXEC  CICS ABEND ABCODE('DL40')
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   C O M M O N   O U T P U T   R O U T I N E                         *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+OUTRTN   EQU   *                        TRANSACTION OUTPUT ROUTINE
+         EXEC  CICS SEND FROM(OUTREC+1) LENGTH(MSGLEN80)
+         MVI   OUTREC,X'40'
+         MVC   OUTREC+1(120),OUTREC
+         BR    LINKREG                  RETURN TO CALLING ROUTINE
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   C O M M O N   P A C K I N G   S U B R O U T I N E                 *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+ADDPK    PACK  WORK+8(8),QUANT
+         AP    WORK(8),WORK+8(8)
+         UNPK  WORK+8(8),WORK+4
+         OI    WORK+15,X'F0'
+         BR    LINKREG                  RETURN TO CALLING ROUTINE
+         EJECT
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+*                                                                     *
+*   D E F I N E D   P R O G R A M   C O N S T A N T S                 *
+*                                                                     *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+         SPACE
+MSGLEN80 DC    H'80'                    MESSAGE LENGTH
+CALLERR  DC    C'D/B CALL   ERROR: PSBNAME= '
+SCHEDERR DC    C'SCHEDULE   ERROR: PSBNAME= '
+ERRPSB   DC    C'PSB NOT FOUND'
+ERRSCH   DC    C'PSB ALREADY SCHEDULED'
+ERRINT   DC    C'PSB INITIALIZATION FAILURE'
+TERMERR  DC    C'PSB TERMINATION ERROR'
+ERRINV   DC    C'INVALID REQUEST'
+ERRNOP   DC    C'D/B NOT OPEN   '
+         EJECT
+MASK1    DC    XL10'40202021204B20202060'
+MASK2    DC    XL9'402020202020212060'
+MASK4    DC    XL8'4020202020202120'
+MASK5    DC    XL2'214B'
+TRANFLS  DC    16C'WRONG TRANSCODE:'
+DSPAERR1 DC    C'GU ERROR IN DSPALLI'
+DSPAERR2 DC    C'NO INVENTORY FOR THIS PART'
+DSPIERR1 DC    C'GU ERROR IN DSPINV'
+DSBUERR1 DC    C'GHU ERROR IN DSBURSE'
+DSBUERR2 DC    C'END OF DATA BASE'
+DSBUERR3 DC    C'REC NOT FD FOR DISBURSE'
+DSBUERR4 DC    C'WRONG DISB.CODE-ONLY P OR U'
+DSBUERR5 DC    C'REPLACE ERROR FOR DISBURSE'
+DELPERR1 DC    C'GHU ERROR IN DELPART'
+DELPERR2 DC    C'DELETE FAILED'
+ADDPERR1 DC    C'INSERT RULES VIOLATED'
+ADDPERR2 DC    C'SEGMENT ALREADY EXISTS'
+ADDPERR3 DC    C'STANINFO ALREADY EXISTS'
+DELPMSG1 DC    C'PART NUMBER                   DELETED FROM DATA BASE'
+ADDPMSG1 DC    C'PART NUMBER                   ADDED TO DATA BASE'
+NOTFMSG1 DC    C'RECORD FOR PART:                   NOT FOUND'
+DSPIMSG1 DC    C'INV DEPT='
+DSPIMSG2 DC    C'STK CT DATE='
+DSPIMSG3 DC    C'CURR REQMTS='
+DSPIMSG4 DC    C'ON ORDER='
+DSPIMSG5 DC    C'TOTAL STOCK='
+DSPIMSG6 DC    C'DISB PLANNED='
+DSPIMSG7 DC    C'DISB UNPLANNED='
+DSBUMSG1 DC    C'UPDATE COMPLETE'
+HEAD1    DS    0CL80
+         DC    C'   AREA  INV  PROJ  DIV    UNIT    CURRE'
+         DC    C'NT    ON       IN      TOTAL  COUNT BACK'
+HEAD2    DS    0CL80
+         DC    C'        DEPT   CD          PRICE   REQMT'
+         DC    C'S    ORDER    STOCK  DISBURSE TAKEN ORDR'
+         LTORG
+         END   DFHSAM40

@@ -1,0 +1,393 @@
+*ASM XOPTS(SP)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$AXNS                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Sample Batch Server Program which uses containers*
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2016, 2016"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION =  CICS Application server program to read containers      *
+*             sent by the invoking Sample Batch Client Program via    *
+*             EXCI DPL calls.                                         *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable,                       *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* ENTRY POINT = DFH$AXNS                                              *
+*                                                                     *
+*     PURPOSE = All Functions.                                        *
+*                                                                     *
+*     LINKAGE = The module is called via DFHMIRS from a batch driven  *
+*               EXCI batch DPL call via either the EXEC level EXEC    *
+*               CICS LINK PROGRAM command, or the Call level DFHXCIS  *
+*               call API.                                             *
+*                                                                     *
+*     INPUT = The program takes in data passed in containers which    *
+*             use more than one channel.                              *
+*                                                                     *
+*     OUTPUT = The output is in the form of a response container, the *
+*              contents of which indicate that the program has        *
+*              successfully received the containers from the client   *
+*              program. Data will be written to a TS queue so that    *
+*              subsequent examination of the queue will confirm       *
+*              program execution.                                     *
+*                                                                     *
+*     EXIT-NORMAL = The module will return control to the calling     *
+*                   program at the EXEC CICS RETURN command execution.*
+*                   No messages are issued by this module.            *
+*                   Return responses are passed in a response         *
+*                   container as follows;                             *
+*                                                                     *
+*                   OK        Containers read successfully.           *
+*                   Any other text string in the response container   *
+*                   gives information as to what went wrong.          *
+*                                                                     *
+*     EXIT-ERROR =  The module issues ABEND NCON if a valid request   *
+*                   container is not received.                        *
+*                                                                     *
+*-------------------------------------------------------------------- *
+*                                                                     *
+*     ROUTINES = EXEC CICS GET CONTAINER                              *
+*                EXEC CICS PUT CONTAINER                              *
+*                EXEC CICS WRITEQ                                     *
+*                EXEC CICS ASKTIME                                    *
+*                EXEC CICS FORMATTIME                                 *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION:                                                        *
+*                                                                     *
+*   This program is called by the Sample  Batch Client Program.       *
+*   It receives containers from the batch program and sets up a       *
+*   response container to be returned. It also writes  messages       *
+*   to a TS main queue so that invokation can be confirmed.           *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+**                                                                    *
+*        $MOD(DFH$AXNS),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*    REASON  REL YYMMDD HDXXIII : REMARKS                             *
+*    R000363 710 160629 HDAFDRB : Initial coding (story 113471)       *
+*                                                                     *
+***********************************************************************
+*=====================================================================*
+*                                                                     *
+*           >>>>>>>>>>>>>> MAINLINE CODE <<<<<<<<<<<<<                *
+*                                                                     *
+*=====================================================================*
+*
+DFH$AXNS DFHEIENT
+DFH$AXNS AMODE 31
+DFH$AXNS RMODE ANY
+*
+*=====================================================================*
+*   Check that a REQUEST_TYPE container has been passed on the        *
+*   channel. This program always expects to find this container.      *
+*=====================================================================*
+*
+         MVC   GET_LENGTH,=F'100'
+*
+         EXEC CICS GET CONTAINER('REQUEST_TYPE')                       *
+               CHANNEL('FIRST_CHANNEL   ')                             *
+               INTO(GET_AREA)                                          *
+               FLENGTH(GET_LENGTH)                                     *
+               RESP(RESP)
+*
+         CLC   EIBRESP,DFHRESP(NORMAL)
+         BE    REQ_OK
+*
+*  The container may be in a different channel.
+*
+         EXEC CICS GET CONTAINER('REQUEST_TYPE')                       *
+               CHANNEL('SECOND_CHANNEL  ')                             *
+               INTO(GET_AREA)                                          *
+               FLENGTH(GET_LENGTH)                                     *
+               RESP(RESP)
+*
+         CLC   EIBRESP,DFHRESP(NORMAL)
+         BE    REQ_OK
+*
+*=====================================================================*
+*   The request type container could not be obtained from the         *
+*   channel. This is an error, so abend with code NCON which          *
+*   indicates that no request container was found.                    *
+*=====================================================================*
+*
+         EXEC  CICS ABEND ABCODE('NCON')
+*
+REQ_OK   DS    0H
+*                                    *===============================*
+         CLC   GET_AREA(5),=C'LINK1' | Is this the first link        |
+         BE    EXEC1                 | Yes, then process it          |
+         CLC   GET_AREA(5),=C'CALL1' | Is this the first call        |
+         BE    CALL1                 ! Yes, then process it          |
+         CLC   GET_AREA(5),=C'LINK2' | Is this the second link       |
+         BE    EXEC2                 | Yes, then process it          |
+         CLC   GET_AREA(5),=C'CALL2' | Is this the second call       |
+         BE    CALL2                 | Yes, then process it          |
+*                                    | None of the above is an error |
+*                                    *===============================*
+*=====================================================================*
+*   The request does not specify either EXEC or CALL, so it is        *
+*   invalid. Write a message to TS queue DFHAXNSQ to indicate that    *
+*   this has happened.                                                *
+*                                                                     *
+*   Also set up the response container with an appropriate message.   *
+*=====================================================================*
+*
+         EXEC CICS ASKTIME ABSTIME(UTIME)
+*
+         MVI  TSMSG,X'40'            | Clear the message area
+         MVC  TSMSG+1(63),TSMSG
+*
+         EXEC CICS FORMATTIME ABSTIME(UTIME)                           *
+              DATESEP('/') DDMMYYYY(TSDATE) TIME(TSTIME) TIMESEP
+         MVC  TSTEXT(31),=C'REQUEST_TYPE container invalid.'
+*
+         EXEC CICS WRITEQ TS MAIN QUEUE('DFHAXNSQ')                    *
+              FROM(TSMSG) LENGTH(TSMSGL) RESP(RESP)
+*
+         EXEC CICS PUT CONTAINER('EXCI_RESPONSE')                      *
+              CHANNEL('FIRST_CHANNEL   ')                              *
+              FROM('REQUEST TYPE invalid.')                            *
+              RESP(RESP)
+*
+         B    RETURN
+*
+EXEC1    DS    0H
+*
+         EXEC CICS ASKTIME ABSTIME(UTIME)
+*
+         MVI  TSMSG,X'40'            | Clear the message area
+         MVC  TSMSG+1(63),TSMSG
+*
+         EXEC CICS FORMATTIME ABSTIME(UTIME)                           *
+              DATESEP('/') DDMMYYYY(TSDATE) TIME(TSTIME) TIMESEP
+         MVC  TSTEXT(36),=C'First invocation via EXEC interface.'
+*
+         EXEC CICS WRITEQ TS MAIN QUEUE('DFHAXNSQ')                    *
+              FROM(TSMSG) LENGTH(TSMSGL) RESP(RESP)
+*
+         B     PROC1
+CALL1    DS    0H
+*
+         EXEC CICS ASKTIME ABSTIME(UTIME)
+*
+         MVI  TSMSG,X'40'            | Clear the message area
+         MVC  TSMSG+1(63),TSMSG
+*
+         EXEC CICS FORMATTIME ABSTIME(UTIME)                           *
+              DATESEP('/') DDMMYYYY(TSDATE) TIME(TSTIME) TIMESEP
+         MVC  TSTEXT(36),=C'First invocation via CALL interface.'
+*
+         EXEC CICS WRITEQ TS MAIN QUEUE('DFHAXNSQ')                    *
+              FROM(TSMSG) LENGTH(TSMSGL) RESP(RESP)
+*
+         B     PROC1
+*
+*=====================================================================*
+*   We have received a container from the client program as the       *
+*   result of an EXEC CICS command. Now GET the container with some   *
+*   data and then write a message to TS.                              *
+*=====================================================================*
+*
+PROC1    DS    0H
+         MVC   GET_LENGTH,=F'100'
+*
+         EXEC CICS GET CONTAINER('EBCDIC_DATA')                        *
+               CHANNEL('FIRST_CHANNEL '  )                             *
+               INTO(GET_AREA)                                          *
+               FLENGTH(GET_LENGTH)                                     *
+               RESP(RESP)
+*
+         CLC   EIBRESP,DFHRESP(NORMAL)
+         BE    EXEC1_OK
+*
+*=====================================================================*
+*   The EBCDIC type container could not be obtained from the          *
+*   channel. This is an error, so write a message to TS and           *
+*   look for a container on a second channel.                         *
+*=====================================================================*
+*
+         EXEC CICS ASKTIME ABSTIME(UTIME)
+*
+         MVI  TSMSG,X'40'            | Clear the message area
+         MVC  TSMSG+1(63),TSMSG
+*
+         EXEC CICS FORMATTIME ABSTIME(UTIME)                           *
+              DATESEP('/') DDMMYYYY(TSDATE) TIME(TSTIME) TIMESEP
+         MVC  TSTEXT(35),=C'EBCDIC_DATA container not received.'
+*
+         EXEC CICS WRITEQ TS MAIN QUEUE('DFHAXNSQ')                    *
+              FROM(TSMSG) LENGTH(TSMSGL) RESP(RESP)
+*
+         EXEC CICS PUT CONTAINER('EXCI_RESPONSE')                      *
+              CHANNEL('FIRST_CHANNEL   ')                              *
+              FROM('EBCDIC_DATA container not received')               *
+              RESP(RESP)
+*
+         B    RETURN
+*
+*
+EXEC1_OK DS   0H
+         EXEC CICS ASKTIME ABSTIME(UTIME)
+*
+         MVI  TSMSG,X'40'            | Clear the message area
+         MVC  TSMSG+1(63),TSMSG
+*
+         EXEC CICS FORMATTIME ABSTIME(UTIME)                           *
+              DATESEP('/') DDMMYYYY(TSDATE) TIME(TSTIME) TIMESEP
+         MVC  TSTEXT(34),=C'EBCDIC_DATA container received OK.'
+*
+         EXEC CICS WRITEQ TS MAIN QUEUE('DFHAXNSQ')                    *
+              FROM(TSMSG) LENGTH(TSMSGL) RESP(RESP)
+*
+         EXEC CICS PUT CONTAINER('EXCI_RESPONSE')                      *
+              CHANNEL('FIRST_CHANNEL   ')                              *
+              FROM('OK')                                               *
+              RESP(RESP)
+*
+         B    RETURN
+*
+EXEC2    DS    0H
+*
+         EXEC CICS ASKTIME ABSTIME(UTIME)
+*
+         MVI  TSMSG,X'40'            | Clear the message area
+         MVC  TSMSG+1(63),TSMSG
+*
+         EXEC CICS FORMATTIME ABSTIME(UTIME)                           *
+              DATESEP('/') DDMMYYYY(TSDATE) TIME(TSTIME) TIMESEP
+         MVC  TSTEXT(37),=C'Second invocation via EXEC interface.'
+*
+         EXEC CICS WRITEQ TS MAIN QUEUE('DFHAXNSQ')                    *
+              FROM(TSMSG) LENGTH(TSMSGL) RESP(RESP)
+*
+         B     PROC2
+CALL2    DS    0H
+*
+         EXEC CICS ASKTIME ABSTIME(UTIME)
+*
+         MVI  TSMSG,X'40'            | Clear the message area
+         MVC  TSMSG+1(63),TSMSG
+*
+         EXEC CICS FORMATTIME ABSTIME(UTIME)                           *
+              DATESEP('/') DDMMYYYY(TSDATE) TIME(TSTIME) TIMESEP
+         MVC  TSTEXT(37),=C'Second invocation via CALL interface.'
+*
+         EXEC CICS WRITEQ TS MAIN QUEUE('DFHAXNSQ')                    *
+              FROM(TSMSG) LENGTH(TSMSGL) RESP(RESP)
+*
+         B     PROC2
+*
+PROC2    DS    0H
+         MVC   GET_LENGTH,=F'100'
+*
+         EXEC CICS GET CONTAINER('ASCII_DATA')                         *
+               CHANNEL('SECOND_CHANNEL  ')                             *
+               INTO(GET_AREA)                                          *
+               FLENGTH(GET_LENGTH)                                     *
+               RESP(RESP)
+*
+         CLC   EIBRESP,DFHRESP(NORMAL)
+         BE    EXEC2_OK
+*
+*=====================================================================*
+*   The ASCII data container could not be obtained from the           *
+*   channel. This is an error, so write a message to TS and           *
+*   exit.                                                             *
+*=====================================================================*
+*
+         EXEC CICS ASKTIME ABSTIME(UTIME)
+*
+         MVI  TSMSG,X'40'            | Clear the message area
+         MVC  TSMSG+1(63),TSMSG
+*
+         EXEC CICS FORMATTIME ABSTIME(UTIME)                           *
+              DATESEP('/') DDMMYYYY(TSDATE) TIME(TSTIME) TIMESEP
+         MVC  TSTEXT(34),=C'ASCII_DATA container not received.'
+*
+         EXEC CICS WRITEQ TS MAIN QUEUE('DFHAXNSQ')                    *
+              FROM(TSMSG) LENGTH(TSMSGL) RESP(RESP)
+*
+         EXEC CICS PUT CONTAINER('EXCI_RESPONSE')                      *
+              CHANNEL('SECOND_CHANNEL  ')                              *
+              FROM('ASCII_DATA container not received')                *
+              RESP(RESP)
+*
+         B    RETURN
+*
+EXEC2_OK DS   0H
+         EXEC CICS ASKTIME ABSTIME(UTIME)
+*
+         MVI  TSMSG,X'40'            | Clear the message area
+         MVC  TSMSG+1(63),TSMSG
+*
+         EXEC CICS FORMATTIME ABSTIME(UTIME)                           *
+              DATESEP('/') DDMMYYYY(TSDATE) TIME(TSTIME) TIMESEP
+         MVC  TSTEXT(33),=C'ASCII_DATA container received OK.'
+*
+         EXEC CICS WRITEQ TS MAIN QUEUE('DFHAXNSQ')                    *
+              FROM(TSMSG) LENGTH(TSMSGL) RESP(RESP)
+*
+         EXEC CICS PUT CONTAINER('EXCI_RESPONSE')                      *
+              CHANNEL('SECOND_CHANNEL  ')                              *
+              FROM('OK')                                               *
+              RESP(RESP)
+*
+         B    RETURN
+*
+*=====================================================================*
+*   All calls return to here.  Control is passed back to the Client   *
+*=====================================================================*
+*
+RETURN   DS    0H
+         EXEC CICS RETURN
+*
+*      Constants
+*
+TSMSGL   DC AL2(64)                   | Length of TS queue element   |
+*=====================================================================*
+*                                                                     *
+*      Working Storage.                                               *
+*                                                                     *
+*=====================================================================*
+*
+*                                    *===============================*
+DFHEISTG     DSECT                   |Program Variables.             |
+GET_AREA     DS CL100                |  Needed on GET CONTAINER      |
+GET_LENGTH   DS F                    |  Will be set by GET CONTAINER |
+RESP         DS F                    |  RESP for EXEC CICS           |
+UTIME        DS PL8                  |  For ABSTIME use              |
+TSMSG        DS 0F                   |  Structure for TS queue msg   |
+TSDATE       DS CL10                 |  Field for date               |
+             DS CL2                  |  Space                        |
+TSTIME       DS CL10                 |  Field for time               |
+TSTEXT       DS CL42                 |  Message area                 |
+TSMSGE       EQU *                   |  End of message area          |
+*                                    |                               |
+*                                    *_______________________________*
+         DFHREGS
+         END DFH$AXNS

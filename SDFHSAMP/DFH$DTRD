@@ -1,0 +1,439 @@
+         TITLE 'DFH$DTRD - Sample XDTRD Global User Exit Program'
+***********************************************************************
+*                                                                     *
+*   MODULE NAME = DFH$DTRD                                            *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  Data Tables Sample XDTRD Exit           *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1991, 1997"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*        Sample Global User Exit Program to run at the XDTRD exit     *
+*                                                                     *
+*   The program selects records for inclusion in a data table.        *
+*                                                                     *
+* ------------------------------------------------------------------- *
+*   NOTE that this program is only intended to DEMONSTRATE the use    *
+*   of the data tables user exit XDTRD, and to show the sort of       *
+*   information which can be obtained from the exit parameter list.   *
+* IT SHOULD BE TAILORED BEFORE BEING USED IN A PRODUCTION ENVIRONMENT *
+* ------------------------------------------------------------------- *
+*                                                                     *
+*   This global user exit program will be invoked, if enabled, when   *
+*   a record which has been fetched from the source data set is about *
+*   to be added to the data table.                                    *
+*                                                                     *
+*   The program is intended for use in the following situations :     *
+*                                                                     *
+*   (1) on CICS systems that have only the original data table        *
+*       support (ie.before shared data tables)                        *
+*   (2) on CICS systems that have shared data table support           *
+*   (3) on CICS systems that have shared date table support AND       *
+*       coupling facility data table support                          *
+*                                                                     *
+*   Flags are passed in the data tables parameter list which may      *
+*   be used to determine whether the exit has been invoked from       *
+*   a system which supports shared data tables or coupling facility   *
+*   data tables.                                                      *
+*                                                                     *
+*   The purpose of the program is to demonstrate the use of the       *
+*   option to optimise the data table load by skipping over ranges of *
+*   key values which are to be excluded from the table.  This option  *
+*   is only allowed for shared data tables and coupling facility      *
+*   data tables but the program also illustrates that                 *
+*   individual records can be rejected when the exit                  *
+*   is not invoked by the data table loading transaction, or when     *
+*   shared data tables support or coupling facility data table        *
+*   support are not in use.                                           *
+*                                                                     *
+*   If the program has been invoked by shared data tables support     *
+*   or coupling facility data table support then it checks            *
+*   whether the source data set name passed to it is the one          *
+*   defined by the constant EXITDSN.  If so, and the exit has         *
+*   been invoked from the loading transaction, then the skip-during-  *
+*   load option will be used to skip (not attempt to load) any        *
+*   records except those whose keys start with the two characters in  *
+*   in EXITKEY.                                                       *
+*                                                                     *
+*   If the program has not been invoked by shared data tables,        *
+*   or coupling facility data tables, it uses the data                *
+*   table name rather than the source DSname to check                 *
+*   whether this is the file from which records are to be rejected.   *
+*   If the table name matches the constant EXITFILE then only records *
+*   whose keys start with the two characters in EXITKEY will be       *
+*   accepted for inclusion in the table.                              *
+*                                                                     *
+*   A number of the actions taken are for illustrative purposes only, *
+*   rather than being the recommended way in which to code an XDTRD   *
+*   exit program - for example, the program demonstrates how the      *
+*   keylength passed to the exit can be used to avoid having to know  *
+*   the keylength of the source data set, whereas in practice this    *
+*   might well be known;  and the program chooses to reject any       *
+*   records which are not presented to it by the loading transaction, *
+*   whereas it would be more realistic to accept all records in the   *
+*   desired range of keys.                                            *
+*                                                                     *
+*   It should also be noted that there are other useful things which  *
+*   can be done with the XDTRD exit, such as amending the contents of *
+*   the records as they are loaded into a user-maintained data table  *
+*   or coupling facility data table.                                  *
+*                                                                     *
+*   The trace flag passed to the exit is set ON if File Control (FC)  *
+*   level 1 tracing is enabled.                                       *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*          DFH$DTRD, or an exit program which is based on this        *
+*          sample, must be defined on the CSD as a program            *
+*          (with DATALOCATION(ANY)).                                  *
+*    RESTRICTIONS =                                                   *
+*          This program is designed to run on CICS/ESA 3.3 or later   *
+*          release.  It requires the DFHXDTDS copybook to be          *
+*          available at assembly time.                                *
+*    REGISTER CONVENTIONS = see code                                  *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, AMODE 31, RMODE ANY                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$DTRD                                              *
+*                                                                     *
+*     PURPOSE =                                                       *
+*         Described above                                             *
+*                                                                     *
+*     LINKAGE =                                                       *
+*         Called by the user exit handler                             *
+*                                                                     *
+*     INPUT =                                                         *
+*         Standard user exit parameter list DFHUEPAR,                 *
+*          addressed by R1 and containing a pointer to the            *
+*          Data Tables parameter list                                 *
+*                                                                     *
+*     OUTPUT =                                                        *
+*         Return code placed in R15                                   *
+*         When skipping is requested, a skip-key is returned in an    *
+*          area whose address is passed in the parameter list         *
+*                                                                     *
+*     EXIT-NORMAL =                                                   *
+*         Return code in R15 can be                                   *
+*         UERCDTAC = accept record (include it in the table)          *
+*         UERCDTRJ = reject record (omit it from the table)           *
+*         UERCDTOP = optimise load by skipping on to specified key    *
+*                     (only possible with shared data tables support  *
+*                      or coupling facility data tables support)      *
+*                                                                     *
+*     EXIT-ERROR =                                                    *
+*         None                                                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES :                                               *
+*     ROUTINES = None                                                 *
+*     DATA AREAS = None                                               *
+*     CONTROL BLOCKS =                                                *
+*         User Exit Parameter list for XDTRD: DFHUEPAR                *
+*         Data Tables User Exit Parameter List: DT_UE_PLIST           *
+*     GLOBAL VARIABLES = None                                         *
+*                                                                     *
+* TABLES = None                                                       *
+*                                                                     *
+* MACROS =                                                            *
+*         DFHUEXIT to generate the standard user exit parameter list  *
+*                  with the extensions for the XDTRD exit point       *
+*         DFHUEXIT to declare the XPI (exit programming interface)    *
+*         DFHTRPTX XPI call to issue a user trace entry               *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION of the program structure:                               *
+*                                                                     *
+*    1) Standard entry code for a global user exit that uses the XPI: *
+*         The program sets up any definitions required, then saves    *
+*         the caller's registers, establishes addressability, and     *
+*         addresses the parameter lists.                              *
+*    2) Initial section of code:                                      *
+*         The program gets the key address and length from the data   *
+*         table parameter list, then tests whether the exit was       *
+*         invoked from shared data table code or coupling facility    *
+*         data ttables code. If not, it branches to the non-SDT       *
+*         section of code.                                            *
+*   3a) SDT and coupling facility data table code - Skipping:         *
+*         If the source data set is the one from which records are to *
+*         be selected, and if the exit has been called by the data    *
+*         table load, then the program compares the record key with   *
+*         a value which defines the range to be included in the       *
+*         data table, and sets return codes which will cause the      *
+*         data table load to skip over any other keys.                *
+*   3b) SDT and coupling facility data table code - Tracing:          *
+*         If FC level 1 tracing is enabled, the program issues a user *
+*         trace point X'0128', then branches to set R15 and return.   *
+*   4a) non-SDT code - choosing whether to accept record:             *
+*         If the file name is the one for which records are to be     *
+*         selected, then the program rejects the record if it does    *
+*         not match the value which defines the range to be included  *
+*         in the data table.                                          *
+*   4b) non-SDT code - Tracing:                                       *
+*         If FC level 1 tracing is enabled, the program issues a user *
+*         trace point X'0118'.                                        *
+*    5) Set R15 and return:                                           *
+*         The program sets a return code in R15 and performs          *
+*         standard exit code for a global user exit (restores         *
+*         caller's registers, and returns to the address that was in  *
+*         R14 when the exit program was called).                      *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$DTRD),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $D0= I05880 330 911218 HDAVCMM : new module for sample user exit *
+*    $P1= M94990 510 950728 HDAVCMM : Tidy up comment in prolog       *
+*    $L1= 725    530 971029 HD4EPEA : LID 725 - Incorporate CFDTs     *
+*    $D1= I05881 410 920915 HDAVCMM : Incorporate SDT into 410        *
+*                                                                     *
+***********************************************************************
+         EJECT ,
+         DFHUEXIT TYPE=EP,ID=XDTRD  Standard UE parameters for XDTRD
+         DFHUEXIT TYPE=XPIENV       Exit programming interface (XPI)
+         EJECT ,
+         COPY  DFHXDTDS             Additional data table UE params
+         EJECT ,
+         COPY  DFHTRPTY             Trace definitions
+         EJECT ,
+***********************************************************************
+*  REGISTER USAGE :                                                   *
+*  R0 -                                                               *
+*  R1 - address of DFHUEPAR on input, and used by XPI calls           *
+*  R2 - address of standard user exit parameter list, DFHUEPAR        *
+*  R3 - record length                                                 *
+*  R4 - address of data set name (SDT and coupling facility data      *
+*       table) or data table name (non-SDT)                           *
+*  R5 - address of storage for XPI parameters                         *
+*  R6 - address of data tables parameter list, DT_UE_PLIST            *
+*  R7 - final return code to be set in R15                            *
+*  R8 - address of the record key                                     *
+*  R9 - key length                                                    *
+*  R10- address of the skip-key area (SDT and coupling facility       *
+*       data table only)                                              *
+*  R11- base register                                                 *
+*  R12- address of data table flags byte, UEPDTFLG                    *
+*  R13- address of kernel stack prior to XPI CALLS                    *
+*  R14- used by XPI calls                                             *
+*  R15- return code and used by XPI calls                             *
+*  (The register equates are declared by the DFHUEXIT call above)     *
+***********************************************************************
+         SPACE 2
+DFH$DTRD CSECT
+DFH$DTRD AMODE 31
+DFH$DTRD RMODE ANY
+         STM   R14,R12,12(R13)     Save callers registers
+         LR    R11,R15             Set up base register
+         USING DFH$DTRD,R11
+         LR    R2,R1               Address standard parameters
+         USING DFHUEPAR,R2
+         L     R6,UEPDTPL          Address data table parameters
+         USING DT_UE_PLIST,R6
+         L     R8,UEPDTKA          Key address
+         L     R9,UEPDTKL          Key length
+***********************************************************************
+* Test whether the exit was invoked from shared data tables support   *
+* or coupling facility data table support                             *
+***********************************************************************
+         TM    UEPDTFLG,UEPDTSDT   Were we invoked from SDT?
+         BO    SDTCFDT             Branch if yes
+         TM    UEPDTFLG,UEPDTCFT   or coupling facility data tables?
+         BZ    NOTSDT              Branch to non-SDT and non coupling
+*                                  facility data table code if not
+         EJECT ,
+SDTCFDT  DS    0H
+***********************************************************************
+*        Invoked from SDT or coupling facility data tables,           *
+*        so can use skip optimisation                                 *
+***********************************************************************
+         L     R10,UEPDTSKA        Get skip-key area address
+***********************************************************************
+* Determine whether the source data set is the one on which           *
+* optimisation by skipping is to be performed.                        *
+* If it is not, just accept all records.                              *
+***********************************************************************
+         CLC   UEPDTDSN,EXITDSN
+         BNE   SDTACC
+***********************************************************************
+* Only keys in the range defined by the initial two characters in     *
+* EXITKEY are to be accepted, any other ranges of key values          *
+* are to be skipped.                                                  *
+* First check whether skipping is valid - skipping can only be used   *
+* when the call has been issued by the loading transaction (which is  *
+* indicated by the UEPDTOPT flag being set).                          *
+***********************************************************************
+         TM    UEPDTFLG,UEPDTOPT   Can we skip?
+         BZ    SDTREJ              Just reject rec if not (although    *
+                                    in a production version it would   *
+                                    make more sense to check whether   *
+                                    the record key is in the desired   *
+                                    range, and accept it if so)
+***********************************************************************
+* EXITKEY is currently set to 'AD', so that the effect of             *
+* the exit will be:                                                   *
+* - If the key is less than 'AD....' then skip to a skip-key of       *
+*   'AD' padded with 00s.                                             *
+* - If it starts with 'AD' then accept it.                            *
+* - If it is greater than 'AD' then skip to a skip-key of 'FF's       *
+* If the value of the constant EXITKEY is altered, then the program   *
+* will cause the new range it defines to be selected for inclusion    *
+* in the table.  Note that if a different length of EXITKEY is        *
+* needed to define the range to be accepted, then the code will       *
+* also require amendment, as it currently assumes a length of 2.      *
+***********************************************************************
+         CLC   0(2,R8),EXITKEY     Is key below or above 'AD' ?
+         BE    SDTACC              If equal then just accept
+         BH    HIGHER              Above so skip to end of file
+         SPACE 1
+LOWER    DS    0H                  Skip forwards to 'AD...'
+         MVC   0(2,R10),EXITKEY    Set skip-key value
+         LR    R15,R9              Keylength for padding
+         SH    R15,=H'3'            minus 2 for 'AD' and 1 for XC
+         EX    R15,XCSKP           Clear out rest of skip key
+         LA    R7,UERCDTOP         Indicate skipping
+         B     SDTTR
+         SPACE 1
+HIGHER   DS    0H                  Skip on to end of file
+         MVI   0(R10),X'FF'        Set 'FF' in start of skip key
+         LR    R15,R9              Get length of skip-key
+         BCTR  R15,0               Decrement for pad length
+         BCTR  R15,0               Decrement for MVC
+         EX    R15,MVCSKP          Propagate 'FF' through skip-key
+         LA    R7,UERCDTOP         Indicate skipping
+         B     SDTTR
+         SPACE 1
+***********************************************************************
+* Store return code in R7 for accept or reject                        *
+***********************************************************************
+SDTACC   DS    0H
+         LA    R7,UERCDTAC         Indicate accept
+         B     SDTTR
+SDTREJ   DS    0H
+         LA    R7,UERCDTRJ         Indicate reject
+         EJECT ,
+***********************************************************************
+*        Tracing when SDT support or coupling facility data table     *
+*        support is in use                                            *
+***********************************************************************
+SDTTR    L     R15,UEPTRACE
+         TM    0(R15),UEPTRON      Is trace on?
+         BZ    NOSDTTR             No - do not issue trace then
+         L     R5,UEPXSTOR         Prepare for XPI call
+         USING DFHTRPT_ARG,R5
+         L     R13,UEPSTACK
+***********************************************************************
+* Trace source data set name, key, record length, flags, and skip-key *
+* Some of these fields are only available with SDT support or         *
+* coupling facility data tables support                               *
+***********************************************************************
+         LA    R4,UEPDTDSN         Point at data set name
+         LA    R3,UEPDTRL          Address of record length for trace
+         LA    R12,UEPDTFLG        Point at the data table flags
+         DFHTRPTX CALL,                                                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(RDTRACE2),                                     *
+               DATA1((R4),UEPDTDSL),                                   *
+               DATA2((R8),(R9)),                                       *
+               DATA3((R3),4),                                          *
+               DATA4((R12),1),                                         *
+               DATA5((R10),(R9)),                                      *
+               OUT,                                                    *
+               RESPONSE(*),                                            *
+               REASON(*)
+NOSDTTR  DS    0H
+         B     FINISH              Go and return from exit
+         EJECT ,
+***********************************************************************
+*        Exit was NOT invoked by shared data tables support           *
+*        or coupling facility data tables support                     *
+***********************************************************************
+NOTSDT   DS    0H
+***********************************************************************
+* Determine whether this data table is the one from which records     *
+* are to be rejected.  If it is not, just accept all records.         *
+***********************************************************************
+         CLC   UEPDTNAM,EXITFILE
+         BNE   ACC
+         CLC   0(2,R8),EXITKEY     Does key start with 'AD' ?
+         BE    ACC                 Yes, so accept it
+REJ      DS    0H
+         LA    R7,UERCDTRJ         Indicate reject
+         B     TRACE               Go and issue trace
+ACC      DS    0H
+         LA    R7,UERCDTAC         Indicate accept
+         SPACE 2
+***********************************************************************
+*        Tracing when SDT support or coupling facility data           *
+*        table support are not in use                                 *
+***********************************************************************
+TRACE    L     R15,UEPTRACE
+         TM    0(R15),UEPTRON      Is trace on?
+         BZ    NOTRACE             No - do not issue trace then
+         L     R5,UEPXSTOR         Prepare for XPI call
+         USING DFHTRPT_ARG,R5
+         L     R13,UEPSTACK
+***********************************************************************
+* Trace data table name, key, record length, and flags                *
+***********************************************************************
+         LA    R4,UEPDTNAM         Point at data table name
+         LA    R3,UEPDTRL          Address of reclen for trace
+         LA    R12,UEPDTFLG        Point at the data table flags
+         DFHTRPTX CALL,                                                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(RDTRACE1),                                     *
+               DATA1((R4),8),                                          *
+               DATA2((R8),(R9)),                                       *
+               DATA3((R3),4),                                          *
+               DATA4((R12),1),                                         *
+               OUT,                                                    *
+               RESPONSE(*),                                            *
+               REASON(*)
+NOTRACE  DS    0H
+         EJECT ,
+***********************************************************************
+*        Code to set R15 return code and return control               *
+***********************************************************************
+FINISH   DS    0H
+         LR    R15,R7              Pick up exit return code
+         L     R13,UEPEPSA         Standard GLUE ending code
+         L     R14,12(R13)
+         LM    R0,R12,20(R13)
+         BR    R14
+         SPACE 2
+***********************************************************************
+*        Constants and executed instructions                          *
+***********************************************************************
+EXITDSN  DC    CL44'CFV23.CSYSW1.SOURCED'
+EXITFILE DC    CL8'CICD'
+EXITKEY  DC    C'AD'
+         SPACE 1
+RDTRACE1 DC    XL2'118'
+RDTRACE2 DC    XL2'128'
+         SPACE 1
+MVCSKP   MVC   1(*-*,R10),0(R10)   Executed to propagate X'FF's
+XCSKP    XC    2(*-*,R10),2(R10)   Executed to clear to X'00's
+         SPACE 1
+         END   DFH$DTRD

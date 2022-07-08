@@ -1,0 +1,1669 @@
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$FORA                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = DB2 Formatting Sample Program                    *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1985, 2017"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*   The function of this program is to format data passed to it       *
+*   via the user exit in the off-line utility program DFHCSDUP, into  *
+*   a format suitable for the DB2 table load utility. The data is     *
+*   formatted into columns which correspond to the columns defined    *
+*   in the load utilities input. Each output record is identified     *
+*   by its first 4 characters, they are set to the first 4 characters *
+*   of the resource type i.e PROG for PROGRAM, TERM for TERMINAL etc. *
+*                                                                     *
+*   This program is designed to work with any EXTRACT command of      *
+*   the form:                                                         *
+*             EXTRACT GROUP(<group name> OBJECTS                      *
+*            or                                                       *
+*                  EXTRACT LIST(<list name> OBJECTS                   *
+*            where                                                    *
+*                 <group name> may be generic                         *
+*                 <list name> must not be generic                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*    $MOD(DFH$FORA),COMP(SAMPLES),PROD(CICS TS ):                     *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 850808 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*    $P2= M90952 330 910925 HD4OGB : Change DPLSUBSET to EXECUTIONSET *
+*    $P3= M83879 410 930916 HD4OGB : Update                           *
+*    $P4= D07535 630 030512 HD4PALS : RDO samples update for apar     *
+*    $P5= D26604 670 110216 HDHBIMS : Cater for DUMMY in JMODEL-TYPE  *
+*    $L1= 660    410 920810 HD4OGB : Batch Call Interface             *
+*    $L2= 647    410 930108 HD4OGB : Transaction Manager Domain       *
+*    $L3= 614    410 930108 HD4OGB : Sympathy Sickness                *
+*    $L4= 626    410 930506 HD4OGB : Transaction Isolation            *
+*    $L5= 569    510 941021 HD4OGB : Rdo for Td                       *
+*    $L6= 715    520 960417 HD4OGB : Rdo for RCT                      *
+*    $L7= 709    530 971020 HD4OGB : Rdo for BAM                      *
+*    $L8= 568    530 971020 HD4OGB : Rdo for TSmodel                  *
+*    $L9= 703    530 971020 HD4OGB : Rdo for ENQmodel                 *
+*    $LA= 735    530 980317 HDFVGMB: Rdo for REQUESTMODEL,            *
+*                                    DOCtemplate and TCPIPService     *
+*    $LB= 795    610 000620 HD4PALS: Rdo for EJB                      *
+*    $LC= 813    630 020828 HD4PALS : Reinstate Asserted Identity     *
+*    $LD= 710    650 060410 HD4PALS : Add IPCONN & other 3.2 items    *
+*    $LE= 937    660 081230 HD4PALS : Add ATOMSERVICE,MQCONN,JVMSERVER*
+*    $LF= R22789 670 101217 HD4PALT : Update for MQCONN RESYNCMEMBER  *
+*         R78960 690 131113 HDAFDRB : Update for EXPIRYINMIN          *
+*         R78960 690 131118 HDAFDRB : Update for other keyword changes*
+*        R110014 710 160701 HDFVGMB : Rdo for MQMONITOR               *
+***********************************************************************
+PARMLIST DSECT ,
+         USING PARMLIST,PLISTPTR
+EXITCDP  DS    A                  Ptr. to call type identifier:
+INITCD   EQU   X'00'                  Initial call
+LSTARTCD EQU   X'02'                  List start call
+GSTARTCD EQU   X'04'                  Group start call
+OSTARTCD EQU   X'06'                  Object start call
+DETAILCD EQU   X'08'                  Keyword Detail Call
+OENDCD   EQU   X'0A'                  Object end call
+GENDCD   EQU   X'0C'                  Group end call
+LENDCD   EQU   X'0E'                  List end call
+FINALCD  EQU   X'10'                  Final call
+EXITWKP  DS    A                  Ptr. to work area ptr
+EXITBTCP DS    A                  Ptr. to back translated command ptr
+LENBTCMD EQU   100                    Max. length of a back tran. cmd.
+EXITLSTP DS    A                  Ptr. to list name
+EXITGRPP DS    A                  Ptr. to group name
+EXITOTP  DS    A                  Ptr. to object type
+EXITONP  DS    A                  Ptr. to object name
+EXITKNP  DS    A                  Ptr. to keyword name
+EXITKLP  DS    A                  Ptr. to keyword length
+EXITKVP  DS    A                  Ptr. to keyword value
+         SPACE 2
+WORKAREA DSECT ,                  Work area pointer dsect
+         USING WORKAREA,WRKPTR       Addressed via WRKPTR
+NEXTKWP  DS    A                  Work area ptr (addressed via EXITWKP)
+REGSA1   DS    2F                 Register save areas used in internal
+REGSA2   DS    2F                 subroutines
+MACROSA  DS    18F                Save area used for MVS macro calls
+RETCODE  DS    F                  Return code for DFHCSDUP
+*
+MOVEKWPL DS    2A                 MOVEKWV subroutines parameter list
+KWLENPTR EQU   0                  ... Disp. of keyword length ptr.
+KWVALPTR EQU   4                  ... Disp. of keyword value ptr.
+         DS    0F
+OUTBUFF  DS    CL1536             Output record buffer for FOROUT
+*
+LWRKAREA EQU   *-WORKAREA         Length of required user work area
+KWDETAIL DSECT ,                  Keyword detail dsect
+         USING KWDETAIL,KWDETPTR     Addressed via KWDETPTR
+KWSTART  DS    AL2                Col. number in o/p rec of keyword
+KWDETLEN EQU   *-KWDETAIL            Length of KWDETAIL DSECT
+         SPACE 2
+         EJECT
+         DFHREGS ,                Define register names
+         EJECT
+         DCBD  DSORG=BS,DEVD=DA   Produce symbolic refs. for a DCB
+         EJECT
+***********************************************************************
+*                                                                     *
+*       M A I N  L I N E  C O D E  S T A R T S  H E R E               *
+*       ===============================================               *
+*                                                                     *
+*   Registers on entry:                                               *
+*           R1 ---> Address of parameter list passed from DFHCSDUP    *
+*           R13---> Address of save area for this programs registers  *
+*           R14---> Return address in DFHCSDUP                        *
+*           R15---> Address of this programs entry point              *
+*                                                                     *
+*   Registers on exit:                                                *
+*           R0-R13 have no significance                               *
+*           R14---> Return address in DFHCSDUP                        *
+*           R15---> Return code form this program ( a non zero value  *
+*                   results in termination of current extract command *
+*                                                                     *
+*                                                                     *
+***********************************************************************
+         SPACE 2
+FORMCSD  CSECT ,
+FORMCSD  AMODE 24                 Addressing mode must be 24 bit
+FORMCSD  RMODE 24                 Code must reside below the line
+         USING *,CODEREG          Est. addressability to CSECT
+         LR    CODEREG,R15        R15=address of entry point(FORMCSD)
+         SAVE  (14,12)            Save callers registers
+         LR    PLISTPTR,R1        Est. addressability to parameter list
+         L     R3,EXITCDP         Load ptr. to call type identifier
+*
+         CLI   1(R3),INITCD       Is it a initial call ?
+         BNE   PROC0010             No...... Compare with next code
+         BAL   R14,INIT             Yes..... Call INIT routine and
+         B     EXITPROC             Then branch to exit R15 contains
+*                                          return code set by INIT
+PROC0010 DS    0H
+*                                 A INITIAL call must have preceded
+*                                 this call so establish addr. to the
+*                                 users work area
+         L     WRKPTR,EXITWKP     Load addr of ptr to work area ptr
+         L     WRKPTR,0(,WRKPTR)  Load ptr work area ptr
+         L     WRKPTR,0(,WRKPTR)  Load work area ptr value
+*
+         CLI   1(R3),OSTARTCD     Is it a object start call ?
+         BNE   PROC0020             No...... Compare with next code
+         BAL   R14,OBJSTART         Yes..... Call OBJSTART routine and
+         BAL   R14,CHKRC          Check return code
+         L     R15,RETCODE        Set R15<-- Retcode for DFHCSDUP
+         B     EXITPROC           ... then branch to exit
+PROC0020 DS    0H
+         CLI   1(R3),DETAILCD     Is it a detail call ?
+         BNE   PROC0030             No...... Compare with next code
+         BAL   R14,DETAIL           Yes..... Call DETAIL routine and
+         BAL   R14,CHKRC          Check return code
+         L     R15,RETCODE        Set R15<-- Retcode for DFHCSDUP
+         B     EXITPROC           ... then branch to exit
+PROC0030 DS    0H
+         CLI   1(R3),OENDCD       Is it a object end call ?
+         BNE   PROC0040             No...... Compare with next code
+         BAL   R14,OBJEND           Yes..... Call OBJEND routine and
+         BAL   R14,CHKRC          Check return code
+         L     R15,RETCODE        Set R15<-- Retcode for DFHCSDUP
+         B     EXITPROC           ... then branch to exit
+PROC0040 DS    0H
+         CLI   1(R3),FINALCD      Is it a final call ?
+         BNE   PROC0050             No...... Nothing to do this call
+         BAL   R14,FINAL            Yes..... Call FINAL routine and
+         L     R15,RETCODE        R15<-- Retcode for DFHCSDUP
+         B     EXITPROC           ... then branch to exit
+PROC0050 DS    0H
+*                                 Not intrested in this type of call
+         SR    R15,R15            Clear register 15 and return
+EXITPROC DS    0H
+         RETURN (14,12),RC=(15)   Restore registers from save area
+*                                 and return to DFHCSDUP
+*                                 Define the DCB for the o/p data set
+FOROUT   DCB   DDNAME=FOROUT,DSORG=PS,MACRF=(W),RECFM=F,               *
+               LRECL=1536,BLKSIZE=1536,SYNAD=WRITEERR
+         EJECT
+* ****************************************************************** *
+*                                                                    *
+*            P R O C E S S  A N  I N I T I A L  C A L L              *
+*                                                                    *
+* This subroutine perform the following:                             *
+*    1) Check that the user has specified OBJECTS on the EXTRACT     *
+*       command. If not then we should quit straight away.           *
+*    2) Get the user work area necessary to make the program         *
+*       serially re-usable. The return code is set if the getmain    *
+*       fails. If the getmain is OK then the 4 byte work area,       *
+*       addressed via the parameter list passed from DFHCSDUP, is    *
+*       set to the address of the acquired storage so that we can    *
+*       re-establish addressability to the work area  on subsequent  *
+*       calls.                                                       *
+*    3) Initialise the return code variable.                         *
+*    4) Opens the output data set FOROUT. If the open fails          *
+*       then the return code is set.                                 *
+*                                                                    *
+* ****************************************************************** *
+         SPACE 2
+INIT     DS    0H
+         LR    R5,R14             Save return address in a safe reg
+*                                 as we can't use reg save area yet!!
+*
+*                                 Ensure OBJECTS specified on EXTRACT
+*                                 command, if not terminate exit now
+         LA    R2,93              BT command length less 7
+         L     R3,EXITBTCP        R3 <-- Ptr to back translated cmd ptr
+         L     R3,0(,R3)          R3 <-- Ptr to back tarnslated cmd
+INIT0010 DS    0H
+         CLC   0(7,R3),=C'OBJECTS' String 'OBJECTS' found ?
+         BE    INIT0030           Yes, so all is OK with cmd
+         LA    R3,1(R3)           Bump up scan register by 1
+         BCT   R2,INIT0010        Try next character
+INIT0020 DS    0H                 If we get here we have failed to find
+*                                 OBJECTS in specified EXTRACT command
+         L     R15,NOOBJERR       So set return code
+         B     EXITINIT           ...and return
+INIT0030 DS    0H
+*                                 Get storage for users work area
+         LA    R2,LWRKAREA        R3<-- Length of required work area
+         GETMAIN RC,LV=(2)        GETMAIN required storage
+         LTR   R15,R15            Is storage available ?
+         BZ    INIT0040           Yes...So continue
+*                                 No... So set return code for a
+         L     R15,GWRKAERR        ..get work area error
+* Register 15 is set directly because RETCODE is unavailable!!
+         B     EXITINIT           ..and branch to exit from subroutine
+INIT0040 DS    0H                 Getmain OK so establish addr. to it
+         SR    R15,R15            R15<-- 0
+         L     R3,EXITWKP         R3<-- Ptr to ptr to provided wrk area
+         L     R3,0(,R3)          R3<-- Addr. of provided work area
+         ST    R1,0(,R3)          Save address of getmained stg
+         LR    WRKPTR,R1          ... and load work area base register
+         XC    RETCODE,RETCODE    Set RETCODE to zero
+*
+         LR    R6,R13             Save R13 around OPEN
+         LA    R13,MACROSA        R13 <-- Addr. of a 18 word save area
+         OPEN  (FOROUT,(OUTPUT)) Open the output file
+         LR    R13,R6             Restore R13
+         USING IHADCB,DCBREG      Obtain addressability to its DCB
+         LA    DCBREG,FOROUT      ...via DCBREG
+         TM    DCBOFLGS,DCBOFOPN  Was the open successful ?
+         BO    EXITINIT           Yes... Exit from this subroutine
+*                                 No.... So set return code for
+         L     R15,OPENERR        ..a file open error
+EXITINIT DS     0H
+         LR    R14,R5             Load return address from R5
+         BR    R14                Return to caller
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*         P R O C E S S  A N  O B J E C T  S T A R T  C A L L         *
+*                                                                     *
+*  This subroutine performs the following:                            *
+*                                                                     *
+*       (1) Clear the output buffer to spaces                         *
+*       (2) Determine the type of the new object and set the          *
+*           register 4 to point to the appropriate section of         *
+*           the keyword table                                         *
+*       (3) Set the first 4 characters of the o/p record to           *
+*           the first 4 characters of the object type. This is        *
+*           necessary in order to allow the DB2 load utility to       *
+*           uniquely identify the different objects.                  *
+*       (4) Move the resource name into the o/p buffer                *
+*       (5) Move the group name into the o/p buffer                   *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+OBJSTART DS    0H
+         STM   R13,R14,REGSA1     Save callers strategic registers
+*
+         LA    R0,OUTBUFF                  Address of OUTBUFF
+         LA    R1,1536                     Length of OUTBUFF
+         LA    R14,BLANK
+         ICM   R15,15,BLANK                Pad with Blanks
+         MVCL  R0,R14                      clear outbuff with blanks
+*
+         L     R3,EXITOTP         Load R3 with ptr. to object type
+OBJS0010 DS    0H
+         CLC   0(12,R3),=CL12'TRANSACTION ' Is it a TRANSACTION ?
+         BNE   OBJS0020                     No... Try next object
+         LA    R4,TRANKWD                   Yes.. R4--> TRANKWD and
+         B     OBJSCONT                           continue
+OBJS0020 DS    0H
+         CLC   0(12,R3),=CL12'PROGRAM     ' Is it a PROGRAM ?
+         BNE   OBJS0030                     No... Try next object
+         LA    R4,PROGKWD                   Yes.. R4--> PROGKWD and
+         B     OBJSCONT                           continue
+OBJS0030 DS    0H
+         CLC   0(12,R3),=CL12'PROFILE     ' Is it a PROFILE ?
+         BNE   OBJS0040                     No... Try next object
+         LA    R4,PROFKWD                   Yes.. R4--> PROFKWD and
+         B     OBJSCONT                           continue
+OBJS0040 DS    0H
+         CLC   0(12,R3),=CL12'PARTITIONSET' Is it a PARTITIONSET ?
+         BNE   OBJS0050                     No... Try next object
+         LA    R4,PARTKWD                   Yes.. R4--> PARTKWD and
+         B     OBJSCONT                           continue
+OBJS0050 DS    0H
+         CLC   0(12,R3),=CL12'MAPSET      ' Is it a MAPSET ?
+         BNE   OBJS0060                     No... Try next object
+         LA    R4,MAPSKWD                   Yes.. R4--> MAPKWD and
+         B     OBJSCONT                           continue
+OBJS0060 DS    0H
+         CLC   0(12,R3),=CL12'TYPETERM    ' Is it a TYPETERM ?
+         BNE   OBJS0070                     No... Try next object
+         LA    R4,TYPEKWD                   Yes.. R4--> TYPEKWD and
+         B     OBJSCONT                           continue
+OBJS0070 DS    0H
+         CLC   0(12,R3),=CL12'TERMINAL    ' Is it a TERMINAL ?
+         BNE   OBJS0080                     No... Try next object
+         LA    R4,TERMKWD                   Yes.. R4--> TERMKWD and
+         B     OBJSCONT                           continue
+OBJS0080 DS    0H
+         CLC   0(12,R3),=CL12'CONNECTION  ' Is it a CONNECTION ?
+         BNE   OBJS0090                     No... Try next object
+         LA    R4,CONNKWD                   Yes.. R4--> CONNKWD and
+         B     OBJSCONT                           continue
+OBJS0090 DS    0H
+         CLC   0(12,R3),=CL12'SESSIONS    ' Is it a SESSION ?
+         BNE   OBJS0100                     No... Try next object
+         LA    R4,SESSKWD                   Yes.. R4--> SESSKWD and
+         B     OBJSCONT                           continue
+OBJS0100 DS    0H
+         CLC   0(12,R3),=CL12'FILE        ' Is it a FILE ?
+         BNE   OBJS0110                     No... Try next object
+         LA    R4,FILEKWD                   Yes.. R4--> FILEKWD and
+         B     OBJSCONT                           continue
+OBJS0110 DS    0H
+         CLC   0(12,R3),=CL12'LSRPOOL     ' Is it a LSRPOOL ?
+         BNE   OBJS0120                     No... Try next object
+         LA    R4,LSRPKWD                   Yes.. R4--> LSRPKWD and
+         B     OBJSCONT                           continue
+OBJS0120 DS    0H
+         CLC   0(12,R3),=CL12'PARTNER     ' Is it a PARTNER ?
+         BNE   OBJS0130                     No... Try next object
+         LA    R4,PTNRKWD                   Yes.. R4--> PTNRKWD and
+         B     OBJSCONT                           continue
+OBJS0130 DS    0H
+         CLC   0(12,R3),=CL12'TRANCLASS   ' Is it a TRANCLASS ?
+         BNE   OBJS0140                     No... Try next object
+         LA    R4,TRCLKWD                   Yes.. R4--> TRCLKWD and
+         B     OBJSCONT                           continue
+OBJS0140 DS    0H
+         CLC   0(12,R3),=CL12'TDQUEUE     ' Is it a TDQUEUE   ?
+         BNE   OBJS0150                     No... Try next object
+         LA    R4,TDQUKWD                   Yes.. R4--> TDQUKWD and
+         B     OBJSCONT                           continue
+OBJS0150 DS    0H
+         CLC   0(12,R3),=CL12'JOURNALMODEL' Is it a JOURNALMODEL?
+         BNE   OBJS0160                     No... Try next object
+         LA    R4,JOURKWD                   Yes.. R4--> JOURKWD and
+         B     OBJSCONT                           continue
+OBJS0160 DS    0H
+         CLC   0(12,R3),=CL12'DB2CONN     ' Is it a DB2CONN ?
+         BNE   OBJS0170                     No... Try next object
+         LA    R4,DB2CKWD                   Yes.. R4--> DB2CKWD and
+         B     OBJSCONT                           continue
+OBJS0170 DS    0H
+         CLC   0(12,R3),=CL12'DB2ENTRY    ' Is it a DB2ENTRY ?
+         BNE   OBJS0180                     No... Try next object
+         LA    R4,DB2EKWD                   Yes.. R4--> DB2EKWD and
+         B     OBJSCONT                           continue
+OBJS0180 DS    0H
+         CLC   0(12,R3),=CL12'DB2TRAN     ' Is it a DB2TRAN ?
+         BNE   OBJS0190                     No... Try next object
+         LA    R4,DB2TKWD                   Yes.. R4--> DB2TKWD and
+         B     OBJSCONT                           continue
+OBJS0190 DS    0H
+         CLC   0(12,R3),=CL12'ENQMODEL    ' Is it a ENQMODEL ?
+         BNE   OBJS0200                     No... Try next object
+         LA    R4,ENQMKWD                   Yes.. R4--> ENQMKWD and
+         B     OBJSCONT                           continue
+OBJS0200 DS    0H
+         CLC   0(12,R3),=CL12'PROCESSTYPE ' Is it a PROCESSTYPE ?
+         BNE   OBJS0210                     No... Try next object
+         LA    R4,PROCKWD                   Yes.. R4--> PROCKWD and
+         B     OBJSCONT                           continue
+OBJS0210 DS    0H
+         CLC   0(12,R3),=CL12'TSMODEL     ' Is it a TSMODEL ?
+         BNE   OBJS0220                     No... Try next object
+         LA    R4,TSMOKWD                   Yes.. R4--> TSMOKWD and
+         B     OBJSCONT                           continue
+OBJS0220 DS    0H
+         CLC   0(12,R3),=CL12'REQUESTMODEL' Is it a REQUESTMODEL ?
+         BNE   OBJS0230                     No... Try next object
+         LA    R4,REQUKWD                   Yes.. R4--> REQUKWD and
+         B     OBJSCONT                           continue
+OBJS0230 DS    0H
+         CLC   0(12,R3),=CL12'DOCTEMPLATE ' Is it a DOCTEMPLATE?
+         BNE   OBJS0240                     No... Try next object
+         LA    R4,DOCTKWD                   Yes.. R4--> DOCTKWD and
+         B     OBJSCONT                           continue
+OBJS0240 DS    0H
+         CLC   0(12,R3),=CL12'TCPIPSERVICE' Is it a TCPIPSERVICE?
+         BNE   OBJS0250                     No... Try next object
+         LA    R4,TCPIKWD                   Yes.. R4--> TCPIKWD and
+         B     OBJSCONT                           continue
+OBJS0250 DS    0H
+         CLC   0(12,R3),=CL12'CORBASERVER ' Is it a CORBASERVER?
+         BNE   OBJS0260                     No... Try next object
+         LA    R4,CORBKWD                   Yes.. R4--> CORBKWD and
+         B     OBJSCONT                           continue
+OBJS0260 DS    0H
+         CLC   0(12,R3),=CL12'DJAR        ' Is it a DJAR?
+         BNE   OBJS0270                     No... Not found
+         LA    R4,DJARKWD                   Yes.. R4--> DJARKWD and
+         B     OBJSCONT                           continue
+OBJS0270 DS    0H
+         CLC   0(12,R3),=CL12'PIPELINE    ' Is it a PIPELINE?
+         BNE   OBJS0280                     No... Not found
+         LA    R4,PIPEKWD                   Yes.. R4--> PIPEKWD and
+         B     OBJSCONT                           continue
+OBJS0280 DS    0H
+         CLC   0(12,R3),=CL12'URIMAP      ' Is it a URIMAP?
+         BNE   OBJS0290                     No... Not found
+         LA    R4,URIMKWD                   Yes.. R4--> URIMKWD and
+         B     OBJSCONT                           continue
+OBJS0290 DS    0H
+         CLC   0(12,R3),=CL12'WEBSERVICE  ' Is it a WEBSERVICE?
+         BNE   OBJS0300                     No... Not found
+         LA    R4,WEBSKWD                   Yes.. R4--> WEBSKWD and
+         B     OBJSCONT                           continue
+OBJS0300 DS    0H
+         CLC   0(12,R3),=CL12'IPCONN      ' Is it an IPCONN?
+         BNE   OBJS0310                     No... Not found
+         LA    R4,IPCOKWD                   Yes.. R4--> IPCOKWD and
+         B     OBJSCONT                           continue
+OBJS0310 DS    0H
+         CLC   0(12,R3),=CL12'LIBRARY     ' Is it a LIBRARY?
+         BNE   OBJS0320                     No... Not found
+         LA    R4,LIBRKWD                   Yes.. R4--> LIBRKWD and
+         B     OBJSCONT                           continue
+OBJS0320 DS    0H
+         CLC   0(12,R3),=CL12'BUNDLE      ' Is it a BUNDLE?
+         BNE   OBJS0330                     No... Not found
+         LA    R4,BUNDKWD                   Yes.. R4--> BUNDKWD and
+         B     OBJSCONT                           continue
+OBJS0330 DS    0H
+         CLC   0(12,R3),=CL12'ATOMSERVICE ' Is it an ATOMSERVICE?
+         BNE   OBJS0340                     No... Not found
+         LA    R4,ATOMKWD                   Yes.. R4--> ATOMKWD and
+         B     OBJSCONT                           continue
+OBJS0340 DS    0H
+         CLC   0(12,R3),=CL12'MQCONN      ' Is it a MQCONN?
+         BNE   OBJS0350                     No... Not found
+         LA    R4,MQCOKWD                   Yes.. R4--> MQCOKWD and
+         B     OBJSCONT                           continue
+OBJS0350 DS    0H
+         CLC   0(12,R3),=CL12'JVMSERVER   ' Is it a JVMSERVER?
+         BNE   OBJS0360                     No... Not found
+         LA    R4,JVMSKWD                   Yes.. R4--> JVMSKWD and
+         B     OBJSCONT                           continue
+OBJS0360 DS    0H
+         CLC   0(12,R3),=CL12'MQMONITOR   ' Is it an MQMONITOR?
+         BNE   OBJSNFND                     No... Not found
+         LA    R4,MQMOKWD                   Yes.. R4--> MQMOKWD and
+         B     OBJSCONT                           continue
+OBJSNFND DS    0H                 Resource type not recognised
+         MVC   RETCODE,UNDEFKWD   Set return code for error
+         B     EXITOBJS           .... and return
+OBJSCONT DS    0H
+         ST    R4,NEXTKWP         Store R4 in NEXTKWD; used in DETAIL
+*                                 calls to determine offset in o/p
+*                                 buffer of next keyword value
+PTNRREC  DS    0H
+         CLC   0(12,R3),=CL12'PARTNER     ' Is it a PARTNER ?
+         BNE   TRCLREC                      No... try TRANCLASS
+         MVC   OUTBUFF(4),=CL4'PTNR'
+         LA    R4,OUTBUFF
+         B     OBJNAM
+TRCLREC  DS    0H
+         CLC   0(12,R3),=CL12'TRANCLASS   ' Is it a TRANCLASS ?
+         BNE   NORMREC                      No... Normal recid
+         MVC   OUTBUFF(4),=CL4'TRCL'
+         LA    R4,OUTBUFF
+         B     OBJNAM
+NORMREC  DS    0H
+         LA    R4,OUTBUFF         R4<-- Address of o/p buffer
+         SR    R5,R5              R5<-- 0
+         LH    R5,RECIDLEN        R5<-- Length of record identifier
+         BCTR  R5,0               Subtract one from length for move
+         EX    R5,MVCOBJSV        Set object id. part of o/p
+*                                 record in chars 1 to 4 of o/p record
+OBJNAM   DS    0H
+         AH    R4,RECIDLEN        Increment ptr to o/p buffer
+         L     R3,EXITONP         R3<-- Address to object name
+         LH    R5,OBJNAMEL        R5<-- Length of a object name
+         BCTR  R5,0               Subtract one from length for move
+         EX    R5,MVCOBJSV        Move object name to o/p buffer
+*
+         AH    R4,OBJNAMEL        Increment ptr to o/p buffer
+         L     R3,EXITGRPP        R3<-- Address of RDO group name
+         LH    R5,GRPNAMEL        Length of a group name
+         BCTR  R5,0               Subtract one from length for move
+         EX    R5,MVCOBJSV        Move group name to o/p buffer
+EXITOBJS DS    0H
+         LM    R13,R14,REGSA1     Restore callers strategic registers
+         BR    R14                Return to caller
+*        M O V E  V A L U E  I N T O  O U P U T  B U F F E R
+*                                R4= Addr. of start pos. in o/p buffer
+*                                R3= Addr. of start pos. of keyword val
+MVCOBJSV MVC   0(,R4),0(R3)       Move object start values to o/p buff
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*             P R O C E S S  A  D E T A I L  C A L L                  *
+*                                                                     *
+* The subroutine moves the latest keyword value into the o/p buffer.  *
+* Subsequent (and previous) DETAIL calls to this program will move in *
+* the remaining keyword values for the object type.                   *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+DETAIL   DS    0H
+         STM   R13,R14,REGSA1     Save callers strategic registers
+*
+         LA    R1,MOVEKWPL        R1<-- Address of parameter list
+         L     R3,EXITKLP         R3<-- Ptr. to keyword value length
+         ST    R3,KWLENPTR(,R1)   Store R3 in parameter list
+         L     R3,EXITKVP         R3<-- Ptr. to keyword value
+         ST    R3,KWVALPTR(,R1)   Store R3 in parameter list
+         BAL   R14,MOVEKWV        Move keyword value into o/p buffer
+*
+EXITDET  DS    0H
+         LM    R13,R14,REGSA1     Restore callers strategic registers
+         BR    R14                Return to caller
+         EJECT
+* *********************************************************************
+*                                                                     *
+*         P R O C E S S  A N  O B J E C T  E N D  C A L L             *
+*                                                                     *
+*  This subroutine writes out the contents contents of the output     *
+*  buffer to the output file FOROUT. As FOROUT is a BSAM file         *
+*  (required by the DB2 load utility) the program must wait until     *
+*  the write has completed before continuing.                         *
+*                                                                     *
+* *********************************************************************
+         SPACE 2
+OBJEND   DS    0H
+         STM   R13,R14,REGSA1     Save callers strategic registers
+*
+         L     KWDETPTR,NEXTKWP   Load ptr. to next keyword detail
+*                                  table entry
+         SR    R4,R4              R4<-- 0
+         ICM   R4,3,KWSTART       R4<-- Next keyword detail table entry
+         BZ    OBJE0010           End of keyword table entry found
+*                                 No...So set return code
+         MVC   RETCODE,KWTABERR   ..to keyword table error code
+         B     EXITOBJE           Exit form subroutine
+OBJE0010 DS   0H
+         LA    R13,MACROSA        R13 <-- Addr. of a 18 word save area
+         LA    R3,FOROUT          R3  <-- Addr. of output files DCB
+         LA    R4,OUTBUFF         R4  <-- Addr. of o/p record buffer
+*
+         WRITE EXDECB,SF,(R3),(R4) Write the record to the output file
+         LA    R5,EXDECB          R5<-- Address of DECB and
+         CHECK (R5),DSORG=ALL     ....  wait on it to be posted
+         B     EXITOBJE
+WRITEERR DS    0H                 I/O ERROR exit routine for FOROUT
+         MVC   RETCODE,IOERR      Set return code for I/O error
+EXITOBJE DS    0H
+         LM    R13,R14,REGSA1     Restore callers strategic registers
+         BR    R14                Return to caller
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*            P R O C E S S  A  F I N A L  C A L L                     *
+*                                                                     *
+*  This subroutine closes the output file FOROUT                      *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+FINAL    DS    0H
+         STM   R13,R14,REGSA1     Save callers strategic registers
+*
+         LA    R13,MACROSA        R13 <-- Addr. of a 18 word save area
+         CLOSE (FOROUT)           Close the output file
+EXITFINL DS    0H
+         LM    R13,R14,REGSA1     Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*            C H E C K  R E T U R N  C O D E                          *
+*                                                                     *
+*  This subroutine check the setting of the return code. If it is     *
+*  greater than zero an attempt is made to close the output file      *
+*  FOROUT as this program will not be called again for the current    *
+*  EXTRACT command. This avoids 0C03 abends on task completion.       *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+CHKRC    DS    0H
+         STM   R13,R14,REGSA1     Save callers strategic registers
+*
+         L     R15,RETCODE        Load return code
+         LTR   R15,R15            Is it zero ?
+         BZ    EXITCHKR           ... Yes, return to caller
+         LA    R13,MACROSA        R13 <-- Addr. of a 18 word save area
+         CLOSE (FOROUT)           ... No, so close the output file
+EXITCHKR DS    0H
+         LM    R13,R14,REGSA1     Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*     M O V E  A  K E Y W O R D  I N T O  O U T P U T  B U F F E R    *
+*                                                                     *
+*  This subroutine moves a keyword value into the appropriate position*
+*  in the output buffer. The position in the output buffer is         *
+*  determined from the next value in the keyword table entry for the  *
+*  current resource type. This entry is pointed to by NEXTKWP.        *
+*  The value to be moved is defined by the values in the parameter    *
+*  list passed to this program.                                       *
+*  These are:                                                         *
+*      KWLENPTR: Ptr. to length of keyword value                      *
+*      KWVALPTR: Ptr. to keyword value                                *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+MOVEKWV  DS    0H
+         STM   R13,R14,REGSA2     Save callers strategic registers
+*
+         L     KWDETPTR,NEXTKWP   Load ptr. to next keyword detail
+*                                  table entry
+         LA    R3,OUTBUFF         R3<-- Addr. of output buffer
+         SR    R4,R4              R4<-- 0
+         ICM   R4,3,KWSTART       R4<-- Next keyword detail table entry
+         LTR   R4,R4              End of keyword table found ?
+         BNZ   MVKW0010           Yes...So set return code
+*
+         MVC   RETCODE,KWTABERR   ..to keyword table error code
+         B     EXITMKWV           Exit form subroutine
+MVKW0010 DS    0H                 No...So move keyword into o/p buffer
+         ALR   R3,R4              Calculate address of start position
+*                                  for next keyword value and
+         BCTR  R3,0               ....Decrement by 1 for 1st byte addr.
+*
+         L     R4,KWLENPTR(,R1)   R4<-- Ptr. to keyword length
+         LH    R5,0(,R4)          R5<-- Keyword length
+         CH    R5,MAXKWLEN        Is it length greater than max. length
+         BNH   MVKW0020           No...So move it into o/p buffer
+         MVC   RETCODE,KWLENERR   Yes..Set return code for length error
+         B     EXITMKWV           Exit from subroutine
+MVKW0020 DS    0H
+         LTR   R5,R5              Length of keyword value equal zero ?
+         BZ    MVKW0030           Yes..So no need to perform a move
+         BCTR  R5,0               No...Decrement length by 1 for move
+         L     R6,KWVALPTR(,R1)   R6<-- Ptr. to keyword value
+*
+         EX    R5,MOVEVAL         Move the keyword value into o/p buff.
+MVKW0030 DS    0H
+         A     KWDETPTR,=A(KWDETLEN) Update ptr to next keyword detail
+*                                    element and
+         ST    KWDETPTR,NEXTKWP      ...Store updated ptr.
+EXITMKWV DS    0H
+         LM    R13,R14,REGSA2     Restore callers strategic registers
+         BR    R14                Return to caller
+*
+*        M O V E  K E Y W O R D
+*        ~~~~~~~~~~~~~~~~~~~~~~
+*                                R3= Addr. of start pos. in o/p buffer
+*                                R6= Addr. of start pos. of keyword val
+MOVEVAL  MVC   0(,R3),0(R6)
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*                E N D  O F  M A I N L I N E  C O D E                 *
+*                                                                     *
+* ******************************************************************* *
+CODEREG  EQU   R8                 CODE CSECT register
+DCBREG   EQU   R9                 Output files DCB register
+PLISTPTR EQU   R10                Input parameter DSECT list register
+WRKPTR   EQU   R11                Work area DSCET register
+KWDETPTR EQU   R12                Keyword detail table DSECT register
+*                                 Define error codes set by this pgm
+NOOBJERR DC    F'1'               ..... OBJECTS not specified on cmd
+OPENERR  DC    F'2'               ..... Return code for a OPEN error
+IOERR    DC    F'3'               ..... I/O Error on output dataset
+GWRKAERR DC    F'4'               ..... getmain  work area error
+KWLENERR DC    F'5'               ..... keyword length error
+KWTABERR DC    F'6'               ..... keyword table error
+UNDEFKWD DC    F'7'               ..... undefined resource type
+*
+*
+RECIDLEN DC    H'4'               Record identifier length
+OBJNAMEL DC    H'8'               Length of a resource name
+GRPNAMEL DC    H'8'               Length of a RDO group name
+MAXKWLEN DC    H'255'             Max. length of a keyword value that
+*                                 is ENQNAME
+BLANK    DC    XL4'40000001'
+*
+*
+* ****************************************************************** *
+*                K E Y W O R D  D E T A I L  T A B L E               *
+*                                                                    *
+* This table defines the positions in the output buffer for each of  *
+* the keyword values associated with each resource type. The order of*
+* the the entries for each resource type is that produced by the     *
+* LIST function of the off-line utility (and also as displayed on the*
+* CEDA panels). If any keywords are added or deleted, or a new value *
+* is added to the list of possible values for a keyword, then the    *
+* appropriate entry must be updated to reflect this.                 *
+*                                                                    *
+* N.B The offsets  defined by this table are exactly the same as     *
+*    those defined to the DB2 load utility and must remain equivalent*
+*    So ensure that any changes are made to it are reflected in the  *
+*    input to the load utility.                                      *
+*                                                                    *
+* ****************************************************************** *
+*
+*
+* 1) ATOMSERVICE
+*
+ATOMKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            ATOMTYPE
+         DC    AL2(89)            STATUS
+         DC    AL2(97)            CONFIGFILE
+         DC    AL2(352)           RESOURCENAME
+         DC    AL2(368)           RESOURCETYPE
+         DC    AL2(375)           BINDFILE
+         DC    AL2(630)           DEFINETIME
+         DC    AL2(647)           CHANGETIME
+         DC    AL2(664)           CHANGEUSRID
+         DC    AL2(672)           CHANGEAGENT
+         DC    AL2(680)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 2) BUNDLE
+*
+BUNDKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            STATUS
+         DC    AL2(87)            BUNDLEDIR
+         DC    AL2(342)           BASESCOPE
+         DC    AL2(597)           DEFINETIME
+         DC    AL2(614)           CHANGETIME
+         DC    AL2(631)           CHANGEUSRID
+         DC    AL2(639)           CHANGEAGENT
+         DC    AL2(647)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 3) CONNECTION
+*
+CONNKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            NETNAME
+         DC    AL2(87)            INDSYS
+         DC    AL2(91)            REMOTESYSTEM
+         DC    AL2(95)            REMOTENAME
+         DC    AL2(99)            REMOTESYSNET
+         DC    AL2(107)           ACCESSMETHOD
+         DC    AL2(115)           PROTOCOL
+         DC    AL2(119)           CONNTYPE
+         DC    AL2(127)           SINGLESESS
+         DC    AL2(130)           DATASTREAM
+         DC    AL2(138)           RECORDFORMAT
+         DC    AL2(140)           QUEUELIMIT
+         DC    AL2(144)           MAXQTIME
+         DC    AL2(148)           AUTOCONNECT
+         DC    AL2(151)           INSERVICE
+         DC    AL2(154)           SECURITYNAME
+         DC    AL2(162)           ATTACHSEC
+         DC    AL2(172)           BINDSECURITY
+         DC    AL2(175)           USEDFLTUSER
+         DC    AL2(178)           PSRECOVERY
+         DC    AL2(188)           XLNACTION
+         DC    AL2(193)           DEFINETIME
+         DC    AL2(210)           CHANGETIME
+         DC    AL2(227)           CHANGEUSRID
+         DC    AL2(235)           CHANGEAGENT
+         DC    AL2(243)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 4) CORBASERVER
+*
+CORBKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            JNDIPREFIX
+         DC    AL2(334)           AUTOPUBLISH
+         DC    AL2(337)           SESSBEANTIME
+         DC    AL2(345)           SHELF
+         DC    AL2(600)           DJARDIR
+         DC    AL2(855)           STATUS
+         DC    AL2(863)           HOST
+         DC    AL2(1118)          CERTIFICATE
+         DC    AL2(1174)          UNAUTH
+         DC    AL2(1182)          CLIENTCERT
+         DC    AL2(1190)          SSLUNAUTH
+         DC    AL2(1198)          ASSERTED
+         DC    AL2(1206)          CIPHERS
+         DC    AL2(1262)          DEFINETIME
+         DC    AL2(1279)          CHANGETIME
+         DC    AL2(1296)          CHANGEUSRID
+         DC    AL2(1304)          CHANGEAGENT
+         DC    AL2(1312)          CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 5) DB2CONN
+*
+DB2CKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            CONNECTERROR
+         DC    AL2(86)            DB2GROUPID
+         DC    AL2(90)            DB2ID
+         DC    AL2(94)            MSGQUEUE1
+         DC    AL2(98)            MSGQUEUE2
+         DC    AL2(102)           MSGQUEUE3
+         DC    AL2(106)           NONTERMREL
+         DC    AL2(109)           PURGECYCLE
+         DC    AL2(114)           RESYNCMEMBER
+         DC    AL2(117)           REUSELIMIT
+         DC    AL2(122)           SIGNID
+         DC    AL2(130)           STANDBYMODE
+         DC    AL2(139)           STATSQUEUE
+         DC    AL2(143)           TCBLIMIT
+         DC    AL2(147)           THREADERROR
+         DC    AL2(152)           ACCOUNTREC
+         DC    AL2(156)           AUTHID
+         DC    AL2(164)           AUTHTYPE
+         DC    AL2(170)           DROLLBACK
+         DC    AL2(173)           PLAN
+         DC    AL2(181)           PLANEXITNAME
+         DC    AL2(189)           PRIORITY
+         DC    AL2(194)           THREADLIMIT
+         DC    AL2(198)           THREADWAIT
+         DC    AL2(201)           COMAUTHID
+         DC    AL2(209)           COMAUTHTYPE
+         DC    AL2(215)           COMTHREADLIM
+         DC    AL2(219)           DEFINETIME
+         DC    AL2(236)           CHANGETIME
+         DC    AL2(253)           CHANGEUSRID
+         DC    AL2(261)           CHANGEAGENT
+         DC    AL2(269)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 6) DB2ENTRY
+*
+DB2EKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            TRANSID
+         DC    AL2(83)            ACCOUNTREC
+         DC    AL2(87)            AUTHID
+         DC    AL2(95)            AUTHTYPE
+         DC    AL2(101)           DROLLBACK
+         DC    AL2(104)           PLAN
+         DC    AL2(112)           PLANEXITNAME
+         DC    AL2(120)           PRIORITY
+         DC    AL2(125)           PROTECTNUM
+         DC    AL2(129)           THREADLIMIT
+         DC    AL2(133)           THREADWAIT
+         DC    AL2(137)           DEFINETIME
+         DC    AL2(154)           CHANGETIME
+         DC    AL2(171)           CHANGEUSRID
+         DC    AL2(179)           CHANGEAGENT
+         DC    AL2(187)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 7) DB2TRAN
+*
+DB2TKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            ENTRY
+         DC    AL2(87)            TRANSID
+         DC    AL2(91)            DEFINETIME
+         DC    AL2(108)           CHANGETIME
+         DC    AL2(125)           CHANGEUSRID
+         DC    AL2(133)           CHANGEAGENT
+         DC    AL2(141)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 8) DJAR
+*
+DJARKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            CORBASERVER
+         DC    AL2(83)            HFSFILE
+         DC    AL2(338)           DEFINETIME
+         DC    AL2(355)           CHANGETIME
+         DC    AL2(372)           CHANGEUSRID
+         DC    AL2(380)           CHANGEAGENT
+         DC    AL2(388)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 9) DOCTEMPLATE
+*
+DOCTKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            TEMPLATENAME
+         DC    AL2(127)           FILE
+         DC    AL2(135)           TSQUEUE
+         DC    AL2(151)           TDQUEUE
+         DC    AL2(155)           PROGRAM
+         DC    AL2(163)           EXITPGM
+         DC    AL2(171)           DDNAME
+         DC    AL2(179)           MEMBERNAME
+         DC    AL2(187)           HFSFILE
+         DC    AL2(442)           APPENDCRLF
+         DC    AL2(445)           TYPE
+         DC    AL2(451)           DEFINETIME
+         DC    AL2(468)           CHANGETIME
+         DC    AL2(485)           CHANGEUSRID
+         DC    AL2(493)           CHANGEAGENT
+         DC    AL2(501)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 10) ENQMODEL
+*
+ENQMKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            ENQSCOPE
+         DC    AL2(83)            STATUS
+         DC    AL2(91)            ENQNAME
+         DC    AL2(346)           DEFINETIME
+         DC    AL2(363)           CHANGETIME
+         DC    AL2(380)           CHANGEUSRID
+         DC    AL2(388)           CHANGEAGENT
+         DC    AL2(396)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 11) FILE
+*
+FILEKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            DSNAME
+*        DC    AL2(123)           PASSWORD                    @PI59763D
+         DC    AL2(123)           RLSACCESS
+         DC    AL2(126)           LSRPOOLNUM
+         DC    AL2(129)           READINTEG
+         DC    AL2(140)           DSNSHARING
+         DC    AL2(150)           STRINGS
+         DC    AL2(153)           NSRGROUP
+         DC    AL2(161)           REMOTESYSTEM
+         DC    AL2(165)           REMOTENAME
+         DC    AL2(173)           RECORDSIZE
+         DC    AL2(178)           KEYLENGTH
+         DC    AL2(181)           STATUS
+         DC    AL2(190)           OPENTIME
+         DC    AL2(198)           DISPOSITION
+         DC    AL2(203)           DATABUFFERS
+         DC    AL2(208)           INDEXBUFFERS
+         DC    AL2(213)           TABLE
+         DC    AL2(217)           MAXNUMRECS
+         DC    AL2(225)           CFDTPOOL
+         DC    AL2(233)           TABLENAME
+         DC    AL2(241)           UPDATEMODEL
+         DC    AL2(251)           LOAD
+         DC    AL2(254)           RECORDFORMAT
+         DC    AL2(255)           ADD
+         DC    AL2(258)           BROWSE
+         DC    AL2(261)           DELETE
+         DC    AL2(264)           READ
+         DC    AL2(267)           UPDATE
+         DC    AL2(270)           JOURNAL
+         DC    AL2(272)           JNLREAD
+         DC    AL2(282)           JNLSYNCREAD
+         DC    AL2(285)           JNLUPDATE
+         DC    AL2(288)           JNLADD
+         DC    AL2(294)           JNLSYNCWRITE
+         DC    AL2(297)           RECOVERY
+         DC    AL2(308)           FWDRECOVLOG
+         DC    AL2(310)           BACKUPTYPE
+         DC    AL2(317)           DEFINETIME
+         DC    AL2(334)           CHANGETIME
+         DC    AL2(351)           CHANGEUSRID
+         DC    AL2(359)           CHANGEAGENT
+         DC    AL2(367)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 12) IPCONN
+*
+IPCOKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            APPLID
+         DC    AL2(87)            NETWORKID
+         DC    AL2(95)            HOST
+         DC    AL2(211)           PORT
+         DC    AL2(216)           TCPIPSERVICE
+         DC    AL2(224)           HA
+         DC    AL2(227)           RECEIVECOUNT
+         DC    AL2(230)           SENDCOUNT
+         DC    AL2(233)           QUEUELIMIT
+         DC    AL2(237)           MAXQTIME
+         DC    AL2(241)           AUTOCONNECT
+         DC    AL2(244)           INSERVICE
+         DC    AL2(247)           SSL
+         DC    AL2(250)           CERTIFICATE
+         DC    AL2(282)           CIPHERS
+         DC    AL2(338)           LINKAUTH
+         DC    AL2(346)           SECURITYNAME
+         DC    AL2(354)           USERAUTH
+         DC    AL2(365)           IDPROP
+         DC    AL2(375)           XLNACTION
+         DC    AL2(380)           MIRRORLIFE
+         DC    AL2(387)           DEFINETIME
+         DC    AL2(404)           CHANGETIME
+         DC    AL2(421)           CHANGEUSRID
+         DC    AL2(429)           CHANGEAGENT
+         DC    AL2(437)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 13) JOURNALMODEL
+*
+JOURKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            JOURNALNAME
+         DC    AL2(87)            TYPE
+         DC    AL2(90)            STREAMNAME
+         DC    AL2(116)           DEFINETIME
+         DC    AL2(133)           CHANGETIME
+         DC    AL2(150)           CHANGEUSRID
+         DC    AL2(158)           CHANGEAGENT
+         DC    AL2(166)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 14) JVMSERVER
+*
+JVMSKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            STATUS
+         DC    AL2(87)            JVMPROFILE
+         DC    AL2(95)            LERUNOPTS
+         DC    AL2(103)           THREADLIMIT
+         DC    AL2(106)           DEFINETIME
+         DC    AL2(123)           CHANGETIME
+         DC    AL2(140)           CHANGEUSRID
+         DC    AL2(148)           CHANGEAGENT
+         DC    AL2(156)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 15) LIBRARY
+*
+LIBRKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            RANKING
+         DC    AL2(81)            CRITICAL
+         DC    AL2(84)            STATUS
+         DC    AL2(92)            DSNAME01
+         DC    AL2(136)           DSNAME02
+         DC    AL2(180)           DSNAME03
+         DC    AL2(224)           DSNAME04
+         DC    AL2(268)           DSNAME05
+         DC    AL2(312)           DSNAME06
+         DC    AL2(356)           DSNAME07
+         DC    AL2(400)           DSNAME08
+         DC    AL2(444)           DSNAME09
+         DC    AL2(488)           DSNAME10
+         DC    AL2(532)           DSNAME11
+         DC    AL2(576)           DSNAME12
+         DC    AL2(620)           DSNAME13
+         DC    AL2(664)           DSNAME14
+         DC    AL2(708)           DSNAME15
+         DC    AL2(752)           DSNAME16
+         DC    AL2(796)           DEFINETIME
+         DC    AL2(813)           CHANGETIME
+         DC    AL2(830)           CHANGEUSRID
+         DC    AL2(838)           CHANGEAGENT
+         DC    AL2(846)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 16) LSRPOOL
+*
+LSRPKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            LSRPOOLNUM
+         DC    AL2(82)            MAXKEYLENGTH
+         DC    AL2(85)            SHARELIMIT
+         DC    AL2(88)            STRINGS
+         DC    AL2(91)            DATA512
+         DC    AL2(96)            DATA1K
+         DC    AL2(101)           DATA2K
+         DC    AL2(106)           DATA4K
+         DC    AL2(111)           DATA8K
+         DC    AL2(116)           DATA12K
+         DC    AL2(121)           DATA16K
+         DC    AL2(126)           DATA20K
+         DC    AL2(131)           DATA24K
+         DC    AL2(136)           DATA28K
+         DC    AL2(141)           DATA32K
+         DC    AL2(146)           INDEX512
+         DC    AL2(151)           INDEX1K
+         DC    AL2(156)           INDEX2K
+         DC    AL2(161)           INDEX4K
+         DC    AL2(166)           INDEX8K
+         DC    AL2(171)           INDEX12K
+         DC    AL2(176)           INDEX16K
+         DC    AL2(181)           INDEX20K
+         DC    AL2(186)           INDEX24K
+         DC    AL2(191)           INDEX28K
+         DC    AL2(196)           INDEX32K
+         DC    AL2(201)           HSDATA4K
+         DC    AL2(209)           HSDATA8K
+         DC    AL2(217)           HSDATA12K
+         DC    AL2(225)           HSDATA16K
+         DC    AL2(233)           HSDATA20K
+         DC    AL2(241)           HSDATA24K
+         DC    AL2(249)           HSDATA28K
+         DC    AL2(257)           HSDATA32K
+         DC    AL2(265)           HSINDEX4K
+         DC    AL2(273)           HSINDEX8K
+         DC    AL2(281)           HSINDEX12K
+         DC    AL2(289)           HSINDEX16K
+         DC    AL2(297)           HSINDEX20K
+         DC    AL2(305)           HSINDEX24K
+         DC    AL2(313)           HSINDEX28K
+         DC    AL2(321)           HSINDEX32K
+         DC    AL2(329)           DEFINETIME
+         DC    AL2(346)           CHANGETIME
+         DC    AL2(363)           CHANGEUSRID
+         DC    AL2(371)           CHANGEAGENT
+         DC    AL2(379)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 17) MAPSET
+*
+MAPSKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            RESIDENT
+         DC    AL2(82)            USAGE
+         DC    AL2(91)            USELPACOPY
+         DC    AL2(94)            STATUS
+         DC    AL2(102)           DEFINETIME
+         DC    AL2(119)           CHANGETIME
+         DC    AL2(136)           CHANGEUSRID
+         DC    AL2(144)           CHANGEAGENT
+         DC    AL2(152)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 18) MQCONN
+*
+MQCOKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            MQNAME
+         DC    AL2(83)            RESYNCMEMBER
+         DC    AL2(94)            INITQNAME
+         DC    AL2(142)           DEFINETIME
+         DC    AL2(159)           CHANGETIME
+         DC    AL2(176)           CHANGEUSRID
+         DC    AL2(184)           CHANGEAGENT
+         DC    AL2(192)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 19) MQMONITOR
+*
+MQMOKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            STATUS
+         DC    AL2(87)            AUTOSTART
+         DC    AL2(90)            MONDATA
+         DC    AL2(290)           MONUSERID
+         DC    AL2(298)           QNAME
+         DC    AL2(346)           TRANSACTION
+         DC    AL2(350)           USERID
+         DC    AL2(358)           DEFINETIME
+         DC    AL2(375)           CHANGETIME
+         DC    AL2(392)           CHANGEUSRID
+         DC    AL2(400)           CHANGEAGENT
+         DC    AL2(408)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 20) PARTITIONSET
+*
+PARTKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            RESIDENT
+         DC    AL2(82)            USAGE
+         DC    AL2(91)            USELPACOPY
+         DC    AL2(94)            STATUS
+         DC    AL2(102)           DEFINETIME
+         DC    AL2(119)           CHANGETIME
+         DC    AL2(136)           CHANGEUSRID
+         DC    AL2(144)           CHANGEAGENT
+         DC    AL2(152)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 21) PARTNER
+*
+PTNRKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            NETNAME
+         DC    AL2(87)            NETWORK
+         DC    AL2(95)            PROFILE
+         DC    AL2(103)           TPNAME
+         DC    AL2(167)           XTPNAME
+         DC    AL2(295)           DEFINETIME
+         DC    AL2(312)           CHANGETIME
+         DC    AL2(329)           CHANGEUSRID
+         DC    AL2(337)           CHANGEAGENT
+         DC    AL2(345)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 22) PIPELINE
+*
+PIPEKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            STATUS
+         DC    AL2(87)            RESPWAIT
+         DC    AL2(91)            CONFIGFILE
+         DC    AL2(346)           SHELF
+         DC    AL2(601)           WSDIR
+         DC    AL2(856)           DEFINETIME
+         DC    AL2(873)           CHANGETIME
+         DC    AL2(890)           CHANGEUSRID
+         DC    AL2(898)           CHANGEAGENT
+         DC    AL2(906)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 23) PROCESSTYPE
+*
+PROCKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            STATUS
+         DC    AL2(87)            FILE
+         DC    AL2(95)            AUDITLOG
+         DC    AL2(103)           AUDITLEVEL
+         DC    AL2(111)           DEFINETIME
+         DC    AL2(128)           CHANGETIME
+         DC    AL2(145)           CHANGEUSRID
+         DC    AL2(153)           CHANGEAGENT
+         DC    AL2(161)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 24) PROFILE
+*
+PROFKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            SCRNSIZE
+         DC    AL2(88)            UCTRAN
+         DC    AL2(91)            MODENAME
+         DC    AL2(99)            FACILITYLIKE
+         DC    AL2(103)           PRINTERCOMP
+         DC    AL2(106)           JOURNAL
+         DC    AL2(108)           MSGJRNL
+         DC    AL2(114)           MSGINTEG
+         DC    AL2(117)           ONEWTE
+         DC    AL2(120)           CHAINCONTROL
+         DC    AL2(123)           DVSUPRT
+         DC    AL2(130)           INBFMH
+         DC    AL2(134)           RAQ
+         DC    AL2(137)           LOGREC
+         DC    AL2(140)           NEPCLASS
+         DC    AL2(143)           RTIMOUT
+         DC    AL2(147)           DEFINETIME
+         DC    AL2(164)           CHANGETIME
+         DC    AL2(181)           CHANGEUSRID
+         DC    AL2(189)           CHANGEAGENT
+         DC    AL2(197)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 25) PROGRAM
+*
+PROGKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            LANGUAGE
+         DC    AL2(88)            RELOAD
+         DC    AL2(91)            RESIDENT
+         DC    AL2(94)            USAGE
+         DC    AL2(103)           USELPACOPY
+         DC    AL2(106)           STATUS
+         DC    AL2(114)           CEDF
+         DC    AL2(117)           DATALOCATION
+         DC    AL2(122)           EXECKEY
+         DC    AL2(126)           CONCURRENCY
+         DC    AL2(136)           API
+         DC    AL2(143)           DYNAMIC
+         DC    AL2(146)           REMOTESYSTEM
+         DC    AL2(150)           REMOTENAME
+         DC    AL2(158)           TRANSID
+         DC    AL2(162)           EXECUTIONSET
+         DC    AL2(171)           JVM
+         DC    AL2(174)           JVMCLASS
+         DC    AL2(429)           JVMSERVER
+         DC    AL2(437)           DEFINETIME
+         DC    AL2(454)           CHANGETIME
+         DC    AL2(471)           CHANGEUSRID
+         DC    AL2(479)           CHANGEAGENT
+         DC    AL2(487)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 26) REQUESTMODEL
+*
+REQUKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            CORBASERVER
+         DC    AL2(83)            TYPE
+         DC    AL2(90)            BEANNAME
+         DC    AL2(330)           INTFACETYPE
+         DC    AL2(336)           MODULE
+         DC    AL2(591)           INTERFACE
+         DC    AL2(846)           OPERATION
+         DC    AL2(1101)          TRANSID
+         DC    AL2(1105)          DEFINETIME
+         DC    AL2(1122)          CHANGETIME
+         DC    AL2(1139)          CHANGEUSRID
+         DC    AL2(1147)          CHANGEAGENT
+         DC    AL2(1155)          CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 27) SESSIONS
+*
+SESSKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            CONNECTION
+         DC    AL2(83)            SESSNAME
+         DC    AL2(87)            NETNAMEQ
+         DC    AL2(95)            MODENAME
+         DC    AL2(103)           PROTOCOL
+         DC    AL2(107)           MAXIMUM
+         DC    AL2(114)           RECEIVEPFX
+         DC    AL2(116)           RECEIVECOUNT
+         DC    AL2(119)           SENDPFX
+         DC    AL2(121)           SENDCOUNT
+         DC    AL2(124)           SENDSIZE
+         DC    AL2(129)           RECEIVESIZE
+         DC    AL2(134)           SESSPRIORITY
+         DC    AL2(137)           USERID
+         DC    AL2(145)           AUTOCONNECT
+         DC    AL2(148)           BUILDCHAIN
+         DC    AL2(151)           USERAREALEN
+         DC    AL2(154)           IOAREALEN
+         DC    AL2(165)           RELREQ
+         DC    AL2(168)           DISCREQ
+         DC    AL2(171)           NEPCLASS
+         DC    AL2(174)           RECOVOPTION
+         DC    AL2(185)           DEFINETIME
+         DC    AL2(202)           CHANGETIME
+         DC    AL2(219)           CHANGEUSRID
+         DC    AL2(227)           CHANGEAGENT
+         DC    AL2(235)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 28) TCPIPSERVICE
+*
+TCPIKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            URM
+         DC    AL2(87)            PORTNUMBER
+         DC    AL2(92)            STATUS
+         DC    AL2(98)            PROTOCOL
+         DC    AL2(102)           TRANSACTION
+         DC    AL2(106)           BACKLOG
+*        DC    AL2(111)           TSQPREFIX                   @PI59763D
+         DC    AL2(111)           HOST
+         DC    AL2(227)           IPADDRESS
+         DC    AL2(242)           SPECIFTCPS
+         DC    AL2(250)           SOCKETCLOSE
+         DC    AL2(256)           MAXPERSIST
+         DC    AL2(261)           MAXDATALEN
+         DC    AL2(267)           SSL
+         DC    AL2(277)           CERTIFICATE
+         DC    AL2(333)           CIPHERS
+         DC    AL2(389)           AUTHENTICATE
+         DC    AL2(401)           REALM
+         DC    AL2(457)           ATTACHSEC
+         DC    AL2(463)           DEFINETIME
+         DC    AL2(480)           CHANGETIME
+         DC    AL2(497)           CHANGEUSRID
+         DC    AL2(505)           CHANGEAGENT
+         DC    AL2(513)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 29) TDQUEUE
+*
+TDQUKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            TYPE
+         DC    AL2(87)            DATABUFFERS
+         DC    AL2(90)            DDNAME
+         DC    AL2(98)            DSNAME
+         DC    AL2(142)           SYSOUTCLASS
+         DC    AL2(143)           ERROROPTION
+         DC    AL2(149)           OPENTIME
+         DC    AL2(157)           REWIND
+         DC    AL2(163)           TYPEFILE
+         DC    AL2(169)           RECORDSIZE
+         DC    AL2(174)           BLOCKSIZE
+         DC    AL2(179)           RECORDFORMAT
+         DC    AL2(187)           BLOCKFORMAT
+         DC    AL2(196)           PRINTCONTROL
+         DC    AL2(197)           DISPOSITION
+         DC    AL2(200)           JOBUSERID
+         DC    AL2(208)           ATIFACILITY
+         DC    AL2(216)           RECOVSTATUS
+         DC    AL2(224)           FACILITYID
+         DC    AL2(228)           TRANSID
+         DC    AL2(232)           TRIGGERLEVEL
+         DC    AL2(237)           USERID
+         DC    AL2(245)           WAIT
+         DC    AL2(248)           WAITACTION
+         DC    AL2(254)           INDIRECTNAME
+         DC    AL2(258)           REMOTENAME
+         DC    AL2(262)           REMOTESYSTEM
+         DC    AL2(266)           REMOTELENGTH
+         DC    AL2(271)           DEFINETIME
+         DC    AL2(288)           CHANGETIME
+         DC    AL2(305)           CHANGEUSRID
+         DC    AL2(313)           CHANGEAGENT
+         DC    AL2(321)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 30) TERMINAL
+*
+TERMKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            AUTINSTMODEL
+         DC    AL2(83)            AUTINSTNAME
+         DC    AL2(91)            TYPETERM
+         DC    AL2(99)            NETNAME
+         DC    AL2(107)           CONSNAME
+         DC    AL2(115)           REMOTESYSTEM
+         DC    AL2(119)           REMOTENAME
+         DC    AL2(123)           REMOTESYSNET
+         DC    AL2(131)           MODENAME
+         DC    AL2(139)           PRINTER
+         DC    AL2(143)           PRINTERCOPY
+         DC    AL2(146)           ALTPRINTER
+         DC    AL2(150)           ALTPRINTCOPY
+         DC    AL2(153)           POOL
+         DC    AL2(161)           TASKLIMIT
+         DC    AL2(166)           USERID
+         DC    AL2(174)           NATLANG
+         DC    AL2(175)           TRANSACTION
+         DC    AL2(179)           TERMPRIORITY
+         DC    AL2(182)           INSERVICE
+         DC    AL2(185)           SOLICITED
+         DC    AL2(188)           SECURITYNAME
+         DC    AL2(196)           ATTACHSEC
+         DC    AL2(206)           BINDSECURITY
+         DC    AL2(209)           USEDFLTUSER
+         DC    AL2(212)           DEFINETIME
+         DC    AL2(229)           CHANGETIME
+         DC    AL2(246)           CHANGEUSRID
+         DC    AL2(254)           CHANGEAGENT
+         DC    AL2(262)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 31) TRANCLASS
+*
+TRCLKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            MAXACTIVE
+         DC    AL2(82)            PURGETHRESH
+         DC    AL2(89)            DEFINETIME
+         DC    AL2(106)           CHANGETIME
+         DC    AL2(123)           CHANGEUSRID
+         DC    AL2(131)           CHANGEAGENT
+         DC    AL2(139)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 32) TRANSACTION
+*
+TRANKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            PROGRAM
+         DC    AL2(87)            TWASIZE
+         DC    AL2(92)            PROFILE
+         DC    AL2(100)           PARTITIONSET
+         DC    AL2(108)           STATUS
+         DC    AL2(116)           TASKDATALOC
+         DC    AL2(121)           TASKDATAKEY
+         DC    AL2(125)           STORAGECLEAR
+         DC    AL2(128)           RUNAWAY
+         DC    AL2(135)           SHUTDOWN
+         DC    AL2(143)           ISOLATE
+         DC    AL2(146)           BREXIT
+         DC    AL2(154)           DYNAMIC
+         DC    AL2(157)           ROUTABLE
+         DC    AL2(160)           REMOTESYSTEM
+         DC    AL2(164)           REMOTENAME
+         DC    AL2(172)           TRPROF
+         DC    AL2(180)           LOCALQ
+         DC    AL2(183)           PRIORITY
+         DC    AL2(186)           TRANCLASS
+         DC    AL2(194)           ALIAS
+         DC    AL2(198)           TASKREQ
+         DC    AL2(202)           XTRANID
+         DC    AL2(210)           TPNAME
+         DC    AL2(274)           XTPNAME
+         DC    AL2(402)           DTIMOUT
+         DC    AL2(406)           RESTART
+         DC    AL2(409)           SPURGE
+         DC    AL2(412)           TPURGE
+         DC    AL2(415)           DUMP
+         DC    AL2(418)           TRACE
+         DC    AL2(421)           CONFDATA
+         DC    AL2(424)           OTSTIMEOUT
+         DC    AL2(430)           ACTION
+         DC    AL2(437)           WAIT
+         DC    AL2(440)           WAITTIME
+         DC    AL2(448)           RESSEC
+         DC    AL2(451)           CMDSEC
+         DC    AL2(454)           DEFINETIME
+         DC    AL2(471)           CHANGETIME
+         DC    AL2(488)           CHANGEUSRID
+         DC    AL2(496)           CHANGEAGENT
+         DC    AL2(504)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 33) TSMODEL
+*
+TSMOKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            PREFIX
+         DC    AL2(95)            XPREFIX
+         DC    AL2(127)           LOCATION
+         DC    AL2(136)           EXPIRYINTMIN
+         DC    AL2(142)           RECOVERY
+         DC    AL2(145)           SECURITY
+         DC    AL2(148)           POOLNAME
+         DC    AL2(156)           REMOTESYSTEM
+         DC    AL2(160)           REMOTEPREFIX
+         DC    AL2(176)           XREMOTEPFX
+         DC    AL2(208)           DEFINETIME
+         DC    AL2(225)           CHANGETIME
+         DC    AL2(242)           CHANGEUSRID
+         DC    AL2(250)           CHANGEAGENT
+         DC    AL2(258)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 34) TYPETERM
+*
+TYPEKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            DEVICE
+         DC    AL2(87)            TERMMODEL
+         DC    AL2(88)            SESSIONTYPE
+         DC    AL2(96)            LDCLIST
+         DC    AL2(104)           SHIPPABLE
+         DC    AL2(107)           PAGESIZE
+         DC    AL2(114)           ALTPAGE
+         DC    AL2(121)           ALTSUFFIX
+         DC    AL2(122)           FMHPARM
+         DC    AL2(125)           OBOPERID
+         DC    AL2(128)           AUTOPAGE
+         DC    AL2(131)           DEFSCREEN
+         DC    AL2(138)           ALTSCREEN
+         DC    AL2(145)           APLKYBD
+         DC    AL2(148)           APLTEXT
+         DC    AL2(151)           AUDIBLEALARM
+         DC    AL2(154)           COLOR
+         DC    AL2(157)           COPY
+         DC    AL2(160)           DUALCASEKYBD
+         DC    AL2(163)           EXTENDEDDS
+         DC    AL2(166)           HILIGHT
+         DC    AL2(169)           KATAKANA
+         DC    AL2(172)           LIGHTPEN
+         DC    AL2(175)           MSRCONTROL
+         DC    AL2(178)           OBFORMAT
+         DC    AL2(181)           PARTITIONS
+         DC    AL2(184)           PRINTADAPTER
+         DC    AL2(187)           PROGSYMBOLS
+         DC    AL2(190)           VALIDATION
+         DC    AL2(193)           FORMFEED
+         DC    AL2(196)           HORIZFORM
+         DC    AL2(199)           VERTICALFORM
+         DC    AL2(202)           TEXTKYBD
+         DC    AL2(205)           TEXTPRINT
+         DC    AL2(208)           QUERY
+         DC    AL2(212)           OUTLINE
+         DC    AL2(215)           SOSI
+         DC    AL2(218)           BACKTRANS
+         DC    AL2(221)           CGCSGID
+         DC    AL2(232)           ASCII
+         DC    AL2(234)           SENDSIZE
+         DC    AL2(239)           RECEIVESIZE
+         DC    AL2(244)           BRACKET
+         DC    AL2(247)           LOGMODE
+         DC    AL2(255)           ERRLASTLINE
+         DC    AL2(258)           ERRINTENSIFY
+         DC    AL2(261)           ERRCOLOR
+         DC    AL2(270)           ERRHILIGHT
+         DC    AL2(279)           AUTOCONNECT
+         DC    AL2(282)           ATI
+         DC    AL2(285)           TTI
+         DC    AL2(288)           CREATESESS
+         DC    AL2(291)           RELREQ
+         DC    AL2(294)           DISCREQ
+         DC    AL2(297)           NEPCLASS
+         DC    AL2(300)           SIGNOFF
+         DC    AL2(306)           RSTSIGNOFF
+         DC    AL2(313)           ROUTEDMSGS
+         DC    AL2(321)           LOGONMSG
+         DC    AL2(324)           BUILDCHAIN
+         DC    AL2(327)           USERAREALEN
+         DC    AL2(330)           IOAREALEN
+         DC    AL2(341)           UCTRAN
+         DC    AL2(347)           RECOVOPTION
+         DC    AL2(358)           RECOVNOTIFY
+         DC    AL2(369)           DEFINETIME
+         DC    AL2(386)           CHANGETIME
+         DC    AL2(403)           CHANGEUSRID
+         DC    AL2(411)           CHANGEAGENT
+         DC    AL2(419)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 35) URIMAP
+*
+URIMKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            STATUS
+         DC    AL2(87)            USAGE
+         DC    AL2(96)            SCHEME
+         DC    AL2(101)           PORT
+         DC    AL2(106)           HOST
+         DC    AL2(222)           PATH
+         DC    AL2(477)           SOCKETCLOSE
+         DC    AL2(483)           TCPIPSERVICE
+         DC    AL2(491)           ANALYZER
+         DC    AL2(494)           CONVERTER
+         DC    AL2(502)           TRANSACTION
+         DC    AL2(506)           PROGRAM
+         DC    AL2(514)           PIPELINE
+         DC    AL2(522)           WEBSERVICE
+         DC    AL2(554)           ATOMSERVICE
+         DC    AL2(562)           USERID
+         DC    AL2(570)           CIPHERS
+         DC    AL2(626)           CERTIFICATE
+         DC    AL2(658)           AUTHENTICATE
+         DC    AL2(663)           MEDIATYPE
+         DC    AL2(719)           CHARACTERSET
+         DC    AL2(759)           HOSTCODEPAGE
+         DC    AL2(769)           TEMPLATENAME
+         DC    AL2(817)           HFSFILE
+         DC    AL2(1072)          REDIRECTTYPE
+         DC    AL2(1081)          LOCATION
+         DC    AL2(1336)          DEFINETIME
+         DC    AL2(1353)          CHANGETIME
+         DC    AL2(1370)          CHANGEUSRID
+         DC    AL2(1378)          CHANGEAGENT
+         DC    AL2(1386)          CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+*
+* 36) WEBSERVICE
+*
+WEBSKWD  DS    0F
+         DC    AL2(21)            DESCRIPTION
+         DC    AL2(79)            PIPELINE
+         DC    AL2(87)            VALIDATION
+         DC    AL2(90)            WSBIND
+         DC    AL2(345)           WSDLFILE
+         DC    AL2(600)           ARCHIVEFILE
+         DC    AL2(855)           DEFINETIME
+         DC    AL2(872)           CHANGETIME
+         DC    AL2(889)           CHANGEUSRID
+         DC    AL2(897)           CHANGEAGENT
+         DC    AL2(905)           CHANGEAGREL
+         DC    AL2(0)             End of Table Entry
+         END

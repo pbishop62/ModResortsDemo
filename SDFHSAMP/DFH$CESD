@@ -1,0 +1,939 @@
+*PROCESS XOPTS(SP) LIST CICS(SOURCE    XREF FLAG(I));
+ /********************************************************************/
+ /*                                                                  */
+ /* MODULE NAME = DFH$CESD                                           */
+ /*                                                                  */
+ /* DESCRIPTIVE NAME = CICS TS  Shutdown Assist Program              */
+ /*                    (Sample PL/1 Version)                         */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*       Licensed Materials - Property of IBM                       */
+ /*                                                                  */
+ /*       "Restricted Materials of IBM"                              */
+ /*                                                                  */
+ /*       5655-Y04                                                   */
+ /*                                                                  */
+ /*       (C) Copyright IBM Corp. 1994, 2013"                        */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* STATUS = 7.2.0                                                   */
+ /*                                                                  */
+ /* TRANSACTION NAME = SDA1                                          */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* OVERVIEW                                                         */
+ /*                                                                  */
+ /* The CICS shutdown assist transaction aims to remove two of the   */
+ /* problems that can arise when shutting down CICS. These problems  */
+ /* are stated below.                                                */
+ /*                                                                  */
+ /* - For a normal shutdown, CICS waits for all running tasks to     */
+ /*   finish before entering the second stage of shutdown.           */
+ /*   Long-running or conversational transactions can cause          */
+ /*   an unacceptable delay or can require operator intervention.    */
+ /*   Work being done by a JVM server can cause an unacceptable      */
+ /*   delay or require operator intervention so these are shut       */
+ /*   down as well.                                                  */
+ /*                                                                  */
+ /* - For an immediate shutdown, CICS does not allow running tasks   */
+ /*   to finish and so backout is not performed until emergency      */
+ /*   restart. This can cause an unacceptable number of units of     */
+ /*   work to be shunted with consequent retention of locks and      */
+ /*   indoubts.                                                      */
+ /*                                                                  */
+ /* The SIT parameter SDTRAN specifies the transid of the shutdown   */
+ /* assist transaction. This transaction is started during CICS      */
+ /* normal or immediate shutdown processing, and its purpose is to   */
+ /* allow control over the purging of long-running tasks.            */
+ /* The default transid is CESD which invokes program DFHCESD.       */
+ /* DFHCESD attempts to purge and backout long-running tasks         */
+ /* using increasingly stronger techniques. It ensures that as       */
+ /* many tasks as possible commit or backout cleanly, enabling       */
+ /* CICS to shut down in a controlled manner.                        */
+ /*                                                                  */
+ /* This program is provided as a sample that the customer can       */
+ /* modify as desired, and use as a replacement for DFHCESD.         */
+ /* As supplied, it contains the exact same logic as DFHCESD.        */
+ /* To use this program, the customer should:                        */
+ /*                                                                  */
+ /* - Modify this program as desired                                 */
+ /* - In sample CSD group DFH$SDAP modify:                           */
+ /*   - The definition for this program DFH$CESD if desired          */
+ /*   - The definition for transaction SDA1 if desired               */
+ /* - Ensure group DFH$SDAP is part of the startup CICS GRPLIST      */
+ /* - Specify SDA1 on the SIT SDTRAN parameter at CICS startup       */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* DESCRIPTION                                                      */
+ /*                                                                  */
+ /* DFH$CESD is intended to be invoked by a CICS shutdown assist     */
+ /* transaction. It attempts to purge and backout long-running       */
+ /* tasks ensuring that as many tasks as possible commit or backout  */
+ /* cleanly. This enables CICS to shut down in a controlled manner   */
+ /* It may be modified as required by the customer.                  */
+ /*                                                                  */
+ /* This purging of tasks involves several steps, each step using a  */
+ /* stronger purge technique and only being invoked if tasks         */
+ /* refuse to disappear from the system. In order to do this,        */
+ /* DFH$CESD samples the number of tasks present in the system.      */
+ /* It only performs the purge operation, and moves on to the        */
+ /* next step, if this sample number of tasks does not reduce        */
+ /* over 8 samples (normal shutdown) or 4 samples (immediate         */
+ /* shutdown). Each sample is achieved by DFH$CESD issuing a delayed */
+ /* EXEC CICS START for itself, passing the last sample count in a   */
+ /* Temporary Storage queue record. The new invocation of DFH$CESD   */
+ /* takes a sample and compares this with the last sample from the   */
+ /* TS queue record. It then decides whether to carry out the        */
+ /* purge operation and move to the next step, or to remain on the   */
+ /* current step.                                                    */
+ /*                                                                  */
+ /* After its initial invocation by CICS, there are three steps that */
+ /* DFH$CESD moves through. Note that the last step does             */
+ /* not cause the CICS shutdown assist transaction to run again, as  */
+ /* CICS ensures that it only runs once.                             */
+ /*                                                                  */
+ /* - Step 1. Normal purge is issued for all remaining tasks         */
+ /*           JVMSERVERs are disabled and work purged      @PI83585A */
+ /* - Step 2. VTAM is force closed, IRC & TCPIP are immclosed.       */
+ /*           JVMSERVERs are force-purged and then killed  @PI83585A */
+ /* - Step 3. CICS is shut down using PERFORM SHUT IMMEDIATE         */
+ /*                                                                  */
+ /* The following information is passed to DFH$CESD in a TS queue    */
+ /* record.                                                          */
+ /*                                                                  */
+ /* - SDFN   Char(2)   Step to be performed (00,01,02,03)            */
+ /* - SDXN   Dec(7)    Task number of task that started shutdown     */
+ /* - SDNT   Bin(31)   Number of tasks in the system at last sample  */
+ /* - SDET   Bin(15)   Number of samples giving the value in SDNT    */
+ /*                                                                  */
+ /* On the initial invocation SDFN is '00', SDNT and SDET are zero,  */
+ /* and SDXN is set to the task number of the shutdown task.         */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* CHANGE ACTIVITY :                                                */
+ /*                                                                  */
+ /*        $MOD(DFH$CESD),COMP(SAMPLES),PROD(CICS TS ):              */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $L0= 651    510 940321 HDEEBD : Create program                  */
+ /*  $P1= M94127 510 950329 HD9ZSMH: Improve readability             */
+ /*  $P3= M94918 510 951114 HD2TAHI : Abend if started from terminal */
+ /*  $P4= M96139 510 951221 HDEEBD  : Set default termid =????       */
+ /*  $P5= M18579 610 010221 HDFVGMB : Include TCPIP in sample shutdow*/
+ /*  $P6= D03301 620 011024 HD9SHGP : Flush user journals            */
+ /*  $P7= D09579 640 041119 HD0PIHR : Message Lies Optimistically    */
+ /*  $P8= D14399 670 100806 HDHCPC  : UNSUPPORTED OPTION IN DFH$CESD */
+ /*       D60036 680 121008 HDFVGMB : Include JVMSERVER processing   */
+ /*       D60390 680 121008 HDFVGMB : JVMSERVER only in stage 3      */
+ /*       D61612 680 130102 HDFVGMB : PM78626 Remove JVMSERVER code  */
+ /*                                                                  */
+ /********************************************************************/
+ DFHCESD: PROC OPTIONS(MAIN);
+ dcl plixopt char(9) var static external init('TRAP(OFF)');    /*@P8C*/
+ /********************************************************************/
+ /* The following declares constants that control the operation of   */
+ /* DFH$CESD. They may be changed by the customer as required.       */
+ /* - delay_shut is the time in seconds to wait between the initial  */
+ /*   invocation and step 1 for a normal shutdown, thus allowing     */
+ /*   tasks to complete normally if possible.                        */
+ /* - delay_next is the time in seconds between each START of SDA1   */
+ /* - equal_num_tasks_norm gives the number of equal consecutive     */
+ /*   samples that must be found before carrying out a purge action  */
+ /*   and moving to the next step, for a normal shutdown             */
+ /* - equal_num_tasks_immed gives the number of equal consecutive    */
+ /*   samples that must be found before carrying out a purge action  */
+ /*   and moving to the next step, for an immediate shutdown         */
+ /********************************************************************/
+ dcl delay_shut             fixed bin(31) static init (120);
+ dcl delay_next             fixed bin(31) static init (2);
+ dcl equal_num_tasks_norm   fixed bin(15) static init (8);
+ dcl equal_num_tasks_immed  fixed bin(15) static init (4);
+ /********************************************************************/
+ /* Various other constants.                                         */
+ /* - initial_call must not be changed as it is set by CICS          */
+ /********************************************************************/
+ dcl initial_call           char(2)  static init ('00');
+ dcl step1                  char(2)  static init ('01');
+ dcl step2                  char(2)  static init ('02');
+ dcl step3                  char(2)  static init ('03');
+ dcl normshut               char(10) static init ('NORMAL.   ');
+ dcl immedshut              char(10) static init ('IMMEDIATE.');
+ dcl npurge                 char(19) static
+                            init ('ATTEMPTING TO PURGE');       /*@P7C*/
+ dcl apurge                 char(19) static
+                            init ('ACTIVE:            ');       /*@P7C*/
+ dcl req_id                 char(8)  static init ('DFHCESD ');
+ dcl max_tasks              fixed bin(31) static init (999);
+ dcl fci_terminal           char(1)  static init ('01'X);
+ /********************************************************************/
+ /* The format of the TS queue record passed to DFH$CESD.            */
+ /********************************************************************/
+ dcl 1 sdarg,                          /* TS queue record            */
+     2 sdfn        char(2),            /* Step to be performed       */
+     2 sdxn        fixed dec(7),       /* Shutdown task number       */
+     2 sdet        fixed bin(15),      /* Number of equal samples    */
+     2 sdnt        fixed bin(31);      /* Number of tasks in system  */
+ /********************************************************************/
+ /* Various other variables.                                         */
+ /********************************************************************/
+ dcl rc            fixed bin(31);      /* Response code from cics    */
+ dcl shutstat      fixed bin(31);      /* Shutdown status            */
+ dcl num_tasks     fixed bin(31);      /* Number of tasks in system  */
+ dcl start_delay   fixed bin(31);      /* Delay for START command    */
+ dcl ti            fixed bin(15);      /* Task index                 */
+ dcl sdarglen      fixed bin(15);      /* Length of TS queue record  */
+ dcl taskno        fixed dec(7);       /* Task number                */
+ dcl psdint        fixed dec(7);       /* Persistent session interval*/
+ dcl tasklistp     pointer;            /* Address of task list       */
+ dcl tranid        char(4);            /* Task transid               */
+ dcl termid        char(4);            /* Task termid                */
+ dcl userid        char(8);            /* Task userid                */
+ dcl sdtype        char(10);           /* Type of shutdown           */
+ dcl uowid         char(16);           /* Unit of work id            */
+ dcl fci           char(1);            /* Facility type              */
+ /********************************************************************/
+ /* Storage for task list.                                           */
+ /********************************************************************/
+ dcl tasklist(999) fixed dec(7) based(tasklistp);
+ /********************************************************************/
+ /* Message declarations.                                            */
+ /********************************************************************/
+ dcl 1 msg_buffer,
+       2 msg_prog  char(8),            /* Program name               */
+       2 msg_f1    char(1),            /* Blank space                */
+       2 msg_appl  char(8),            /* CICS applid                */
+       2 msg_f2    char(1),            /* Blank space                */
+       2 msg_text  char(80);           /* Message text               */
+ dcl msg_len       fixed bin(31);      /* Length of message buffer   */
+ dcl msg_rc        fixed bin(31);      /* Response code from cics    */
+
+ dcl 1 start_msg_auto like start_msg based(addr(msg_text));
+ dcl 1 start_msg static,
+       2 f1   char(28)  init('SHUTDOWN ASSIST TRANSACTION '),
+       2 tran char(4)   init('xxxx'),
+       2 f2   char(23)  init(' STARTING. SHUTDOWN IS '),
+       2 shut char(10)  init('xxxxxxxxxx'),
+       2 f3   char(15)  init('');
+ dcl 1 count_msg_auto like count_msg based(addr(msg_text));
+ dcl 1 count_msg static,
+       2 f1   char(14)  init('THERE ARE NOW '),
+       2 task pic'9999' init('0000'),
+       2 f2   char(27)  init(' TASKS STILL IN THE SYSTEM.'),
+       2 f3   char(35)  init('');
+ dcl 1 purge_msg_auto like purge_msg based(addr(msg_text));
+ dcl 1 purge_msg static,
+       2 typ  char(19)  init('xxxxxxxxxxxxxxxxxxx'),            /*@P7C*/
+       2 f1   char(8)  init(' TRANID '),
+       2 tran char(4)   init('xxxx'),
+       2 f2   char(9)   init(', TERMID '),
+       2 term char(4)   init('????'),
+       2 f3   char(9)   init(', USERID '),
+       2 user char(8)   init('xxxxxxxx'),
+       2 f4   char(9)   init(', TASKNO '),
+       2 task pic'999999' init('000000'),
+       2 f5   char(4)   init('');                               /*@P7C*/
+ dcl 1 list_msg_auto like list_msg based(addr(msg_text));
+ dcl 1 list_msg static,
+       2 f1   char(30)  init('LIST OF SHUNTED UNITS OF WORK '),
+       2 f2   char(22)  init('IN THE SYSTEM FOLLOWS.'),
+       2 f3   char(28)  init('');
+ dcl 1 shunt_msg_auto like shunt_msg based(addr(msg_text));
+ dcl 1 shunt_msg static,
+       2 f1   char(20)  init('SHUNTED TRANSACTION '),
+       2 tran char(4)   init('xxxx'),
+       2 f2   char(9)   init(', TERMID '),
+       2 term char(4)   init('????'),
+       2 f3   char(15)  init(', UNIT OF WORK '),
+       2 uow  char(16)  init('xxxxxxxxxxxxxxxx'),
+       2 f4   char(12)  init('');
+ dcl 1 error_msg_auto like error_msg based(addr(msg_text));
+ dcl 1 error_msg static,
+       2 f1   char(28)  init('SHUTDOWN ASSIST TRANSACTION '),
+       2 tran char(4)   init('xxxx'),
+       2 f2   char(8)   init(' ERROR. '),
+       2 txt  char(40)  init('');
+ dcl 1 step_msg_auto like step_msg based(addr(msg_text));
+ dcl 1 step_msg static,
+       2 f1   char(21)  init('SHUTDOWN ASSIST STEP '),
+       2 step char(2)   init('xx'),
+       2 f2   char(57)  init('');
+
+ dcl (addr, bin, divide, mod, length, substr, cstg, unspec) builtin;
+
+ /********************************************************************/
+ /* DFH$CESD mainline code.                                          */
+ /********************************************************************/
+
+ /********************************************************************/
+ /* Obtain the program name and CICS applid for messages.            */
+ /* Obtain the facility type, to ensure the transaction is not       */
+ /* started from a terminal.                                         */
+ /********************************************************************/
+ msg_buffer = '';
+ msg_len = length(msg_prog) + length(msg_f1) + length(msg_appl) +
+           length(msg_f2) + length(msg_text);
+ exec cics assign
+      program(msg_prog)
+      applid(msg_appl)
+      fci(fci)
+      resp(rc);
+ /********************************************************************/
+ /* Abend if we were started by terminal input                       */
+ /********************************************************************/
+ if fci = fci_terminal then
+   do;
+     exec cics abend abcode('ERRS');
+   end;
+ /********************************************************************/
+ /* Obtain the type of CICS shutdown (normal or immediate).          */
+ /********************************************************************/
+ exec cics inquire system
+      shutstatus(shutstat)
+      resp(rc);
+ if rc ^= dfhresp(NORMAL) then call errorc(2);
+ select (shutstat);
+   when (dfhvalue(NOTAPPLIC))
+     do;
+     /* If CICS is not shutting down then just return quietly.*/
+     /* The START command may have been recovered, and the shutdown*/
+     /* transaction restarted on the next CICS run.           */
+     exec cics return;
+     end;
+   when (dfhvalue(CONTROLSHUT))
+     sdtype = normshut;
+   otherwise
+     sdtype = immedshut;
+ end;
+ /********************************************************************/
+ /* Issue CICS ENQ to ensure only one copy of DFH$CESD is running    */
+ /********************************************************************/
+         exec cics enq luw
+               resource(req_id)
+               length(length(req_id))
+               resp(rc);
+ /********************************************************************/
+ /* Retrieve TS queue record passed to this transaction via EXEC     */
+ /* CICS START TRANSID() FROM().                                     */
+ /********************************************************************/
+ sdarglen = 12;
+ exec cics retrieve
+      into(sdarg)
+      length(sdarglen)
+      resp(rc);
+ if rc ^= dfhresp(NORMAL) then call errorc(1);
+ sdarglen = 12;
+ /********************************************************************/
+ /* Inquire on the number of tasks in the system.                    */
+ /********************************************************************/
+ exec cics inquire task list
+      listsize(num_tasks)
+      set(tasklistp)
+      resp(rc);
+ if rc ^= dfhresp(NORMAL) then call errorc(3);
+ /********************************************************************/
+ /* Select on step and call the appropriate routine.                 */
+ /* Message step_msg could be issued here if desired.                */
+ /********************************************************************/
+ /* step_msg_auto = step_msg   */
+ /* step_msg_auto.step = sdfn  */
+ /* call issue_message         */
+ select;
+   when (sdfn = initial_call)
+     call initial_routine;
+   when (sdfn = step1)
+     call step1_routine;
+   when (sdfn = step2)
+     call step2_routine;
+   when (sdfn = step3)
+     call step3_routine;
+   otherwise
+     call errorc(5);
+ end;
+ /********************************************************************/
+ /* End the program and return.                                      */
+ /********************************************************************/
+ exec cics return;
+
+ /********************************************************************/
+ /* Procedure to perform initial invocation processing.              */
+ /*                                                                  */
+ /*   - Display shunted units of work                                */
+ /* - EXEC CICS START ourselves again specifying step 1              */
+ /********************************************************************/
+ initial_routine: proc;
+
+ /********************************************************************/
+ /* Issue an initial startup message indicating shutdown type.       */
+ /********************************************************************/
+ start_msg_auto = start_msg;
+ start_msg_auto.tran = eibtrnid;
+ start_msg_auto.shut = sdtype;
+ call issue_message;
+ /********************************************************************/
+ /* Browse and display all shunted units of work.                    */
+ /********************************************************************/
+     call inq_uows;
+ /********************************************************************/
+ /* Move straight to step 1.                                         */
+ /********************************************************************/
+ sdfn = step1;
+ sdnt = max_tasks;
+ sdet = 0;
+ sdxn = eibtaskn;
+ /********************************************************************/
+ /* Issue the next START for our own transid, passing the updated    */
+ /* TS queue record.                                                 */
+ /* Note that we delay the START for 120 seconds for a normal        */
+ /* shutdown, to allow tasks to terminate normally.                  */
+ /********************************************************************/
+ if sdtype = normshut then
+   start_delay = delay_shut;
+ else
+   start_delay = delay_next;
+ exec cics start
+      transid(eibtrnid)
+      from(sdarg)
+      length(sdarglen)
+      after seconds(start_delay)
+      reqid(req_id)
+      resp(rc);
+ if rc ^= dfhresp(NORMAL) then call errorc(6);
+ return;
+ end initial_routine;
+
+ /********************************************************************/
+ /* Procedure to perform processing for step 1.                      */
+ /*                                                                  */
+ /* - Check if we have finished step 1 and need to move to step 2    */
+ /* - EXEC CICS START ourselves again specifying step 1 or step 2    */
+ /* - If finished step 1 then                                        */
+ /*   - Close transaction dump data set                              */
+ /*   - Normal purge each still running task                         */
+ /*   - Disable all JVMSERVERs and purge all work           @PI83585A*/
+ /*   - Display shunted units of work                                */
+ /********************************************************************/
+ step1_routine: proc;
+
+ /********************************************************************/
+ /* Check if the sample count has reduced or is still the same.      */
+ /* If we have taken 8 samples (normal shutdown) or 4 samples        */
+ /* (immediate shutdown) without reduction then we will perform the  */
+ /* step 1 purging actions and move to step 2.                       */
+ /* Otherwise we will remain on step 1.                              */
+ /********************************************************************/
+ call check_sample_count;
+ if (sdtype = normshut  & sdet >= equal_num_tasks_norm) |
+    (sdtype = immedshut & sdet >= equal_num_tasks_immed) then
+   do;
+     sdfn = step2;
+     sdet = 0;
+   end;
+ /********************************************************************/
+ /* Issue the next START for our own transid, passing the updated    */
+ /* TS queue record.                                                 */
+ /********************************************************************/
+ start_delay = delay_next;
+ exec cics start
+      transid(eibtrnid)
+      from(sdarg)
+      length(sdarglen)
+      after seconds(start_delay)
+      reqid(req_id)
+      resp(rc);
+ if rc ^= dfhresp(NORMAL) then call errorc(6);
+ /********************************************************************/
+ /* If finished step 1 perform the step 1 purging actions.           */
+ /********************************************************************/
+ if sdfn = step2 then
+   do;
+ /********************************************************************/
+ /* Close transaction dump dataset to prevent unwanted dumps from    */
+ /* being taken when tasks are purged.                               */
+ /********************************************************************/
+     exec cics set dumpds
+          closed
+          resp(rc);
+     if rc ^= dfhresp(NORMAL) then call errorc(10);
+ /********************************************************************/
+ /* For each task in the list of running tasks, purge it if it is    */
+ /* still running. We issue a message to indicate this fact.         */
+ /* We do not purge ourselves or the task that issued the shutdown.  */
+ /* Ignore any error from the purge.                                 */
+ /********************************************************************/
+     do ti = 1 to num_tasks;
+     if mod(ti,128) =0 then
+       do;         /* CICS SUSPEND is issued every 128 times round   */
+                   /* the loop to reset the CICS RUNAWAY timer!      */
+         exec cics suspend
+               resp(rc);
+       end;        /* CICS SUSPEND is issued every 128 times round   */
+       taskno = tasklist(ti);
+       exec cics inquire task(taskno)
+            transaction(tranid)
+            facility(termid)
+            userid(userid)
+            resp(rc);
+       if rc = dfhresp(NORMAL) &
+          tranid ^= eibtrnid   &
+          taskno ^= sdxn then
+         do;
+           purge_msg_auto = purge_msg;
+           purge_msg_auto.typ = npurge;
+           purge_msg_auto.tran = tranid;
+           if termid ^='' then
+              purge_msg_auto.term = termid;
+           purge_msg_auto.user = userid;
+           purge_msg_auto.task = taskno;
+           call issue_message;
+           exec cics set task(taskno)
+                purge
+                resp(rc);
+         end;
+       end;
+ /********************************************************************/
+ /* Tell JVMSERVERs to purge all work                                */
+ /********************************************************************/
+     call set_JVMSERVERs(dfhvalue(purge));                /*@PI83585A*/
+ /********************************************************************/
+ /* Browse and display all shunted units of work.                    */
+ /********************************************************************/
+     call inq_uows;
+   end;                               /* of if finished step 1       */
+ return;
+ end step1_routine;
+
+ /********************************************************************/
+ /* Procedure to perform processing for step 2.                      */
+ /*                                                                  */
+ /* - Check if we have finished step 2 and need to move to step 3    */
+ /* - EXEC CICS START ourselves again specifying step 2 or step 3    */
+ /* - If finished step 2 then                                        */
+ /*   - If normal shutdown or no persistent sessions                 */
+ /*     - Force close VTAM                                           */
+ /*   - Close IRC immediately                                        */
+ /*   - Close TCPIP immediately                                      */
+ /*   - Tell JVMSERVERs to forcepurge and kill all work     @PI83585A*/
+ /*   - Display shunted units of work                                */
+ /********************************************************************/
+ step2_routine: proc;
+
+ /********************************************************************/
+ /* Check if the sample count has reduced or is still the same.      */
+ /* If we have taken 8 samples (normal shutdown) or 4 samples        */
+ /* (immediate shutdown) without reduction then we will perform the  */
+ /* step 2 purging actions and move to step 3.                       */
+ /* Otherwise we will remain on step 2.                              */
+ /********************************************************************/
+ call check_sample_count;
+ if (sdtype = normshut  & sdet >= equal_num_tasks_norm) |
+    (sdtype = immedshut & sdet >= equal_num_tasks_immed) then
+   do;
+     sdfn = step3;
+     sdet = 0;
+   end;
+ /********************************************************************/
+ /* Issue the next START for our own transid, passing the updated    */
+ /* TS queue record.                                                 */
+ /********************************************************************/
+ start_delay = delay_next;
+ exec cics start
+      transid(eibtrnid)
+      from(sdarg)
+      length(sdarglen)
+      after seconds(start_delay)
+      reqid(req_id)
+      resp(rc);
+ if rc ^= dfhresp(NORMAL) then call errorc(6);
+ /********************************************************************/
+ /* If finished step 2 perform the step 3 purging actions.           */
+ /********************************************************************/
+ if sdfn = step3 then
+   do;
+ /********************************************************************/
+ /* Check if CICS is running with persistent sessions
+ /********************************************************************/
+     exec cics inquire vtam
+          psdinterval(psdint)
+          resp(rc);
+     if rc ^= dfhresp(NORMAL) then call errorc(7);
+ /********************************************************************/
+ /* If normal shutdown, or CICS is not running with persistent       */
+ /* sessions, force close VTAM. This will abend any task waiting     */
+ /* for input from VTAM, and any task that subsequently accesses a   */
+ /* VTAM session.                                                    */
+ /********************************************************************/
+     if psdint = 0 | sdtype = normshut then
+       do;
+         exec cics set vtam
+              forceclose
+              resp(rc);
+         if rc ^= dfhresp(NORMAL) then call errorc(7);
+       end;
+ /********************************************************************/
+ /* Close Inter Region Communication immediately.                    */
+ /* This will abend any task waiting for input from IRC, and any     */
+ /* task that subsequently accesses an IRC session. It also closes   */
+ /* any open EXCI pipes that may have prevented shutdown from        */
+ /* completing.                                                      */
+ /********************************************************************/
+     exec cics set irc
+          immclose
+          resp(rc);
+     if rc ^= dfhresp(NORMAL) then call errorc(9);
+ /********************************************************************/
+ /* Close TCPIP services immediately.                                */
+ /* This will abend any task waiting for input from TCP, and any     */
+ /* task that subsequently accesses an TCP session.                  */
+ /********************************************************************/
+     exec cics set tcpip
+          immclose
+          resp(rc);
+     if rc ^= dfhresp(NORMAL) then call errorc(11);
+ /********************************************************************/
+ /* Tell JVMSERVERs to forcepurge all work                           */
+ /********************************************************************/
+     call set_JVMSERVERs(dfhvalue(forcepurge));           /*@PI83585A*/
+ /********************************************************************/
+ /* Now immediately tell JVMSERVERs to kill their work.     @PI83585A*/
+ /* FORCEPURGE is required prior to KILL, but won't do      @PI83585A*/
+ /* extra on top of PURGE as all CICS tasks have already    @PI83585A*/
+ /* terminated by this point.                               @PI83585A*/
+ /********************************************************************/
+     call set_JVMSERVERs(dfhvalue(kill));                 /*@PI83585A*/
+ /********************************************************************/
+ /* Browse and display all shunted units of work.                    */
+ /********************************************************************/
+     call inq_uows;
+   end;                               /* of if finished step 2       */
+ return;
+ end step2_routine;
+
+ /********************************************************************/
+ /* Procedure to perform processing for step 3.                      */
+ /*                                                                  */
+ /* - Check if we have finished step 3                               */
+ /* - If finished step 3                                             */
+ /*   - Display active tasks that are about to die                   */
+ /*   - Display shunted units of work                                */
+ /*   - Issue an immediate shutdown of CICS                          */
+ /*   - Final end of SDA1                                            */
+ /* - Else                                                           */
+ /*   - EXEC CICS START ourselves again specifying step 3            */
+ /********************************************************************/
+ step3_routine: proc;
+
+ /********************************************************************/
+ /* Check if the sample count has reduced or is still the same.      */
+ /* If we have taken 8 samples (normal shutdown) or 4 samples        */
+ /* (immediate shutdown) without reduction then we will perform the  */
+ /* step 3 purging actions and end the shutdown assist transaction.  */
+ /* Otherwise we will remain on step 3.                              */
+ /********************************************************************/
+ call check_sample_count;
+ if (sdtype = normshut  & sdet >= equal_num_tasks_norm) |
+    (sdtype = immedshut & sdet >= equal_num_tasks_immed) then
+   do;
+ /********************************************************************/
+ /* Finished step 3 so perform the step 3 purging actions.           */
+ /* For each task in the list of running tasks, issue a message      */
+ /* to indicate it is about to die.                                  */
+ /********************************************************************/
+     do ti = 1 to num_tasks;
+       taskno = tasklist(ti);
+       exec cics inquire task(taskno)
+            facility(termid)
+            transaction(tranid)
+            userid(userid)
+            resp(rc);
+       if rc = dfhresp(NORMAL) &
+          tranid ^= eibtrnid   &
+          taskno ^= sdxn then
+         do;
+           purge_msg_auto = purge_msg;
+           purge_msg_auto.typ = apurge;
+           purge_msg_auto.tran = tranid;
+           if termid ^='' then
+              purge_msg_auto.term = termid;
+           purge_msg_auto.user = userid;
+           purge_msg_auto.task = taskno;
+           call issue_message;
+         end;
+     end;
+ /********************************************************************/
+ /* Browse and display all shunted units of work.                    */
+ /********************************************************************/
+     call inq_uows;
+ /********************************************************************/
+ /* Flush all active user journals                                   */
+ /********************************************************************/
+     call flush_journals;                                      /*@P6A*/
+ /********************************************************************/
+ /* Terminate CICS by performing an immediate shutdown.              */
+ /* This will NOT cause SDA1 to run again as CICS only permits one   */
+ /* use of the shutdown assist transaction mechanism.                */
+ /* This is the final end of transaction SDA1.                       */
+ /********************************************************************/
+     exec cics perform shutdown
+          immediate
+          resp(rc);
+     if rc ^= dfhresp(NORMAL) then call errorc(4);
+   end;                                     /* of if finished step 4 */
+ else
+   do;
+ /********************************************************************/
+ /* We have not finished step 3 yet.                                 */
+ /* Issue the next START for our own transid, passing the updated    */
+ /* TS queue record.                                                 */
+ /********************************************************************/
+     start_delay = delay_next;
+     exec cics start
+          transid(eibtrnid)
+          from(sdarg)
+          length(sdarglen)
+          after seconds(start_delay)
+      reqid(req_id)
+          resp(rc);
+     if rc ^= dfhresp(NORMAL) then call errorc(6);
+   end;
+ return;
+ end step3_routine;
+
+ /********************************************************************/
+ /* Procedure to convert input to printable hexadecimal              */
+ /********************************************************************/
+ c2x: proc (strin, lenin, strout);
+
+ dcl strin         char(*);
+ dcl strout        char(*);
+ dcl lenin         fixed bin(31);
+ dcl posin         fixed bin(31);
+ dcl num           fixed bin(31);
+ dcl hexcode       char(16) static init('0123456789ABCDEF');
+
+ strout = '';
+ do posin = 1 to lenin;
+   num = unspec(substr(strin,posin,1));
+   substr(strout,(posin*2-1),1) =
+     substr(hexcode,(1+divide(num,16,31)),1);
+   substr(strout,(posin*2),1) =
+     substr(hexcode,(1+mod(num,16)),1);
+ end;
+ return;
+ end c2x;
+
+ /********************************************************************/
+ /* Procedure to browse and display all shunted units of work.       */
+ /********************************************************************/
+ inq_uows: proc;
+
+ /********************************************************************/
+ /* Start browse of shunted UOWs.                                    */
+ /********************************************************************/
+ exec cics inquire uow
+      start
+      shunted
+      resp(rc);
+   if rc ^= dfhresp(NORMAL) then call errorc(8);
+ /********************************************************************/
+                   /* Issue CICS SUSPEND to reset CICS RUNAWAY timer */
+ /********************************************************************/
+         exec cics suspend
+               resp(rc);
+ /********************************************************************/
+ /* Get first shunted UOW.                                           */
+ /********************************************************************/
+ exec cics inquire uow(uowid)
+      next
+      transid(tranid)
+      termid(termid)
+      resp(rc);
+ if rc = dfhresp(NORMAL) then
+   do;
+     list_msg_auto = list_msg;
+     call issue_message;
+   end;
+ /********************************************************************/
+ /* Write a message for each shunted UOW.                            */
+ /* Note: A UOW is 16 characters long but only the first 8 are used  */
+ /* by CICS/ESA. The last 8 are zeros and may be ignored.            */
+ /********************************************************************/
+   do while (rc = dfhresp(NORMAL));
+     shunt_msg_auto = shunt_msg;
+     shunt_msg_auto.tran = tranid;
+     if termid ^='' then
+        shunt_msg_auto.term = termid;
+     call c2x (uowid, 8, shunt_msg_auto.uow);
+     call issue_message;
+ /********************************************************************/
+ /* Get next shunted UOW.                                            */
+ /********************************************************************/
+     exec cics inquire uow(uowid)
+        next
+        transid(tranid)
+        termid(termid)
+        resp(rc);
+   end;
+ /********************************************************************/
+ /* End browse of shunted UOWs.                                      */
+ /********************************************************************/
+ exec cics inquire uow
+      end
+      resp(rc);
+ if rc ^= dfhresp(NORMAL) then call errorc(8);
+ return;
+ end inq_uows;
+
+ /********************************************************************/
+ /* Procedure to flush buffers of all active user journals           */
+ /********************************************************************/
+ flush_journals: proc;                                         /*@P6A*/
+   dcl dfhlog char(8) static init('DFHLOG  ');                 /*@P6A*/
+   dcl dfhshunt char(8) static init('DFHSHUNT');               /*@P6A*/
+   dcl jn char(8);                                             /*@P6A*/
+   dcl js fixed bin(31);                                       /*@P6A*/
+   dcl jt fixed bin(31);                                       /*@P6A*/
+   dcl inq_next_rc fixed bin(31);                              /*@P6A*/
+
+   exec cics inquire journalname start resp(rc);               /*@P6A*/
+   if rc = dfhresp(NORMAL) then                                /*@P6A*/
+     do;                                                       /*@P6A*/
+       inq_next_rc = dfhresp(NORMAL);                          /*@P6A*/
+       do while (inq_next_rc = dfhresp(NORMAL));               /*@P6A*/
+         exec cics inquire next
+              journalname(jn)
+              status(js)
+              type(jt)
+              resp(inq_next_rc);                               /*@P6A*/
+         if inq_next_rc = dfhresp(NORMAL) then                 /*@P6A*/
+           if jn ^= dfhlog                                     /*@P6A*/
+              & jn ^= dfhshunt                                 /*@P6A*/
+              & js = dfhvalue(ENABLED)                         /*@P6A*/
+              & jt = dfhvalue(MVS) then                        /*@P6A*/
+             exec cics set journalname(jn) flush resp(rc);     /*@P6A*/
+       end;                                                    /*@P6A*/
+       exec cics inquire journalname end resp(rc);             /*@P6A*/
+     end;                                                      /*@P6A*/
+ end flush_journals;                                           /*@P6A*/
+
+ /********************************************************************/
+ /* Procedure to issue an error message.                             */
+ /********************************************************************/
+ errorc: proc (err);
+
+ dcl err        fixed bin(31);
+ dcl error_txt  char(length(error_msg.txt));
+
+ error_txt = '';
+ select(err);
+   when(1)    error_txt = 'RETRIEVE FAILURE.';
+   when(2)    error_txt = 'INQ SYSTEM FAILURE.';
+   when(3)    error_txt = 'INQ TASK LIST FAILURE.';
+   when(4)    error_txt = 'PERFORM SHUT FAILURE.';
+   when(5)    error_txt = 'UNKNOWN SHUT ASSIST STEP.';
+   when(6)    error_txt = 'START TRANSID FAILURE.';
+   when(7)    error_txt = 'SET VTAM FAILURE.';
+   when(8)    error_txt = 'INQ UOW START/END FAILURE.';
+   when(9)    error_txt = 'SET IRC FAILURE.';
+   when(10)   error_txt = 'SET DUMPDS FAILURE.';
+   when(11)   error_txt = 'SET TCPIP FAILURE.';
+   when(12)   error_txt = 'INQ JVMSERVER START FAILURE.'; /*@PI83585A*/
+   otherwise  error_txt = 'UNKNOWN ERROR.';
+ end;
+ /********************************************************************/
+ /* Write an error message and terminate the program.                */
+ /********************************************************************/
+ error_msg_auto = error_msg;
+ error_msg_auto.tran = eibtrnid;
+ error_msg_auto.txt = error_txt;
+ call issue_message;
+ exec cics return;
+ end errorc;
+
+ /********************************************************************/
+ /* Procedure to check if the latest sample of tasks in the system   */
+ /* is the same as the previous sample.                              */
+ /* - If it is less then reset the number of equal samples to zero,  */
+ /*   as our purging actions are having an effect, and issue a       */
+ /*   message.                                                       */
+ /* - If it is the same or greater then increment the number of      */
+ /*   equal samples, as our purging actions are not yet working.     */
+ /********************************************************************/
+ check_sample_count: proc;
+
+ if num_tasks < sdnt then
+   do;
+     sdet = 0;
+     sdnt = num_tasks;
+     count_msg_auto = count_msg;
+     count_msg_auto.task = num_tasks;
+     call issue_message;
+   end;
+ else
+   sdet = sdet + 1;
+ return;
+ end check_sample_count;
+
+ /********************************************************************/
+ /* Procedure to issue a message to the console                      */
+ /********************************************************************/
+ issue_message: proc;
+
+ exec cics write operator
+      text(msg_buffer)
+      textlength(msg_len)
+      resp(msg_rc);
+ return;
+ end issue_message;
+ /********************************************************************/
+ /* Procedure to browse and set all JVMSERVERs disabled & purgetype  */
+ /* according to value specifies, PHASEOUT, FORCEPURGE or KILL       */
+ /*                                                         @PI83585A*/
+ /********************************************************************/
+ set_JVMSERVERs: proc (purgetype);
+
+ dcl purgetype   fixed bin(31);
+ dcl servername        char(8);           /* JVMSERVER name          */
+ /********************************************************************/
+ /* Start browse of JVMSERVERs.                                      */
+ /********************************************************************/
+ exec cics inquire jvmserver
+      start
+      resp(rc);
+ if rc ^= dfhresp(NORMAL) then call errorc(12);
+
+ exec cics inquire jvmserver(servername)
+                   next
+                   resp(rc);
+
+ do while (rc = dfhresp(NORMAL));
+ /********************************************************************/
+ /* Get next JVMSERVER                                               */
+ /********************************************************************/
+    exec cics set jvmserver(servername)
+                  disabled
+                  purgetype(purgetype)
+                  resp(rc);
+
+    exec cics inquire jvmserver(servername)
+                      next
+                      resp(rc);
+
+ end;
+ /********************************************************************/
+ /* End browse of JVMSERVERs                                         */
+ /********************************************************************/
+ exec cics inquire jvmserver
+           end
+           resp(rc);
+ return;
+ end set_JVMSERVERs;
+ /********************************************************************/
+ /* End of program.                                                  */
+ /********************************************************************/
+ END DFHCESD;

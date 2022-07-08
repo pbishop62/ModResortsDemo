@@ -1,0 +1,457 @@
+#pragma XOPTS(CICS)
+ /********************************************************************/
+ /*                                                                  */
+ /* MODULE NAME = DFH$BRLC                                           */
+ /*                                                                  */
+ /* DESCRIPTIVE NAME = CICS TS  (BR) Sample 3270 Bridge C DPL Program*/
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*      Licensed Materials - Property of IBM                        */
+ /*                                                                  */
+ /*      "Restricted Materials of IBM"                               */
+ /*                                                                  */
+ /*      5655-Y04                                                    */
+ /*                                                                  */
+ /*      (C) Copyright IBM Corp. 2001, 2002"                         */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* STATUS = 7.2.0                                                   */
+ /*                                                                  */
+ /* FUNCTION = Sample 3270 Bridge C DPL Program                      */
+ /*                                                                  */
+ /*   DFH$BRLC is the bridge client which wrappers the               */
+ /*   NACT transaction. It is called by the client program           */
+ /*   DFH$BRCC with a commarea mapped by DFH$BRSH.                   */
+ /*   The results or error information is passed back in the         */
+ /*   the commarea.                                                  */
+ /*                                                                  */
+ /*   DFH$BRLC can be called for two functions:                      */
+ /*   1. Search for surnames.                                        */
+ /*   2. Display an account number.                                  */
+ /*                                                                  */
+ /*   The actions taken by DFH$BRLC are as follows:                  */
+ /*   1. Allocate a session.                                         */
+ /*   2. Setup the NACT menu.                                        */
+ /*   3. Create a message to run the search/display request.         */
+ /*   4. Delete the session.                                         */
+ /*                                                                  */
+ /* NOTES :                                                          */
+ /*  DEPENDENCIES = S/390                                            */
+ /*  RESTRICTIONS = Same as Link3270                                 */
+ /*  REGISTER CONVENTIONS = Normal                                   */
+ /*  MODULE TYPE = Executable                                        */
+ /*  PROCESSOR = C/370                                               */
+ /*  ATTRIBUTES = Read only, Serially Reusable                       */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* ENTRY POINT = DFH$BRLC                                           */
+ /*                                                                  */
+ /*   PURPOSE = All functions                                        */
+ /*                                                                  */
+ /*   LINKAGE = Normal CICS program                                  */
+ /*                                                                  */
+ /*   INPUT = C header file DFH$BRSH                                 */
+ /*                                                                  */
+ /*   OUTPUT = C header file DFH$BRSH                                */
+ /*                                                                  */
+ /*   EXIT-NORMAL = errorData.Returncode is zero                     */
+ /*                                                                  */
+ /*   EXIT-ERROR =  errorData.Returncode is non-zero                 */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* DESCRIPTION                                                      */
+ /*                                                                  */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /* List of error codes                                              */
+ /*                                                                  */
+ /* Returncode Description                                           */
+ /* 0          OK                                                    */
+ /* 1-999      DFHL3270 Error. BRIH-RETURNCODE.                      */
+ /* 1000       Invalid briv-output-header                            */
+ /* 1001       briv-sm-mapset not DFH0MNA                            */
+ /* 1002       briv-sm-map not ACCTMNU after initialising            */
+ /* 1003       briv-sm-map not ACCTMNU after search                  */
+ /* 1004       briv-sm-map not ACCTDTL after display                 */
+ /* 1005       Invalid search parameter                              */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* CHANGE ACTIVITY :                                                */
+ /*                                                                  */
+ /*      $MOD(DFH$BRLC),COMP(BRIDGE),PROD(CICS TS ):                 */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXXIII : REMARKS                        */
+ /*  $D1= I07267 630 020326 HDHYJB  : Compile all samples            */
+ /*  $L0= 775    620 010814 HDDLCRP : Bridge C Link Sample           */
+ /*  $L2= 775    620 010817 HDDLCRP : Bridge samples review          */
+ /*  $P1= D02652 620 011010 HDFXAB  : Nact install (Part 4)          */
+ /*  $P2= D03450 620 011112 HDDLCRP : Review of C Bridge Samples     */
+ /*                                                                  */
+ /********************************************************************/
+
+#include "stdlib.h"
+#include "string.h"
+#include "dfhbrich.h"
+#include "dfhbrihh.h"
+#include "dfh$brsh.h"
+#include "dfhaid.h"
+
+/******************************************************/
+/* Application mapset                                 */
+/******************************************************/
+#define struct _Packed struct
+#include "dfh$brmh.h"
+#undef struct
+
+iodataArea *ioAreaPtr;
+char *msgAreaPtr;
+char msgArea[2000];
+
+brih             *brihPtr;
+briv_receive_map *rmPtr;
+briv_send_map    *smPtr;
+
+brih             defaultBrih = BRIH_DEFAULT;
+briv_receive_map dfltBrivRM  = BRIV_RECEIVE_MAP_DEFAULT;
+briv_receive_map *dfltRmPtr;
+
+char facility[8];
+long int vectorOffset;
+long int adsOffset;
+
+void searchRequest();
+void displayRequest();
+void setMenu();
+void getMenu();
+void setSearch();
+void getSearch();
+void setDisplay();
+void getDisplay();
+void setBrih();
+void setBrivReceiveMap();
+void getBrivSendMap();
+void allocateBridgeFacility();
+void deleteBridgeFacility();
+void link3270();
+
+void main(void)
+{
+  EXEC CICS ADDRESS COMMAREA(ioAreaPtr);
+
+  msgAreaPtr = msgArea;
+  brihPtr    = (brih*) msgArea;
+
+  /* Allocate session */
+  allocateBridgeFacility();
+
+  /* Either run a search session or a display session */
+  if (ioAreaPtr->inputData.reqType == 'S')
+    searchRequest();
+  else
+    displayRequest();
+
+  /* Delete session */
+  deleteBridgeFacility();
+  exit(0);
+}
+
+/******************************************************************/
+/* Search request                                                 */
+/******************************************************************/
+void searchRequest()
+{
+  /* Bring up menu */
+  setMenu();
+  link3270();
+  getMenu();
+
+  /* Search for name */
+  setSearch();
+  link3270();
+  getSearch();
+
+}
+
+/******************************************************************/
+/* Display request                                                */
+/******************************************************************/
+void displayRequest()
+{
+  /* Bring up menu */
+  setMenu();
+  link3270();
+  getMenu();
+
+  /* Display name */
+  setDisplay();
+  link3270();
+  getDisplay();
+}
+
+/******************************************************************/
+/* Create menu screen by running NACT with no input               */
+/******************************************************************/
+void setMenu()
+{
+  setBrih();
+}
+/******************************************************************/
+/* Interpret menu output map                                      */
+/******************************************************************/
+void getMenu()
+{
+  getBrivSendMap();
+  if (strncmp(smPtr->sm_map,"ACCTMNU ",8) != 0)
+  {
+    ioAreaPtr->errorData.Returncode = 1002;
+    exit((int)(ioAreaPtr->errorData.Returncode));
+  }
+}
+/******************************************************************/
+/* Create search request with input map                           */
+/******************************************************************/
+void setSearch()
+{
+  setBrih();
+  setBrivReceiveMap();
+
+  memcpy(&bmsmapbr->acctmnui.snamemi,
+         &(ioAreaPtr->inputData.search.surname),
+         sizeof(ioAreaPtr->inputData.search.surname));
+  bmsmapbr->acctmnui.snameml =
+         sizeof(ioAreaPtr->inputData.search.surname);
+  memcpy(&bmsmapbr->acctmnui.fnamemi,
+         &(ioAreaPtr->inputData.search.firstName),
+         sizeof(ioAreaPtr->inputData.search.firstName));
+  bmsmapbr->acctmnui.fnameml =
+         sizeof(ioAreaPtr->inputData.search.firstName);
+}
+/******************************************************************/
+/* Interpret search output map                                    */
+/******************************************************************/
+void getSearch()
+{
+  getBrivSendMap();
+  if(strncmp(smPtr->sm_map,"ACCTMNU ",8) != 0)
+  {
+    ioAreaPtr->errorData.Returncode = 1003;
+    exit((int)(ioAreaPtr->errorData.Returncode));
+  }
+
+  bmsmapbr=(union dfh0mna*)((char*)smPtr + smPtr->sm_data_offset);
+
+  /* check for message indicating invalid search parameters */
+  if( bmsmapbr->acctmnuo.msgmo[0] != ' ')
+  {
+    memcpy(&(ioAreaPtr->errorData.Data),bmsmapbr->acctmnuo.msgmo,60);
+    ioAreaPtr->errorData.Returncode = 1005;
+    exit((int)(ioAreaPtr->errorData.Returncode));
+  }
+
+  /* Extract search output data from outbound message */
+  {
+    memcpy(ioAreaPtr->outputData.search.acctNo,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[0],5);
+    memcpy(ioAreaPtr->outputData.search.surname,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[8],5);
+    memcpy(ioAreaPtr->outputData.search.firstName,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[22],5);
+    memcpy(&(ioAreaPtr->outputData.search.midInit),
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[31],1);
+    memcpy(ioAreaPtr->outputData.search.title,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[34],4);
+    memcpy(ioAreaPtr->outputData.search.address1,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[40],14);
+    memcpy(ioAreaPtr->outputData.search.acStatus,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[66],2);
+    memcpy(ioAreaPtr->outputData.search.acLimit,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[72],8);
+  }
+}
+/******************************************************************/
+/* Create display request with input map                          */
+/******************************************************************/
+void setDisplay()
+{
+  setBrih();
+  setBrivReceiveMap();
+
+  memcpy(&(bmsmapbr->acctmnui.reqmi),
+         &(ioAreaPtr->inputData.reqType),
+         sizeof(ioAreaPtr->inputData.reqType));
+  bmsmapbr->acctmnui.reqml = sizeof(ioAreaPtr->inputData.reqType);
+  memcpy(&(bmsmapbr->acctmnui.acctmi),
+         &(ioAreaPtr->inputData.display.acctNo),
+         sizeof(ioAreaPtr->inputData.display.acctNo));
+  bmsmapbr->acctmnui.acctml =
+    sizeof(ioAreaPtr->inputData.display.acctNo);
+}
+/******************************************************************/
+/* Interpret display input map                                    */
+/******************************************************************/
+void getDisplay()
+{
+  getBrivSendMap();
+  if(strncmp(smPtr->sm_map,"ACCTDTL ",8) != 0)
+  {
+    ioAreaPtr->errorData.Returncode = 1004;
+    exit((int)(ioAreaPtr->errorData.Returncode));
+  }
+
+  bmsmapbr =(union dfh0mna*)((char*)smPtr + smPtr->sm_data_offset);
+
+  memcpy(ioAreaPtr->outputData.display.line1.acctNo,
+          bmsmapbr->acctdtlo.acctdo, 5);
+  memcpy(ioAreaPtr->outputData.display.line1.surname,
+          bmsmapbr->acctdtlo.snamedo, 18);
+  memcpy(ioAreaPtr->outputData.display.line1.title,
+          bmsmapbr->acctdtlo.ttldo, 4);
+  memcpy(ioAreaPtr->outputData.display.line1.firstName,
+          bmsmapbr->acctdtlo.fnamedo, 12);
+  memcpy(&(ioAreaPtr->outputData.display.line1.midInit),
+         &bmsmapbr->acctdtlo.mido, 1);
+  memcpy(ioAreaPtr->outputData.display.line1.phone,
+          bmsmapbr->acctdtlo.teldo, 10);
+  memcpy(ioAreaPtr->outputData.display.line2.address1,
+          bmsmapbr->acctdtlo.addr1do, 24);
+  memcpy(ioAreaPtr->outputData.display.line2.address2,
+          bmsmapbr->acctdtlo.addr2do, 24);
+  memcpy(ioAreaPtr->outputData.display.line2.address3,
+          bmsmapbr->acctdtlo.addr3do, 24);
+  memcpy(&(ioAreaPtr->outputData.display.line3.cardsIssd),
+         &bmsmapbr->acctdtlo.cardsdo, 1);
+  memcpy(&(ioAreaPtr->outputData.display.line3.cCode),
+         &bmsmapbr->acctdtlo.ccodedo, 1);
+  memcpy(ioAreaPtr->outputData.display.line3.issueMon,
+          bmsmapbr->acctdtlo.imodo, 2);
+  memcpy(ioAreaPtr->outputData.display.line3.issueDay,
+          bmsmapbr->acctdtlo.idaydo, 2);
+  memcpy(ioAreaPtr->outputData.display.line3.issueYr,
+          bmsmapbr->acctdtlo.iyrdo, 2);
+  memcpy(&(ioAreaPtr->outputData.display.line3.rsnCode),
+         &bmsmapbr->acctdtlo.rsndo, 1);
+  memcpy(ioAreaPtr->outputData.display.line3.apprBy,
+          bmsmapbr->acctdtlo.apprdo, 3);
+  memcpy(&(ioAreaPtr->outputData.display.line3.spCode1),
+         &bmsmapbr->acctdtlo.scode1do, 1);
+  memcpy(&(ioAreaPtr->outputData.display.line3.spCode2),
+         &bmsmapbr->acctdtlo.scode2do, 1);
+  memcpy(&(ioAreaPtr->outputData.display.line3.spCode3),
+         &bmsmapbr->acctdtlo.scode3do, 1);
+  memcpy(ioAreaPtr->outputData.display.line3.history,
+          bmsmapbr->acctdtlo.histtldo, 33);
+  memcpy(ioAreaPtr->outputData.display.line3.acLimit,
+          bmsmapbr->acctdtlo.limitdo, 8);
+  memcpy(ioAreaPtr->outputData.display.line3.acStatus,
+          bmsmapbr->acctdtlo.statdo, 2);
+  memcpy(ioAreaPtr->outputData.display.line4.auth1,
+          bmsmapbr->acctdtlo.auth1do, 32);
+  memcpy(ioAreaPtr->outputData.display.line4.auth2,
+          bmsmapbr->acctdtlo.auth2do, 32);
+  memcpy(ioAreaPtr->outputData.display.line4.auth3,
+          bmsmapbr->acctdtlo.auth3do, 32);
+  memcpy(ioAreaPtr->outputData.display.line4.auth4,
+          bmsmapbr->acctdtlo.auth4do, 32);
+}
+/******************************************************************/
+/* Set up BRIH                                                    */
+/******************************************************************/
+void setBrih()
+{
+  memcpy(msgAreaPtr,&defaultBrih,sizeof(defaultBrih));
+  memcpy(brihPtr->transactionid,"NACT",4);
+  brihPtr->adsdescriptor = BRIHADSD_NO;
+  memcpy(brihPtr->facility,facility,8);
+
+}
+/******************************************************************/
+/* Set up BRIV-RECEIVE-MAP with null input data                   */
+/******************************************************************/
+void setBrivReceiveMap()
+{
+  rmPtr = (briv_receive_map*) &msgArea[sizeof(brih)];
+  memcpy(rmPtr,&dfltBrivRM,sizeof(dfltBrivRM));
+  memcpy(rmPtr->rm_mapset,"DFH0MNA ",8);
+  memcpy(rmPtr->rm_map,"ACCTMNU ",8);
+  rmPtr->rm_cposn    = 422;
+  rmPtr->rm_data_len = sizeof(bmsmapbr->acctmnui);
+  bmsmapbr = (union dfh0mna*) &msgArea[sizeof(brih)+
+                                       sizeof(briv_receive_map)];
+  memset(&(bmsmapbr->acctmnui),0,sizeof(bmsmapbr->acctmnui));
+  rmPtr->rm_vector_header.input_vector_length +=
+    sizeof(bmsmapbr->acctmnui);
+
+  brihPtr->datalength+=rmPtr->rm_vector_header.input_vector_length;
+
+}
+/******************************************************************/
+/* Validate that we have a SEND MAP vector for mapset DFH0MNA     */
+/******************************************************************/
+void getBrivSendMap()
+{
+  vectorOffset = brihPtr->struclength;
+  smPtr = (briv_send_map*) (msgAreaPtr + vectorOffset);
+
+  if (strncmp(smPtr->sm_vector_header.output_vector_descriptor,
+      BRIVDSC_SEND_MAP,4) != 0)
+  {
+    ioAreaPtr->errorData.Returncode = 1000;
+    exit((int)(ioAreaPtr->errorData.Returncode));
+  }
+
+  if (strncmp(smPtr->sm_mapset,"DFH0MNA ",8) != 0)
+  {
+    ioAreaPtr->errorData.Returncode = 1001;
+    exit((int)(ioAreaPtr->errorData.Returncode));
+  }
+
+}
+
+/******************************************************************/
+/* Allocate session and save facility                             */
+/******************************************************************/
+void allocateBridgeFacility()
+{
+  setBrih();
+  strncpy(brihPtr->transactionid,BRIHT_ALLOCATE_FACILITY,4);
+  brihPtr->facilitykeeptime = 300;
+  link3270();
+  memcpy(facility,brihPtr->facility,8);
+}
+
+/******************************************************************/
+/* Delete session                                                 */
+/******************************************************************/
+void deleteBridgeFacility()
+{
+  setBrih();
+  strncpy(brihPtr->transactionid,BRIHT_DELETE_FACILITY,4);
+  memcpy(brihPtr->facility,facility,8);
+  link3270();
+}
+
+/******************************************************************/
+/* Call the Link3270 bridge                                       */
+/******************************************************************/
+void link3270()
+{
+  EXEC CICS LINK PROGRAM("DFHL3270")
+                 COMMAREA(msgAreaPtr)
+                 LENGTH(sizeof(msgArea))
+                 DATALENGTH(brihPtr->datalength);
+
+  if (brihPtr->returncode != 0)
+  {
+    ioAreaPtr->errorData.Returncode = brihPtr->returncode;
+    ioAreaPtr->errorData.Reason     = brihPtr->reason;
+    ioAreaPtr->errorData.Compcode   = brihPtr->compcode;
+    memcpy(ioAreaPtr->errorData.Abendcode,brihPtr->abendcode,4);
+    exit((int)(ioAreaPtr->errorData.Returncode));
+  }
+}

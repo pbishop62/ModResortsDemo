@@ -1,0 +1,572 @@
+*ASM XOPTS(SP)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$AXCS                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Sample Batch Server Program.                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1993, 2016"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION =  CICS Application server program to initialise, browse,  *
+*             update and close a file as requested by the invoking    *
+*             Sample Batch Client Program via EXCI DPL calls.         *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*    RESTRICTIONS = The Target File will be a VSAM file defined on    *
+*              the same CICS system as this module resides, and which *
+*              will have records of length 80 bytes.                  *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable,                       *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* ENTRY POINT = DFH$AXCS                                              *
+*                                                                     *
+*     PURPOSE = All Functions.                                        *
+*                                                                     *
+*     LINKAGE = The module is called via DFHMIRS from a batch driven  *
+*               EXCI batch DPL call via either the EXEC level EXEC    *
+*               CICS LINK PROGRAM command, or the Call level DFHXCIS  *
+*               call API.  A commarea will be set up so as to         *
+*               contain a parameter list including the call-type      *
+*               required, the name of a target file, and a RidField.  *
+*                                                                     *
+*     INPUT = The program takes in parameters via the Commarea passed *
+*             during a DPL call from a batch environment, assuming    *
+*             the commarea to have the following structure;           *
+*                                                                     *
+*             Bytes;    Datatype;   Parameter;                        *
+*                                                                     *
+*              0-3      Fullword    Call-Type Code.                   *
+*              4-11      Char(8)    Target File Name.                 *
+*              12-17     Char(6)    Ridfield identifier.              *
+*              18-97     Char(80)   Record transmission area.         *
+*                                                                     *
+*     OUTPUT = The commarea will also be used to return output from   *
+*              this application program.  The call-type code slot is  *
+*              used to transmit return codes from the application     *
+*              indicating how successfully it has processed the target*
+*              file.  The RidField slot will be updated with the next *
+*              RidField value whenever the READ processor is          *
+*              activated.  Also, the Record transmission area will be *
+*              used to return a single 80-byte record from the VSAM   *
+*              target file, again, whenever the READ processor is     *
+*              active.                                                *
+*                                                                     *
+*     EXIT-NORMAL = The module will return control to the calling     *
+*                   program at the EXEC CICS RETURN command execution.*
+*                   No messages are issued by this module.            *
+*                   Return codes transmitted in the first fullword of *
+*                   the commarea are as follows;                      *
+*                                                                     *
+*                   0         File is Browsable/read was successful.  *
+*                   4         File is not Browsable.                  *
+*                   8         End File.                               *
+*                   12        File not found.                         *
+*                   16        Serious error.                          *
+*                                                                     *
+*     EXIT-ERROR =  The module does not issue any ABENDS.             *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+*     ROUTINES = EXEC CICS ADDRESS                                    *
+*                EXEC CICS RETURN                                     *
+*                EXEC CICS SET                                        *
+*                EXEC CICS INQUIRE                                    *
+*                EXEC CICS STARTBR                                    *
+*                EXEC CICS READNEXT                                   *
+*                EXEC CICS READ                                       *
+*                EXEC CICS UPDATE                                     *
+*                EXEC CICS ENDBR                                      *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* DESCRIPTION:                                                        *
+*                                                                     *
+*   This program is called by the Sample Batch Client Program,        *
+*   and performs three separate tasks depending upon what call type   *
+*   it is passed and thus asked to perform.  It's three tasks are     *
+*   summarised as follows;                                            *
+*                                                                     *
+*   INITBRZ:   This is called first, and once only.  It is initiated  *
+*              by the passing of the INIT code in the first word of   *
+*              the Outbound Commarea.  It will query the existence of *
+*              the FILE passed in the next double word of the Commarea*
+*              and if it exists will set it to a browsable, open      *
+*              state.  If it does not exist, or if the file could not *
+*              be initialised for browsing correctly, a return flag   *
+*              will cause the client program to terminate processing. *
+*                                                                     *
+*   READFILE:  This will be called as many times as are required by   *
+*              the client to retrieve all of the records.  It will    *
+*              read the next sequential record from the FILE into the *
+*              Inbound Commarea and return it to the Client.  If an   *
+*              EOF situation is reached, it will return the EOF flag  *
+*              causing the Client to stop calling READFILE.           *
+*                                                                     *
+*   WRTFILE:   This will be called as many times as are required by   *
+*              the client to write amended records back to FILE.      *
+*                                                                     *
+*   CLOSEFILE: This is called last by the Client after all records    *
+*              have been retrieved to set the FILE to closed state.   *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+**                                                                    *
+*        $MOD(DFH$AXCS),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $01= A54299 410 940607 HDCWNRB : Migrate PN54299 from SPA R410   *
+*    $L0= 660    410 930406 HDNONEDP: Create sample batch application *
+*    $P1= M30619 530 981109 HDAFDRB : Produce TEXCI sample programs.  *
+*    $P3= M15766 610 000927 HD7OPJW : Binder warning messages         *
+*        R113471 710 160903 HD2GJST : Correct sample entry            *
+*                                                                     *
+***********************************************************************
+*=====================================================================*
+*                                                                     *
+*           >>>>>>>>>>>>>> MAINLINE CODE <<<<<<<<<<<<<                *
+*                                                                     *
+*=====================================================================*
+*
+DFH$AXCS DFHEIENT                                            @R113471C
+DFH$AXCS AMODE 31                                                 @P3A
+DFH$AXCS RMODE ANY                                                @P3A
+*
+*=====================================================================*
+*   Check that a COMMAREA has been passed. If we don't have a commarea*
+*   we cannot even return a return code back to the client, so issue  *
+*   an abend instead.                                                 *
+*                                                                     *
+*   NCOM abend explanation:                                           *
+*   =======================                                           *
+*   Check that the client program is passing the required commarea.   *
+*   Also check that the transaction definition under which DFH$AXCS   *
+*   is running specifies the mirror program DFHMIRS as the initial    *
+*   program. IT IS AN ERROR TO SPECIFY DFH$AXCS AS THE INITIAL        *
+*   PROGRAM. This will cause the commarea not to be passed to DFH$AXCS*
+*   as it is the mirror program that builds the commarea in storage   *
+*   before pssing control to the server program. A Server Protocol    *
+*   error would also occur if the server program were to syncpoint, as*
+*   syncpoint logic has been bypassed in DFHMIRS.                     *
+*=====================================================================*
+         CLC   EIBCALEN,=H'0'
+         BNE   PARSE
+         EXEC CICS ABEND ABCODE('NCOM')
+*=====================================================================*
+*   Map the COMMAREA DSECT onto the Commarea passed.                  *
+*=====================================================================*
+*
+PARSE    DS    0H
+         EXEC CICS ADDRESS COMMAREA(R4)
+         USING COMMAREA,R4
+*
+*=====================================================================*
+*   Branch to call processor.                                         *
+*=====================================================================*
+*
+         CLC   COMMCODE,INITCALL
+         BE    INITBRZ
+         CLC   COMMCODE,READCALL
+         BE    READFILE
+         CLC   COMMCODE,WRTCALL
+         BE    WRTFILE
+         CLC   COMMCODE,CLOSCALL
+         BE    CLOSFILE
+*
+*=====================================================================*
+*   All calls return to here.  Control is passed back to the Client   *
+*=====================================================================*
+*
+RETURN   DS    0H
+         EXEC CICS RETURN
+*
+INITBRZ  DS    0H
+*=====================================================================*
+*                                                                     *
+*   INITBRZ:                                                          *
+*                                                                     *
+*   This first call processor will query the existence of the file    *
+*   passed, and if it does exist, it will set it to a browsable state.*
+*   The first word of the return commarea will be used to transmit    *
+*   Server return codes back to the Client program.                   *
+*                                                                     *
+*=====================================================================*
+*
+*=====================================================================*
+*   Set error handle for FILENOTFOUND condition.                      *
+*=====================================================================*
+*
+         EXEC CICS HANDLE CONDITION                                    *
+                          FILENOTFOUND(NOFILE)                         *
+                          ERROR(INITERR)
+*
+*=====================================================================*
+*   Query state of the FILE - Does it have the 'Browsable' attribute? *
+*=====================================================================*
+*
+         EXEC CICS INQUIRE FILE(COMMFILE)                              *
+                           BROWSE(BRZ_FLAG)
+         CLC   BRZ_FLAG,DFHVALUE(BROWSABLE)
+         BZ    BRWSBLE
+*
+*=====================================================================*
+*   It didn't have the 'Browsable' attribute, so change the attributes*
+*=====================================================================*
+*
+         EXEC CICS SET FILE(COMMFILE) CLOSED WAIT
+         EXEC CICS SET FILE(COMMFILE) BROWSABLE
+*
+*=====================================================================*
+*   Did the attempt succeed?                                          *
+*=====================================================================*
+*
+         EXEC CICS INQUIRE FILE(COMMFILE)                              *
+                           BROWSE(BRZ_FLAG)
+         CLC   BRZ_FLAG,DFHVALUE(BROWSABLE)
+         BE    BRWSBLE
+*
+*=====================================================================*
+*   It could not be set to a browsable state, send back return code.  *
+*=====================================================================*
+*
+NOBRZ    DS    0H
+         L     R7,RET_NOBRWS
+         ST    R7,COMMCODE
+         B     RETURN
+*
+*=====================================================================*
+*   It has the 'Browsable' attribute, on is the file open?            *
+*=====================================================================*
+*
+BRWSBLE  DS  0H
+         EXEC CICS INQUIRE FILE(COMMFILE)                              *
+                           OPENSTATUS(OPENFLAG)
+         CLC   OPENFLAG,DFHVALUE(OPEN)
+         BE    FILEOP
+*
+*=====================================================================*
+*   No it is not.  so issue the command to set the file open.         *
+*=====================================================================*
+*
+         EXEC CICS SET FILE(COMMFILE) OPEN ENABLED
+*
+*=====================================================================*
+*   Did the attempt succeed?                                          *
+*=====================================================================*
+*
+         EXEC CICS INQUIRE FILE(COMMFILE)                              *
+                           OPENSTATUS(OPENFLAG)
+         CLC   OPENFLAG,DFHVALUE(OPEN)
+         BNE   NOBRZ
+*
+*=====================================================================*
+*   Yes, so exit with file initialised fully for browsing.            *
+*=====================================================================*
+*
+FILEOP   DS    0H
+         L     R7,RET_BROWSE
+         ST    R7,COMMCODE
+         B     RETURN
+*
+*
+NOFILE   DS    0H
+*=====================================================================*
+*   File not found error handle exit.                                 *
+*=====================================================================*
+*
+         L     R7,RET_NOFILE
+         ST    R7,COMMCODE
+         B     RETURN
+*
+INITERR  DS    0H
+*=====================================================================*
+*   Serious error handle exit.                                        *
+*=====================================================================*
+*
+         L     R7,RET_ERROR
+         ST    R7,COMMCODE
+         B     RETURN
+*
+READFILE DS    0H
+*=====================================================================*
+*                                                                     *
+*   READFILE;                                                         *
+*                                                                     *
+*   This call processor will routinely browse a single record in the  *
+*   FILE and place it in the return Commarea for transmission to the  *
+*   Client program for subsequent printing.  If the EndFile condition *
+*   is met, or a serious error is detected, the appropriate return    *
+*   codes will also be transmitted.                                   *
+*                                                                     *
+*=====================================================================*
+*
+*=====================================================================*
+*   Set error handle cases;                                           *
+*=====================================================================*
+*
+         EXEC CICS HANDLE CONDITION                                    *
+                          ENDFILE(ENDFILE)                             *
+                          LENGERR(LONG)                                *
+                          ERROR(READERR)
+*
+*=====================================================================*
+*   Read the next RECORD from the FILE directly into the Commarea.    *
+*=====================================================================*
+*
+         EXEC CICS STARTBR FILE(COMMFILE) RIDFLD(COMMRID)
+         MVC   RECORDLEN,RECLEN
+         EXEC CICS READNEXT FILE(COMMFILE) RIDFLD(COMMRID)             *
+                            INTO(COMMREC)                              *
+                            LENGTH(RECORDLEN)
+*
+*=====================================================================*
+*   Get the next RidField value by reading forward to the next record.*
+*=====================================================================*
+*
+         MVC  RECORDLEN,RECLEN
+         EXEC CICS READNEXT FILE(COMMFILE) RIDFLD(COMMRID)             *
+                            INTO(DUMMY)                                *
+                            LENGTH(RECORDLEN)
+         EXEC CICS ENDBR FILE(COMMFILE)
+*
+*=====================================================================*
+*   Set up the Inbound Commarea, and return.                          *
+*=====================================================================*
+*
+READWORK DS    0H
+         L     R7,RET_BROWSE                  *Return code in 1st slot.
+         ST    R7,COMMCODE
+         B     RETURN
+*
+ENDFILE  DS    0H
+*=====================================================================*
+*   End-of-file condition error handle exit.                          *
+*=====================================================================*
+*
+         L     R7,RET_EOF
+         ST    R7,COMMCODE
+         B     RETURN
+*
+LONG     DS    0H
+*=====================================================================*
+*   Lengerr condition error handle exit.                              *
+*=====================================================================*
+*
+         L     R7,RET_ERROR
+         ST    R7,COMMCODE
+         B     RETURN
+*
+READERR DS     0H
+*=====================================================================*
+*   Serious error handle exit.                                        *
+*=====================================================================*
+*
+         L     R7,RET_ERROR
+         ST    R7,COMMCODE
+         B     RETURN
+*
+WRTFILE  DS    0H
+*=====================================================================*
+*                                                                     *
+*   WRTFILE;                                                          *
+*                                                                     *
+*   This call processor will normally follow a READFILE call from the *
+*   client program. This call will re-write the altered record to     *
+*   FILE and then close the file.                                     *
+*                                                                     *
+*=====================================================================*
+*
+*=====================================================================*
+*   Set error handle cases;                                           *
+*=====================================================================*
+*
+         EXEC CICS HANDLE CONDITION                                    *
+                          LENGERR(LONG3)                               *
+                          ENDFILE(ENDFILE3)                            *
+                          ERROR(WRTERR)
+*
+*=====================================================================*
+*   Write the record which we have been passed in the Commarea to     *
+*   FILE.                                                             *
+*=====================================================================*
+*
+         EXEC CICS STARTBR FILE(COMMFILE) RIDFLD(COMMRID)
+         MVC   RECORDLEN,RECLEN
+         EXEC CICS READPREV FILE(COMMFILE) RIDFLD(COMMRID)             *
+                            INTO(DUMMY)                                *
+                            LENGTH(RECORDLEN)
+         EXEC CICS READPREV FILE(COMMFILE) RIDFLD(COMMRID)             *
+                            INTO(DUMMY)                                *
+                            LENGTH(RECORDLEN)
+         EXEC CICS ENDBR FILE(COMMFILE)
+*
+         EXEC CICS READ FILE(COMMFILE) RIDFLD(COMMRID) UPDATE          *
+                            INTO(DUMMY)                                *
+                            LENGTH(RECORDLEN)
+*
+         EXEC CICS REWRITE FILE(COMMFILE)                              *
+                            FROM(COMMREC)                              *
+                            LENGTH(RECORDLEN)
+*
+         EXEC CICS STARTBR FILE(COMMFILE) RIDFLD(COMMRID)
+         EXEC CICS READNEXT FILE(COMMFILE) RIDFLD(COMMRID)             *
+                            INTO(DUMMY)                                *
+                            LENGTH(RECORDLEN)
+         EXEC CICS READNEXT FILE(COMMFILE) RIDFLD(COMMRID)             *
+                            INTO(DUMMY)                                *
+                            LENGTH(RECORDLEN)
+         EXEC CICS ENDBR FILE(COMMFILE)
+*
+*=====================================================================*
+*   Set up the Outbound Commarea, and return.                         *
+*=====================================================================*
+*
+WRTWORK  DS    0H
+         L     R7,RET_BROWSE                  *Return code in 1st slot.
+         ST    R7,COMMCODE
+         B     RETURN
+*
+*
+ENDFILE3 DS    0H
+*=====================================================================*
+*   End-of-file condition error handle exit.                          *
+*=====================================================================*
+*
+         L     R7,RET_EOF
+         ST    R7,COMMCODE
+         B     RETURN
+*
+LONG3    DS    0H
+*=====================================================================*
+*   Lengerr condition error handle exit.                              *
+*=====================================================================*
+*
+         L     R7,RET_ERROR
+         ST    R7,COMMCODE
+         B     RETURN
+*
+WRTERR  DS     0H
+*=====================================================================*
+*   Serious error handle exit.                                        *
+*=====================================================================*
+*
+         L     R7,RET_ERROR
+         ST    R7,COMMCODE
+         B     RETURN
+*
+
+CLOSFILE DS    0H
+*=====================================================================*
+*                                                                     *
+*   CLOSEFILE;                                                        *
+*                                                                     *
+*   This final call processor will be called to tidy up the file after*
+*   processing is complete.  It will close the target file, leaving   *
+*   it in a state ready for reaccessing by any other processes.       *
+*                                                                     *
+*=====================================================================*
+*
+         EXEC CICS HANDLE CONDITION INVREQ(INVREQ)                     *
+                                    ERROR(CLOSERR)
+         EXEC CICS SET FILE(COMMFILE) CLOSED WAIT ENABLED
+         B     RETURN
+*
+INVREQ   DS    0H
+*=====================================================================*
+*   Invreq condition error handle exit.                               *
+*=====================================================================*
+*
+         L     R7,RET_ERROR
+         ST    R7,COMMCODE
+         B     RETURN
+*
+CLOSERR DS     0H
+*=====================================================================*
+*   Serious error handle exit.                                        *
+*=====================================================================*
+*
+         L     R7,RET_ERROR
+         ST    R7,COMMCODE
+         B     RETURN
+*
+*=====================================================================*
+*                                                                     *
+*      Constants and Definitions.                                     *
+*                                                                     *
+*=====================================================================*
+*
+         LTORG
+*
+*                                    *===============================*
+*                                    |Server Return Codes;           |
+RET_BROWSE   DC F'0'                 |   File browsable.             |
+RET_NOBRWS   DC F'4'                 |   File not browsable.         |
+RET_EOF      DC F'8'                 |   End of file found.          |
+RET_NOFILE   DC F'12'                |   File not found.             |
+RET_ERROR    DC F'16'                |   Serious error detected.     |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+CONSTANTS    DS 0F                   |Program specific constants.    |
+RECLEN       DC AL2(80)              |                               |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+CALLS        DS 0F                   |Server call-type codes.        |
+INITCALL     DC F'1'                 |                               |
+READCALL     DC F'2'                 |                               |
+CLOSCALL     DC F'3'                 |                               |
+WRTCALL      DC F'4'                 |                               |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*=====================================================================*
+*                                                                     *
+*      Commarea DSECT.                                                *
+*                                                                     *
+*=====================================================================*
+*
+COMMAREA DSECT
+         DS    0H
+COMMCODE DS    F
+COMMFILE DS    8C
+COMMRID  DS    6C
+COMMREC  DS    80C
+*
+*=====================================================================*
+*                                                                     *
+*      Working Storage.                                               *
+*                                                                     *
+*=====================================================================*
+*
+*                                    *===============================*
+DFHEISTG     DSECT                   |Program Variables.             |
+EYE          DC CL8'WSTORAGE'        |                               |
+RECORDLEN    DS AL2                  |  Length of record variable.   |
+DUMMY        DS 80C                  |  Dummy reading area.          |
+BRZ_FLAG     DS F                    |  Query Browsable storage.     |
+OPENFLAG     DS F                    |  Query Openstatus storage.    |
+*                                    |                               |
+*                                    *_______________________________*
+         DFHREGS
+         END DFH$AXCS

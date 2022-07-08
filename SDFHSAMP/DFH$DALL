@@ -1,0 +1,420 @@
+#pragma XOPTS(CICS)
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$DALL                                           */
+ /*                                                                  */
+ /* Descriptive Name = File Inquiry/Update for Sample Application    */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1989, 1993"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /*                                                                  */
+ /*  $MOD(DFH$DALL),COMP(SAMPLES),PROD(CICS TS ):                    */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 210 890825 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $D1= I06048 410 930913 HD7OPJW: C++ support                     */
+ /*                                                                  */
+ /********************************************************************/
+#include "dfhbmsca.h"                    /* BMS definitions          */
+#include "dfh$dga.h"                     /* Logical maps for DFH$DGA */
+#include "dfh$dgb.h"                     /* Logical maps for DFH$DGB */
+#include "dfh$dfil.h"                    /* FILEA definition         */
+
+#include <string.h>
+#include <ctype.h>                                           /* @D1A */
+
+
+int rcode;                               /* RESP value               */
+
+#define DADD (1)                         /* Code for DADD TRANID     */
+#define DINQ (2)                         /* Code for DINQ TRANID     */
+#define DUPD (3)                         /* Code for DUPD TRANID     */
+#define DMNU (4)                         /* Code for DMNU TRANID     */
+
+static int trnid;                        /* Coded TRANID             */
+
+static char messages[50];                /* Messages area            */
+static char keynum[6];                   /* Key area                 */
+struct loga_struct {                     /* Definition of loga_struct*/
+   struct loghdr_struct {
+      unsigned char lday[4];
+      unsigned char ltime[4];
+      unsigned char lterml[4];
+   } loghdr;
+   struct filea_struct logrec;
+};
+
+static struct loga_struct loga;          /* loga definition          */
+
+static struct filea_struct *commarea;    /* COMMAREA definition      */
+static short int comlen;                 /* Length of COMMAREA       */
+
+
+static int Verify_Name(char *string,short int length)        /* @D1C */
+{
+   for(;length>0;length--,string++)
+      if(strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZ .-'",*string)==0)
+         return(0);
+   return(1);
+}
+
+
+static int Verify_Amount(char *string,short int length)      /* @D1C */
+{
+   for(;length>0;length--,string++)
+      if(strchr("0123456789.›$",*string)==0)
+         return(0);
+   return(1);
+}
+
+static int IsNumeric(char *string,int length)                /* @D1C */
+{
+   for(;length>0;length--,string++)
+      if (!isdigit((int)(*string)))
+         return(0);
+   return(1);
+}
+
+static void Dmnu()
+{
+   int i;
+
+   dfhdga.dfhdgao.msga = DFHBMASB;
+   for (i=strlen(messages);i<40;i++)
+      messages[i] = ' ';
+   memcpy(dfhdga.dfhdgao.msgo,messages,39);
+   EXEC CICS SEND MAP("dfhdga ") MAPSET("DFH$DGA") ERASE;
+   EXEC CICS RETURN;
+}
+
+static void Notmodf()
+{
+   strcpy(messages,"RECORD NOT MODIFIED");
+   Dmnu();
+}
+
+static void Duprec()
+{
+   strcpy(messages,"DUPLICATE RECORD");
+   Dmnu();
+}
+
+static void Badleng()
+{
+   strcpy(messages,"PLEASE ENTER AN ACCOUNT NUMBER");
+   Dmnu();
+}
+
+static void Badchars()
+{
+   strcpy(messages,"ACCOUNT NUMBER MUST BE NUMERIC");
+   Dmnu();
+}
+
+static void Notfound()
+{
+   strcpy(messages,"INVALID NUMBER - PLEASE REENTER");
+   Dmnu();
+}
+
+static void Map_Fail()
+{
+   strcpy(messages,"PRESS CLEAR TO EXIT");
+   Dmnu();
+}
+
+static void Errors()
+{
+   EXEC CICS DUMP DUMPCODE("ERRS");
+   Dmnu();
+}
+
+
+static void Cics_Control()
+{
+   EXEC CICS RETURN TRANSID(dfheiptr->eibtrnid)
+   COMMAREA(commarea) LENGTH(comlen);
+}
+
+static void Map_Build()
+{
+   memcpy(dfhdgb.dfhdgbo.numbo,filea.numb,6);
+   memcpy(dfhdgb.dfhdgbo.nameo,filea.name,20);
+   memcpy(dfhdgb.dfhdgbo.addro,filea.addrx,20);
+   memcpy(dfhdgb.dfhdgbo.phoneo,filea.phone,8);
+   memcpy(dfhdgb.dfhdgbo.dateo,filea.datex,8);
+   memcpy(dfhdgb.dfhdgbo.amounto,filea.amount,8);
+   memcpy(dfhdgb.dfhdgbo.commento,filea.comment,9);
+   return;
+}
+
+static void Map_Send()
+{
+   EXEC CICS SEND MAP("dfhdgb ") MAPSET("DFH$DGB") ERASE;
+   return;
+}
+
+
+static void Data_Error()
+{
+   dfhdgb.dfhdgbo.msg3a = DFHBMASB;
+   memcpy(dfhdgb.dfhdgbo.msg3o, \
+   "DATA ERROR - CORRECT AND PRESS ENTER   ",36);
+   dfhdgb.dfhdgbo.amounta  = DFHUNNUM;
+   dfhdgb.dfhdgbo.namea    = DFHBMFSE;
+   dfhdgb.dfhdgbo.phonea   = DFHBMFSE;
+   dfhdgb.dfhdgbo.datea    = DFHBMFSE;
+   dfhdgb.dfhdgbo.commenta = DFHBMFSE;
+   EXEC CICS SEND MAP("dfhdgb ") MAPSET("DFH$DGB") DATAONLY;
+   comlen = sizeof(struct filea_struct);
+   Cics_Control();   /* No return from 'Cics_Control' */
+}
+
+static void Read_Input()
+{
+   EXEC CICS RECEIVE MAP("dfhdgb ") MAPSET("DFH$DGB") RESP(rcode);
+   switch (rcode) {
+      case DFHRESP(NORMAL) : break;
+      case DFHRESP(MAPFAIL): Notmodf();
+      default: Errors();
+   }
+   switch (trnid) {
+      case DUPD :
+      {
+         EXEC CICS READ UPDATE FILE("FILEA   ") INTO(&filea)
+         LENGTH(filea_size) RIDFLD(commarea->numb) RESP(rcode);
+         switch (rcode) {
+            case DFHRESP(NORMAL) : break;
+            case DFHRESP(NOTFND) : Notfound(); /* No return from */
+            default: Errors();
+         }
+         if (memcmp(&filea,commarea, \
+         sizeof(struct filea_struct))!=0) {
+            memcpy(dfhdgb.dfhdgbo.msg1o, \
+            "RECORD UPDATED BY OTHER USER, TRY AGAIN",39);
+            dfhdgb.dfhdgbo.msg1a = DFHBMASB;
+            dfhdgb.dfhdgbo.msg3a = DFHPROTN;
+            Map_Build();
+            EXEC CICS SEND MAP("dfhdgb ") MAPSET("DFH$DGB") DATAONLY;
+            *commarea = filea;
+            comlen = sizeof(struct filea_struct);
+            Cics_Control();   /* 'Cics_Control' does not return */
+         }
+         else {
+            filea.stat = 'U';
+            strcpy(messages,"RECORD UPDATED");
+         }
+         break;
+      }
+      case DADD :
+      {
+         filea.stat = 'A';
+         strcpy(messages,"RECORD ADDED");
+         break;
+      }
+      default :
+         Errors();
+   }
+   if (dfhdgb.dfhdgbi.namel == 0 \
+   && dfhdgb.dfhdgbi.addrl == 0 \
+   && dfhdgb.dfhdgbi.phonel == 0 \
+   && dfhdgb.dfhdgbi.datel == 0 \
+   && dfhdgb.dfhdgbi.amountl == 0 \
+   && dfhdgb.dfhdgbi.commentl == 0)
+      Notmodf();          /* No return from 'Notmodf' */
+   switch (trnid) {
+      case DADD :
+      {
+         if (!Verify_Name(dfhdgb.dfhdgbi.namei, \
+         dfhdgb.dfhdgbi.namel))
+            Data_Error(); /* No return from 'Data_Error' */
+      }
+      case DUPD :
+      {
+         if (dfhdgb.dfhdgbi.namel !=0 )
+            if (!Verify_Name(dfhdgb.dfhdgbi.namei, \
+               dfhdgb.dfhdgbi.namel))
+               Data_Error(); /* No return from 'Data_Error' */
+         if (dfhdgb.dfhdgbi.amountl != 0)
+         if (!Verify_Amount(dfhdgb.dfhdgbi.amounti, \
+            dfhdgb.dfhdgbi.amountl))
+               Data_Error(); /* No return from 'Data_Error' */
+      }
+   }
+   if (trnid == DADD)
+      memcpy(filea.numb,commarea->numb,6);
+   if (dfhdgb.dfhdgbi.namel != 0)
+      memcpy(filea.name,dfhdgb.dfhdgbi.namei,20);
+   if (dfhdgb.dfhdgbi.addrl != 0)
+      memcpy(filea.addrx,dfhdgb.dfhdgbi.addri,20);
+   if (dfhdgb.dfhdgbi.phonel != 0)
+      memcpy(filea.phone,dfhdgb.dfhdgbi.phonei,8);
+   if (dfhdgb.dfhdgbi.datel != 0)
+      memcpy(filea.datex,dfhdgb.dfhdgbi.datei,20);
+   if (dfhdgb.dfhdgbi.amountl != 0)
+      memcpy(filea.amount,dfhdgb.dfhdgbi.amounti,8);
+   else if (trnid == DADD)
+      memcpy(filea.amount,"›0000.00",8);
+   if (dfhdgb.dfhdgbi.commentl != 0)
+      memcpy(filea.comment,dfhdgb.dfhdgbi.commenti,9);
+   loga.logrec = filea;
+   memcpy(loga.loghdr.lday,dfheiptr->eibdate,4);
+   memcpy(loga.loghdr.ltime,dfheiptr->eibtime,4);
+   memcpy(loga.loghdr.lterml,dfheiptr->eibtrmid,4);
+   EXEC CICS WRITEQ TD QUEUE("LOGA") FROM(&loga)
+   LENGTH(sizeof(struct loga_struct)) RESP(rcode);
+   switch(rcode) {
+      case DFHRESP(NORMAL) : break;
+      default :
+        strcpy(messages,"TRANSACTION TERMINATED");
+        Errors();
+   }
+   if (trnid == DUPD) {
+      EXEC CICS REWRITE FILE("FILEA   ") FROM(&filea)
+      LENGTH(filea_size) RESP(rcode);
+      switch(rcode) {
+         case DFHRESP(NORMAL) : break;
+         case DFHRESP(DUPREC) : Duprec(); /* No return from here */
+         default: Errors();
+      }
+   }
+   else {
+      EXEC CICS WRITE FILE("FILEA   ") FROM(&filea)
+      LENGTH(filea_size) RIDFLD(commarea->numb) RESP(rcode);
+      switch(rcode) {
+         case DFHRESP(NORMAL) : break;
+         case DFHRESP(DUPREC) : Duprec(); /* No return from here */
+         case DFHRESP(NOTFND) : Notfound(); /* No return from here */
+         default: Errors();
+      }
+   }
+   Dmnu();  /* No return from 'Dmnu' */
+}
+
+ /********************************************************************/
+ /* Entry point of the program.                                      */
+ /********************************************************************/
+main()
+{
+   struct filea_struct com_spc;
+
+
+   EXEC CICS ADDRESS EIB(dfheiptr);      /* Get Addressability of
+                                            the EIB                  */
+   EXEC CICS ADDRESS COMMAREA(commarea);  /* Get addressability of
+                                            the COMMAREA             */
+ /* Code the trnid to one of DADD, DINQ, DUPD or DMNU                */
+   if (memcmp(dfheiptr->eibtrnid,"DADD",4)==0) {
+      trnid = DADD;
+   }
+   else if (memcmp(dfheiptr->eibtrnid,"DINQ",4)==0) {
+      trnid = DINQ;
+   }
+   else if (memcmp(dfheiptr->eibtrnid,"DUPD",4)==0) {
+      trnid = DUPD;
+   }
+   else if (memcmp(dfheiptr->eibtrnid,"DMNU",4)==0){
+      trnid = DMNU;
+   }
+   else
+      trnid = 0;
+
+   if (dfheiptr->eibcalen != 0)
+      Read_Input();                    /* No return from Read_Input */
+
+   commarea = &com_spc;
+   EXEC CICS RECEIVE MAP("dfhdga ") MAPSET("DFH$DGA") RESP(rcode);
+   switch (rcode) {
+      case DFHRESP(NORMAL) : break;
+      case DFHRESP(MAPFAIL): Map_Fail();
+      default: Errors();
+   }
+
+   if (dfhdga.dfhdgai.keyl == 0)
+      Badleng();                      /* No return from 'Bad_Leng' */
+   if (!IsNumeric(dfhdga.dfhdgai.keyi,6))
+      Badchars();                     /* No return from 'Bad_Chars' */
+   memcpy(keynum,dfhdga.dfhdgai.keyi,6);
+   switch (trnid) {
+      case DADD :
+      {
+         memcpy(dfhdgb.dfhdgbo.titleo,"FILE ADD    ",12);
+         memcpy(dfhdgb.dfhdgbo.msg3o, \
+            "ENTER DATA AND PRESS ENTER KEY         ",39);
+         memcpy(dfhdgb.dfhdgbo.numbo,dfhdga.dfhdgai.keyi,6);
+         memcpy(commarea->numb,dfhdga.dfhdgai.keyi,6);
+         dfhdgb.dfhdgbo.namea    = DFHBMUNP;
+         dfhdgb.dfhdgbo.addra    = DFHBMUNP;
+         dfhdgb.dfhdgbo.phonea   = DFHBMUNP;
+         dfhdgb.dfhdgbo.datea    = DFHBMUNP;
+         dfhdgb.dfhdgbo.amounta  = DFHBMUNN;
+         dfhdgb.dfhdgbo.commenta = DFHBMUNP;
+         memcpy(dfhdgb.dfhdgbo.amounto,"›0000.00",8);
+         comlen = 7;
+         Map_Send();
+         Cics_Control();     /* Cics_Control does not return */
+      }
+      case DINQ :
+      case DUPD :
+      {
+      /* Remember to handle conditions. */
+         EXEC CICS READ FILE("FILEA   ") INTO(&filea)
+         LENGTH(filea_size)
+         RIDFLD(keynum) RESP(rcode);
+         switch(rcode) {
+            case DFHRESP(NORMAL) : break;
+            case DFHRESP(NOTFND) : Notfound();
+            default : Errors();
+         }
+         if (trnid == DINQ) {
+            memcpy(dfhdgb.dfhdgbo.titleo,"FILE INQUIRY",12);
+            memcpy(dfhdgb.dfhdgbo.msg3o, \
+               "PRESS ENTER TO CONTINUE                ",39);
+            Map_Build();
+            /* Protect all fields on the map */
+            dfhdgb.dfhdgbo.namea    = DFHBMPRO;
+            dfhdgb.dfhdgbo.addra    = DFHBMPRO;
+            dfhdgb.dfhdgbo.phonea   = DFHBMPRO;
+            dfhdgb.dfhdgbo.datea    = DFHBMPRO;
+            dfhdgb.dfhdgbo.amounta  = DFHBMPRO;
+            dfhdgb.dfhdgbo.commenta = DFHBMPRO;
+            Map_Send();
+            EXEC CICS RETURN TRANSID("DMNU");
+         }
+         else {
+            memcpy(dfhdgb.dfhdgbo.titleo,"FILE UPDATE ",12);
+            memcpy(dfhdgb.dfhdgbo.msg3o, \
+               "CHANGE FIELDS AND PRESS ENTER          ",39);
+            *commarea = filea;
+            dfhdgb.dfhdgbo.namea    = DFHBMUNP;
+            dfhdgb.dfhdgbo.addra    = DFHBMUNP;
+            dfhdgb.dfhdgbo.phonea   = DFHBMUNP;
+            dfhdgb.dfhdgbo.datea    = DFHBMUNP;
+            dfhdgb.dfhdgbo.amounta  = DFHBMUNN;
+            dfhdgb.dfhdgbo.commenta = DFHBMUNP;
+            Map_Build();
+            Map_Send();
+            comlen = sizeof(struct filea_struct);
+            Cics_Control(); /* 'Cics_Control' does not reurn */
+         }
+      }
+      default :
+         Errors();
+   }                                     /* End switch               */
+}                                        /* End main                 */

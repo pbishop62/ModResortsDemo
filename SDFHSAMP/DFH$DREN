@@ -1,0 +1,178 @@
+#pragma XOPTS(CICS)
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$DREN                                           */
+ /*                                                                  */
+ /* Descriptive Name = Order Entry for Sample Application            */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1989, 2003"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /*                                                                  */
+ /*  $MOD(DFH$DREN),COMP(SAMPLES),PROD(CICS TS ):                    */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 210 890825 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $P2= D03791 630 030625 HDHYJBR: Check for bad resp              */
+ /*  $D1= I06048 410 930706 HD7OPJW: C++ support                     */
+ /*                                                                  */
+ /********************************************************************/
+#include "dfhbmsca.h"                    /* BMS definitions          */
+#include "dfhaid.h"                      /* Attention identifiers    */
+#include "dfh$dgk.h"                     /* Logical maps for DFH$DGK */
+#include "dfh$dl86.h"                    /* L860 definition          */
+#include "dfh$dfil.h"                    /* FILEA definition         */
+#include <string.h>                                          /* @D1C */
+#include <ctype.h>                                           /* @D1A */
+int rcode;                               /* RESP identifier          */
+
+static void Notfound()
+{
+   dfhdgk.dfhdgko.custnoa = DFHUNINT;
+   dfhdgk.dfhdgko.msg1a = DFHBMASB;
+   EXEC CICS SEND MAP("dfhdgk ") MAPSET("DFH$DGK");
+   return;
+}                                        /* End Notfound() { ...     */
+
+static Fin()
+{
+   EXEC CICS RETURN;
+}                                        /* End Fin() {...           */
+
+static Enddord()
+{
+   char presmsg[]="PROCESSING COMPLETED";                    /* @D1C */
+
+   EXEC CICS SEND TEXT FROM(presmsg) LENGTH(strlen(presmsg)) ERASE;
+   EXEC CICS SEND CONTROL FREEKB;
+   Fin();
+}                                        /* End Enddord() { ...      */
+
+static Errors()
+{
+   memcpy(dfhdgk.dfhdgko.msg2o,"TRANSACTION TERMINATED",22);
+   dfhdgk.dfhdgko.msg2a = DFHBMASB;
+   EXEC CICS SEND MAP("dfhdgk ") MAPSET("DFH$DGK");
+   EXEC CICS DUMP DUMPCODE("ERRS");
+   Fin();
+}                                        /* End Errors() { ...       */
+
+static int IsNumeric(char *string,int length)                /* @D1C */
+{
+   for(;length>0;length--,string++)
+      if (!isdigit((int)(*string)))
+         return(0);
+   return(1);
+}
+
+#define NULLS "\x00\x00\x00\x00\x00\x00"
+static void Clearmap()
+{
+      dfhdgk.dfhdgko.msg1a   =  DFHBMDAR;
+      dfhdgk.dfhdgko.msg2a   =  DFHBMDAR;
+      dfhdgk.dfhdgko.custnoa =  DFHBMUNP;
+      dfhdgk.dfhdgko.partnoa =  DFHBMUNP;
+      dfhdgk.dfhdgko.quanta  =  DFHBMUNP;
+      memcpy(dfhdgk.dfhdgko.msg1o,   NULLS,26);
+      memcpy(dfhdgk.dfhdgko.msg2o,   NULLS,22);
+      memcpy(dfhdgk.dfhdgko.custnoo, NULLS,6);
+      memcpy(dfhdgk.dfhdgko.partnoo, NULLS,6);
+      memcpy(dfhdgk.dfhdgko.quanto,  NULLS,6);
+   return;
+}                                           /* End Clearmap ...   */
+
+static void Mapfail()
+{
+   Clearmap();
+   dfhdgk.dfhdgko.msg2a = DFHBMASB;
+   EXEC CICS SEND MAP("dfhdgk ") MAPSET("DFH$DGK") ERASE;
+   return;
+}                                        /* End Mapfail() { ...      */
+
+main()
+{
+   int error_flag;
+
+   EXEC CICS ADDRESS EIB(dfheiptr);
+   Clearmap();
+   EXEC CICS SEND MAP ("dfhdgk ") MAPSET("DFH$DGK") ERASE RESP(rcode);
+   switch(rcode) {
+      case DFHRESP(NORMAL) : break;
+      case DFHRESP(MAPFAIL) : Mapfail();
+      default : Errors();
+   }                                     /* End switch ...           */
+   while(1) {
+      EXEC CICS RECEIVE MAP("dfhdgk ") MAPSET("DFH$DGK") RESP(rcode);
+      switch (dfheiptr->eibaid) {
+         case DFHCLEAR : Enddord();
+      }                                  /* End Switch               */
+      switch(rcode) {
+         case DFHRESP(NORMAL) : break;
+         case DFHRESP(MAPFAIL) : { Mapfail();
+                                continue; }
+         default : Errors();
+      }                                     /* End switch ...       */
+      error_flag = 0;
+      dfhdgk.dfhdgko.custnoa = DFHBMFSE;
+      dfhdgk.dfhdgko.partnoa = DFHBMFSE;
+      dfhdgk.dfhdgko.quanta  = DFHBMFSE;
+      if (!IsNumeric(dfhdgk.dfhdgki.custnoi,6)) {
+         dfhdgk.dfhdgko.custnoa = DFHUNINT;
+         error_flag = 1;
+      }
+      if (!IsNumeric(dfhdgk.dfhdgki.partnoi,6)) {
+         dfhdgk.dfhdgko.partnoa = DFHUNINT;
+         error_flag = 1;
+      }
+      if (!IsNumeric(dfhdgk.dfhdgki.quanti,6)) {
+         dfhdgk.dfhdgko.quanta = DFHUNINT;
+         error_flag = 1;
+      }
+      if (error_flag) {
+         dfhdgk.dfhdgko.msg2a = DFHBMASB;
+         EXEC CICS SEND MAP("dfhdgk ") MAPSET("DFH$DGK") ERASE;
+         continue;                       /* Return to while(1) { ... */
+      }                                  /* End if (error_flag) ... */
+      EXEC CICS READ FILE("FILEA   ") INTO(&filea) LENGTH(filea_size)
+         RIDFLD(dfhdgk.dfhdgki.custnoi) RESP(rcode);
+      switch(rcode) {
+          case DFHRESP(NOTFND) : { Notfound();
+                                   continue; }
+          case DFHRESP(NORMAL) : break;
+          default : Errors();
+      }                                  /* End switch ..            */
+      memcpy(l86o.custno,dfhdgk.dfhdgki.custnoi,6);
+      memcpy(l86o.partno,dfhdgk.dfhdgki.partnoi,6);
+      memcpy(l86o.quantity,dfhdgk.dfhdgki.quanti,6);
+      memcpy(l86o.termid,dfheiptr->eibtrmid,4);
+      EXEC CICS WRITEQ TD QUEUE("L86O") FROM(l86o) LENGTH(22)
+                          RESP(rcode);                     /* @P2A */
+      switch(rcode) {                                      /* @P2A */
+         case DFHRESP(NORMAL) : break;                     /* @P2A */
+         default : Errors();                               /* @P2A */
+      }                                                    /* @P2A */
+      EXEC CICS SEND MAP("dfhdgk ") MAPSET("DFH$DGK") MAPONLY
+         ERASEAUP RESP(rcode);
+      switch(rcode) {
+         case DFHRESP(NORMAL) : break;
+         case DFHRESP(MAPFAIL) : { Mapfail();
+                                break; }
+         default : Errors();
+      }                                     /* End switch ...     */
+   }                                     /* End while(1) ...         */
+}                                        /* End main() {...          */

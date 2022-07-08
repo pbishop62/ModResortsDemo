@@ -1,0 +1,141 @@
+#pragma XOPTS(CICS)
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$DREP                                           */
+ /*                                                                  */
+ /* Descriptive Name = Low Balance Inquiry for Sample Application    */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1989, 1993"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /*                                                                  */
+ /*  $MOD(DFH$DREP),COMP(SAMPLES),PROD(CICS TS ):                    */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 210 890825 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $P2= M91283 330 911112 HD9TMAW : Fix BMS paging & OVERFLOW      */
+ /*  $D1= I06048 410 930706 HD7OPJW: C++ support                     */
+ /*                                                                  */
+ /********************************************************************/
+#include "dfhbmsca.h"                    /* BMS definitions          */
+#include "dfh$dgd.h"                     /* Logical maps for DFH$DGD */
+#include "dfh$dfil.h"                    /* FILEA definition         */
+
+#include <stdio.h>                                           /* @D1A */
+#include <string.h>                                          /* @D1A */
+unsigned char keynum[6];
+int pagen;
+int rcode;                               /* RESP variable            */
+
+static void Oflow()
+{
+   char temp[4];
+   EXEC CICS SEND MAP("footing") MAPSET("DFH$DGD")
+      MAPONLY ACCUM PAGING;
+   pagen++;
+   sprintf(temp,"%3d",pagen);
+   heading.headingo.pagena = '\000';
+   memcpy(heading.headingo.pageno,temp,3);
+   EXEC CICS SEND MAP("heading") MAPSET("DFH$DGD")
+      ACCUM PAGING ERASE;
+   EXEC CICS SEND MAP("dfhdgd ") MAPSET("DFH$DGD")
+      ACCUM PAGING;
+   return;
+}
+
+static void Errors()
+{
+   EXEC CICS PURGE MESSAGE;
+   EXEC CICS ABEND ABCODE("ERRS");
+}
+
+static void End_Task()
+{
+   EXEC CICS RETURN;
+}
+
+static void Endfile()
+{
+   char opinstr[]= \
+   "PRESS THE ENTER KEY AND FOLLOW WITH PAGING COMMANDS.";
+   int term_leng;
+   char term_data;
+
+   EXEC CICS SEND MAP("final  ") MAPSET("DFH$DGD") MAPONLY
+      ACCUM PAGING;
+   EXEC CICS SEND PAGE;
+   EXEC CICS SEND TEXT FROM(opinstr) LENGTH(52) ERASE;
+   EXEC CICS ENDBR FILE("FILEA   ");
+   /******************************************************************/
+   /* A RECEIVE IS ISSUED TO GIVE THE TERMINAL OPERATOR A CHANCE TO  */
+   /* READ THE PROMPTING MESSAGE.  THE TRANSACTION WILL TERMINATE    */
+   /* WHEN THE OPERATOR PRESSES THE ENTER KEY.  NO HARM DONE IF      */
+   /* OPERATOR TYPES IN DATA IN ADDITION TO PRESSING THE ENTER KEY   */
+   /******************************************************************/
+   term_leng = 1;
+   EXEC CICS RECEIVE INTO(term_data) LENGTH(term_leng);
+   End_Task();
+}
+
+main()
+{
+   memcpy(keynum,"000000",6);
+   pagen = 1;
+   heading.headingo.pagena = '\000';
+   memcpy(heading.headingo.pageno,"1  ",3);
+
+   EXEC CICS ADDRESS EIB(dfheiptr);
+   EXEC CICS SEND MAP("heading") MAPSET("DFH$DGD") ACCUM
+      NOFLUSH PAGING ERASE RESP(rcode);
+   switch(rcode) {
+      case DFHRESP(NORMAL) : break;
+      case DFHRESP(OVERFLOW) : Oflow();
+      default : Errors();
+   }
+
+   EXEC CICS STARTBR FILE("FILEA   ") RIDFLD(keynum) RESP(rcode);
+   if (rcode != DFHRESP(NORMAL))
+      Errors();
+
+   for(;;) {
+
+      EXEC CICS READNEXT INTO(&filea) FILE("FILEA   ")
+         LENGTH(filea_size) RIDFLD(keynum) RESP(rcode);
+      switch(rcode) {
+         case DFHRESP(NORMAL) : break;
+         case DFHRESP(ENDFILE) : Endfile();
+         case DFHRESP(LENGERR) : End_Task();
+         default : Errors();
+      }
+
+      if (memcmp(filea.amount,"$0050.00",8) < 0) {
+         memcpy(dfhdgd.dfhdgdo.amounto,filea.amount,8);
+         memcpy(dfhdgd.dfhdgdo.numbero,filea.numb,6);
+         memcpy(dfhdgd.dfhdgdo.nameo,filea.name,20);
+
+         EXEC CICS SEND MAP("dfhdgd ") MAPSET("DFH$DGD")
+         ACCUM NOFLUSH PAGING RESP(rcode);
+         switch(rcode) {
+            case DFHRESP(NORMAL) : break;
+            case DFHRESP(OVERFLOW) : Oflow(); break;
+            default : Errors();
+         }
+
+      }                                  /* End if (...              */
+   }                                     /* End for(;;) ...          */
+}                                        /* End main()               */

@@ -1,0 +1,524 @@
+*ASM XOPTS(CICS,SP,NOEDF,NOPROLOG,NOEPILOG)
+         TITLE 'DFH$FCBV - Sample XFCBOVER Exit Program'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$FCBV                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Sample global user exit program for XFCBOVER     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*      Licensed Materials - Property of IBM                           *
+*                                                                     *
+*      "Restricted Materials of IBM"                                  *
+*                                                                     *
+*      5655-Y04                                                       *
+*                                                                     *
+*      (C) Copyright IBM Corp. 1994, 2014"                            *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*                                                                     *
+*   This program provides sample processing for the File Control      *
+*   backout override GLobal User Exit (GLUE) XFCBOVER.                *
+*   It is called when a log record is presented to File Control for   *
+*   backing out an update to a data set in RLS access mode, and the   *
+*   lock which protected the updated record could have been overriden *
+*   by a non-RLS batch program.                                       *
+*                                                                     *
+*   A non-RLS batch program is not normally allowed to open for       *
+*   update a data set which has retained locks protecting RLS updates *
+*   which have been made to the data set, but it could have done so   *
+*   if a special option to override locks had been specified.         *
+*   Because the condition of the data set could have been altered by  *
+*   the non-RLS batch program, the results of backing out any updates *
+*   which were backout-failed or indoubt at the locks were override   *
+*   are unpredictable, so CICS will by default not backout any such   *
+*   updates, but will write diagnostic information to CSFL.           *
+*                                                                     *
+*   The XFCBOVER exit allows an installation to write application     *
+*   related diagnostics to supplement the CICS information, to        *
+*   perform application-related recovery actions, and to request that *
+*   the backout be carried out after all, if the batch program is     *
+*   known not to corrupt data integrity.  It might be that the batch  *
+*   program only ever inserts records, and never updates existing     *
+*   records, so that it would not affect any of the locked records if *
+*   it specified the override option.  Also, some batch programs tend *
+*   to specify update on the open although they do not make updates.  *
+*                                                                     *
+*   This GLUE was introduced in CICS for MVS/ESA, version 5 release 1 *
+*   and does not exist in prior versions of CICS for MVS/ESA.         *
+*                                                                     *
+* NOTES :                                                             *
+*  DEPENDENCIES   = S/390                                             *
+*  RESTRICTIONS   = CICS/ESA GLUE restrictions                        *
+*                   GLUEs have certain unique restrictions. These     *
+*                   include, but are not limited to, such things as   *
+*                   addressing mode, the use of CICS services and the *
+*                   CICS storage protection facility. Please refer to *
+*                   the CICS/ESA Customization Guide for details.     *
+*  REGISTER CONVENTIONS = On entry, these registers have values:      *
+*                   R1 - address of the user exit parameter list      *
+*                        DFHUEPAR                                     *
+*                   R13- address of a standard register save area     *
+*                        R13 must have this value when returning to   *
+*                        the caller.                                  *
+*                   R14- address to which this program must return    *
+*                   R15- entry address of this program                *
+*                   No other register values are guaranteed on entry  *
+*                   The exit should save and restore any registers    *
+*                   that it modifies, using the save area addressed   *
+*                   by R13.                                           *
+*                                                                     *
+*                   These registers are used in this program:         *
+*                   R2 - Work register                                *
+*                   R3 - Code base                                    *
+*                   R4 - Spare                                        *
+*                   R5 - Log record addressing register               *
+*                   R6 - DFHUEPAR base                                *
+*                   R7 - Data set name addressing register            *
+*                   R8 - Spare                                        *
+*                   R9 - Spare                                        *
+*                   R10- DFHEISTG base (DFHEIPLR)                     *
+*                   R11- EIB base (DFHEIBR)                           *
+*                   R12- Work register and Stored return code         *
+*                   R13- Kernel stack base                            *
+*  MODULE TYPE    = Executable                                        *
+*  PROCESSOR      = Assembler                                         *
+*  ATTRIBUTES     = Read only, AMODE 31, RMODE ANY                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$FCBV                                              *
+*                                                                     *
+*   PURPOSE     = All functions                                       *
+*                                                                     *
+*   LINKAGE     = Called by the CICS exit handler                     *
+*                                                                     *
+*   INPUT       = R1 contains the address of DFHUEPAR                 *
+*                 DFHUEPAR contains the following exit-specific       *
+*                 parameters:                                         *
+*                                                                     *
+*                 UEPOLOGR  Address of the File Control portion of    *
+*                           the log record that has been presented    *
+*                           for backing out.                          *
+*                           The FC part of the log record consists of *
+*                                Control-data + Key + Data.           *
+*                           Copybook DFHFCLGD maps the Control-data.  *
+*                           The Data is the before-image of the       *
+*                           updated data set record.                  *
+*                                                                     *
+*                 UEPODSN   Address of the name of the data set       *
+*                           whose locks have been overriden.          *
+*                           Padded to 44 characters with spaces.      *
+*                                                                     *
+*   OUTPUT      = R15 = Return code (UERCNORM or UERCBCKO)            *
+*                                                                     *
+*   EXIT-NORMAL = Return to CICS with R15 = UERCNORM (do not backout) *
+*                                  or R15 = UERCBCKO (backout despite *
+*                                                     locks having    *
+*                                                     been overriden) *
+*                                                                     *
+*   EXIT-ERROR  = None                                                *
+*                                                                     *
+*   This program does not check for purged responses from EXEC CICS   *
+*   or XPI calls that it makes because the exit is invoked during     *
+*   backout processing and hence                                      *
+*     (1) purged responses cannot be returned by such calls,          *
+*     (2) UERCPURG is not an allowed return code from the exit.       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+*                                                                     *
+*     CALLS = EXEC CICS ADDRESS EIB                                   *
+*             DFHTRPTX TRACE_PUT                                      *
+*                                                                     *
+*     DATA AREAS = None                                               *
+*                                                                     *
+*     CONTROL BLOCKS = DFHUEPAR                                       *
+*                      DFHFCLGD                                       *
+*                                                                     *
+*     GLOBAL VARIABLES = None                                         *
+*                                                                     *
+* TABLES =                                                            *
+*    BNUE_TABLE = Table of data sets for which Batch Never Updates    *
+*                 Existing keys                                       *
+*                                                                     *
+* MACROS = None                                                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+* ------------------------------------------------------------------- *
+*   The purpose of this sample program is to demonstrate the use of   *
+*   File Control backout override exit XFCBOVER, and to show the kind *
+*   of information which can be derived from the exit parameter list. *
+*                                                                     *
+* * * YOU SHOULD TAILOR IT BEFORE USE IN A PRODUCTION ENVIRONMENT * * *
+*                                                                     *
+*   Some suggested extensions to the sample program are included in   *
+*   a section at the end of this description.                         *
+* ------------------------------------------------------------------- *
+*                                                                     *
+*   The environment in DFH$FCBV is set up to conform to CICS global   *
+*   user exit programming standards, and also to allow both EXEC CICS *
+*   (API) calls and CICS user exit programming interface (XPI) calls  *
+*   to be made. This is achieved by the following:                    *
+*                                                                     *
+*   - NOPROLOG, NOEPILOG, NOEDF specified on the ASM XOPTS statement  *
+*   - DATAREG other than R13 specified on the DFHEIENT macro          *
+*   - EXEC CICS ADDRESS EIB used to obtain EIB address                *
+*   - DFHUEXIT TYPE=XPIENV specified                                  *
+*   - R13 set to address kernel stack entry (UEPSTACK)                *
+*   - RCREG specified on the DFHEIRET macro                           *
+*                                                                     *
+*   Note that the translator preserves R13 across API calls so there  *
+*   is no need to reload it before each XPI call.                     *
+*                                                                     *
+*   This sample program does not make any EXEC CICS calls (other than *
+*   to address the EIB) but the program is set up to make it easy to  *
+*   add EXEC CICS calls.                                              *
+*                                                                     *
+*                                                                     *
+* DFH$FCBV Processing consists of the following steps:                *
+*                                                                     *
+*   -Generate the prolog code with the DFHEIENT macro.                *
+*      Specify CODEREG, DATAREG and EIBREG.                           *
+*      This enables use of EXEC CICS (API) calls.                     *
+*                                                                     *
+*   -Include DSECTS needed for:                                       *
+*      User Exit Parameter List - DFHUEPAR                            *
+*      Log Record format - DFHFCLGD                                   *
+*      XPI Support - XPI macro DFHxxyyX requires copy book DFHxxyyY   *
+*                                                                     *
+*   -Address the DFHUEPAR parameter list.                             *
+*                                                                     *
+*   -Address the EIB and the kernel stack entry.                      *
+*                                                                     *
+*   -Address the File Control portion of the log record.              *
+*    Field name FLJB_FILE_NAME contains the filename of the file to   *
+*    which the log record belongs.                                    *
+*                                                                     *
+*   -Calculate the length of the log record.                          *
+*      A File Control backout log record consists of                  *
+*        General Data part  (length equ FLJB_GENERAL_DATA__LEN)       *
+*        Common Data part   (length equ FLJB_COMMON_DATA__LEN)        *
+*        Key                (length in a field in the common part)    *
+*        Data               (length in a field in the common part)    *
+*      so its length is the sum of these lengths.                     *
+*                                                                     *
+*   -Address the data set name.                                       *
+*                                                                     *
+*   -Make a user trace entry if tracing is active for File Control.   *
+*    Use the XPI, DFHTRPTX, specifying TRACE_PUT.                     *
+*    The trace point id is in the range of user trace points          *
+*    (X'0100' through X'01FF').                                       *
+*    The following data is traced:                                    *
+*      DATA1: Eyecatcher 'DFH$FCBV ENTRY'                             *
+*      DATA2: Data set name                                           *
+*      DATA3: File Control portion of log record                      *
+*                                                                     *
+*      If any trace XPI call fails, this is ignored.                  *
+*                                                                     *
+*    Trace entries could alternatively be written using the           *
+*    EXEC CICS ENTER TRACENUM command.  This program uses DFHTRPTX    *
+*    to demonstrate use of an XPI interface.                          *
+*                                                                     *
+*   -Check the data set name to see if it is one of those for which   *
+*    it is known that batch programs never update existing records,   *
+*    but only insert new records, or do not make updates at all.      *
+*      The program contains a table of such data sets.                *
+*      If this data set is in the table, then UERCBCKO is returned:   *
+*      the backout can safely be carried out because the locked       *
+*      record will not have been updated from batch.                  *
+*                                                                     *
+*   -For all other data sets, it must be assumed that the batch job   *
+*    could have updated the record being presented for backing out,   *
+*    therefore UERCNORM must be returned to take the default action   *
+*    of not backing out the update.                                   *
+*                                                                     *
+*   -Exit processing for the program                                  *
+*      Make a user trace entry if tracing is active for File Control  *
+*      The following data is traced:                                  *
+*        DATA1: Eyecatcher 'DFH$FCBV EXIT'                            *
+*        DATA2: Text 'update will be backed out'                      *
+*                 or 'update will not be backed out' as appropriate.  *
+*        DATA3: Data set name                                         *
+*                                                                     *
+*   -Generate epilog code with the DFHEIRET macro                     *
+*    The DFHEIRET macro frees DFHEISTG working storage,               *
+*    restores caller's registers, and sets R15 before exiting         *
+*                                                                     *
+*                                                                     *
+*   Suggested Extensions to the Backout Override Exit Sample Program  *
+*   ----------------------------------------------------------------  *
+*   This XFCBOVER exit program could be extended to reflect the       *
+*   pattern of batch usage at your installation.  For example, you    *
+*   could perhaps:                                                    *
+*                                                                     *
+*   - Carry out specific processing for data sets for which batch     *
+*     programs only ever update certain ranges of keys, checking the  *
+*     key in the backout log record to see whether it is in the       *
+*     updated range.  If the log record does not match the range of   *
+*     updated keys then a response of UERCBCKO can be returned: the   *
+*     backout can safely be carried out because the locked record     *
+*     will not have been updated by the batch program.                *
+*                                                                     *
+*   - Make use of the key and data in the log record to determine     *
+*     whether or not it would be correct to backout this update.      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$FCBV),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 654    510 941028 HDAVCMM : Sample Backout Exit Program     *
+*    $P1= M94782 510 950705 HDAVCMM : Change CICS name in comments    *
+*                                                                     *
+***********************************************************************
+*
+***********************************************************************
+* Ensure AMODE(31) and RMODE(ANY).                                    *
+***********************************************************************
+DFH$FCBV CSECT
+DFH$FCBV AMODE 31
+DFH$FCBV RMODE ANY
+***********************************************************************
+*   -Generate the prolog code with the DFHEIENT macro.                *
+*      Specify CODEREG, DATAREG and EIBREG.                           *
+*      This enables use of EXEC CICS (API) calls.                     *
+***********************************************************************
+         DFHEIENT CODEREG=3,DATAREG=10,EIBREG=11
+***********************************************************************
+*   -Include DSECTS needed for:                                       *
+*      User Exit Parameter List - DFHUEPAR                            *
+*      Log Record format - DFHFCLGD                                   *
+*      XPI Support - XPI macro DFHxxyyX requires copy book DFHxxyyY   *
+***********************************************************************
+         DFHUEXIT TYPE=EP,ID=XFCBOVER    DFHUEPAR plist for XFCBOVER
+         EJECT
+         COPY  DFHFCLGD                  File Control log record
+         EJECT
+         DFHUEXIT TYPE=XPIENV            XPI environment
+         EJECT
+         COPY  DFHTRPTY                  DFHTRPTX macro parameter list
+         EJECT
+***********************************************************************
+* DFHEISTG working storage.                                           *
+***********************************************************************
+         DFHEISTG                        Start working storage
+ADDSTAT        DS    F                   Addability status of file
+CICSRESP       DS    F                   EXEC CICS RESP code
+LOG_LENGTH     DS    F                   Length of FC log record
+               DS    0D                  Doubleword align XPI plist
+XPI_PLIST_STG  DS    CL256               Storage for XPI plists
+         DFHEIEND                        End working storage
+         EJECT
+DFH$FCBV  CSECT
+***********************************************************************
+*   -Address the DFHUEPAR parameter list.                             *
+***********************************************************************
+         LR    R6,R1                     Address DFHUEPAR
+         USING DFHUEPAR,R6
+***********************************************************************
+*   -Address the EIB and the kernel stack entry.                      *
+***********************************************************************
+         L     R13,UEPSTACK              Address kernel stack entry
+*
+         EXEC CICS ADDRESS EIB(DFHEIBR)
+*
+***********************************************************************
+*   -Address the File Control portion of the log record.              *
+*    Field name FLJB_FILE_NAME contains the filename of the file to   *
+*    which the log record belongs.                                    *
+***********************************************************************
+         L     R5,UEPOLOGR               Address FC log record
+***********************************************************************
+*   -Calculate the length of the log record.                          *
+*      A File Control backout log record consists of                  *
+*        General Data part  (length equ FLJB_GENERAL_DATA__LEN)       *
+*        Common Data part   (length equ FLJB_COMMON_DATA__LEN)        *
+*        Key                (length in a field in the common part)    *
+*        Data               (length in a field in the common part)    *
+*      so its length is the sum of these lengths.                     *
+***********************************************************************
+         USING FLJB_COMMON_DATA-FLJB_GENERAL_DATA__LEN,R5
+         LA    R12,FLJB_GENERAL_DATA__LEN+FLJB_COMMON_DATA__LEN
+         AH    R12,FLJB_CD_KEY_LENGTH
+         A     R12,FLJB_CD_DATA_LENGTH
+         ST    R12,LOG_LENGTH
+*
+         DROP  R5
+         USING FLJB_GENERAL_DATA,R5      Base FC log record structure
+*
+***********************************************************************
+*   -Address the data set name.                                       *
+***********************************************************************
+         L     R7,UEPODSN                Address the data set name
+*
+***********************************************************************
+*   -Make a user trace entry if tracing is active for File Control.   *
+*    Use the XPI, DFHTRPTX, specifying TRACE_PUT.                     *
+*    The trace point id is in the range of user trace points          *
+*    (X'0100' through X'01FF').                                       *
+*    The following data is traced:                                    *
+*      DATA1: Eyecatcher 'DFH$FCBV ENTRY'                             *
+*      DATA2: Data set name                                           *
+*      DATA3: File Control portion of log record                      *
+***********************************************************************
+         L     R2,UEPTRACE               Address the trace flag
+         TM    0(R2),UEPTRON             Is FC level 1 tracing active?
+         BZ    NO_ENTRY_TRACE            No...skip trace
+*
+         LA    R2,XPI_PLIST_STG          Yes..make user trace entry
+         USING DFHTRPT_ARG,R2            Address DFHTRPTX plist
+*
+         DFHTRPTX CALL,                  Trace XPI call                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(ENTRY_TPID),                                   *
+               DATA1(A(ENTRY_EYE),L'ENTRY_EYE),    Eyecatcher          *
+               DATA2((R7),DSN_LEN),                Data set name       *
+               DATA3((R5),LOG_LENGTH),             FC log record       *
+               OUT,                                                    *
+               RESPONSE(*)
+*
+         DROP  R2                        Lose addressability to plist
+*
+NO_ENTRY_TRACE DS 0H                     Skip to here if no trace
+*
+***********************************************************************
+*   -Check the data set name to see if it is one of those for which   *
+*    it is known that batch programs never update existing records,   *
+*    but only insert new records, or do not make updates at all.      *
+*      The program contains a table of such data sets.                *
+*      If this data set is in the table, then UERCBCKO is returned:   *
+*      the backout can safely be carried out because the locked       *
+*      record will not have been updated from batch.                  *
+***********************************************************************
+         LA    R2,BNUE_TABLE             Address table of DSnames
+         LA    R12,BNUE_COUNT            Get number of entries
+BNUE_LOOP DS    0H                       Check each entry in turn
+         CLC   0(DSN_LEN,R7),0(R2)       Found the data set?
+         BE    PERFORM_BACKOUT           Yes..it is OK to backout
+         LA    R2,DSN_LEN(R2)            No...get next entry
+         BCT   R12,BNUE_LOOP             Loop if not end of table
+*
+***********************************************************************
+*   -For all other data sets, it must be assumed that the batch job   *
+*    could have updated the record being presented for backing out,   *
+*    therefore UERCNORM must be returned to take the default action   *
+*    of not backing out the update.                                   *
+***********************************************************************
+*
+***********************************************************************
+* Set default return code and branch to exit processing               *
+***********************************************************************
+PERFORM_DEFAULT DS 0H
+         LA    R12,UERCNORM              Request default action
+         B     RETURN_BOVER              Exit, issuing trace if enabled
+*
+***********************************************************************
+* Set return code that allows backout to proceed and branch to exit   *
+* processing.                                                         *
+***********************************************************************
+PERFORM_BACKOUT DS 0H
+         LA    R12,UERCBCKO              Request backout of record
+         B     RETURN_BOVER              Exit, issuing trace if enabled
+*
+***********************************************************************
+*   -Exit processing for the program                                  *
+*      Make a user trace entry if tracing is active for File Control  *
+*      The following data is traced:                                  *
+*        DATA1: Eyecatcher 'DFH$FCBV EXIT'                            *
+*        DATA2: Text 'update will be backed out'                      *
+*                 or 'update will not be backed out' as appropriate.  *
+*        DATA3: Data set name                                         *
+***********************************************************************
+RETURN_BOVER   DS 0H
+         L     R2,UEPTRACE               Address the trace flag
+         TM    0(R2),UEPTRON             Is FC level 1 tracing active?
+         BZ    NO_EXIT_TRACE             No...skip trace
+*
+         LA    R2,XPI_PLIST_STG          Yes..make user trace entry
+         USING DFHTRPT_ARG,R2            Address DFHTRPTX plist
+*
+         CH    R12,=Y(UERCBCKO)          Are we going to backout?
+         BE    BACKOUT_TEXT              Yes, go and say so
+         DFHTRPTX CLEAR,                 Set up trace data field       *
+               IN,                                                     *
+               DATA2(A(NORM_TEXT),L'NORM_TEXT)
+         B     ISSUE_TRACE               Go and issue the trace entry
+*
+BACKOUT_TEXT   DS 0H
+         DFHTRPTX CLEAR,                 Set up trace data field       *
+               IN,                                                     *
+               DATA2(A(BCKO_TEXT),L'BCKO_TEXT)
+*
+ISSUE_TRACE    DS 0H
+         DFHTRPTX CALL,                  Trace exit from program       *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(EXIT_TPID),                                    *
+               DATA1(A(EXIT_EYE),L'EXIT_EYE),      Eyecatcher          *
+               DATA2(*),                           Text                *
+               DATA3((R7),DSN_LEN),                Data set name       *
+               OUT,                                                    *
+               RESPONSE(*)
+*
+         DROP  R2                        Lose addressability to plist
+*
+NO_EXIT_TRACE DS 0H                      Skip to here if no trace
+         LR    R15,R12                   Copy return code into R15
+         B     RETURN_TO_CICS            Return to CICS
+*
+***********************************************************************
+*   -Generate epilog code with the DFHEIRET macro                     *
+*    The DFHEIRET macro frees DFHEISTG working storage,               *
+*    restores caller's registers, and sets R15 before exiting         *
+***********************************************************************
+RETURN_TO_CICS DS 0H
+         DFHEIRET RCREG=15               Return with rc in R15
+*
+         DROP  R5,R6,DFHEIBR,DFHEIPLR    Lose addressability to DSECTs
+         EJECT
+***********************************************************************
+* Trace point ids. User trace entries issued from exit programs       *
+* should have trace point ids in the range X'0100' to X'01FF' for     *
+* CICS to interpret them as such.                                     *
+***********************************************************************
+         DS    0D
+ENTRY_TPID     DC    XL2'01E0'                Entry trace point id
+EXIT_TPID      DC    XL2'01E1'                Exit trace point id
+*
+***********************************************************************
+* Other constants and equates                                         *
+***********************************************************************
+ENTRY_EYE      DC    C'DFH$FCBV ENTRY'        Entry eyecatcher
+EXIT_EYE       DC    C'DFH$FCBV EXIT'         Exit eyecatcher
+NORM_TEXT      DC    C'update will not be backed out'
+BCKO_TEXT      DC    C'update will be backed out'
+DSN_LEN        EQU   44                       Length of data set names
+         LTORG
+***********************************************************************
+* Table of data sets for which Batch Never Updates Existing records   *
+***********************************************************************
+BNUE_TABLE     DS    0D
+               DC    CL44'SAMPLE.RLSFILE.KBASE3'
+               DC    CL44'SAMPLE.RLSFILE.KBASE4'
+BNUE_COUNT  EQU (*-BNUE_TABLE)/44             Number of entries
+         EJECT
+***********************************************************************
+* End of DFH$FCBV                                                     *
+***********************************************************************
+         DROP
+         END DFH$FCBV

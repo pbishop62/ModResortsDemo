@@ -1,0 +1,1328 @@
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$CRFA                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CSD Cross Referencing Sample Program             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1987, 1998"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  The function of this program is to produce a cross reference       *
+*  listing of objects or keywords on the CICS system definition file  *
+*  (DFHCSD). The program is driven by a user exit in the CSD          *
+*  off-line utility DFHCSDUP. Data describing resource definitions    *
+*  on the CSD is passed to this exit in a standard parameter list     *
+*  format, and the pertinent data saved in a cross reference table    *
+*  which is built in store from the data passed to the exit on        *
+*  the objects/keywords in which we are interested.                   *
+*                                                                     *
+*  This exit assumes that it is run via a EXTRACT command of the      *
+*  form:                                                              *
+*         EXTRACT GROUP(<group name>) OBJECTS                         *
+*      or                                                             *
+*         EXTRACT LIST(<list name>) OBJECTS                           *
+*           where <group name> may be generic                         *
+*           and   <list name> must not be generic                     *
+*                                                                     *
+*   N.B This program must be link edited with the stub DFHEXAI.       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*    $MOD(DFH$CRFA),COMP(SPI),PROD(CICS TS ):                         *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 210 870708 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*    $P2= M27689 530 980126 HD4OGB : Fix 0C4                          *
+*                                                                     *
+***********************************************************************
+PARMLIST DSECT ,
+         USING PARMLIST,PLISTPTR
+EXITCDP  DS    A                  Ptr. to exit call identifier
+INITCD   EQU   X'00'              ...Initial call
+LSTARTCD EQU   X'02'              ...List start call
+GSTARTCD EQU   X'04'              ...Group start call
+OSTARTCD EQU   X'06'              ...Object start call
+DETAILCD EQU   X'08'              ...Keyword detail call
+OENDCD   EQU   X'0A'              ...Object end call
+GENDCD   EQU   X'0C'              ...Group end call
+LENDCD   EQU   X'0E'              ...List end call
+FINALCD  EQU   X'10'              ...Final call
+EXITWKP  DS    A                  Ptr. to ptr. to user work area
+EXITBTCP DS    A                  Ptr. to ptr. to backtranslated cmd
+LENBTCMD EQU   75                 ...Max length of a backtranslated cmd
+EXITLSTP DS    A                  Ptr to list name
+EXITGRPP DS    A                  Ptr to group name
+EXITOTP  DS    A                  Ptr to object type
+EXITONP  DS    A                  Ptr to object name
+EXITKNP  DS    A                  Ptr to keyword name
+EXITKLP  DS    A                  Ptr to keyword length
+EXITKVP  DS    A                  Ptr to keyword value
+         EJECT
+* ****************************************************************** *
+*                                                                    *
+*          D E F I N E  T H E  U S E R  W O R K  A R E A             *
+*                                                                    *
+*  All variables must be defined here in order to make the program   *
+*  serially re-usable and read only (LPA eligible).                  *
+*                                                                    *
+* ****************************************************************** *
+         SPACE 2
+WORKAREA DSECT ,                  Users work area
+         USING WORKAREA,WRKPTR    ...Addressed via EXITWKP
+TYPESTRT DS    A                  Ptrr to start of type chain
+FIRSTBYT DS    A                  Addr of first byte of avail stg
+LASTBYT  DS    A                  Addr of last byte of avail stg
+BTCMDPTR DS    A                  Save ptr to back translated cmd
+REGSA1   DS    6F                 Register save area 1
+REGSA2   DS    6F                 Register save area 2
+REGSA3   DS    6F                 Register save area 3
+REGSA4   DS    6F                 Register save area 4
+*
+MACROSA  DS    18F                Macro save area(GET,PUT & GETMAIN)
+*
+RETCODE  DS    F                  Return code from a internal routine
+*
+NAMECURR DS    A                  Ptr to currently addr name element
+DEFNCURR DS    A                  Ptr to currently addr defn element
+USEDCURR DS    A                  Ptr to currently addr used element
+*
+BASEPTR  DS    F                  Return variable from GETSTG routine
+NAMEBPTR EQU   BASEPTR            ...in FINDNAME subroutine
+DEFNBPTR EQU   BASEPTR            ...in FINDDEFN subroutine
+USEDBPTR EQU   BASEPTR            ...in FINDUSED subroutine
+*
+CARD     DS    CL80               Input record buffer for EXITRDR
+ICRDADDR DS    F                  Addr of input record buffer
+EOFRDR   DS    C                  End of input file flag
+TRUE     EQU   X'10'              ...End of file reached
+FALSE    EQU   X'01'              ...End of file not reached yet
+*
+WKKEY    DS    0CL28              Concatenated key for FINDUSED
+WRKTYPE  DS    CL12               ...Object type
+WRKNAME  DS    CL8                ...Object name
+WRKGRP   DS    CL8                ...RDO group of using object defn
+*
+GSTGPLST DS    A                  GETSTG subroutines parameter list
+*
+ATYPLIST DS    0AL1               ADDTYPE parameter list
+         DC    A(CARD)            ...Address of input record
+* The above address is set up by the INIT subroutine
+*
+DISPLIST DS    2A                 DISP parameter list
+*
+GSTGLIST DS    0AL2               GETSTG parameter list
+         DC    A(STGLEN)          ...Addr of reqd storage length var
+* The above address is set up by the INIT subroutine
+         DS    A                  ...Addr of result variable
+STGLEN   DS    F                  Length of storage required
+STGADDR  DS    A                  BAse address of allocated storage
+*
+FTYPLIST DS    A                  FINDTYPE parameter list
+FNAMLIST DS    A                  FINDNAME parameter list
+FDEFLIST DS    A                  FINDDEFN parameter list
+FUSDLIST DS    A                  FINDUSED parameter list
+*
+WRKAREA1 DS    CL44               Work area for building FINDNAME keys
+WKNNAME  EQU   WRKAREA1           ...for finding  a object name
+WKKVAL   EQU   WRKAREA1           ...for finding a keyword value
+*
+CNTCHAR  DS    C                  Output control character
+RECORD   DS    CL131              Output record
+*
+XREFMSG  DS    0CL131             Object/Keyword report header line
+         DC    C'* * * * '
+         DC    C'CROSS REFERENCE OF '
+XREFTYPE DS    CL12               ...Object/Keyword name
+         DC    C' * * * *'
+         DS    CL84               ...spaces
+*
+ENAMCMSG DS    0CL131             Empty name chain line
+         DC    C'THERE ARE NO DEFINITIONS/USES OF '
+EMPTYNAM DS    CL12               ...TYPE with empty name chain
+         DC    C' IN THE SPECIFIED GROUPS/LISTS.'
+         DS    CL55               ... spaces
+*
+DEFNMSG  DS    0CL131             Definition description
+DEFNNO   DS    CL4                ...Number of times object defined
+         DC    C' group(s) contain definitions of '
+DNAME    DS    CL12               ...Object name
+         DS    CL94               ... spaces
+*
+USEDMSG  DS    0CL131             Object/keyword use description
+USEDNO   DS    CL4                ...No. of times object/keyword used
+         DC    C' uses are made of '
+UNAME    DS    CL109              ...Object/keyword name + spaces
+         DS    0D
+*
+DISPTMP1 DS    CL8                Packed decimal form of binary number
+NUMASCHA DS    CL16               Binary number in decimal char form
+*
+LWRKAREA EQU   *-WORKAREA         ...Length of users work area
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*      D E F I N E  T H E  X R E F  T A B L E  E L E M E N T S        *
+*                                                                     *
+*  The following define the structure of the elements which go        *
+*  together to make up the cross reference table.                     *
+*  The table consists of 4 different types of element. They are:      *
+*                                                                     *
+*   1) Type Elements   -  These define the objects or keywords        *
+*                         which are to be cross referenced.           *
+*                         The values are those read from the          *
+*                         input file. Each type element has a         *
+*                         chain of 'name' elements associated with    *
+*                         it.                                         *
+*                                                                     *
+*   2) Name Elements   -  These define the different values found     *
+*                         on the CSD for a particular object or       *
+*                         keyword name. Each name element has a       *
+*                         chain of 'defined' elements and a chain     *
+*                         of 'used' elements associated with it.      *
+*                                                                     *
+*   3) Defined Elements-  These define where a object of a given      *
+*                         name is defined (keywords cannot be         *
+*                         defined). As no two objects in a given      *
+*                         group can have the same name all that       *
+*                         it is necessary to record is the RDO        *
+*                         group name.                                 *
+*                                                                     *
+*   4) Used Elements   -  These define in which resource              *
+*                         definitions a particular value of a         *
+*                         object name or a keyword value is used.     *
+*                         The object type, name and group must        *
+*                         recorded to uniquely define a use.          *
+*                                                                     *
+* ******************************************************************* *
+       SPACE 2
+TBASE    DSECT ,                  XREF table 'type' element DSECT
+         USING TBASE,TBPTR        ...First addressed by TYPESTRT
+TYPE     DS    CL12               Resource type / Keyword name
+TYPENEXT DS    A                  Next type element ptr
+NAMESTRT DS    A                  Start of name chain for this type
+NAMECNT  DS    F                  No. of elements on name chain
+LTYPBASE EQU   *-TBASE            ...Length of a type element
+         SPACE 2
+NBASE    DSECT ,                  XREF table 'name' element DSECT
+         USING NBASE,NBPTR        ...Addr by NAMESRT/NAMENEXT
+NAMEKEY  DS    0CL44              Name of an occurrence of a type
+NAME     DS    CL44               A uniquely named occurrence of a type
+NAMENEXT DS    A                  Next name in collating sequence
+DEFNSTRT DS    A                  Start of defined chain for this name
+DEFNCNT  DS    F                  No. of elements in defined chain
+USEDSTRT DS    A                  Start of used chain for this name
+USEDCNT  DS    F                  No. of elements in used chain
+LNAMBASE EQU   *-NBASE            ...Length of a 'name' element
+         SPACE 2
+DEFN     DSECT ,                  XREF table 'defined' element DSECT
+         USING DEFN,DEFNPTR       ...Addr via  DEFNSTRT/DEFNNEXT
+DEFNKEY  DS    0CL8               Key to a definition of a name
+DEFNGRP  DS    CL8                Just record the defining RDO group
+DEFNNEXT DS    A                  Ptr to the next definition of a name
+LDEFBASE EQU   *-DEFN             ...Length of a 'defined' element
+         SPACE 2
+USED     DSECT ,                  XREF table 'used' element DSECT
+         USING USED,USEDPTR       ...Addr via USEDSTSRT/USEDNEXT
+USEDKEY  DS    0CL28              Key to the use of a name
+USEDTYPE DS    CL12               ...Resource type of using object
+USEDNAME DS    CL8                ...Name of using object
+USEDGRP  DS    CL8                ...RDO group containing using object
+USEDNEXT DS    A                  Ptr to next 'used' element
+LUSDBASE EQU   *-USED             ...Length of a 'used' element
+         EJECT
+         SPACE 2
+         DCBD DSORG=BS,DEVD=DA    Produce the required DCB DSECT
+*                                 for symbolic references
+         EJECT
+         DFHREGS ,                Define symbolic registers
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*          M A I N L I N E  C O D E  S T A R T S  H E R E             *
+*          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~             *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+CREFCSD  CSECT ,
+CREFCSD  AMODE 24                 Addressing mode must be 24 bit
+CREFCSD  RMODE 24                 Code must reside below the line
+         USING *,CODEREG          Est. addressability to code CSECT
+         LR    CODEREG,R15        R15 = Addr of this pgms. entry point
+         SAVE  (14,12)            Save callers registers
+         LR    PLISTPTR,R1        Est. addressability to parameter list
+         L     R3,EXITCDP         R3<-- Addr of call type identifier
+*
+         CLI   1(R3),INITCD       Is it an INITIAL type call ?
+         BNE   PROC0010           No...Try next type
+         BAL   R14,INIT           Yes..Branch to INIT subroutine; then
+*                                 R15 already contains the return code
+         B     EXITPROC           ...branch to exit
+PROC0010 DS    0H                 INIT call must have preceded this so
+*                                 it is OK to est. addr. to work area
+         L     WRKPTR,EXITWKP     Load ptr. to work area ptr
+         L     WRKPTR,0(,WRKPTR)  Establish addr to provided work area
+         L     WRKPTR,0(,WRKPTR)  Establish addr to users work area
+*
+         CLI   1(R3),OSTARTCD     Is it an OBJECT START type call ?
+         BNE   PROC0020           No...Try next type
+         BAL   R14,OBJSTART       Yes..Branch to OBJSTART subroutine
+         L     R15,RETCODE        R15<-- Return code from subroutine
+         BAL   R14,CHKRC          Check return code setting
+         B     EXITPROC           ...then branch to exit from pgm
+PROC0020 DS    0H
+         CLI   1(R3),DETAILCD     Is it a DETAIL type call ?
+         BNE   PROC0030           No...Try next type
+         BAL   R14,DETAIL         Yes...Branch to DETAIL subroutine
+         L     R15,RETCODE        R15<-- Return code from subroutine
+         BAL   R14,CHKRC          Check return code setting
+         B     EXITPROC           ...then branch to exit from pgm
+PROC0030 DS    0H
+         CLI   1(R3),FINALCD      Is it a FINAL type call ?
+         BNE   PROC0050           No...Try next type
+         BAL   R14,FINAL          Yes..Branch to FINAL subroutine
+         L     R15,RETCODE        R15<-- Return code from subroutine
+         B     EXITPROC           ...then branch to exit from pgm
+PROC0050 DS    0H                 Not intrested in this type of call
+         SR    R15,R15            ..so clear R15 to zero and
+*                                 ...then exit from pgm
+EXITPROC DS    0H
+         RETURN (14,12),RC=(15)   Restore callers (DFHCSDUP) registers
+*                                 except R15 which contains the return
+*                                 code
+*
+* ****************************************************************** *
+*                                                                    *
+*    D E F I N E  T H E  I N P U T  A N D  O U T P U T  F I L E S    *
+*                                                                    *
+* ****************************************************************** *
+*
+*                                This file is to contain the XREF
+*                                listing produced by this pgm on the
+*                                objects/keywords specified in the
+*                                input file
+*
+CRFOUT   DCB   DDNAME=CRFOUT,DSORG=PS,MACRF=(PM),RECFM=FA,LRECL=131,   *
+               BLKSIZE=131,SYNAD=WRTLERR
+*                                This file defines the objects and
+*                                keywords on which to cross reference,
+*                                one record for each object/keyword.
+*                                Only the first 12 characters of each
+*                                record are significant.
+*                                e.g To cross reference PROGRAMs with
+*                                TRANSACTIONs and TYPETERMs with
+*                                TERMINALs the required records are:
+*
+*                                        PROGRAM
+*                                        TYPETERM
+*
+CRFINPT  DCB   DDNAME=CRFINPT,DSORG=PS,MACRF=(GM),RECFM=F,LRECL=80,    *
+               BLKSIZE=80,EODAD=RCREOF,SYNAD=RCRERR
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*           P R O C E S S  A  I N I T I A L  C A L L                  *
+*                                                                     *
+*  This subroutine performs the following:                            *
+*      (1) Get the work area; return code set if it fails; then       *
+*          establish addressability to it.                            *
+*      (2) Get the first 1K of storage to be allocated to the XREF    *
+*          table elements.                                            *
+*      (3) Open the input and output files; return code set if either *
+*          file fails to open                                         *
+*      (4) Read in the input file contents into the TYPE part of the  *
+*          XREF table                                                 *
+*      (5) Save ptr. to back translated command                       *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+INIT     DS    0H
+         LR    SAFEREG1,R13       Save main procs save area ptr, and
+         LR    SAFEREG2,R14       ... return address in a safe reg
+*                                 N.B We can't use reg save area yet as
+*                                     the stg is not yet getmained
+*
+*                                 Ensure OBJECTS specified on EXTRACT
+*                                 command, if not terminate exit now
+         LA    R2,93              BT command length less 7
+         L     R3,EXITBTCP        R3 <-- Ptr to back translated cmd ptr
+         L     R3,0(,R3)          R3 <-- Ptr to back tarnslated cmd
+INIT0010 DS    0H
+         CLC   0(7,R3),=C'OBJECTS' String 'OBJECTS' found ?
+         BE    INIT0030           Yes, so all is OK with cmd
+         LA    R3,1(R3)           Bump up scan register by 1
+         BCT   R2,INIT0010        Try next character
+INIT0020 DS    0H                 If we get here we have failed to find
+*                                 OBJECTS in specified EXTRACT command
+         L     R15,NOOBJERR       So set return code
+         B     EXITINI1           ...and return
+INIT0030 DS    0H
+         LA    R2,LWRKAREA        R3<-- Length of required work area
+         GETMAIN RC,LV=(2)        GETMAIN required storage
+         LTR   R15,R15            Is storage available ?
+         BZ    INIT0040           Yes...So continue
+         L     R15,GWRKAERR       No...So set return code
+         B     EXITINI1           ..and branch to exit from subroutine
+INIT0040 DS    0H                 Getmain OK so establish addr. to it
+         L     R3,EXITWKP         R3<-- Ptr to ptr to provided wrk area
+         L     R3,0(,R3)          R3<-- Addr. of provided work area
+         ST    R1,0(,R3)          Save address of getmained stg
+         LR    WRKPTR,R1          ... and load work area base register
+*
+*        I N I T I A L I S E  W O R K  A R E A
+*
+         XR    R3,R3              R3<-- 0
+         ST    R3,TYPESTRT        Initialise TYEPSTRT to 0
+         ST    R3,RETCODE         Initialise RETCODE to 0
+         LA    R3,CARD            Establish  ADDTYPE parameter list
+         ST    R3,ATYPLIST          addressability to input record
+         LA    R3,STGLEN          Establish GETSTG parameter list
+         ST    R3,GSTGLIST          addressability to STGLEN variable
+*
+         BAL   R14,GET1K          Get the first 1K of stg for XREF tble
+         ICM   R15,B'1111',RETCODE Current value of return code zero ?
+         BNZ   EXITINIT           NO...So exit form this routine
+INIT0050 DS    0H
+         OPEN  (CRFOUT,(OUTPUT))  Open the output file
+         USING IHADCB,DCBREG      Establish addressability to the
+         LA    DCBREG,CRFOUT        output files DCB
+         TM    DCBOFLGS,DCBOFOPN  Was open successful ?
+         BO    INIT0060           Yes..So continue
+         L     R15,OPENERRO       No...So set return code register
+*                                 ...for a output file open error
+         B     EXITINIT           ...and exit from the routine
+INIT0060 DS    0H
+         OPEN  (CRFINPT,(INPUT))  Open the output file
+         LA    DCBREG,CRFINPT     Est. addr to the input files DCB
+         TM    DCBOFLGS,DCBOFOPN  Was open successful ?
+         BO    INIT0070           Yes..So continue
+         CLOSE (CRFOUT)           No..So close CRFOUT ignoring any
+*                                 erro on the CLOSE
+         L     R15,OPENERRI       and set return code for a input
+*                                 ...file open error
+         B     EXITINIT           ...then exit from the routine
+INIT0070 DS    0H
+         BAL   R14,READCARD       Read in the first input record
+         B     INIT0090           Check for eof/error condition on read
+INIT0080 DS    0H
+         LA    R3,CARD            R3<--- address of input record
+         ST    R3,ATYPLIST        Store R3 in ADDTYPE parameter list
+         LA    R1,ATYPLIST        R1<-- Addr of add type param. list
+         BAL   R14,ADDTYPE        Branch to ADDTYPE routine
+         ICM   R15,B'1111',RETCODE Is return code from ADDTYPE zero ?
+         BNZ   EXITINIT           No...So exit from routine
+         BAL   R14,READCARD       Read next input record
+INIT0090 DS    0H
+         ICM   R15,B'1111',RETCODE Is return code from READCARD zero ?
+         BNZ   EXITINIT           No...So exit from routine
+         TM    EOFRDR,TRUE        Was end of input file reached ?
+         BNO   INIT0080           No...So add input to the type chain
+INIT0100 DS    0H
+         L     R3,EXITBTCP        R3<--- Addr of ptr to back tran. cmd
+         L     R3,0(,R3)          R3<--- Addr of back tran. cmd
+         ST    R3,BTCMDPTR        ...be used in XREF report
+EXITINIT DS    0H
+         BAL   R14,CHKRC
+EXITINI1 DS    0H
+         LR    R13,SAFEREG1       Reload main procs save area ptr, and
+         LR    R14,SAFEREG2       .. return address from safe registers
+*                                 R15 already contains the return code
+         BR    R14                Return to caller
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*     A D D  A  N E W  T Y P E  T O  T H E  T Y P E  C H A I N        *
+*                                                                     *
+*  This subroutine adds a object type name or keyword name, read from *
+*  the input file, to the type chain of the cross reference table; new*
+*  entries are made at the end of the chain. The name chain associated*
+*  with the new 'type' is also initialised.                           *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+ADDTYPE  DS    0H
+         STM   R13,R2,REGSA2      Save callers strategic registers
+*
+         MVC   ICRDADDR(4),0(R1)  Save address of input record
+         L     R3,=AL4(LTYPBASE)  R3<-- Length of a 'type' entry
+         ST    R3,STGLEN          Store in parameter list for GETSTG
+         LA    R3,STGADDR         R3<-- Addr of result variable
+         ST    R3,GSTGLIST+4      Store in parameter list for GETSTG
+         LA    R1,GSTGLIST        R1<-- Addr of parameter list
+         BAL   R14,GETSTG         Branch to GETSTG routine
+         CLI   RETCODE,0          Was storage available ?
+         BNZ   EXITATYP           No..So exit form routine
+         L     R3,TYPESTRT        R3<-- Addr of start of type chain
+         LTR   R3,R3              Is it zero; i.e. empty chain
+         BNZ   ATYP0010           No...So add element to end of chain
+         L     R3,STGADDR         R3<-- Addr of acquired storage
+         ST    R3,TYPESTRT        Init. ptr to start of type chain
+         B     ATYP0040           ... then initialise new element
+ATYP0010 DS    0H
+         USING TBASE,TBPTR        Obtain addr to type chain
+         L     TBPTR,TYPESTRT     ...TBPTR addr base of element
+         B     ATYP0030           Test for end of chain
+ATYP0020 DS    0H
+         L     TBPTR,TYPENEXT     Est. addr to next element in chain
+ATYP0030 DS    0H
+         L     R3,TYPENEXT        R3<-- Ptr to next element in chain
+         LTR   R3,R3              R3 = 0 ?
+         BNZ   ATYP0020           No...End of chain not reached
+         L     R3,STGADDR         Yes...R3<-- Addr of new element
+         ST    R3,TYPENEXT        Point current element at new element
+*
+ATYP0040 DS    0H
+         L     TBPTR,STGADDR      Est. addr. to new element
+         XR    R3,R3              R3<-- 0
+         ST    R3,TYPENEXT        Set end of type chain marker
+         L     R3,ICRDADDR        R3<-- Addr of input record
+         MVC   TYPE(12),0(R3)     Move input into new element
+*
+*        I N I T I A L I S E  N A M E  C H A I N
+*
+*                                 Initialise the dummy first element
+         L     R3,=AL4(LNAMBASE)  R3<-- Length of a name element
+         ST    R3,STGLEN          Store in the parameter list
+         LA    R3,NAMESTRT        NAMESTRT to be set to addr of stg
+         ST    R3,GSTGLIST+4        so store its address in parm. list
+         LA    R1,GSTGLIST        R1<-- Addr of parameter list
+         BAL   R14,GETSTG         Get the necessary storage
+         CLI   RETCODE,0          Was required storage available ?
+         BNZ   EXITATYP           No...So exit from routine
+         USING NBASE,NBPTR        Est. addressability to the new elem.
+         L     NBPTR,NAMESTRT     ....Via addr. passed back in NAMESTRT
+         XC    NAME(44),NAME      Clear the new element to zeroes
+*
+*                                 Initialise the dummy last element
+         LA    R3,NAMENEXT        R3<--Addr of NAMENEXT in first elem.
+         ST    R3,GSTGLIST+4      Store in parameter list
+         LA    R1,GSTGLIST        R1<--Addr of GETSTG parameter list
+         BAL   R14,GETSTG         Get storage for dummy last element
+         CLI   RETCODE,0          Was storage available ?
+         BNZ   EXITATYP           No..So exit from routine
+*
+*                                 Est. addressability to the new elem.
+         L     NBPTR,NAMENEXT     ...Via addr passed back in NAMESTRT
+         XC    NAME+1(43),NAME+1  Clear top part of new element to zero
+         MVI   NAME,X'FF'         Set first byte of new element HIGH
+         XR    R3,R3              R3<--- 0
+         ST    R3,NAMENEXT        Set NAMENEXT to end of chain marker
+         ST    R3,NAMECNT         Init. name count in new TYPE element
+EXITATYP DS    0H
+         LM    R13,R2,REGSA2      Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ****************************************************************** *
+*                                                                    *
+*       P R O C E S S  A  O B J E C T  S T A R T  C A L L            *
+*                                                                    *
+*  This subroutine searches the TYPE to see if a object is one on    *
+*  which cross referencing is to be performed. If it is then:        *
+*  1) The name chain is searched to see if it already contains the   *
+*  name of the object. If it does not then a new name element is     *
+*  added in collating sequence.                                      *
+*  2) Then the definition of the object is recorded in the 'defined' *
+*  chain associated with the 'name' chain element (which may have    *
+*  been created in (1) above) which in turn is associated with a     *
+*  'type' chain element.                                             *
+*                                                                    *
+******************************************************************** *
+         SPACE 2
+OBJSTART DS    0H
+         STM   R13,R2,REGSA1      Save callers strategic registers
+*
+         L     R3,EXITOTP         R3<-- Addr of object type
+         ST    R3,FTYPLIST        Store in FINDTYPE parameter list
+         LA    R1,FTYPLIST        R1<-- Addr of FINDTYPE's param. list
+         BAL   R14,FINDTYPE       Branch to 'find type' routine
+         LTR   TBPTR,TBPTR        Was object type found in chain ?
+         BZ    EXITOBJS           NO... So exit from this routine
+OBJS0010 DS    0H
+         MVI   WKNNAME+8,C' '     Clear chars 8-40 of work area
+         MVC   WKNNAME+9(36),WKNNAME+8 ...to spaces
+         L     R3,EXITONP         R3<-- Addr of object name
+         MVC   WKNNAME(8),0(R3)   Move chars of obj. name into wrk area
+         LA    R3,WKNNAME         R3<-- Addr of work area
+         ST    R3,FNAMLIST        Store in FINDNAME's parameter list
+         LA    R1,FNAMLIST        R1<-- Addr of FINDNAME's parm. list
+         BAL   R14,FINDNAME       Branch to FINDNAME routine
+         CLI   RETCODE,0          Did an error occur; no storage avail?
+         BNZ   EXITOBJS           Yes..So exit from this routine
+*
+*        A D D  A  E L E M E N T  T O  T H E  D E F I N E D  C H A I N
+*
+OBJS0020 DS    0H
+         L     R3,EXITGRPP        R3<-- Addr of RDO group name
+         ST    R3,FDEFLIST        Store in FINDEFN's parameter list
+         LA    R1,FDEFLIST        R1<-- Addr of FINDDEFN's parm list
+         BAL   R14,FINDDEFN       Branch to 'find definition' routine
+*                                   to add this definition in sequence
+EXITOBJS DS    0H
+         LM    R13,R2,REGSA1      Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ****************************************************************** *
+*                                                                    *
+*        P R O C E S S  A  K E Y W O R D  D E T A I L  C A L L       *
+*                                                                    *
+*  This subroutine searches the TYPE to see if a  keyword is one     *
+*  on which cross referencing is to be performed. If it is then:     *
+*  1) The name chain is searched to see if it already contains the   *
+*  name of the keyword value. If it does not then a new name element *
+*  is added in collating sequence.                                   *
+*  2) Then the use of the object is recorded in the 'used' chain     *
+*   associated with the 'name' chain element (which may have been    *
+*   created in (1) above) which in turn is associated with a 'type'  *
+*   chain element.                                                   *
+*                                                                    *
+******************************************************************** *
+         SPACE 2
+DETAIL   DS    0H
+         STM   R13,R2,REGSA1      Save callers strategic registers
+*
+         MVI   WKKVAL,C' '        Clear the work area  to spaces
+         MVC   WKKVAL+1(43),WKKVAL ...By propagating a space char.
+         L     R3,EXITKLP         R3<-- Addr of keyword value length
+         LH    R3,0(,R3)          R3<-- Keyword value length; 16 bits
+         C     R3,=F'44'          Is length of keyword value > 44
+         BL    DET0010            No...So move it to work area
+         L     R3,EXITKVP         R3<-- Addr of keyword value
+         MVC   WKKVAL(44),0(R3)   Move in first 44 chars. of value then
+         B     DET0020            ...Try to find value in type chain
+DET0010  DS    0H
+         L     R2,EXITKVP         R2<-- Addr of keyword value
+         BCTR  R3,0               Subtract 1 from length in R3
+         EX    R3,MOVEKV          Move in all chars. of keyword value
+DET0020  DS    0H
+         L     R3,EXITKNP         R3<--- Addr of keyword name
+         ST    R3,FTYPLIST        Store in FINDTYPE's parameter list
+         LA    R1,FTYPLIST        R1<--- Addr of parameter list
+         BAL   R14,FINDTYPE       Branch to 'find type' routine
+         CLI   RETCODE,0          Did an error occur; no stg avail ?
+         BNZ   EXITDET            Yes..Exit from this routine
+         LTR   TBPTR,TBPTR        Was keyword name found ?
+         BZ    EXITDET            No..So exit from routine
+DET0030  DS    0H                 Yes...So check if in name chain; if
+*                                   not then add it in collating seq.
+         LA    R3,WKKVAL          R3<--- Addr of work area
+         ST    R3,FNAMLIST        Store in FINDNAME's parameter list
+         LA    R1,FNAMLIST        R1<-- Addr of FINDNAME's parm. list
+         BAL   R14,FINDNAME       Branch to 'find name' routine
+*
+         CLI   RETCODE,0          Did an error occur; no stg avail ?
+         BNZ   EXITDET            Yes...So exit from this routine
+DET0040  DS    0H                 No...So add this use to 'used chain'
+         L     R3,EXITOTP         R3<-- Addr of object type
+         MVC   WRKTYPE(12),0(R3)  Move object type into work area
+         L     R3,EXITONP         R3<-- Addr of object name
+         MVC   WRKNAME(12),0(R3)  Move object name into work area
+         L     R3,EXITGRPP        R3<-- Addr of RDO group name
+         MVC   WRKGRP(8),0(R3)    Move group name into work area
+         LA    R3,WKKEY           R3<-- Addr of constructed key
+         ST    R3,FUSDLIST        Store in FINDUSED's parameter list
+         LA    R1,FUSDLIST        R1<-- Addr of FINDUSED's parm list
+         BAL   R14,FINDUSED       Branch to 'find use' routine to add
+*                                   this use in collating sequence
+EXITDET  DS    0H
+         LM    R13,R2,REGSA1      Restore callers registers
+         BR    R14                Return to caller
+*
+*                                 Perform variable length move of
+MOVEKV   MVC   WKKVAL(0),0(R2)      keyword value to work area
+         EJECT
+* ****************************************************************** *
+*                                                                    *
+*              P R O C E S S  A  F I N A L  C A L L                  *
+*                                                                    *
+*  This subroutine performs the following:                           *
+*     (1) Lists out the contents of the resulting cross reference    *
+*         in the sequence defined by the sequence of the input.      *
+*     (2) Closes both the input and output files                     *
+*                                                                    *
+* ****************************************************************** *
+         SPACE 2
+FINAL    DS    0H
+         STM   R13,R2,REGSA1      Save the callers strategic registers
+*
+         USING TBASE,TBPTR        Obtain addressability to the first
+         L     TBPTR,TYPESTRT       entry in the cross reference table
+         B     FINL0020           Check for end of table
+FINL0010 DS    0H
+         BAL   R14,LISTTYPE       Yes..List out all the names with
+*                                   their definitions and uses
+         L     TBPTR,TYPENEXT     Point at next type element in chain
+FINL0020 DS    0H
+         LTR   TBPTR,TBPTR        End of table reached ?
+         BNZ   FINL0010           No..So iterate
+FINL0040 DS    0H
+         CLOSE (CRFINPT)          Close the input file
+         CLOSE (CRFOUT)           Close the output file
+EXITFINL DS    0H
+         LM    R13,R2,REGSA1      Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ****************************************************************** *
+*                                                                    *
+*              C H E C K  T H E  R E T U R N  C O D E                *
+*                                                                    *
+*  This subroutine checks the return code setting and insures that   *
+*  all files are closed before exit if the return code is non-zero.  *
+*  R15 contains the return code to be checked on entry.              *
+*                                                                    *
+* ****************************************************************** *
+         SPACE 2
+CHKRC    DS    0H
+         STM   R13,R2,REGSA1      Save the callers strategic registers
+*
+         LTR   R15,R15            Is return code greater than zero
+         BZ    EXITCHKR           No.. So exit from this routine
+CHKR0010 DS    0H
+         CL    R15,OPENERRI       Is RC set to open input file error?
+         BE    CHKR0030           Yes, So no need to close it
+CHKR0020 DS    0H                 No..So close the input file
+         CLOSE (CRFINPT)
+CHKR0030 DS    0H
+         CL    R15,OPENERRO       Is RC set to open output file error?
+         BE    EXITCHKR           Yes, So no need to close it
+         CLOSE (CRFOUT)           Close the output file
+EXITCHKR DS    0H
+         LM    R13,R2,REGSA1      Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ****************************************************************** *
+*                                                                    *
+*       L I S T  O U T  T H E  D E T A I L S  O F  A  T Y P E        *
+*                                                                    *
+*  This subroutine produces a report on either:                      *
+*     (1) The names of the objects of a certain type with details of *
+*         their definition and use.                                  *
+*     (2) The values used for a specified keyword with details on    *
+*         their use.                                                 *
+*                                                                    *
+* ****************************************************************** *
+         SPACE 2
+LISTTYPE DS    0H
+         STM   R13,R2,REGSA2      Save callers strategic registers
+         MVI   CNTCHAR,C' '       Clear out the control char. field
+         MVI   RECORD,C' '        Clear the output record to spaces
+         MVC   RECORD+1(L'RECORD-1),RECORD ...propagate the first byte
+         BAL   R14,WRTLINE        Write out a blank line
+         L     R3,BTCMDPTR        R3<--- Addr of back tran. cmd
+         MVC   RECORD(LENBTCMD),0(R3) ...and move it into o/p buffer
+         BAL   R14,WRTLINE        Write out the back translated cmd
+*
+         MVI   RECORD,C' '        Clear th o/p buffer to spaces
+         MVC   RECORD+1(L'RECORD-1),RECORD ...propagate the first byte
+         BAL   R14,WRTLINE        Write out a blank line
+         BAL   R14,WRTLINE        Write out a blank line
+         MVC   XREFMSG(L'XREFMASK),XREFMASK
+         MVC   XREFTYPE,TYPE
+         MVC   RECORD(L'XREFMSG),XREFMSG
+         BAL   R14,WRTLINE        Write out the header
+*
+         L     R3,NAMECNT         R3<-- Number of names associated with
+*                                   this type element
+         LTR   R3,R3              Names for this type ?
+         BNZ   LTYP0010           Yes...So list there defs and/or uses
+*
+         MVI   RECORD,C' '        Clear th o/p buffer to spaces
+         MVC   RECORD+1(L'RECORD-1),RECORD ...propagate the first byte
+         BAL   R14,WRTLINE        Write out a blank line
+         BAL   R14,WRTLINE        Write out a blank line
+         MVC   ENAMCMSG(L'ENAMCMSK),ENAMCMSK
+         MVC   EMPTYNAM,TYPE
+         MVC   RECORD(L'ENAMCMSG),ENAMCMSG
+         BAL   R14,WRTLINE        Write the 'no definitions/uses' msg
+         B     EXITLTYP           Exit from subroutine
+*
+LTYP0010 DS    0H
+         USING NBASE,NBPTR        Obtain addressability to the head of
+         L     NBPTR,NAMESTRT     .. the NAME chain for this TYPE
+         B     LTYP0090           Check for end of NAME chain. This
+*                                   will cause skipping of first elem.
+LTYP0020 DS    0H
+         MVI   RECORD,C' '        Clear the o/p buffer to spaces
+         MVC   RECORD+1(L'RECORD-1),RECORD ...propagate the first byte
+         BAL   R14,WRTLINE        Write out a blank line
+         BAL   R14,WRTLINE        Write out a blank line
+*
+*        L I S T  O U T  T H E  D E F I N I T I O N S  O F  A  N A M E
+*
+*
+LTYP0030 DS    0H
+         L     R3,DEFNCNT         R3<-- No. of definitions of this name
+         LTR   R3,R3              Is it zero ?
+         BZ    LTYP0060           Yes...No defn's to list; so list uses
+         MVC   DEFNMSG(L'DEFNMASK),DEFNMASK Move defn mask to defn msg
+*                                           area
+         MVC   DNAME(12),NAME     No...So list out the No. of defn's
+         LA    R3,DEFNCNT         R3<-- Addr of number of definitions
+         ST    R3,DISPLIST        Store in DISP's parameter list
+         LA    R3,DEFNNO          R3<--- Addr of result variable
+         ST    R3,DISPLIST+4      Store in DISP's parameter list
+         LA    R1,DISPLIST        R1<-- Addr of parameter list
+         BAL   R14,DISP           Convert No. of defn's to char form
+         MVC   RECORD(L'DEFNMSG),DEFNMSG Move defn msg to o/p buffer
+         BAL   R14,WRTLINE        Write out the msg:
+*                                   'N groups contain definitions of '
+         MVI   RECORD,C' '        Clear the o/p buffer to spaces
+         MVC   RECORD+1(L'RECORD-1),RECORD ...propagate the first byte
+         MVC   RECORD(L'THEYARE),THEYARE Move 'They are:' msg to o/p
+         BAL   R14,WRTLINE        Write out the 'The are:' msg
+*
+         USING DEFN,DEFNPTR       Obtain addressability to the head of
+         L     DEFNPTR,DEFNSTRT   ...the DEFNINED chain for this NAME
+         B     LTYP0050           Check for end of defined chain. This
+*                                   will cause skipping of first elem.
+LTYP0040 DS    0H
+         MVI   RECORD,C' '        Clear the o/p buffer to spaces
+         MVC   RECORD+1(L'RECORD-1),RECORD ...propagate the first byte
+         MVC   RECORD+14(8),DEFNGRP Set group name where defined
+         BAL   R14,WRTLINE         Write out 'group line'
+*
+LTYP0050 DS    0H
+         L     DEFNPTR,DEFNNEXT    Point to next element on defn chain
+         CLI   DEFNKEY,X'FF'       Is next element the dummy last elem.
+         BNE   LTYP0040            No...So create next defined msg
+*
+*        L I S T  O U T  T H E  U S E S  O F  A  N A M E
+*
+*
+LTYP0060 DS    0H
+         L     R3,USEDCNT         R3<-- No. of uses of this name
+         LTR   R3,R3              Is it zero ?
+         BNP   LTYP0090           Yes...So go on to process next name
+         MVC   USEDMSG(L'USEDMASK),USEDMASK Move defn mask to defn msg
+*                                           area
+         MVC   UNAME(44),NAME     Move name into used msg
+         LA    R3,USEDCNT         R3<-- Addr of used count
+         ST    R3,DISPLIST        Store in parameter list of DISP
+         LA    R3,USEDNO          R3<-- Addr of result variable
+         ST    R3,DISPLIST+4      Store in parameter list
+         LA    R1,DISPLIST        R1<-- Addr of parameter list
+         BAL   R14,DISP           Convert number of uses to char. form
+         MVC   RECORD(L'USEDMSG),USEDMSG move used msg to o/p buffer
+         BAL   R14,WRTLINE        Write out the msg:N defs' msg
+*                                   'N uses area made of ' msg
+         MVI   RECORD,C' '        Clear the o/p buffer to spaces
+         MVC   RECORD+1(L'RECORD-1),RECORD ...propagate the first byte
+         MVC   RECORD(L'THEYARE),THEYARE Move 'They are:' msg to o/p
+         BAL   R14,WRTLINE        Write out the 'The are:' msg
+*
+         USING USED,USEDPTR       Obtain addressability to the head of
+         L     USEDPTR,USEDSTRT   ...the USED chain for this NAME
+         B     LTYP0080           Check for end of USED chain. This
+*                                   will cause skipping of first elem.
+LTYP0070 DS    0H
+         MVI   RECORD,C' '        Clear the o/p buffer to spaces
+         MVC   RECORD+1(L'RECORD-1),RECORD ...propagate the first byte
+         MVC   RECORD+14(12),USEDTYPE Create <type>
+         MVC   RECORD+27(8),USEDNAME               <name>
+         MVC   RECORD+36(2),=CL2'IN'                     IN
+         MVC   RECORD+39(8),USEDGRP                        <group> msg
+         BAL   R14,WRTLINE            Write out constructed msg
+*
+LTYP0080 DS    0H
+         L     USEDPTR,USEDNEXT   Point to next element on used chain
+         CLI   USEDKEY,X'FF'      Is next element dummy last element ?
+         BNE   LTYP0070           No..So create next 'is used' msg
+*
+LTYP0090 DS    0H
+         USING NBASE,NBPTR        Obtain addressability to the head of
+         L     NBPTR,NAMENEXT     .. the NAME chain for this TYPE
+         CLI   NAMEKEY,X'FF'      End of name chain reached ?
+         BNE   LTYP0020           No..So process next name element
+*
+EXITLTYP DS    0H
+         MVI   CNTCHAR,C'1'       Set page eject control character
+         MVI   RECORD,C' '        Clear the o/p buffer to spaces
+         MVC   RECORD+1(L'RECORD-1),RECORD ...propagate the first byte
+         BAL   R14,WRTLINE        Perform page eject
+         MVI   CNTCHAR,C' '       Re-set control character
+*
+         LM    R13,R2,REGSA2      Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ****************************************************************** *
+*                                                                    *
+*       F I N D  A  N A M E  I N  T H E  N A M E  C H A I N          *
+*                                                                    *
+*  The function of this subroutine is to locate a name in the name   *
+*  if one is not found then a new name element is added in collating *
+*  sequence and initialises its associated DEFINED and USED chains.  *
+*                                                                    *
+* ****************************************************************** *
+         SPACE 2
+FINDNAME DS    0H
+         STM   R13,R2,REGSA2      Save callers strategic registers
+         L     INNAMPTR,0(,R1)    Save address of input search name
+         USING NBASE,NBPTR        Obtain addressability to the head of
+         L     NBPTR,NAMESTRT     .. the NAME chain for this TYPE
+FNAM0010 DS    0H
+         LR    NAMEPREV,NBPTR     NAMEPREV--> Previous element in chain
+         L     NBPTR,NAMENEXT     Addr. next element on chain
+         CLC   NAME(44),0(INNAMPTR) Is this the name were looking for ?
+         BL    FNAM0010           No...So look at next element on chain
+         BE    EXITFNAM           Duplicate name; exit from subroutine
+*                                 ..Else this is a new name for TYPE
+         ST    NBPTR,NAMECURR     Save ptr to current element
+*
+         L     R3,NAMECNT         Load name count for TYPE
+         A     R3,=F'1'           R3<-- R3 + 1
+         ST    R3,NAMECNT         Store back name count for TYPE
+*
+         L     R3,=AL4(LNAMBASE)  R3<-- Length of a name element
+         ST    R3,STGLEN          Store in GETSTG's parameter list
+         LA    R3,NAMEBPTR        R3<-- Addr of result variable
+         ST    R3,GSTGLIST+4      Store in GETSTG's parameter list
+         LA    R1,GSTGLIST        R1<-- Addr of GETSTG's param. list
+         BAL   R14,GETSTG         Get storage for new NAME element
+         CLI   RETCODE,0          Was storage available ?
+         BNZ   EXITFNAM           No..So exit from this routine
+*
+         L     NBPTR,NAMEBPTR     Establish Addr. to the new element
+         MVC   NAME(44),0(INNAMPTR)  Set the name filed of the new elem
+         MVC   NAMENEXT(4),NAMECURR  Point it to the next element in
+*                                      chain in collating sequence
+         LR    R3,NBPTR           Save ptr to new element
+         LR    NBPTR,NAMEPREV     Establish addr to previous element
+*                                      in chain in collating sequence
+         ST    R3,NAMENEXT        And point it to the new element
+         LR    NBPTR,R3           Return addr to new element
+*
+*        C R E A T E  T H E  D E F I N E D  C H A I N
+*
+FNAM0020 DS    0H
+         L     R3,=AL4(LDEFBASE)  R3<-- Length of a defined base
+         ST    R3,STGLEN          Store in GETSTG's parameter list
+         LA    R3,DEFNSTRT        R3<-- Addr of result variable
+         ST    R3,GSTGLIST+4      Store in GETSTG's parameter list
+         LA    R1,GSTGLIST        R1<-- Addr of GETSTG's parm list
+         BAL   R14,GETSTG         Get storage for new DEFN element
+         CLI   RETCODE,0          Was storage available ?
+         BNZ   EXITFNAM           No..So exit from this routine
+*
+         USING DEFN,DEFNPTR       Establish addressability to the
+         L     DEFNPTR,DEFNSTRT     new element (Dummy chain head)
+         XC    DEFNKEY,DEFNKEY    Clear the DEFNKEY to low values
+*
+         LA    R3,DEFNNEXT        R3<-- Addr of result variable
+         ST    R3,GSTGLIST+4      Store in GETSTG's parameter list
+         LA    R1,GSTGLIST        R1<-- Addr of GETSTG's parm list
+         BAL   R14,GETSTG         Get storage for new DEFN element
+         CLI   RETCODE,0          Was storage available ?
+         BNZ   EXITFNAM           No..So exit from this routine
+*
+         L     DEFNPTR,DEFNNEXT   Establish addressability to the
+*                                   new element (Dummy chain tail)
+         XC    DEFNKEY+1,DEFNKEY+1 ..clear bytes 2-8 to low values
+         MVI   DEFNKEY,X'FF'       ..and byte 1 to a high value
+         XR    R3,R3              R3<-- 0
+         ST    R3,DEFNNEXT        Set end of defined chain marker
+         ST    R3,DEFNCNT         Initialise defined count to zero
+*
+*        C R E A T E  T H E  U S E D  C H A I N
+*
+FNAM0030 DS    0H
+         L     R3,=AL4(LUSDBASE)  R3<-- Length of a used base
+         ST    R3,STGLEN          Store in GETSTG's parameter list
+         LA    R3,USEDSTRT        R3<-- Addr of result variable
+         ST    R3,GSTGLIST+4      Store in GETSTG's parameter list
+         LA    R1,GSTGLIST        R1<-- Addr of GETSTG's parm list
+         BAL   R14,GETSTG         Get storage for new USED element
+         CLI   RETCODE,0          Was storage available ?
+         BNZ   EXITFNAM           No..So exit from this routine
+*
+         USING USED,USEDPTR       Establish addressability to the
+         L     USEDPTR,USEDSTRT     new element (Dummy chain head)
+         XC    USEDKEY,USEDKEY    Clear the USEDKEY to low values
+*
+         LA    R3,USEDNEXT        R3<-- Addr of result variable
+         ST    R3,GSTGLIST+4      Store in GETSTG's parameter list
+         LA    R1,GSTGLIST        R1<-- Addr of GETSTG's parm list
+         BAL   R14,GETSTG         Get storage for new USED element
+         CLI   RETCODE,0          Was storage available ?
+         BNZ   EXITFNAM           No..So exit from this routine
+*
+         L     USEDPTR,USEDNEXT   Establish addressability to the
+*                                   new element (Dummy chain tail)
+         XC    USEDKEY+1,USEDKEY+1 ..clear bytes 2-28 to low values
+         MVI   USEDKEY,X'FF'       ..and byte 1 to a high value
+         XR    R3,R3              R3<-- 0
+         ST    R3,USEDNEXT        Set end of used chain marker
+         ST    R3,USEDCNT         Initialise used count to zero
+EXITFNAM DS    0H
+         LM    R13,R2,REGSA2      Restore callers registers
+         BR    R14                return to caller
+* ****************************************************************** *
+*                                                                    *
+*      F I N D  A  D E F I N I T I O N  I N  I T S  C H A I N        *
+*                                                                    *
+*  The function of this subroutine is to locate the position in the  *
+*  defined chain at which to record a new definition of a element of *
+*  the name chain. No two definitions should ever be the same as     *
+*  it is not possible to define two resources of the same type with  *
+*  the same name in any one RDO group. Once the position as been     *
+*  found a new element is added to the chain.                        *
+*                                                                    *
+* ****************************************************************** *
+         SPACE 2
+FINDDEFN DS    0H
+         STM   R13,R2,REGSA2      Save callers registers
+*
+         L     INDEFPTR,0(,R1)    Save address of new definition key
+         USING DEFN,DEFNPTR       Establish addressability to the
+         L     DEFNPTR,DEFNSTRT     dummy chain head
+FDEF0010 DS    0H                 Search for position in seq of new
+*                                   definition
+         LR    DEFNPREV,DEFNPTR   DEFNPREV--> Previous element in seq.
+         L     DEFNPTR,DEFNNEXT   Addr next element in sequence
+         CLC   DEFNKEY,0(INDEFPTR) Is it the DEFN element we want
+         BL    FDEF0010          No...So look at the next element
+         BE    EXITFDEF          Unexpected error!!! Should never occur
+*
+         ST    DEFNPTR,DEFNCURR  Save ptr to currently addr. element
+*
+         L     R3,DEFNCNT        R3<-- Current definition count
+         A     R3,=F'1'          R3<-- R3 + 1
+         ST    R3,DEFNCNT        Save updated definition count
+*
+         L     R3,=AL4(LDEFBASE)  R3<-- Length of a definition elem.
+         ST    R3,STGLEN          Store in GETSTG's parameter list
+         LA    R3,DEFNBPTR        R3<-- Addr of result variable
+         ST    R3,GSTGLIST+4      Store in GETSTG's parameter list
+         LA    R1,GSTGLIST        R1<-- Addr of GETSTG's param. list
+         BAL   R14,GETSTG         Get storage for new DEFN element
+         CLI   RETCODE,0          Was storage available ?
+         BNZ   EXITFDEF           No...So exit from this routine
+*
+         L     DEFNPTR,DEFNBPTR   Establish addr to new defn element
+         MVC   DEFNKEY(8),0(INDEFPTR) Initialise defn key
+         MVC   DEFNNEXT(4),DEFNCURR   Point new element at next higher
+*                                       in collating sequence
+         LR    R3,DEFNPTR         Save ptr to new 'defined' element
+         LR    DEFNPTR,DEFNPREV   Addr previous element in chain
+         ST    R3,DEFNNEXT        Point it at the new element
+EXITFDEF DS    0H
+         LM    R13,R2,REGSA2      Restore the callers registers
+         BR    R14                Return to caller
+         EJECT
+* ****************************************************************** *
+*                                                                    *
+*         F I N D  A  U S E  I N  T H E  U S E D  C H A I N          *
+*                                                                    *
+*  The function of this subroutine is to locate the position in the  *
+*  used chain at which to record a new use of a element in the name  *
+*  chain. No two definitions should ever be the same as it is not    *
+*  possible to define two resources of the same type with  the same  *
+*  name in any one RDO group. Once the position as been found a new  *
+*  element is added to the chain.                                    *
+*                                                                    *
+* ****************************************************************** *
+         SPACE 2
+FINDUSED DS    0H
+         STM   R13,R2,REGSA2      Save callers strategic registers
+*
+         L     INUSDPTR,0(,R1)    Save addr of 'use' key
+         USING USED,USEDPTR       Establish addressability to the head
+         L     USEDPTR,USEDSTRT     of the USED chain of current NAME
+FUSD0010 DS    0H
+         LR    USEDPREV,USEDPTR   Save ptr to current element
+         L     USEDPTR,USEDNEXT   Addr next element on chain
+         CLC   USEDKEY,0(INUSDPTR) Is it the one were looking for ?
+         BL    FUSD0010           No...So look at the next in sequence
+         BE    EXITFUSD           Unexpected error!! Should never occur
+         ST    USEDPTR,USEDCURR   Save ptr to currently addr element
+*
+         L     R3,USEDCNT         R3<-- Current value of use count
+         A     R3,=F'1'           R3<-- R3 + 1
+         ST    R3,USEDCNT         Store updated value of use count
+*
+         L     R3,=AL4(LUSDBASE)  R3<-- Length of a used elem.
+         ST    R3,STGLEN          Store in GETSTG's parameter list
+         LA    R3,USEDBPTR        R3<-- Addr of result variable
+         ST    R3,GSTGLIST+4      Store in GETSTG's parameter list
+         LA    R1,GSTGLIST        R1<-- Addr of GETSTG's param. list
+         BAL   R14,GETSTG         Get storage for new USED element
+         CLI   RETCODE,0          Was storage available ?
+         BNZ   EXITFUSD           No..So exit from this routine
+*
+         L     USEDPTR,USEDBPTR   Addr the new used element
+         MVC   USEDKEY(28),0(INUSDPTR) Set the use key
+         MVC   USEDNEXT(4),USEDCURR    Point it at the next in seq.
+         LR    R3,USEDPTR         Save pointer to new element
+         LR    USEDPTR,USEDPREV   Addr previous in sequence
+         ST    R3,USEDNEXT        Point it at the new element
+EXITFUSD DS    0H
+         LM    R13,R2,REGSA2      Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ****************************************************************** *
+*                                                                    *
+*        F I N D  A  T Y P E I N  T H E  T Y P E  C H A I N          *
+*                                                                    *
+*  The function of this subroutine is to locate the position in the  *
+*  type chain of a particular object name or keyword name.           *
+*  When it is found the subroutine is exited with TBPTR pointing at  *
+*  the required element. If on return TBPTR is zeroes then the       *
+*  object name / keyword name could not be found.                    *
+*                                                                    *
+* ****************************************************************** *
+         SPACE 2
+FINDTYPE DS    0H
+         STM   R13,R2,REGSA2      Save callers registers
+*
+         L     INTYPPTR,0(,R1)    Save ptr to input type key
+         USING TBASE,TBPTR        Establish addr to the type chain
+         L     TBPTR,TYPESTRT       from ptr in user work area
+         B     FTYP0020           Check for end of chain found
+FTYP0010 DS    0H
+         L     TBPTR,TYPENEXT     Addr next element in chain
+FTYP0020 DS    0H
+         LTR   TBPTR,TBPTR        As the end of chain been found ?
+         BZ    EXITFTYP           Yes...Exit from routine
+         CLC   TYPE(12),0(INTYPPTR) Is this the required TYPE element ?
+         BNE   FTYP0010           Try next type element
+EXITFTYP DS    0H
+         LM    R13,R2,REGSA2      Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*    W R I T E  A  R E C O R D  T O  T H E  O U T P U T  F I L E      *
+*                                                                     *
+*  This subroutine writes out the contents of the output record       *
+*  buffer to CRFOUT. The return code is set if a write error is       *
+*  detected and the SYNAD label WRTLERR branched to by the PUT macro. *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+WRTLINE  DS    0H
+         STM   R13,R2,REGSA3      Save callers strategic registers
+*
+         ICM   R15,B'1111',RETCODE Return code set, must be a write
+*                                  error so don't attempt write
+         BNZ   EXITWRTL
+WRTL0010 DS    0H
+         LA    R13,MACROSA        R13<-- 18 word save area for macro
+         PUT   CRFOUT,RECORD-1    Write control char plus rec to file
+         B     EXITWRTL           No error if we get here; exit routine
+WRTLERR  DS    0H
+         MVC   RETCODE,WRITEERR   Write error if we get here
+EXITWRTL DS    0H
+         LM    R13,R2,REGSA3      Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*                 R E A D  A  I N P U T  R E C O R D                  *
+*                                                                     *
+*  This subroutine reads in input record into the input buffer CARD.  *
+*  If the end of file is reached then the EOFRDR flag is set; if a    *
+*  read error occurs then the return code is set; otherwise a normal  *
+*  processing continues.                                              *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+READCARD DS    0H
+         STM   R13,R2,REGSA2      Save callers strategic registers
+*
+         MVI   EOFRDR,FALSE       Re-set end of input file flag
+RCRD0010 DS    0H
+         LA    R13,MACROSA        R13<-- 18 word save area for macro
+         GET   CRFINPT,CARD       Get a record
+         B     EXITRCRD           No error if we get here
+*
+RCREOF   DS    0H                 End of file if we get here (EODAD)
+         MVI   EOFRDR,TRUE        Set end of input file flag
+         B     EXITRCRD
+*
+RCRERR   DS    0H                 Read error if we get here (SYNAD)
+         MVC   RETCODE,READERR    Set return code for read error
+*
+EXITRCRD DS    0H
+         LM    R13,R2,REGSA2      Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*  A L L O C A T E  S T O R A G E  F O R  A  T A B L E  E L E M E N T *
+*                                                                     *
+*  This subroutine allocates the required storage for a XREF table    *
+*  element. If sufficient storage is not available from the pool      *
+*  then a further 1K of storage is allocated to the pool (GET1K); if  *
+*  no more storage is available then the return code set and the      *
+*  routine will terminate.                                            *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+GETSTG   DS    0H
+         STM   R13,R2,REGSA3      Save callers strategic registers
+*
+         L     R2,0(,R1)        R2<-- Addr of amount of stg. requested
+         L     R2,0(,R2)        R2<-- Amount of storage requested
+*
+         L     R3,LASTBYT       R3<-- Addr of end of storage pool
+         SL    R3,FIRSTBYT      R2<-- R3 - Addr of start of stg. pool
+         CLR   R2,R3            Enough storage left in pool ?
+         BL    GSTG0020         Yes.. So allocate amount required
+GSTG0010 DS    0H
+         BAL   R14,GET1K        No...So get another 1K of storage
+         CLI   RETCODE,0        Was more storage available ?
+         BNZ   EXITGSTG         No...So exit from this routine
+GSTG0020 DS    0H               A L L O C A T E  S T O R A G E
+         L     R3,FIRSTBYT      R3<-- Addr of first available byte
+         ALR   R2,R3            R2<-- R3 + amount of stg. requested
+*
+         L     R3,4(,R1)        R3<-- Addr. of result variable
+         MVC   0(4,R3),FIRSTBYT Store start of allocated stg in it
+         ST    R2,FIRSTBYT      Update value of first byte in pool
+EXITGSTG DS    0H
+         LM    R13,R2,REGSA3      Restore callers registers
+         BR    R14              Return to caller
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+* G E T  M O R E  S T O R A G E  F O R  T H E  S T O R A G E  P O O L *
+*                                                                     *
+*  This subroutine gets another 1K of storage for the storage pool,   *
+*  which is used to allocate storage for cross reference table        *
+*  elements. If no more storage is available then the return code is  *
+*  set, causing the program to terminate.                             *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+GET1K    DS    0H
+         STM   R13,R2,REGSA4      Save callers strategic registers
+*
+         L     R2,=F'1024'        R2<-- Amount of storage required (1K)
+         GETMAIN RC,LV=(2)        Get the required storage
+GETK0010 DS    0H
+         LTR   R15,R15            Was storage available ?
+         BZ    GETK0020           Yes.. So set stg. pool variables
+         MVC   RETCODE,GSTGERR    No.. So set return code variable
+         B     EXITG1K              and exit from routine
+GETK0020 DS    0H
+         ST    R1,FIRSTBYT        Re-set ptr. to first available byte
+         AL    R1,=F'1024'        R1<- R1 + 1024; i.e last avail byte
+         ST    R1,LASTBYT         Re-set ptr to last avail. byte
+EXITG1K  DS    0H
+         LM    R13,R2,REGSA4      Restore callers registers
+         BR    R14                Return to caller
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+* C O N V E R T  A  B I N A R Y  N U M B E R  T O  C H A R A C T E R  *
+*                                                                     *
+* This subroutine converts a number in binary format into a character *
+* string suitable for printing as part of the cross reference report  *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+DISP     DS    0H
+         STM   R13,R2,REGSA3      Save callers strategic registers
+*
+         L     R2,0(,R1)          R2<-- Addr of number to convert
+         L     R2,0(,R2)          R2<-- Value of number to convert
+         CVD   R2,DISPTMP1        Convert to packed decimal form
+         MVC   NUMASCHA(16),DISPEDPT Move edit mask into target area
+         ED    NUMASCHA(16),DISPTMP1 Edit p.d number into target area
+         L     R2,4(,R1)          R2<-- Addr of pos. in a o/p line
+         L     R3,=F'4'           R3<-- Max. number of digits (0-9999)
+         LA    R1,NUMASCHA        R1<-- Addr of char form of input
+         A     R1,=F'16'          R1<-- R1 + Length of NUMASCHA
+         SLR   R1,R3              R1<-- Position of first sig. digit
+         BCTR  R3,0               R3<--- R3 - 1 for move
+         EX    R3,DISPMVC         Move edited number into o/p line
+EXITDISP DS    0H
+         LM    R13,R2,REGSA3      Restore callers registers
+         BR    R14                Return to caller
+DISPMVC  MVC   0(,R2),0(R1)       Move chars; length in R3
+         EJECT
+* ******************************************************************* *
+*                                                                     *
+*           E N D  O F  E X E C U T A B L E  C O D E                  *
+*                                                                     *
+*                                                                     *
+*          D A T A  D E F I N I T I O N  S T A R T S  H E R E         *
+*                                                                     *
+* ******************************************************************* *
+         SPACE 2
+CODEREG  EQU   R4                 CSECT base register
+TBPTR    EQU   R5                 TYPE element DSECT base register
+NBPTR    EQU   R6                 NAME element DSECT base register
+DEFNPTR  EQU   R7                 DEFN element DSECT base register
+USEDPTR  EQU   DEFNPTR            USED element DSECT base register
+WRKPTR   EQU   R8                 WORKAREA DSECT base register
+INPUTPTR EQU   R9                 Subroutine parameter list ptr
+INTYPPTR EQU   INPUTPTR           ...for FINDTYPE subroutine
+INNAMPTR EQU   INPUTPTR           ...for FINDNAME subroutine
+INDEFPTR EQU   INPUTPTR           ...for FINDDEFN subroutine
+INUSDPTR EQU   INPUTPTR           ...for FUNDUSED subroutine
+DCBREG   EQU   INPUTPTR           DCB DSECT (IHADCB) base ptr
+PLISTPTR EQU   R10                Parameter list DSECT base register
+NAMEPREV EQU   R11                Register used in scan of a chain
+DEFNPREV EQU   NAMEPREV           ...in FINDDEFN subroutine
+USEDPREV EQU   NAMEPREV           ...in FINDUSED subroutine
+*
+SAFEREG1 EQU   R11                Safe registers for saving R13 & R14
+SAFEREG2 EQU   R12                on a INITIAL call ONLY!!!!
+*                                 Define error code values set by this
+*                                 program, passed back in register 15
+NOOBJERR DC    F'1'               ...OBJECTS not specified
+OPENERRI DC    F'2'               ...Input file open error
+READERR  DC    F'3'               ...Input file read error
+OPENERRO DC    F'4'               ...Output file open error
+WRITEERR DC    F'5'               ...Output file write error
+GWRKAERR DC    F'6'               ...getmain failure for work area
+GSTGERR  DC    F'7'               ...getmain failure in GET1K
+*
+XREFMASK DS    0CL131             Object/Keyword header line
+         DC    C'* * * * '
+         DC    C'CROSS REFERENCE OF '
+         DC    12C' '             ...Object/Keyword name
+         DC    C' * * * *'
+         DC    84C' '
+*
+ENAMCMSK DS    0CL131             Empty name chain line
+         DC    C'THERE ARE NO DEFINITIONS/USES OF '
+         DC    12C' '             ...TYPE with empty name chain
+         DC    C' IN THE SPECIFIED GROUPS/LISTS.'
+         DC    55C' '
+*
+DEFNMASK DS    0CL131             Definition description
+         DC    4C' '              ...Number of times object defined
+         DC    C' GROUP(S) CONTAIN DEFINITIONS OF '
+         DC    94C' '             ...Space for Object name
+*
+USEDMASK DS    0CL131             Object/keyword use description
+         DC    4C' '              ...No. of times object/keyword used
+         DC    C' USES ARE MADE OF '
+         DC    109C' '            ...Space for Object/keyword name
+*
+THEYARE  DS    0CL131
+         DC    5C' '
+         DC    C'THEY ARE:'
+         DC    117C' '
+*
+DISPEDPT DC    X'40202020202020202020202020202021' ...edit mask
+*
+         END
+* ****************************************************************** *
+*                    E N D  O F  P R O G R A M                       *
+* ****************************************************************** *

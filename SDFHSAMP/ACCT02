@@ -1,0 +1,529 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0S02                                         *
+      *                                                               *
+      * DESCRIPTIVE NAME = File Update for Sample Application         *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1985, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION :                                                 *
+      *                                                               *
+      *       THIS PROGRAM IS THE FIRST INVOKED BY THE 'AC02'         *
+      *       TRANSACTION.  IT COMPLETES REQUESTS FOR ACCOUNT FILE    *
+      *       UPDATES (ADDS, MODIFIES, AND DELETES), AFTER THE USER   *
+      *       ENTERED THE UPDATE INFORMATION.                         *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $SEG(DFH0S02),COMP(SAMPLES),PROD(CICS TS ):                   *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $L0= Z30    170 85     HD1XIC : CREATE BASE SOURCE         *
+      *    $L1= SP1    310 8702   HD1CHW : RESTRUCTURE                *
+      *    $P1= M56440 310 8905   HD3WJJG: REMOVE COMPILATION ERRORS  *
+      *    $P2= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ACCT02.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  MISC.
+           02  RESPONSE               PIC S9(8) COMP.
+           02  OWN-FLAG               PIC 9.
+           02  MENU-MSGNO             PIC S9(4) COMP VALUE +1.
+           02  DTL-MSGNO              PIC S9(4) COMP VALUE +0.
+           02  ACCT-LNG               PIC S9(4) COMP VALUE +383.
+           02  ACIX-LNG               PIC S9(4) COMP VALUE +63.
+           02  DTL-LNG                PIC S9(4) COMP VALUE +751.
+           02  DUMMY                  PIC S9(4) COMP VALUE +128.
+           02  FILLER REDEFINES DUMMY.
+               04  FILLER             PIC X.
+               04  HEX80              PIC X.
+           02  STARS                  PIC X(12) VALUE '************'.
+      * NEXT 3 LINES ADDED UNDER APAR                         @BA28964A
+           02  WS-YR-4.
+               04  WS-CC              PIC X(2).
+               04  WS-YR-2            PIC X(2).
+           02  USE-QID.
+               04  USE-QID1           PIC X(3) VALUE 'AC0'.
+               04  USE-QID2           PIC X(5).
+           02  USE-REC.
+               04  USE-TERM           PIC X(4).
+               04  USE-TIME           PIC S9(7) COMP-3.
+               04  USE-DATE           PIC S9(7) COMP-3.
+           02  USE-LNG                PIC S9(4) COMP VALUE +12.
+           02  OLD-IXKEY.
+               04  IXOLD-SNAME        PIC X(12).
+               04  IXOLD-ACCT         PIC X(5).
+           02  COMMAREA-FOR-ACCT04.
+               04  ERR-PGRMID         PIC X(8) VALUE 'ACCT02'.
+               04  ERR-FN             PIC X.
+               04  ERR-RCODE          PIC X.
+               04  ERR-COMMAND        PIC XX.
+               04  ERR-RESP           PIC 99.
+           02  PAY-INIT               PIC X(36) VALUE
+                   '    0.00000000    0.00000000    0.00'.
+      *    MESSAGES DISPLAYED ON MENU SCREEN
+           02  MENU-MSG-LIST.
+               04  FILLER             PIC X(60) VALUE
+                   'PREVIOUS REQUEST CANCELLED AS REQUESTED'.
+               04  FILLER             PIC X(60) VALUE
+                   'REQUESTED ADDITION COMPLETED'.
+               04  FILLER             PIC X(60) VALUE
+                   'REQUESTED MODIFICATION COMPLETED'.
+               04  FILLER             PIC X(60) VALUE
+                   'REQUESTED DELETION COMPLETED'.
+      *    MESSAGES DISPLAYED ON DETAIL SCREEN
+           02  MENU-MSG REDEFINES MENU-MSG-LIST PIC X(60) OCCURS 4.
+           02  DTL-MSG-LIST.
+               04  FILLER             PIC X(60) VALUE
+                   'EITHER ENTER "Y" TO CONFIRM OR "CLEAR" TO CANCEL'.
+               04  FILLER             PIC X(60) VALUE
+               'YOUR REQUEST WAS INTERRUPTED; PLEASE CANCEL AND RETRY'.
+               04  FILLER             PIC X(60) VALUE
+               'CORRECT HIGHLIGHTED ITEMS (STARS MEAN ITEM REQUIRED)'.
+               04  FILLER             PIC X(60) VALUE
+               'USE ONLY "ENTER" (TO PROCEED) OR "CLEAR" (TO CANCEL)'.
+               04  FILLER             PIC X(60) VALUE
+               'MAKE SOME ENTRIES AND "ENTER" OR "CLEAR" TO CANCEL'.
+           02  DTL-MSG REDEFINES DTL-MSG-LIST PIC X(60) OCCURS 5.
+           02  MOD-LINE.
+               04  FILLER             PIC X(25) VALUE
+                   '==========> CHANGES TO:  '.
+               04  MOD-NAME           PIC X(6) VALUE SPACES.
+               04  MOD-TELE           PIC X(5) VALUE SPACES.
+               04  MOD-ADDR           PIC X(6) VALUE SPACES.
+               04  MOD-AUTH           PIC X(6) VALUE SPACES.
+               04  MOD-CARD           PIC X(6) VALUE SPACES.
+               04  MOD-CODE           PIC X(5) VALUE SPACES.
+           02  UPDT-LINE.
+               04  FILLER             PIC X(30) VALUE
+                   '==========> UPDATED AT TERM:  '.
+               04  UPDT-TERM          PIC X(4).
+               04  FILLER             PIC X(6) VALUE '  AT  '.
+               04  UPDT-TIME          PIC 9(7).
+               04  FILLER             PIC X(6) VALUE '  ON  '.
+               04  UPDT-DATE          PIC 9(7).
+       01  NEW-ACCTREC. COPY ACCTREC.
+       01  OLD-ACCTREC. COPY ACCTREC.
+       01  NEW-ACIXREC. COPY ACIXREC.
+       01  OLD-ACIXREC. COPY ACIXREC.
+           COPY ACCTSET.
+           COPY DFHAID.
+           COPY DFHBMSCA.
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           02  REQC                   PIC X.
+           02  ACCTC                  PIC X(5).
+      *
+       PROCEDURE DIVISION.
+      *
+       MAIN SECTION.
+      *    INITIALIZE.
+           MOVE LOW-VALUES TO ACCTDTLI.
+           MOVE SPACES TO OLD-ACCTREC, NEW-ACCTREC,
+               OLD-ACIXREC, NEW-ACIXREC.
+      *    CATER FOR UNEXPECTED ERRORS
+           EXEC CICS HANDLE CONDITION ERROR(NO-GOOD) END-EXEC.
+           IF EIBAID = DFHCLEAR THEN
+               PERFORM CK-OWN
+               IF OWN-FLAG = 1 GO TO NO-OWN ELSE
+               GO TO RELEASE-ACCT.
+           IF EIBAID NOT = DFHENTER THEN
+               GO TO PA-KEY.
+      *
+      *    GET INPUT AND BUILD NEW RECORD.
+           EXEC CICS RECEIVE MAP('ACCTDTL') MAPSET('ACCTSET')
+                     RESP(RESPONSE) END-EXEC.
+           IF RESPONSE = DFHRESP(MAPFAIL) GO TO NO-MAP.
+           IF RESPONSE NOT = DFHRESP(NORMAL) GO TO NO-GOOD.
+           IF REQC NOT = 'A',
+               EXEC CICS READ FILE('ACCTFIL') INTO(OLD-ACCTREC)
+                   RIDFLD(ACCTC) UPDATE LENGTH(ACCT-LNG) END-EXEC
+               MOVE OLD-ACCTREC TO NEW-ACCTREC,
+               MOVE SNAMEDO IN OLD-ACCTREC TO IXOLD-SNAME,
+               MOVE ACCTC TO IXOLD-ACCT.
+           IF REQC = 'X',
+               IF VFYDI = 'Y', GO TO NO-EDIT
+               ELSE MOVE -1 TO VFYDL, MOVE DFHUNIMD TO VFYDA,
+                   MOVE 1 TO DTL-MSGNO,
+                   GO TO INPUT-REDISPLAY.
+      *
+           PERFORM EDIT.
+           IF DTL-MSGNO = 3 OR DTL-MSGNO = 5
+               GO TO INPUT-REDISPLAY.
+      *
+       NO-EDIT.
+           PERFORM CK-OWN.
+           IF OWN-FLAG = 1 GO TO NO-OWN.
+      *
+           PERFORM UPDTE.
+      *
+      *    RELEASE OWNERSHIP OF ACCOUNT NUMBER.
+       RELEASE-ACCT.
+           EXEC CICS DELETEQ TS QUEUE(USE-QID) END-EXEC.
+      *
+      *    SEND MENU MAP BACK TO TERMINAL.
+       MENU-REFRESH.
+           MOVE LOW-VALUES TO ACCTMNUO.
+           MOVE MENU-MSG (MENU-MSGNO) TO MSGMO.
+           EXEC CICS SEND MAP('ACCTMNU') MAPSET('ACCTSET') ERASE FREEKB
+               END-EXEC.
+           EXEC CICS RETURN TRANSID('AC01') END-EXEC.
+      *
+      *    FOR INPUT ERRORS, RESEND DETAIL MAP.
+       INPUT-REDISPLAY.
+           MOVE DTL-MSG (DTL-MSGNO) TO MSGDO.
+           IF DTL-MSGNO = 2 OR 4 OR 5, MOVE -1 TO SNAMEDL.
+           EXEC CICS SEND MAP('ACCTDTL') MAPSET('ACCTSET') DATAONLY
+               CURSOR FREEKB END-EXEC.
+           EXEC CICS RETURN TRANSID('AC02') COMMAREA(DFHCOMMAREA)
+               LENGTH(6) END-EXEC.
+      *
+      *    PROCESSING FOR RECOVERABLE ERRORS.
+       NO-OWN.
+           IF EIBAID = DFHCLEAR OR MENU-MSGNO = 5 GO TO MENU-REFRESH.
+           MOVE 2 TO DTL-MSGNO, GO TO INPUT-REDISPLAY.
+       NO-MAP.
+      *    IF MAPFAIL OCCURRED THEN REDISPLAY WITH APPROPRIATE MESSAGE.
+           IF REQC = 'X' MOVE 1 TO DTL-MSGNO, MOVE -1 TO VFYDL
+              ELSE MOVE 5 TO DTL-MSGNO.
+           GO TO INPUT-REDISPLAY.
+       PA-KEY.
+           MOVE 4 TO DTL-MSGNO, GO TO INPUT-REDISPLAY.
+      *
+      *    PROCESSING FOR UNRECOVERABLE ERRORS.
+       NO-GOOD.
+           MOVE EIBFN TO ERR-FN, MOVE EIBRCODE TO ERR-RCODE.
+           MOVE EIBFN TO ERR-COMMAND, MOVE EIBRESP TO ERR-RESP.
+           EXEC CICS HANDLE CONDITION ERROR END-EXEC.
+           EXEC CICS LINK PROGRAM('ACCT04')
+               COMMAREA(COMMAREA-FOR-ACCT04) LENGTH(14) END-EXEC.
+           GOBACK.
+       MAIN-EXIT.
+           EXIT.
+       EDIT SECTION.
+       EDIT-START.
+           IF SNAMEDL > 0 MOVE SNAMEDI TO SNAMEDO IN NEW-ACCTREC.
+           IF FNAMEDL > 0 MOVE FNAMEDI TO FNAMEDO IN NEW-ACCTREC.
+           IF MIDL > 0 MOVE MIDI TO MIDO IN NEW-ACCTREC.
+           IF TTLDL > 0 MOVE TTLDI TO TTLDO IN NEW-ACCTREC.
+           IF TELDL > 0 MOVE TELDI TO TELDO IN NEW-ACCTREC.
+           IF ADDR1DL > 0 MOVE ADDR1DI TO ADDR1DO IN NEW-ACCTREC.
+           IF ADDR2DL > 0 MOVE ADDR2DI TO ADDR2DO IN NEW-ACCTREC.
+           IF ADDR3DL > 0 MOVE ADDR3DI TO ADDR3DO IN NEW-ACCTREC.
+           IF AUTH1DL > 0 MOVE AUTH1DI TO AUTH1DO IN NEW-ACCTREC.
+           IF AUTH2DL > 0 MOVE AUTH2DI TO AUTH2DO IN NEW-ACCTREC.
+           IF AUTH3DL > 0 MOVE AUTH3DI TO AUTH3DO IN NEW-ACCTREC.
+           IF AUTH4DL > 0 MOVE AUTH4DI TO AUTH4DO IN NEW-ACCTREC.
+           IF CARDSDL > 0 MOVE CARDSDI TO CARDSDO IN NEW-ACCTREC.
+           IF IMODL > 0 MOVE IMODI TO IMODO IN NEW-ACCTREC.
+           IF IDAYDL > 0 MOVE IDAYDI TO IDAYDO IN NEW-ACCTREC.
+      * FOLLOWING LINE CHANGED AND NEXT 2 ADDED UNDER APAR    @BA28964C
+           IF IYRDL > 0
+              MOVE IYRDI TO WS-YR-4
+              MOVE WS-YR-2 TO IYRDO IN NEW-ACCTREC.
+           IF RSNDL > 0 MOVE RSNDI TO RSNDO IN NEW-ACCTREC.
+           IF CCODEDL > 0 MOVE CCODEDI TO CCODEDO IN NEW-ACCTREC.
+           IF APPRDL > 0 MOVE APPRDI TO APPRDO IN NEW-ACCTREC.
+           IF SCODE1DL > 0 MOVE SCODE1DI TO SCODE1DO IN NEW-ACCTREC.
+           IF SCODE2DL > 0 MOVE SCODE2DI TO SCODE2DO IN NEW-ACCTREC.
+           IF SCODE3DL > 0 MOVE SCODE3DI TO SCODE3DO IN NEW-ACCTREC.
+           IF REQC = 'A' GO TO EDIT-0.
+           IF SNAMEDF = HEX80 MOVE SPACES TO SNAMEDO IN NEW-ACCTREC.
+           IF FNAMEDF = HEX80 MOVE SPACES TO FNAMEDO IN NEW-ACCTREC.
+           IF MIDF = HEX80 MOVE SPACES TO MIDO IN NEW-ACCTREC.
+           IF TTLDF = HEX80 MOVE SPACES TO TTLDO IN NEW-ACCTREC.
+           IF TELDF = HEX80 MOVE SPACES TO TELDO IN NEW-ACCTREC.
+           IF ADDR1DF = HEX80 MOVE SPACES TO ADDR1DO IN NEW-ACCTREC.
+           IF ADDR2DF = HEX80 MOVE SPACES TO ADDR2DO IN NEW-ACCTREC.
+           IF ADDR3DF = HEX80 MOVE SPACES TO ADDR3DO IN NEW-ACCTREC.
+           IF AUTH1DF = HEX80 MOVE SPACES TO AUTH1DO IN NEW-ACCTREC.
+           IF AUTH2DF = HEX80 MOVE SPACES TO AUTH2DO IN NEW-ACCTREC.
+           IF AUTH3DF = HEX80 MOVE SPACES TO AUTH3DO IN NEW-ACCTREC.
+           IF AUTH4DF = HEX80 MOVE SPACES TO AUTH4DO IN NEW-ACCTREC.
+           IF CARDSDF = HEX80 MOVE SPACE TO CARDSDO IN NEW-ACCTREC.
+           IF IMODF = HEX80 MOVE ZERO TO IMODO IN NEW-ACCTREC.
+           IF IDAYDF = HEX80 MOVE ZERO TO IDAYDO IN NEW-ACCTREC.
+           IF IYRDF = HEX80 MOVE ZERO TO IYRDO IN NEW-ACCTREC.
+           IF RSNDF = HEX80 MOVE SPACE TO RSNDO IN NEW-ACCTREC.
+           IF CCODEDF = HEX80 MOVE SPACES TO CCODEDO IN NEW-ACCTREC.
+           IF APPRDF = HEX80 MOVE SPACES TO APPRDO IN NEW-ACCTREC.
+           IF SCODE1DF = HEX80 MOVE SPACES TO SCODE1DO IN NEW-ACCTREC.
+           IF SCODE2DF = HEX80 MOVE SPACES TO SCODE2DO IN NEW-ACCTREC.
+           IF SCODE3DF = HEX80 MOVE SPACES TO SCODE3DO IN NEW-ACCTREC.
+           IF OLD-ACCTREC = NEW-ACCTREC,
+               MOVE 5 TO DTL-MSGNO,
+               GO TO EDIT-99.
+      *    EDIT INPUT.
+       EDIT-0.
+           MOVE LOW-VALUES TO ACCTDTLI.
+           IF SNAMEDO IN NEW-ACCTREC = SPACES,
+               MOVE STARS TO SNAMEDI,
+           ELSE IF SNAMEDO IN NEW-ACCTREC ALPHABETIC GO TO EDIT-1.
+           MOVE DFHUNIMD TO SNAMEDA, MOVE -1 TO SNAMEDL.
+       EDIT-1.
+           IF FNAMEDO IN NEW-ACCTREC = SPACES,
+               MOVE STARS TO FNAMEDI,
+           ELSE IF FNAMEDO IN NEW-ACCTREC ALPHABETIC, GO TO EDIT-2.
+           MOVE DFHUNIMD TO FNAMEDA, MOVE -1 TO FNAMEDL.
+       EDIT-2.
+           IF MIDO IN NEW-ACCTREC NOT ALPHABETIC,
+               MOVE DFHUNIMD TO MIDA, MOVE -1 TO MIDL.
+           IF TTLDO IN NEW-ACCTREC NOT ALPHABETIC,
+               MOVE DFHUNIMD TO TTLDA, MOVE -1 TO TTLDL.
+           IF (TELDO IN NEW-ACCTREC NOT = SPACES AND
+                   TELDO IN NEW-ACCTREC NOT NUMERIC),
+               MOVE DFHUNIMD TO TELDA, MOVE -1 TO TELDL.
+           IF ADDR1DO IN NEW-ACCTREC = SPACES,
+               MOVE STARS TO ADDR1DI,
+               MOVE DFHBMBRY TO ADDR1DA, MOVE -1 TO ADDR1DL.
+           IF ADDR2DO IN NEW-ACCTREC = SPACES,
+               MOVE STARS TO ADDR2DI,
+               MOVE DFHBMBRY TO ADDR2DA, MOVE -1 TO ADDR2DL.
+           IF CARDSDO IN NEW-ACCTREC = SPACES,
+               MOVE STARS TO CARDSDI,
+           ELSE IF (CARDSDO IN NEW-ACCTREC > '0' AND
+                   CARDSDO IN NEW-ACCTREC NOT > '9'), GO TO EDIT-3.
+           MOVE DFHUNIMD TO CARDSDA, MOVE -1 TO CARDSDL.
+       EDIT-3.
+           IF IMODO IN NEW-ACCTREC = SPACES,
+               MOVE STARS TO IMODI,
+           ELSE IF IMODO IN NEW-ACCTREC NUMERIC AND
+               IMODO IN NEW-ACCTREC > '00' AND
+               IMODO IN NEW-ACCTREC < '13', GO TO EDIT-4.
+           MOVE DFHUNIMD TO IMODA, MOVE -1 TO IMODL.
+       EDIT-4.
+           IF IDAYDO IN NEW-ACCTREC = SPACES,
+               MOVE STARS TO IDAYDI,
+           ELSE IF IDAYDO IN NEW-ACCTREC NUMERIC AND
+                   IDAYDO IN NEW-ACCTREC > '00' AND
+                   IDAYDO IN NEW-ACCTREC < '32',
+                   GO TO EDIT-5.
+           MOVE DFHUNIMD TO IDAYDA, MOVE -1 TO IDAYDL.
+       EDIT-5.
+           IF IYRDO IN NEW-ACCTREC = SPACES,
+               MOVE STARS TO IYRDI,
+           ELSE IF IYRDO IN NEW-ACCTREC NUMERIC AND
+      * FOLLOWING LINE CHANGED UNDER APAR                     @BA28964C
+              (WS-YR-4 > '1975' AND < '2025'), GO TO EDIT-6.
+           MOVE DFHUNIMD TO IYRDA, MOVE -1 TO IYRDL.
+       EDIT-6.
+           IF RSNDO IN NEW-ACCTREC = SPACES,
+               MOVE STARS TO RSNDI,
+           ELSE IF (RSNDO IN NEW-ACCTREC = 'N' OR
+                   RSNDO IN NEW-ACCTREC = 'L' OR
+                   RSNDO IN NEW-ACCTREC = 'S' OR
+                   RSNDO IN NEW-ACCTREC = 'R'), GO TO EDIT-7.
+           MOVE DFHUNIMD TO RSNDA, MOVE -1 TO RSNDL.
+       EDIT-7.
+           IF CCODEDO IN NEW-ACCTREC = SPACES,
+               MOVE STARS TO CCODEDI,
+               MOVE -1 TO CCODEDL, MOVE DFHBMBRY TO CCODEDA.
+           IF APPRDO IN NEW-ACCTREC = SPACES,
+               MOVE STARS TO APPRDI,
+               MOVE -1 TO APPRDL, MOVE DFHBMBRY TO APPRDA.
+           IF ACCTDTLI NOT = LOW-VALUES,
+               MOVE 3 TO DTL-MSGNO, GO TO EDIT-99.
+           IF REQC = 'A' MOVE ACCTC TO ACCTDO IN NEW-ACCTREC,
+               MOVE 'N ' TO STATDO IN NEW-ACCTREC,
+               MOVE ' 1000.00' TO LIMITDO IN NEW-ACCTREC,
+               MOVE PAY-INIT TO PAY-HIST IN NEW-ACCTREC (1),
+                   PAY-HIST IN NEW-ACCTREC (2),
+                   PAY-HIST IN NEW-ACCTREC (3).
+           MOVE ACCTDO IN NEW-ACCTREC TO ACCTDO IN NEW-ACIXREC.
+           MOVE SNAMEDO IN NEW-ACCTREC TO SNAMEDO IN NEW-ACIXREC.
+           MOVE FNAMEDO IN NEW-ACCTREC TO FNAMEDO IN NEW-ACIXREC.
+           MOVE MIDO IN NEW-ACCTREC TO MIDO IN NEW-ACIXREC.
+           MOVE TTLDO IN NEW-ACCTREC TO TTLDO IN NEW-ACIXREC.
+           MOVE ADDR1DO IN NEW-ACCTREC TO ADDR1DO IN NEW-ACIXREC.
+           MOVE STATDO IN NEW-ACCTREC TO STATDO IN NEW-ACIXREC.
+           MOVE LIMITDO IN NEW-ACCTREC TO LIMITDO IN NEW-ACIXREC.
+       EDIT-99.
+           EXIT.
+      *
+       CK-OWN SECTION.
+      *    CHECK OWNERSHIP OF ACCOUNT NUMBER.
+       CK-01.
+           MOVE 0 TO OWN-FLAG.
+           MOVE ACCTC TO USE-QID2.
+           EXEC CICS READQ TS QUEUE(USE-QID) INTO(USE-REC)
+               LENGTH(USE-LNG) ITEM(1) RESP(RESPONSE) END-EXEC.
+           IF RESPONSE = DFHRESP(LENGERR)
+              OR RESPONSE = DFHRESP(QIDERR) THEN
+               MOVE 1 TO OWN-FLAG
+               GO TO CK-EXIT.
+           IF RESPONSE NOT = DFHRESP(NORMAL) GO TO NO-GOOD.
+           IF USE-TERM NOT = EIBTRMID OR USE-LNG NOT = 12
+               MOVE 1 TO OWN-FLAG
+               GO TO CK-EXIT.
+           IF EIBAID = DFHCLEAR OR MENU-MSGNO = 5 GO TO CK-EXIT.
+      *
+      *    WRITE HARDCOPY LOG RECORDS.
+           MOVE LOW-VALUES TO ACCTDTLO.
+           MOVE DFHBMDAR TO HISTTLDA, STATTLDA, STATDA, LIMTTLDA,
+               LIMITDA.
+           IF REQC = 'A' MOVE 'NEW RECORD' TO TITLEDO, GO TO LOG-1.
+           MOVE ACCTDO IN OLD-ACCTREC TO ACCTDO IN ACCTDTLO.
+           MOVE SNAMEDO IN OLD-ACCTREC TO SNAMEDO IN ACCTDTLO.
+           MOVE FNAMEDO IN OLD-ACCTREC TO FNAMEDO IN ACCTDTLO.
+           MOVE MIDO IN OLD-ACCTREC TO MIDO IN ACCTDTLO.
+           MOVE TTLDO IN OLD-ACCTREC TO TTLDO IN ACCTDTLO.
+           MOVE TELDO IN OLD-ACCTREC TO TELDO IN ACCTDTLO.
+           MOVE ADDR1DO IN OLD-ACCTREC TO ADDR1DO IN ACCTDTLO.
+           MOVE ADDR2DO IN OLD-ACCTREC TO ADDR2DO IN ACCTDTLO.
+           MOVE ADDR3DO IN OLD-ACCTREC TO ADDR3DO IN ACCTDTLO.
+           MOVE AUTH1DO IN OLD-ACCTREC TO AUTH1DO IN ACCTDTLO.
+           MOVE AUTH2DO IN OLD-ACCTREC TO AUTH2DO IN ACCTDTLO.
+           MOVE AUTH3DO IN OLD-ACCTREC TO AUTH3DO IN ACCTDTLO.
+           MOVE AUTH4DO IN OLD-ACCTREC TO AUTH4DO IN ACCTDTLO.
+           MOVE CARDSDO IN OLD-ACCTREC TO  CARDSDO IN ACCTDTLO.
+           MOVE IMODO IN OLD-ACCTREC TO IMODO IN ACCTDTLO.
+           MOVE IDAYDO IN OLD-ACCTREC TO IDAYDO IN ACCTDTLO.
+      * FOLLOWING LINE CHANGED AND NEXT 4 ADDED UNDER APAR    @BA28964C
+           MOVE IYRDO IN OLD-ACCTREC TO WS-YR-2
+           IF WS-YR-2 > '75'
+                MOVE '19' TO WS-CC
+           ELSE MOVE '20' TO WS-CC.
+           MOVE WS-YR-4 TO IYRDO IN ACCTDTLO.
+           MOVE RSNDO IN OLD-ACCTREC TO RSNDO IN ACCTDTLO.
+           MOVE CCODEDO IN OLD-ACCTREC TO CCODEDO IN ACCTDTLO.
+           MOVE APPRDO IN OLD-ACCTREC TO APPRDO IN ACCTDTLO.
+           MOVE SCODE1DO IN OLD-ACCTREC TO SCODE1DO IN ACCTDTLO.
+           MOVE SCODE2DO IN OLD-ACCTREC TO SCODE2DO IN ACCTDTLO.
+           MOVE SCODE3DO IN OLD-ACCTREC TO SCODE3DO IN ACCTDTLO.
+           MOVE STATDO IN OLD-ACCTREC TO STATDO IN ACCTDTLO.
+           MOVE LIMITDO IN OLD-ACCTREC TO LIMITDO IN ACCTDTLO.
+           IF REQC = 'X' MOVE 'DELETION' TO TITLEDO, GO TO LOG-2.
+           MOVE 'BEFORE CHANGE' TO TITLEDO.
+           IF SNAMEDO IN OLD-ACCTREC NOT = SNAMEDO IN NEW-ACCTREC OR
+               FNAMEDO IN OLD-ACCTREC NOT = FNAMEDO IN NEW-ACCTREC
+               OR MIDO IN OLD-ACCTREC NOT = MIDO IN NEW-ACCTREC OR
+               TTLDO IN OLD-ACCTREC NOT = TTLDO IN NEW-ACCTREC
+               MOVE 'NAME' TO MOD-NAME.
+           IF TELDO IN OLD-ACCTREC NOT = TELDO IN NEW-ACCTREC
+               MOVE 'TEL' TO MOD-TELE.
+           IF ADDR1DO IN OLD-ACCTREC NOT = ADDR1DO IN NEW-ACCTREC OR
+               ADDR2DO IN OLD-ACCTREC NOT = ADDR2DO IN NEW-ACCTREC OR
+               ADDR3DO IN OLD-ACCTREC NOT = ADDR3DO IN NEW-ACCTREC
+               MOVE 'ADDR' TO MOD-ADDR.
+           IF AUTH1DO IN OLD-ACCTREC NOT = AUTH1DO IN NEW-ACCTREC OR
+               AUTH2DO IN OLD-ACCTREC NOT = AUTH2DO IN NEW-ACCTREC OR
+               AUTH3DO IN OLD-ACCTREC NOT = AUTH3DO IN NEW-ACCTREC OR
+               AUTH4DO IN OLD-ACCTREC NOT = AUTH4DO IN NEW-ACCTREC
+               MOVE 'AUTH' TO MOD-AUTH.
+           IF CARDSDO IN OLD-ACCTREC NOT = CARDSDO IN NEW-ACCTREC OR
+               IMODO IN OLD-ACCTREC NOT = IMODO IN NEW-ACCTREC OR
+               IDAYDO IN OLD-ACCTREC NOT = IDAYDO IN NEW-ACCTREC OR
+               IYRDO IN OLD-ACCTREC NOT = IYRDO IN NEW-ACCTREC OR
+               RSNDO IN OLD-ACCTREC NOT = RSNDO IN NEW-ACCTREC OR
+               CCODEDO IN OLD-ACCTREC NOT = CCODEDO IN NEW-ACCTREC OR
+               APPRDO IN OLD-ACCTREC NOT = APPRDO IN NEW-ACCTREC
+               MOVE 'CARD' TO MOD-CARD.
+           IF SCODE1DO IN OLD-ACCTREC NOT = SCODE1DO IN NEW-ACCTREC OR
+               SCODE2DO IN OLD-ACCTREC NOT = SCODE2DO IN NEW-ACCTREC OR
+               SCODE3DO IN OLD-ACCTREC NOT = SCODE3DO IN NEW-ACCTREC
+               MOVE 'CODES' TO MOD-CODE.
+           MOVE MOD-LINE TO MSGDO.
+           EXEC CICS WRITEQ TS QUEUE('ACCTLOG') FROM(ACCTDTLO)
+               LENGTH(DTL-LNG) END-EXEC.
+           MOVE 'AFTER CHANGE' TO TITLEDO.
+       LOG-1.
+           MOVE ACCTDO IN NEW-ACCTREC TO ACCTDO IN ACCTDTLO.
+           MOVE SNAMEDO IN NEW-ACCTREC TO SNAMEDO IN ACCTDTLO.
+           MOVE FNAMEDO IN NEW-ACCTREC TO FNAMEDO IN ACCTDTLO.
+           MOVE MIDO IN NEW-ACCTREC TO MIDO IN ACCTDTLO.
+           MOVE TTLDO IN NEW-ACCTREC TO TTLDO IN ACCTDTLO.
+           MOVE TELDO IN NEW-ACCTREC TO TELDO IN ACCTDTLO.
+           MOVE ADDR1DO IN NEW-ACCTREC TO ADDR1DO IN ACCTDTLO.
+           MOVE ADDR2DO IN NEW-ACCTREC TO ADDR2DO IN ACCTDTLO.
+           MOVE ADDR3DO IN NEW-ACCTREC TO ADDR3DO IN ACCTDTLO.
+           MOVE AUTH1DO IN NEW-ACCTREC TO AUTH1DO IN ACCTDTLO.
+           MOVE AUTH2DO IN NEW-ACCTREC TO AUTH2DO IN ACCTDTLO.
+           MOVE AUTH3DO IN NEW-ACCTREC TO AUTH3DO IN ACCTDTLO.
+           MOVE AUTH4DO IN NEW-ACCTREC TO AUTH4DO IN ACCTDTLO.
+           MOVE CARDSDO IN NEW-ACCTREC TO  CARDSDO IN ACCTDTLO.
+           MOVE IMODO IN NEW-ACCTREC TO IMODO IN ACCTDTLO.
+           MOVE IDAYDO IN NEW-ACCTREC TO IDAYDO IN ACCTDTLO.
+      * FOLLOWING LINE CHANGED AND NEXT 4 ADDED UNDER APAR    @BA28964C
+           MOVE IYRDO IN NEW-ACCTREC TO WS-YR-2
+           IF WS-YR-2 > '75'
+                MOVE '19' TO WS-CC
+           ELSE MOVE '20' TO WS-CC.
+           MOVE WS-YR-4 TO IYRDO IN ACCTDTLO.
+           MOVE RSNDO IN NEW-ACCTREC TO RSNDO IN ACCTDTLO.
+           MOVE CCODEDO IN NEW-ACCTREC TO CCODEDO IN ACCTDTLO.
+           MOVE APPRDO IN NEW-ACCTREC TO APPRDO IN ACCTDTLO.
+           MOVE SCODE1DO IN NEW-ACCTREC TO SCODE1DO IN ACCTDTLO.
+           MOVE SCODE2DO IN NEW-ACCTREC TO SCODE2DO IN ACCTDTLO.
+           MOVE SCODE3DO IN NEW-ACCTREC TO SCODE3DO IN ACCTDTLO.
+           MOVE STATDO IN NEW-ACCTREC TO STATDO IN ACCTDTLO.
+           MOVE LIMITDO IN NEW-ACCTREC TO LIMITDO IN ACCTDTLO.
+       LOG-2.
+           MOVE EIBTRMID TO UPDT-TERM, MOVE EIBTIME TO UPDT-TIME,
+           MOVE EIBDATE TO UPDT-DATE, MOVE UPDT-LINE TO MSGDO.
+           EXEC CICS WRITEQ TS QUEUE('ACCTLOG') FROM(ACCTDTLO)
+               LENGTH(DTL-LNG) END-EXEC.
+       CK-EXIT.
+           EXIT.
+       UPDTE SECTION.
+      *    UPDATE THE FILES FOR ADD REQUESTS.
+           IF REQC = 'A' GO TO UPDT-ADD.
+           IF REQC = 'X' GO TO UPDT-DELETE.
+           IF REQC = 'M' GO TO UPDT-MODIFY.
+       UPDT-ADD.
+           MOVE 2 TO MENU-MSGNO.
+           EXEC CICS WRITE FILE('ACCTFIL') FROM(NEW-ACCTREC)
+               RIDFLD(ACCTC) LENGTH(ACCT-LNG) END-EXEC.
+           EXEC CICS WRITE FILE('ACCTIX') FROM(NEW-ACIXREC)
+               RIDFLD(SNAMEDO IN NEW-ACIXREC) LENGTH(ACIX-LNG) END-EXEC.
+           GO TO UPDT-EXIT.
+      *
+      *    UPDATE THE FILES FOR MODIFY REQUESTS.
+       UPDT-MODIFY.
+           MOVE 3 TO MENU-MSGNO.
+           EXEC CICS REWRITE FILE('ACCTFIL') FROM(NEW-ACCTREC)
+               LENGTH (ACCT-LNG) END-EXEC.
+           IF SNAMEDO IN NEW-ACCTREC NOT = SNAMEDO IN OLD-ACCTREC
+               EXEC CICS DELETE FILE('ACCTIX') RIDFLD(OLD-IXKEY)
+                   END-EXEC
+               EXEC CICS WRITE FILE('ACCTIX') FROM (NEW-ACIXREC)
+                   RIDFLD (SNAMEDO IN NEW-ACIXREC) LENGTH(ACIX-LNG)
+                   END-EXEC
+           ELSE IF FNAMEDO IN NEW-ACCTREC NOT = FNAMEDO IN OLD-ACCTREC
+               OR MIDO IN NEW-ACCTREC NOT = MIDO IN OLD-ACCTREC OR
+               TTLDO IN NEW-ACCTREC NOT = TTLDO IN OLD-ACCTREC OR
+               ADDR1DO IN NEW-ACCTREC NOT = ADDR1DO IN OLD-ACCTREC
+               EXEC CICS READ FILE('ACCTIX') INTO (OLD-ACIXREC)
+                   RIDFLD(OLD-IXKEY) LENGTH(ACIX-LNG) UPDATE END-EXEC
+               EXEC CICS REWRITE FILE('ACCTIX') FROM(NEW-ACIXREC)
+                   LENGTH(ACIX-LNG) END-EXEC.
+           GO TO UPDT-EXIT.
+      *
+      *    UPDATE THE FILES FOR DELETE REQUESTS.
+       UPDT-DELETE.
+           MOVE 4 TO MENU-MSGNO.
+           EXEC CICS DELETE FILE('ACCTFIL') END-EXEC.
+           EXEC CICS DELETE FILE('ACCTIX') RIDFLD(OLD-IXKEY)
+               END-EXEC.
+       UPDT-EXIT.
+           EXIT.

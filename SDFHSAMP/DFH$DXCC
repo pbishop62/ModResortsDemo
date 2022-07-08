@@ -1,0 +1,866 @@
+ /*********************************************************************/
+ /*                                                                   */
+ /* PROGRAM NAME: DFH$DXCC                                            */
+ /*                                                                   */
+ /* TITLE: C Sample Batch Client Program.                             */
+ /*                                                                   */
+ /* PROGRAM DESCRIPTION:  This program will show an example of how to */
+ /*                       code a simple batch type application using  */
+ /*                       the EXCI call and EXEC level APIs.          */
+ /*                                                                   */
+ /* SPECIAL REQUIREMENTS: The program must be translated with the     */
+ /*                       EXCI option, and run amode 31 in order to   */
+ /*                       use the External CICS interface.            */
+ /*                                                                   */
+ /* SYSTEM LEVEL:         CICS 4.1 or higher.                         */
+ /*                                                                   */
+ /*                                                                   */
+ /* INPUT:                The target CICS system with which this      */
+ /*                       batch client program communicates can be    */
+ /*                       specified via the JCL PARM statement,       */
+ /*                       otherwise it defaults to applid DBDCCICS.   */
+ /*                       The target file is hardcoded as FILEA.      */
+ /*                       The userid for the target system can now    */
+ /*                       be entered.                                 */
+ /*                                 e.g.  APPLID,USERID               */
+ /*                                                                   */
+ /*                                                                   */
+ /* OUTPUT:               The whole of the target file will be output */
+ /*                       to the SYSPRINT log.                        */
+ /*                                                                   */
+ /*                                                                   */
+ /*                                                                   */
+ /*     Licensed Materials - Property of IBM                          */
+ /*                                                                   */
+ /*     "Restricted Materials of IBM"                                 */
+ /*                                                                   */
+ /*     5655-Y04                                                      */
+ /*                                                                   */
+ /*     (C) Copyright IBM Corp. 1993, 2015"                           */
+ /*                                                                   */
+ /*                                                                   */
+ /*                                                                   */
+ /*                                                                   */
+ /* Status = %SP00                                                    */
+ /*                                                                   */
+ /*-------------------------------------------------------------------*/
+ /*                                                                   */
+ /* CHANGE ACTIVITY :                                                 */
+ /*                                                                   */
+ /*   $MOD(DFH$DXCC),COMP(SAMPLES),PROD(CICS TS ):                    */
+ /*                                                                   */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                          */
+ /*  $D0= I06048 410 930818 HD7OPJW : DCR 6048 - C++ support          */
+ /*  $P1= M84316 410 931028 HD2GJST : Correct abcode processing       */
+ /*  $P2= M84399 410 931108 HD2GJST : Use equates in DFHXCPLH         */
+ /*  $P3= M27373 530 971009 HD6ACPA : Adding Userid to parms          */
+ /*  $L0= 660    410 930301 HDELDPG: Created.                         */
+ /*                                                                   */
+ /*                                                                   */
+ /*********************************************************************/
+
+ /*===================================================================*/
+ /*   Include standard libraries.                                     */
+ /*===================================================================*/
+ #include <string.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <ctype.h>
+ /*===================================================================*/
+ /*   Include parameter list definitions                              */
+ /*===================================================================*/
+ #include "dfhxcplh.h"
+
+ /*===================================================================*/
+ /*   Define program flags.                                           */
+ /*===================================================================*/
+ #define no_abort   0
+ #define yes        1
+
+ /*===================================================================*/
+ /*   Define Server call-type codes.                                  */
+ /*===================================================================*/
+ #define init_call  1
+ #define read_call  2
+ #define close_call 3
+
+ /*===================================================================*/
+ /*   Define Server Return Codes.                                     */
+ /*===================================================================*/
+ #define ret_browse 0
+ #define ret_nobrws 4
+ #define ret_eof    8
+ #define ret_nofile 12
+
+ /*===================================================================*/
+ /*   Define the Commarea Length and Data Length constants(in bytes). */
+ /*===================================================================*/
+ #define COMMAREA_LENGTH 98
+ #define DATA_LENGTH     18
+
+ /*===================================================================*/
+ /*   Define Call level-specific fields.                              */
+ /*===================================================================*/
+ #define PROGRAM_NAME    "BATCHCLI"
+
+ /*===================================================================*/
+ /*   Define datatypes for return areas, and commareas                */
+ /*===================================================================*/
+                                              /* Commarea Map         */
+ typedef struct { long int call_type;         /*  Server Call-type    */
+                  char file_name??(8??);      /* Target-file name area*/
+                  char rid_field??(6??);      /*  Rid_Field area      */
+                  char record_area??(80??);   /*  Return area for the */
+                } comms;                      /*   retrieved records  */
+                                              /*======================*/
+                                              /*======================*/
+                                              /* Unit of Work Id Map  */
+ typedef struct { unsigned int length :8;     /*                      */
+                  unsigned int logunitlen :8; /*                      */
+                  char logunitname??(17??);   /*                      */
+                  char stck??(6??);           /*                      */
+                  char sequence??(2??);       /*                      */
+                } uow;                        /*                      */
+                                              /*======================*/
+                                              /*======================*/
+                                              /* Bit Def'n for options*/
+ typedef struct { unsigned int option_bit :8; } bit;
+                                              /*======================*/
+
+ /*===================================================================*/
+ /*   Define internal function prototypes.                            */
+ /*===================================================================*/
+ int  exec_call(char??(8??) ,char??(8??) ,char??(4??) ,char??(8??));
+ void call_level(char??(8??) ,char??(8??) ,char??(4??)
+                                         ,char??(8??) ,char??(8??));
+ void getfile(char??(8??),char??(8??) ,char??(4??) ,
+              char??(8??) ,long int ,long int);
+ void linkrets(exci_exec_return_code *);
+ void callrets(exci_return_code *);
+
+ /*===================================================================*/
+ /*   Character constants for messages to be output.                  */
+ /*===================================================================*/
+ char *Msg00="";
+ char *Msg01="*===================== EXCI Sample Batch"
+             " Client Program =======================*";
+ char *Msg02="*                                       "
+             "                                       *";
+ char *Msg03="*  EXEC Level Processor.                "
+             "                                       *";
+ char *Msg04="*    Setting up the EXEC level call.    "
+             "                                       *";
+ char *Msg05="*    The Link Request has successfully c"
+             "ompleted.                              *";
+ char *Msg06="*    Server Response:                   "
+             "                                       *";
+ char *Msg07="*      The file is set to a browsable st"
+             "ate.                                   *";
+ char *Msg08="*      The file could not be found.     "
+             "                                       *";
+ char *Msg09="*      The file could not be successfull"
+             "y initialised                          *";
+ char *Msg10="*      A serious error was detected.    "
+             "                                       *";
+ char *Msg11="*    The Link Request has failed.  Retur"
+             "n codes are:                           *";
+ char *Msg13="*    A message was received from the tar"
+             "get CICS system:                       *";
+ char *Msg14="*    >>>> Aborting further processing <<"
+             "<<                                     *";
+ char *Msg15="*  CALL Level Processor.                "
+             "                                       *";
+ char *Msg16="*    Initialise_User call complete.     "
+             "                                       *";
+ char *Msg17="*    Allocate_Pipe call complete.       "
+             "                                       *";
+ char *Msg18="*    Open_Pipe call complete.           "
+             "                                       *";
+ char *Msg19="*    The connection has been successful."
+             "                                       *";
+ char *Msg20="*      The target file follows:         "
+             "                                       *";
+ char *Msg21="*=========================== Top of File"
+             " ======================================*";
+ char *Msg22="*=========================== End of File"
+             " ======================================*";
+ char *Msg23="*    The connection has been unsuccessfu"
+             "l.  Return codes are:                  *";
+ char *Msg25="*      The DPL request has failed.      "
+             "                                       *";
+ char *Msg26="*      Link return codes are:           "
+             "                                       *";
+ char *Msg27="*      DPL return codes are:            "
+             "                                       *";
+ char *Msg28="*    Closing DPL Request has been attemp"
+             "ted.                                   *";
+ char *Msg29="*    Close_Pipe call complete.          "
+             "                                       *";
+ char *Msg30="*    Deallocate_Pipe call complete.     "
+             "                                       *";
+ char *Msg31="*=================== End of EXCI Sample "
+             "Batch Client Program ==================*";
+ char *Msg32="*   Parameters: ";
+
+ int  batch_return_code;
+
+ int main(int argc, char *argv??(??))
+ /*===================================================================*/
+ /*                                                                   */
+ /*           >>>>>>>>>>> MAINLINE CODE <<<<<<<<<<<<<<                */
+ /*                                                                   */
+ /*===================================================================*/
+ {
+ /*===================================================================*/
+ /*   Declare Target information variables.                           */
+ /*===================================================================*/
+    char target_file??(8??);
+    char target_transid??(4??);
+    char target_program??(8??);
+    char target_system??(8??);
+    char target_userid??(8??);
+    char *Token;
+
+ /*===================================================================*/
+ /*   Declare function-specific variables.                            */
+ /*===================================================================*/
+    int  abort_needed;
+    int  parm_len;
+                                               /*=====================*/
+    printf("%80.80s\n", Msg00);                /* Msg=''              */
+    printf("%80.80s\n", Msg01);                /*Msg='*=EXCI Sample=*'*/
+    printf("%80.80s\n", Msg02);                /* Msg#'*     *'       */
+    printf("%16.16s", Msg32);
+                                               /*=====================*/
+ /*===================================================================*/
+ /*   Get applid and userid if passed as parameters                   */
+ /*===================================================================*/
+
+    strncpy(target_system,"DBDCCICS",8);
+    strncpy(target_userid,"\n",8);
+
+    /* Take input params and send them to CICS                        */
+
+    Token = strtok(argv??(1??),",");
+    if (Token == NULL)                         /* No parameters passed*/
+    {
+      printf("%5.5s"," None");
+    }
+
+    if (Token != NULL)                         /* Check parameters    */
+    {
+      if (strncmp(argv??(1??),",",1) != 0)     /* Applid supplied     */
+      {
+        parm_len = strlen(Token);
+        strncpy(target_system,"        ",8);
+        strncpy(target_system,Token,parm_len);
+        printf("%7.7s","Applid=");
+        printf("%8.8s",target_system);
+        Token = strtok(NULL,",");
+        if (Token != NULL)                     /* Userid supplied     */
+          {
+           parm_len = strlen(Token);
+           strncpy(target_userid,"        ",8);
+           strncpy(target_userid,Token,parm_len);
+           printf("%11.11s","    Userid=");
+           printf("%8.8s",target_userid);
+          }
+      }
+      else                                     /* Only userid supplied*/
+        {
+         parm_len = strlen(Token);
+         strncpy(target_userid,"        ",8);
+         strncpy(target_userid,Token,parm_len);
+         printf("%11.11s","    Userid=");
+         printf("%8.8s",target_userid);
+        }
+     }
+
+    printf("%1.1s\n"," ");
+    printf("%80.80s\n", Msg02);
+
+ /*===================================================================*/
+ /*   Initialise Target information to point to a file residing on the*/
+ /*   target_system, where the correct connection, session, & program */
+ /*   definitions have been installed.  The target_transaction should */
+ /*   point to the DFHMIRS program.  The target_program is the CICS   */
+ /*   application server which is to be invoked by the DPL call.      */
+ /*===================================================================*/
+
+    strncpy(target_file,"FILEA   ",8);
+    strncpy(target_transid,"EXCI",4);
+    strncpy(target_program,"DFH$AXCS",8);
+    batch_return_code = 0;
+
+ /*===================================================================*/
+ /*   Perform the EXEC level call to attempt to initialise the target */
+ /*   file.  If this is successful then further processing via the    */
+ /*   EXCI call level function to retrieve the whole target file.     */
+ /*===================================================================*/
+    abort_needed=exec_call(target_file,
+                           target_system,
+                           target_transid,
+                           target_program);
+    if (abort_needed==no_abort)
+    {
+       call_level(target_file,
+                  target_system,
+                  target_transid,
+                  target_userid,
+                  target_program);
+    }
+                                               /*=====================*/
+    printf("%80.80s\n", Msg02);                /* Msg='*      *'      */
+    printf("%80.80s\n", Msg31);                /* Msg='*= END =*'     */
+    return (batch_return_code);                /*=====================*/
+ /*===================================================================*/
+ /*                                                                   */
+ /*        >>>>>>>>>> END OF MAINLINE CODE <<<<<<<<<<<<<              */
+ /*                                                                   */
+ /*===================================================================*/
+ }
+
+ int exec_call(char file??(8??),
+               char system??(8??),
+               char transid??(4??),
+               char program??(8??))
+ /*===================================================================*/
+ /*                                                                   */
+ /*   EXEC_CALL:   This routine will use an EXEC level EXCI link      */
+ /*                request to call into the target CICS system, and   */
+ /*                invoke the BATCHSER sample server program with a   */
+ /*                call-type of INIT.  The server will then query the */
+ /*                existence of the target file, and if it exists,will*/
+ /*                attempt to initialise it to a browsable state.  If */
+ /*                the call or the server fails in any way, all       */
+ /*                further processing will be aborted.                */
+ /*                                                                   */
+ /*===================================================================*/
+ {
+ /*===================================================================*/
+ /*   Declare local variables.                                        */
+ /*===================================================================*/
+                                               /*=====================*/
+ exci_exec_return_code link_retarea;           /* EXEC Return area.   */
+ comms     commarea;                           /* EXEC Commarea       */
+ short int link_commlength;                    /* Length of Commarea  */
+ short int link_datalength;                    /* Len of outbound area*/
+ short int abort_needed;                       /* Abort flag.         */
+ long  int server_retcode;                     /* Return code area    */
+                                               /*                     */
+    printf("%80.80s\n", Msg03);                /* Msg='EXEC level'    */
+                                               /*=====================*/
+ /*===================================================================*/
+ /*   Set the Commarea Length and Data Length constants(in bytes).    */
+ /*===================================================================*/
+    link_commlength = COMMAREA_LENGTH;
+    link_datalength = DATA_LENGTH;
+
+ /*===================================================================*/
+ /*   Set up the Outbound Commarea for transmission.                  */
+ /*===================================================================*/
+                                               /*=====================*/
+    printf("%80.80s\n", Msg04);                /*Msg='Setting up Link'*/
+    commarea.call_type = init_call;            /* Server calltype INIT*/
+    strncpy(commarea.file_name,file,8);        /* Target file name    */
+                                               /*=====================*/
+ /*===================================================================*/
+ /*                                                                   */
+ /*   Perform the Link Request.                                       */
+ /*                                                                   */
+ /*===================================================================*/
+    EXEC CICS LINK PROGRAM(program)
+                      APPLID(system)
+                      RETCODE(&link_retarea)
+                      COMMAREA(&commarea)
+                      LENGTH(link_commlength)
+                      DATALENGTH(link_datalength)
+                      TRANSID(transid)
+                      SYNCONRETURN;
+ /*===================================================================*/
+ /*                                                                   */
+ /*   Check on how successful the call was.                           */
+ /*                                                                   */
+ /*===================================================================*/
+                                            /*========================*/
+   if (link_retarea.exec_resp==0)           /* Check high lvl response*/
+   {                                        /*                        */
+      printf("%80.80s\n", Msg05);           /* Msg='Link successful'  */
+      server_retcode=commarea.call_type;    /*                        */
+      printf("%80.80s\n", Msg06);           /* Msg='Server Response:' */
+      switch(server_retcode)                /*  Find out about Server:*/
+      {                                     /*                        */
+      case ret_browse:                      /*                        */
+         printf("%80.80s\n", Msg07);        /* Msg='File browsable'   */
+         abort_needed=no_abort;             /*                        */
+         break;                             /*                        */
+      case ret_nobrws:                      /*                        */
+         printf("%80.80s\n", Msg09);        /*Msg='File not browsable'*/
+         printf("%80.80s\n", Msg14);        /* Msg='Aborting...'      */
+         abort_needed=yes;                  /*                        */
+         batch_return_code = 16;            /*                        */
+         break;                             /*                        */
+      case ret_nofile:                      /*                        */
+         printf("%80.80s\n", Msg08);        /* Msg='File not found'   */
+         printf("%80.80s\n", Msg14);        /* Msg='Aborting...'      */
+         abort_needed=yes;                  /*                        */
+         batch_return_code = 16;            /*                        */
+         break;                             /*                        */
+      default:                              /*                        */
+         printf("%80.80s\n", Msg10);        /* Msg='A serious error'  */
+         printf("%80.80s\n", Msg14);        /* Msg='Aborting...'      */
+         abort_needed=yes;                  /*                        */
+         batch_return_code = 16;            /*                        */
+         break;                             /*                        */
+      }                                     /*                        */
+   }                                        /*                        */
+   else                                     /*                        */
+   {                                        /*                        */
+      printf("%80.80s\n", Msg11);           /* Msg='Link has failed'  */
+      linkrets(&link_retarea);              /* Output response codes  */
+      printf("%80.80s\n", Msg14);           /* Msg='Aborting...'      */
+      batch_return_code = link_retarea.exec_resp;
+      abort_needed=yes;                     /*                        */
+   }                                        /*                        */
+   return(abort_needed);                    /*========================*/
+ /*===================================================================*/
+ /*                                                                   */
+ /*            >>>>> End of EXEC_CALL processing <<<<<                */
+ /*                                                                   */
+ /*===================================================================*/
+ }
+
+ void call_level(char file??(8??),
+                 char system??(8??),
+                 char transid??(4??),
+                 char userid??(8??),
+                 char program??(8??))
+ /*===================================================================*/
+ /*                                                                   */
+ /*   CALL_LEVEL:  This routine will use the EXCI call level API to   */
+ /*                initiate a connection to the target CICS system    */
+ /*                manually, by performing  Initialise User, Allocate */
+ /*                Pipe, and Open Pipe calls in sequence.  If the     */
+ /*                connection has been successful, a series of DPL    */
+ /*                requests will be performed in succession, each time*/
+ /*                retrieving a single record from the target file    */
+ /*                until all of the file has been retrieved.  If the  */
+ /*                Connection is unsuccessful, or any of the DPL calls*/
+ /*                fail before the end of the target file has been    */
+ /*                reached, or the server fails in any way, then      */
+ /*                further processing will be aborted, and the        */
+ /*                Connection will be terminated.                     */
+ /*                                                                   */
+ /*===================================================================*/
+ {
+ /*===================================================================*/
+ /*   Declare local variables.                                        */
+ /*===================================================================*/
+                                          /*==========================*/
+ exci_return_code  call_retarea;          /* Call level Return area.  */
+ long int version;                        /* Version no. of EXCI API  */
+ long int user_token;                     /* For the token passed back*/
+ long int pipe_token;                     /* Ditto for the Pipe       */
+ long int call_type;                      /* EXCI call type fullword  */
+ char     application??(8??);             /* Name of this program.    */
+ bit      pipe_type;                      /* Allocate option bit.     */
+                                          /*==========================*/
+ /*===================================================================*/
+ /*   Initialise local variables.                                     */
+ /*      These variables are specific to the call level API.          */
+ /*===================================================================*/
+    version = VERSION_1;
+    strncpy(application,PROGRAM_NAME,8);
+    pipe_type.option_bit = SPECIFIC_PIPE;
+                                          /*==========================*/
+    printf("%80.80s\n", Msg02);           /* Msg='*      *'           */
+    printf("%80.80s\n", Msg15);           /*Msg='Call level processor'*/
+                                          /*==========================*/
+ /*===================================================================*/
+ /*   Set up and perform the Initialise_User call.                    */
+ /*===================================================================*/
+                                          /*==========================*/
+    call_type=INIT_USER;                  /* Set up call type.        */
+    dfhxcis(&version,                     /* Version no. of EXCI API  */
+            &call_retarea,                /* Return code area         */
+            &user_token,                  /* Use to refer to this User*/
+            &call_type,                   /* Call is an Init_User     */
+            &application);                /* Name of this User Program*/
+    printf("%80.80s\n", Msg16);           /* Msg='Init_User complete' */
+                                          /*==========================*/
+ /*===================================================================*/
+ /*   Set up and perform the Allocate_Pipe call.                      */
+ /*===================================================================*/
+                                          /*==========================*/
+    call_type=ALLOCATE_PIPE;              /* Set up call type         */
+    dfhxcis(&version,                     /* Version no. of EXCI API  */
+            &call_retarea,                /* Return code area         */
+            &user_token,                  /* Refer to the defined User*/
+            &call_type,                   /* Call is an Allocate_Pipe */
+            &pipe_token,                  /* Use to refer to this Pipe*/
+            system,                       /* Target CICS System.      */
+            &pipe_type);                  /* Allocate Option bit      */
+    printf("%80.80s\n", Msg17);           /* Msg='Alloc_Pipe complete'*/
+                                          /*==========================*/
+ /*===================================================================*/
+ /*   Set up and perform the Open_Pipe call.                          */
+ /*===================================================================*/
+                                          /*==========================*/
+    call_type=OPEN_PIPE;                  /* Set up call type         */
+    dfhxcis(&version,                     /* Version no. of EXCI API  */
+            &call_retarea,                /* Return code area         */
+            &user_token,                  /* Refer to the defined User*/
+            &call_type,                   /* Call is an Open_Pipe     */
+            &pipe_token);                 /* Refer to allocated Pipe  */
+    printf("%80.80s\n", Msg18);           /* Msg='Open__Pipe complete'*/
+                                          /*==========================*/
+ /*===================================================================*/
+ /*                                                                   */
+ /*   Has the Pipe been successfully initiated?                       */
+ /*                                                                   */
+ /*===================================================================*/
+                                          /*==========================*/
+    if (call_retarea.exci_response==0)    /*Is high level response ok?*/
+    {                                     /*                          */
+       printf("%80.80s\n", Msg19);        /* Msg='The Pipe is good..' */
+       printf("%80.80s\n", Msg20);        /* Msg='Target file ..'     */
+       printf("%80.80s\n", Msg02);        /* Msg='*           *'      */
+       printf("%80.80s\n", Msg21);        /* Msg='*====Top====*'      */
+       getfile(file,                      /* Call the getfile function*/
+               transid,                   /*  to retrieve the target  */
+               program,                   /*  file.  Give it the User */
+               userid,                    /*  and Pipe tokens so it   */
+               user_token,                /*  can use the connection. */
+               pipe_token);               /*                          */
+    }                                     /*                          */
+    else                                  /*                          */
+    {                                     /*                          */
+       printf("%80.80s\n", Msg23);        /* Msg='The Pipe was not ok'*/
+       callrets(&call_retarea);           /* Ouput Response codes     */
+       batch_return_code = call_retarea.exci_response;
+       printf("%80.80s\n", Msg14);        /* Msg='Aborting...'        */
+    }                                     /*                          */
+                                          /*==========================*/
+ /*===================================================================*/
+ /*                                                                   */
+ /*   The Pipe is no longer required, or is unusable, so an attempt to*/
+ /*   terminate it's existence is made by performing Close_Pipe and   */
+ /*   Deallocate_Pipe calls in succession.                            */
+ /*                                                                   */
+ /*===================================================================*/
+
+ /*===================================================================*/
+ /*   Set up and perform the Close_Pipe call.                         */
+ /*===================================================================*/
+                                          /*==========================*/
+    call_type=CLOSE_PIPE;                 /* Set up call type         */
+    dfhxcis(&version,                     /* Version no. of EXCI API  */
+            &call_retarea,                /* Return code area         */
+            &user_token,                  /* Refer to the defined User*/
+            &call_type,                   /* Call is a Close_Pipe     */
+            &pipe_token);                 /* Refer to allocated Pipe  */
+    printf("%80.80s\n", Msg29);           /* Msg='Close_Pipe complete'*/
+                                          /*==========================*/
+ /*===================================================================*/
+ /*   Set up and perform the Deallocate_pipe call.                    */
+ /*===================================================================*/
+                                          /*==========================*/
+    call_type=DEALLOCATE_PIPE;            /* Set up call type         */
+    dfhxcis(&version,                     /* Version no. of EXCI API  */
+            &call_retarea,                /* Return code area         */
+            &user_token,                  /* Refer to the defined User*/
+            &call_type,                   /* Call is a Deallocate     */
+            &pipe_token);                 /* Refer to allocated Pipe  */
+    printf("%80.80s\n", Msg30);           /* Msg='Deallocate complete'*/
+                                          /*==========================*/
+ /*===================================================================*/
+ /*                                                                   */
+ /*            >>>>> End of CALL_LEVEL processing <<<<                */
+ /*                                                                   */
+ /*===================================================================*/
+ }
+
+ void getfile(char file??(8??),
+              char transid??(4??),
+              char program??(8??),
+              char userid??(8??),
+              long int user_token,
+              long int pipe_token)
+ /*===================================================================*/
+ /*                                                                   */
+ /*   GETFILE:       This routine will set up and perform multiple DPL*/
+ /*                  requests into the target CICS system, and invokes*/
+ /*                  the server program with a call_type of READ.     */
+ /*                  Depending on the individual success or failure of*/
+ /*                  any call, either a record from the target file   */
+ /*                  will be output to the SYSPRINT log, or a message */
+ /*                  stating what has failed.  It will also make a    */
+ /*                  decision as to whether further calls are         */
+ /*                  required/necessary/possible.                     */
+ /*                                                                   */
+ /*===================================================================*/
+ {
+ /*===================================================================*/
+ /*   Declare local variables.                                        */
+ /*===================================================================*/
+                                          /*==========================*/
+ exci_return_code  call_retarea;          /* Return code area         */
+ exci_dpl_retarea  dpl_retarea;           /* DPL response code area   */
+ comms     commarea;                      /* Commarea for server parms*/
+ char      *null_pointer;                 /* For omitting uow         */
+ long int version;                        /* Version no. of EXCI API  */
+ long  int comm_length;                   /* Length of return Commarea*/
+ long  int data_length;                   /* Length of outbound Comm. */
+ bit       dpl_type;                      /* DPL option bit           */
+ short int abort_needed;                  /* Abort flag               */
+ long  int call_type;                     /* EXCI call type fullword  */
+ long  int server_retcode;                /* server response area     */
+                                          /*==========================*/
+ /*===================================================================*/
+ /*   Initialise local variables.                                     */
+ /*      These variables area mainly specific to the DPL_Request call.*/
+ /*===================================================================*/
+    version = VERSION_1;
+    dpl_type.option_bit=SYNCONRETURN;
+    null_pointer = 0;
+
+ /*===================================================================*/
+ /*   Set the Commarea Length and Data Length constants(in bytes).    */
+ /*===================================================================*/
+    comm_length = COMMAREA_LENGTH;
+    data_length = DATA_LENGTH;
+
+ /*===================================================================*/
+ /*   Set up the Outbound Commarea for transmission.                  */
+ /*===================================================================*/
+                                          /*==========================*/
+    strncpy(commarea.file_name,file,8);   /* Target file name         */
+    strncpy(commarea.rid_field,"000001",6);/* Initial Rid Field       */
+                                          /*==========================*/
+ /*===================================================================*/
+ /*   Initialise and start the conditional looping.                   */
+ /*===================================================================*/
+    abort_needed=no_abort;
+    while(abort_needed==no_abort)
+    {
+ /*===================================================================*/
+ /*                                                                   */
+ /*   Set up and perform the DPL_Requset.                             */
+ /*                                                                   */
+ /*     No Userid will be passed, as an example of how to leave out   */
+ /*     any parameter from the list.  A null pointer must replace the */
+ /*     pointer in the list which would normally point to the         */
+ /*     parameter missing.                                            */
+ /*                                                                   */
+ /*===================================================================*/
+                                          /*==========================*/
+    commarea.call_type=read_call;         /* Set up Server call type  */
+    call_type=DPL_REQUEST;                /* Set up the EXCI call type*/
+    dfhxcis(&version,                     /* Version no. of EXCI API  */
+            &call_retarea,                /* Return code area         */
+            &user_token,                  /* Refer to initialised User*/
+            &call_type,                   /* Call is a DPL request    */
+            &pipe_token,                  /* Refer to allocated Pipe  */
+            program,                      /* The CICS-resident Server */
+            &commarea,                    /* Contains Server parms    */
+            &comm_length,                 /* Return Commarea length   */
+            &data_length,                 /* Outbound Commarea length */
+            transid,                      /* TransId -> DFHMIRS       */
+            null_pointer,                 /* Uowid ommitted           */
+            userid,                       /* End user's UserId omitted*/
+            &dpl_retarea,                 /* DPL return code area     */
+            &dpl_type);                   /* DPL option bit           */
+                                          /*==========================*/
+ /*===================================================================*/
+ /*                                                                   */
+ /*   Check on how successful the link, and the DPL call were.        */
+ /*                                                                   */
+ /*===================================================================*/
+                                          /*==========================*/
+    if (call_retarea.exci_response==0)    /* Check if high level resp */
+    {                                     /* is ok..                  */
+       if (dpl_retarea.exci_dpl_resp!=0)  /* Check if low level (DPL) */
+       {                                  /* response is ok...        */
+          printf("%80.80s\n", Msg25);     /* Msg='DPL call failed.'   */
+          printf("%80.80s\n", Msg27);     /* Msg='Return codes are:'  */
+          printf("*      DPL Resp, Resp2, Abcode values of: %d %d %4.4s"
+                 "                                 *\n",
+                 dpl_retarea.exci_dpl_resp,dpl_retarea.exci_dpl_resp2,
+                 dpl_retarea.exci_dpl_abcode);                 /* @P1C*/
+          printf("%80.80s\n", Msg14);     /* Msg='Aborting... '       */
+          batch_return_code = dpl_retarea.exci_dpl_resp;
+          abort_needed=yes;               /*                          */
+       }                                  /*                          */
+       else                               /* Output the Record to the */
+       {                                  /*  SYSPRINT Log.           */
+          printf("%80.80s\n",commarea.record_area);
+       }                                  /*                          */
+    }                                     /*                          */
+    else                                  /*                          */
+       {                                  /*                          */
+          printf("%80.80s\n", Msg11);     /* Msg='Link request failed'*/
+          printf("%80.80s\n", Msg26);     /* Msg='Link return codes..'*/
+          callrets(&call_retarea);        /* Output Response codes    */
+          printf("%80.80s\n", Msg27);     /* Msg='Return codes..' @P1A*/
+          printf("*      DPL Resp, Resp2, Abcode values of: %d %d %4.4s"
+                 "                                 *\n",
+                 dpl_retarea.exci_dpl_resp,dpl_retarea.exci_dpl_resp2,
+                 dpl_retarea.exci_dpl_abcode);                 /* @P1A*/
+          printf("%80.80s\n", Msg14);     /* Msg='Aborting...'        */
+          batch_return_code = call_retarea.exci_response;
+          abort_needed=yes;               /*                          */
+       }                                  /*                          */
+    server_retcode=commarea.call_type;    /*Has End-File been reached?*/
+    if (server_retcode==ret_eof)          /*                          */
+    {                                     /*                          */
+      abort_needed=yes;                   /*                          */
+      printf("%80.80s\n", Msg22);         /* Msg='*====ENDFILE===*'   */
+      printf("%80.80s\n", Msg02);         /* Msg='*              *'   */
+    }                                     /*                          */
+ }                                        /*==========================*/
+ /*===================================================================*/
+ /*                                                                   */
+ /*   Perform Closing DPL_Request.                                    */
+ /*      This final DPL call invokes the BATCHSER server program with */
+ /*      a call-type of CLOS_CALL, in an attempt to close the target  */
+ /*      file after processing is complete. No error checking is      */
+ /*      required, as nothing can be done if the call fails.          */
+ /*                                                                   */
+ /*===================================================================*/
+                                          /*==========================*/
+    commarea.call_type=close_call;        /* Set up Server call type  */
+    call_type=DPL_REQUEST;                /* Set up the EXCI call type*/
+    dfhxcis(&version,                     /* Version no. of EXCI API  */
+            &call_retarea,                /* Return code area         */
+            &user_token,                  /* Refer to initialised User*/
+            &call_type,                   /* Call is a DPL request    */
+            &pipe_token,                  /* Refer to allocated Pipe  */
+            program,                      /* The CICS-resident Server */
+            &commarea,                    /* Contains Server parms    */
+            &comm_length,                 /* Return Commarea length   */
+            &data_length,                 /* Outbound Commarea length */
+            transid,                      /* TransId -> DFHMIRS       */
+            null_pointer,                 /* Uowid ommitted           */
+            null_pointer,                 /* End user's UserId omitted*/
+            &dpl_retarea,                 /* DPL return code area     */
+            &dpl_type);                   /* DPL option bit           */
+    printf("%80.80s\n", Msg28);           /* Msg='Closing DPL ...'    */
+                                          /*==========================*/
+ /*===================================================================*/
+ /*                                                                   */
+ /*            >>>>> End of GETFILE processing <<<<                   */
+ /*                                                                   */
+ /*===================================================================*/
+ }
+
+ void callrets(exci_return_code *pRet_Area)
+ /*===================================================================*/
+ /*                                                                   */
+ /*   CALLRETS:         If the call level EXCI link fails in any way, */
+ /*                     this routine will display in decimal all high */
+ /*                     level return codes produced.  If a message was*/
+ /*                     received from the target CICS system, this    */
+ /*                     will also be displayed.                       */
+ /*                                                                   */
+ /*===================================================================*/
+ {
+   char     *pMsg_String;
+   short int Msg_Len;
+
+   /* output response, reason, subreason */
+   printf("*    Response = %d   Reason = %d   Subreason = %d"
+          "                     *\n",
+              pRet_Area->exci_response,
+              pRet_Area->exci_reason,
+              pRet_Area->exci_sub_reason1);
+
+   /* output message if one exists */
+   if (pRet_Area->exci_msg_ptr != NULL)
+   {
+     /* calculate message length */
+     /* message length = value in first two bytes - 4 */
+     Msg_Len = *(short int *)pRet_Area->exci_msg_ptr - 4;
+
+     /* allocate memory for message */
+     if ((pMsg_String = (char *)malloc(Msg_Len+1)) != NULL)  /* @D0C */
+     {
+       /* malloc successful - copy contents of message into string */
+
+       memcpy(pMsg_String, pRet_Area->exci_msg_ptr+4, Msg_Len);
+
+       /* null terminate our message string */
+       *(pMsg_String + Msg_Len) = '\0';
+
+       /* output message */
+       printf("%80.80s\n", Msg13);
+       printf("%80.80s\n", Msg02);
+       printf("%80.120s\n", pMsg_String);
+       printf("%80.80s\n", Msg02);
+
+     } else printf("malloc - failed No Memory For Message String\n");
+
+   }
+
+   return;
+ /*===================================================================*/
+ /*                                                                   */
+ /*            >>>>> End of CALLRETS processing <<<<<                 */
+ /*                                                                   */
+ /*===================================================================*/
+ }
+
+ void linkrets(exci_exec_return_code *pRet_Area)
+ /*===================================================================*/
+ /*                                                                   */
+ /*   LINKRETS:         If the EXEC level EXCI link fails in any way, */
+ /*                     this routine will display in decimal all high */
+ /*                     level return codes produced.  If a message was*/
+ /*                     received from the target CICS system, this    */
+ /*                     will also be displayed.                       */
+ /*                                                                   */
+ /*===================================================================*/
+ {
+   char     *pMsg_String;
+   short int Msg_Len;
+
+   /* output response, reason, subreason */
+   printf("*     Response = %d   Response2 = %d   Abend Code = %4.4s"
+          "                      *\n",
+              pRet_Area->exec_resp,
+              pRet_Area->exec_resp2,
+              pRet_Area->exec_abcode);
+
+   /* output message if one exists */
+   if (pRet_Area->exec_msg_ptr != NULL)
+   {
+     /* get message length       */
+     Msg_Len = pRet_Area->exec_msg_len;
+
+     /* allocate memory for message */
+     if ((pMsg_String = (char *)malloc(Msg_Len+1)) != NULL)  /* @D0C */
+     {
+       /* malloc successful - copy contents of message into string */
+
+       memcpy(pMsg_String, pRet_Area->exec_msg_ptr, Msg_Len); /* @P1C */
+
+       /* null terminate our message string */
+       *(pMsg_String + Msg_Len) = '\0';
+
+       /* output message */
+       printf("%80.80s\n", Msg13);
+       printf("%80.80s\n", Msg02);
+       printf("%80.120s\n", pMsg_String);
+       printf("%80.80s\n", Msg02);
+
+     } else printf("malloc - failed No Memory For Message String\n");
+
+   }
+
+   return;
+ /*===================================================================*/
+ /*                                                                   */
+ /*            >>>>> End of LINKRETS processing <<<<<                 */
+ /*                                                                   */
+ /*===================================================================*/
+
+ }

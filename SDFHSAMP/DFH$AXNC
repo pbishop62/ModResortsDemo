@@ -1,0 +1,1546 @@
+*ASM XOPTS(EXCI)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$AXNC                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Assembler Sample Batch client sample which       *
+*                    uses channels and containers                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2016, 2016"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION =  This module shows users how to code a simple batch type *
+*             application program using the EXCI call level and EXEC  *
+*             level batch Dpl API.  This assembler version will use   *
+*             the API to call into a target CICS region and invoke    *
+*             the EXCI sample server program resident on the system   *
+*             to perform tasks according to a message sent via a      *
+*             container. Appropriate to each task, the return         *
+*             containers will contain data specific to the call-type  *
+*             requested.                                              *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*    REGISTER CONVENTIONS = R3,R4    Base registers.                  *
+*                           R5       Message length                   *
+*                           R6       Message pointer.                 *
+*                           R7       For arithmetic.                  *
+*                           R8       Used in amode switch.            *
+*                           R9       -->EXEC return area.             *
+*                           R11      -->Call level return area.       *
+*                           R12      -->Dpl return area.              *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable,                       *
+*                                                                     *
+*-------------------------------------------------------------------- *
+*                                                                     *
+* ENTRY POINT = DFH$AXNC                                              *
+*                                                                     *
+* DESCRIPTION :   The program is simply broken down into three        *
+*                 sections.  Section I performs a single EXEC level   *
+*                 EXCI call into the target CICS region, while        *
+*                 Sections II and III together include the code       *
+*                 required to manually set up a Pipe connection to a  *
+*                 remote CICS, and to perform multiple Dpl calls via  *
+*                 this single connection.  The following is a basic   *
+*                 outline of each section's logic;                    *
+*                                                                     *
+*    SECTION_I:   Set up a request container which tells the server   *
+*                 the type and number of the invocation.              *
+*                                                                     *
+*                 A container is set up with some EBCDIC data to      *
+*                 send to the server. An EXEC CICS LINK is then       *
+*                 performed to pass the channel to the server.        *
+*                                                                     *
+*                 If this succeeds, a second channel is set up and    *
+*                 a container is added which contains ASCII data.     *
+*                 Use is made of codepage conversion in containers    *
+*                 to convert EBCDIC to ASCII. This is not strictly    *
+*                 necessary, but is performed for illustrative        *
+*                 purposes.                                           *
+*                                                                     *
+*                 End of Section I processing.                        *
+*                                                                     *
+*                                                                     *
+*                 The EXEC level EXCI call requires very little effort*
+*                 in the setting up of many parameters, as is         *
+*                 exemplified in the simplicity of this section, and  *
+*                 as it performs an Init_User, Allocate, Open, Dpl,   *
+*                 Close and Deallocate Pipe call form every invocation*
+*                 it's use is generally limited to 'single shot' Dpl  *
+*                 calls of this type.                                 *
+*                                                                     *
+*   SECTION_II:   Set up and perform the Init_User call.              *
+*                                                                     *
+*                 Set up and perform the Allocate_Pipe call.          *
+*                                                                     *
+*                 Set up and perform the Open_Pipe call.              *
+*                                                                     *
+*                 If the Pipe has been successfully created then      *
+*                 get the data in containers from the target CICS     *
+*                 region.                                             *
+*                                                                     *
+*                 Perform Section III for backout purposes.           *
+*                                                                     *
+*                                                                     *
+*                 With the Call level EXCI link, care must be taken   *
+*                 to allocate storage for call level specific         *
+*                 parameters such as the User token and Pipe Token,   *
+*                 as well as others i.e. version number, userid (for  *
+*                 security purposes) the Allocate option and Dpl      *
+*                 option bits, the unit of work id, and also both high*
+*                 and low level return code areas.  It is obvious that*
+*                 the Call level EXCI link requires more setting up,  *
+*                 but because the user can decide how to go about     *
+*                 allocating or using pipes, a greater flexibility and*
+*                 efficiency can be achieved for multiple Dpl calls,  *
+*                 as exemplified here.                                *
+*                                                                     *
+*   SECTION III:  Delete the two channels which have been used. This  *
+*                 is good practise and ensures that storage is tidied *
+*                 up properly.                                        *
+*                                                                     *
+*                 Set up and perform the closing DPl Request.         *
+*                                                                     *
+*                 Set up and perform the Close_Pipe call.             *
+*                                                                     *
+*                 Set up and perform the Deallocate_Pipe call.        *
+*                                                                     *
+*                 Exit.                                               *
+*                                                                     *
+*                                                                     *
+*                 Section III will be called regardless of the degree *
+*                 of success achieved by processing in Section II, as *
+*                 no assumptions can be made if any part of Section II*
+*                 fails as to how far successful processing occured.  *
+*                                                                     *
+*  INPUT PARAMETERS:                                                  *
+*                                                                     *
+*    The only input to this program is supplied by the JCL PARM       *
+*    parameter.  This must contain the applid of the target CICS      *
+*    region and, optionally, the userid under which the DPL program   *
+*    must run, separated from the applid by a single comma.           *
+*    If the applid is omitted, a default of DBDCCICS is used.         *
+*    If the userid is omitted, the default is the userid of the       *
+*    job within which this program is executing.                      *
+*    The parameters must be passed in the form                        *
+*            APPLID,USERID                                            *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+**                                                                    *
+*        $MOD(DFH$AXNC),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*    REASON  REL YYMMDD HDXXIII : REMARKS                             *
+*    R000363 710 160623 HDAFDRB : Initial coding (story 113471)       *
+*    R150387 720 180716 HD2GJST : Show use of SPI commands            *
+***********************************************************************
+*
+*=====================================================================*
+*   Include the standard copybook for EXCI return codes and DSECTS.   *
+*=====================================================================*
+*
+          COPY DFHXCRCD
+*
+*=====================================================================*
+*   Include the standard copybook for EXCI Parameter list equates.    *
+*=====================================================================*
+*
+          COPY DFHXCPLD
+*
+*=====================================================================*
+*                                                                     *
+*         >>>>>>>>>>>>>> MAINLINE CODE <<<<<<<<<<<<<<<<               *
+*                                                                     *
+*=====================================================================*
+DFH$AXNC AMODE 31
+DFH$AXNC RMODE 24
+DFH$AXNC DFHEIENT CODEREG=(R3,R4,R10)
+         MVC   TARGET_USERID,BLANKS         Blank target userid
+         MVC   MSG32(18),MSGPARM            Set up Parm message
+         MVC   MSG32E(28),MSGLAST
+         MVC   MSG32A(7),NOAPP              Parameters None
+*
+*=====================================================================*
+*   Retrieve the target CICS Applid and Userid, passed in PARM.       *
+*=====================================================================*
+*                                           *=========================*
+         L     R1,0(,R1)                    | R1-->JCL Plist.         |
+         XR    R7,R7                        | Clear R7                |
+         ICM   R7,B'0011',0(R1)             |  Pick up parm length    |
+         BZ    NOPARM                       | Was a CICS name passed? |
+         MVC   TARGET_SYSTEM(8),BLANKS      | Yes: Pad with blanks    |
+         LA    R6,2(,R1)          -> Character at PARM start
+         LA    R2,2-1(,R1)        -> Character before PARM start
+         LA    R15,2-1(R7,R1)     -> Last PARM character
+         LA    R14,1              Set scan increment
+SCANAPPL DS    0H                 Scan through source applid
+         BXH   R2,R14,ENDAPPL     Exit loop at end of PARM
+         CLI   0(R2),C','         Is there a comma?
+         BNE   SCANAPPL           No, keep searching
+ENDAPPL  DS    0H                 End of applid found
+         LR    R7,R2              Save address reached
+         SR    R7,R6              Subtract start address
+         BNP   DONEAPPL           If zero length, no applid
+         LA    R0,L'TARGET_SYSTEM Set length of target field
+         CR    R7,R0              Is PARM too long?
+         BNH   SETAPPL            No, use length found
+         LR    R7,R0              Truncate to target length
+SETAPPL  DS    0H                 Set up target applid
+         BCTR  R7,0                         |  decrement length       |
+         EX    R7,GETNAME                   |  Retrieve CICS name     |
+DONEAPPL DS    0H                 Finished applid
+         LA    R6,1(,R2)          Start of next PARM (userid)
+SCANUSER DS    0H                 Scan through source userid
+         BXH   R2,R14,ENDUSER     Exit loop at end of PARM
+         CLI   0(R2),C','         Is there a comma?
+         BNE   SCANUSER           No, keep searching
+ENDUSER  DS    0H                 End of userid reached
+         LR    R7,R2              Save address reached
+         SR    R7,R6              Subtract start address
+         BNP   DONEUSER           No userid text left
+         LA    R0,L'TARGET_USERID Set length of target field
+         CR    R7,R0              Is PARM too long?
+         BNH   SETUSER            No, use length found
+         LR    R7,R0              Truncate to target length
+SETUSER  DS    0H                 Set up target userid
+         BCTR  R7,0               Decrement length
+         EX    R7,GETUSER         Copy target userid
+DONEUSER DS    0H                 Finished with userid
+         CLI   TARGET_SYSTEM,C' ' Was a target applid found?
+         BE    NOPARM             No, use default
+         MVC   MSG32A(7),FILLAPP  Set up message
+         MVC   MSG32B(8),TARGET_SYSTEM   Set Up Message Applid
+         CLI   TARGET_USERID,C' ' Was a target userid found?
+         BE    NOUPARM            No
+USERMSG  DS    0H
+         MVC   MSG32C(11),FILLUSD Set up message
+         MVC   MSG32D(8),TARGET_USERID  Set up Message Userid
+         B     OPENSYS                      |  Continue...            |
+GETNAME  MVC   TARGET_SYSTEM(0),2(R1)       |
+GETUSER  MVC   TARGET_USERID(0),0(R6)       |
+NOPARM   DS    0H                           | No: Default CICSname.   |
+         MVC   TARGET_SYSTEM(8),DEFAULT_SYSTEM                        |
+         MVC   MSG32B,BLANKS      Blank out Applid in Message
+         CLI   TARGET_USERID,C' ' Was a target userid found?
+         BNE   USERMSG            Yes
+NOUPARM  DS    0H                 No Userid parameter
+         MVC   MSG32C,NOUSD       Set Message Userid to blank
+         MVC   MSG32D,BLANKS      Blank Out Userid in Message
+*                                           *_________________________*
+*=====================================================================*
+*   Set the output SYSPRINT log open.                                 *
+*=====================================================================*
+*
+OPENSYS  DS    0H                           *=========================*
+         MVC   DCBPARM,OUTPUT               | load DCB                |
+         LA    R7,DCBPARM                   |                         |
+         MVC   OPENPARM,OPENLIST            | Initialise plist        |
+         LA    R1,OPENPARM                  | Address Plist           |
+         OPEN ((R7),(OUTPUT)),              | Call macro.             |*
+               MODE=31,                     |                         |*
+               MF=(E,(1))                   *_________________________*
+*
+*=====================================================================*
+*   Put out Entry message.                                            *
+*=====================================================================*
+*
+         MVC   PRTRECORD(80),MSG00          *=========================*
+         L     R15,=A(X'80000000'+PRINT)    |                         |
+         BALR  R14,R15                      | Msg='   '               |
+         MVC   PRTRECORD(80),MSG01          |                         |
+         L     R15,=A(X'80000000'+PRINT)    | Msg='EXCI Sample...'    |
+         BALR  R14,R15                      *_________________________*
+         MVC   PRTRECORD(80),MSG02          |                         |
+         L     R15,=A(X'80000000'+PRINT)    | Msg='    '              |
+         BALR  R14,R15                      *_________________________*
+         MVC   PRTRECORD(80),MSG32          |                         |
+         L     R15,=A(X'80000000'+PRINT)    | Msg='Parameters:   '    |
+         BALR  R14,R15                      *_________________________*
+*
+*=====================================================================*
+*   Clear Working Storage;                                            *
+*=====================================================================*
+*                                              *======================*
+         LA    R9,EXEC_RETAREA                 | R9--> EXEC returns   |
+         USING EXCI_EXEC_RETURN_CODE,R9        |                      |
+         LA    R11,CALL_RETAREA                | R11-->Call returns   |
+         USING EXCI_RETURN_CODE,R11            |                      |
+         LA    R12,DPL_RETAREA                 | R12--> DPL returns   |
+         USING EXCI_DPL_RETAREA,R12            *______________________*
+         XC    CLEAR_START(CLEAR_LEN),CLEAR_START
+         MVC   STOREYE(8),=C'STORAGE:'
+         MVC   TOKENEYE(8),=C'TOKENS:-'
+         XC    CALL,CALL
+         MVC   PARMEYE(8),=C'CPLIST :'
+         MVC   EXECEYE(8),=C'EXECRet:'
+         MVC   EXCIEYE(8),=C'EXCIRet:'
+         MVC   DPL_EYE(8),=C'DPL_Ret:'
+*
+*=====================================================================*
+*                                                                     *
+*   SECTION I:                                                        *
+*                                                                     *
+*   First set up a request_type container. This will also create a    *
+*   channel. This  container is  used by  the  server  program  to    *
+*   distinguish  between  an  EXEC  or a  CALL  interface  request.   *
+*   A  second  container  is  then  put onto the channel with some    *
+*   EBCDIC data.                                                      *
+*                                                                     *
+*   Following a link to the server program, a  second  channel is set *
+*   up with containers. Use is made of container codepage translation *
+*   to convert data into UTF-8 format.                                *
+*                                                                     *
+*=====================================================================*
+*
+         MVC   PRTRECORD(80),MSG02           *========================*
+         L     R15,=A(X'80000000'+PRINT)     |                        |
+         BALR  R14,R15                       | Msg='*    *'           |
+         MVC   PRTRECORD(80),MSG03           |                        |
+         L     R15,=A(X'80000000'+PRINT)     |                        |
+         BALR  R14,R15                       | Msg='EXEC call...'     |
+         MVC   PRTRECORD(80),MSG04           |                        |
+         L     R15,=A(X'80000000'+PRINT)     | Msg='Setting up parms' |
+         BALR  R14,R15                       *________________________*
+*
+*=====================================================================*
+*   Set up the Outbound containers on channel FIRST_CHANNEL
+*=====================================================================*
+*                                                                     *
+*
+*=====================================================================*
+* Set the request as LINK1 in container REQUEST_TYPE. This will also  *
+* create the channel called FIRST_CHANNEL.                            *
+*=====================================================================*
+
+         EXEC CICS PUT CONTAINER('REQUEST_TYPE')                       *
+               CHANNEL('FIRST_CHANNEL   ')                             *
+               FROM('LINK1')                                           *
+               RETCODE(EXEC_RETAREA)
+*
+*=====================================================================*
+*   Did the PUT fail?  Check the Return Codes.                        *
+*=====================================================================*
+*
+         CLC   EXEC_RESP,ZERO
+         BNE   PUTFAIL
+*                                                                     *
+*=====================================================================*
+*   Put another container into the channel. It contains EBCDIC data.  *
+*=====================================================================*
+*
+         MVC   PUT_AREA(33),=CL33'     Here are some data in EBCDIC'
+         MVC   PUT_LENGTH,=F'33'
+         EXEC CICS PUT CONTAINER('EBCDIC_DATA')                        *
+               CHANNEL('FIRST_CHANNEL   ')                             *
+               FROM(PUT_AREA)                                          *
+               FLENGTH(PUT_LENGTH)                                     *
+               DATATYPE(1019)                                          *
+               RETCODE(EXEC_RETAREA)
+*
+*=====================================================================*
+*   Did the PUT fail?  Check the Return Codes.                        *
+*=====================================================================*
+*
+         CLC   EXEC_RESP,ZERO
+         BNE   PUTFAIL
+         B     LINKPROG
+*
+*=====================================================================*
+*   YES:  output reason and abort processing.                         *
+*=====================================================================*
+*
+PUTFAIL DS    0H                          *===========================*
+         MVC   SAVED_RESP,EXEC_RESP       | Save a copy of rc         |
+         MVC   PRTRECORD(80),MSG10        | Msg='A put has failed'    |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXEC_RESP               | Convert Return codes to   |
+         CVD   R5,WORK1                   |   displayable Decimal.    |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG(16),MSG11           | Msg='*    Resp='          |
+         MVC   ERRMSG1(8),WORK2           | EXEC_RESP                 |
+         L     R5,EXEC_RESP2              |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG2(10),MSG12          | Msg='*   Resp2='          |
+         MVC   ERRMSG3(8),WORK2           | EXEC_RESP2                |
+         MVC   ERRMSG4(16),MSG13          | Msg='*   Abend:'          |
+         MVC   ERRMSG5(8),MSG00           | blank out all 8 bytes.    |
+         MVC   ERRMSG5(4),EXEC_ABCODE     | EXEC_ABCODE               |
+         MVC   ERRMSG6(16),MSG14          |                           |
+         MVC   PRTRECORD(80),ERRMSG       | Msg=Return codes.         |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    | Has CICS issued a message?|
+         CLC   EXEC_MSG_PTR,ZERO          |                           |
+         BE    PUTNOMSG                   | No: Continue.             |
+PUTMSG   MVC   PRTRECORD(80),MSG15        | Yes: Msg='A message...'   |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG02        | Msg='*    *'              |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXEC_MSG_PTR            | Get message pointer and   |
+         L     R6,EXEC_MSG_LEN            | length                    |
+PUTLOOP  DS    0H                         |                           |
+         LR    R8,R6                      | Start with length = msg l |
+         LA    R7,80                      |                           |
+         CR    R6,R7                      | Is it > 80 ?              |
+         BL    PUTSMLMS                   |                           |
+         LA    R8,80                      | Yes - move first 80       |
+PUTSMLMS DS    0H                         | No - move whole message   |
+         BCTR  R8,0                       | Less one for MVC          |
+         EX    R8,PUTMSG1                 | Move in message           |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    | Send message              |
+         MVC   PRTRECORD(80),MSG00        | Clear buffer              |
+         LA    R5,80(,R5)                 | Bump message pointer      |
+         SR    R6,R7                      | and decrement length      |
+         BP    LOOP                       | Loop if more message      |
+         MVC   PRTRECORD(80),MSG02        | Msg='*    *'              |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+PUTNOMSG MVC   PRTRECORD(80),MSG16        | Yes: Msg='Aborting...'    |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     EXIT                       |                           |
+PUTMSG1  MVC   PRTRECORD(0),0(R5)         *___________________________*
+*                                                                     *
+*=====================================================================*
+*   Perform LINK request.                                             *
+*=====================================================================*
+*                                                                     *
+LINKPROG DS    0H
+         EXEC CICS LINK PROGRAM(TARGET_PROGRAM)                        *
+               TRANSID(TARGET_TRANSID)                                 *
+               APPLID(TARGET_SYSTEM)                                   *
+               CHANNEL('FIRST_CHANNEL   ')                             *
+               RETCODE(EXEC_RETAREA)                                   *
+               SYNCONRETURN
+*
+*=====================================================================*
+*   Did the call fail?  Check the Return Codes.                       *
+*=====================================================================*
+*
+         CLC   EXEC_RESP,ZERO
+         BNE   LINKFAIL
+*
+*=====================================================================*
+*   NO:  Put out a message and get response container.                *
+*=====================================================================*
+*
+CHECK1   DS    0H
+*                                         *===========================*
+         MVC   PRTRECORD(80),MSG05        | Msg='Link worked ok'      |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG35        | Msg='Checking response'   |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+*
+*=====================================================================*
+*   Check the response container to see that we are OK to continue    *
+*=====================================================================*
+*
+         MVC   GET_LENGTH,=F'100'
+         XC    GET_AREA,GET_AREA
+*
+         EXEC CICS GET CONTAINER('EXCI_RESPONSE')                      *
+               CHANNEL('FIRST_CHANNEL   ')                             *
+               INTO(GET_AREA)                                          *
+               FLENGTH(GET_LENGTH)                                     *
+               RETCODE(EXEC_RETAREA)
+*
+         CLC   GET_AREA(2),=C'OK'
+         BE    OKSOFAR1                   | OK so far, continue
+         MVC   PRTRECORD(80),MSG34        | Msg='Response not OK'     |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG16        | Msg='Aborting       '     |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     EXIT                       | So exit                   |
+*
+*=====================================================================*
+*   The LINK  was successful, so  we can  continue processing. Now    *
+*   put a container  containing UTF-8  data  into a  new  channel.    *
+*   We do this by putting the container with EBCDIC data, then get    *
+*   it into  the  UTF-8  codepage  then  putting  it  again.  This    *
+*   demonstrates  the use  of containers  as a  means  of codepage    *
+*   conversion.                                                       *
+
+*   A new channel is used for this. This is not necessary, but is     *
+*   done so as to illustrate the use of multiple channels.            *
+*=====================================================================*
+*
+OKSOFAR1 DS    0H
+*
+         MVC   PRTRECORD(80),MSG38        | Msg='Response OK      '   |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+*
+*=====================================================================*
+* This section is not required. It merely demonstrates how to use the *
+* EXCI SPI to query how many containers are on the channel and to     *
+* browse to get the names of the containers. The code does not do     *
+* anything with the container names, it merely checks the browse      *
+* works ok.                                                           *
+*=====================================================================*
+*
+         EXEC CICS QUERY CHANNEL('FIRST_CHANNEL   ')                   *
+               CONTAINERCNT(CCNT) RETCODE(EXEC_RETAREA)
+*
+         CLC   EXEC_RESP,ZERO
+         BNE   QFAIL
+         MVC   PRTRECORD(80),MSG39        | Msg='Query command        |
+         L     R15,=A(X'80000000'+PRINT)  |      successful'          |
+         BALR  R14,R15                    |                           |
+         CLC   CCNT,=F'3'
+         BNE   QFAIL2
+         MVC   PRTRECORD(80),MSG40        | Msg='Correct number of    |
+         L     R15,=A(X'80000000'+PRINT)  |      containers'          |
+         BALR  R14,R15                    |                           |
+         B     QCONT
+QFAIL    DS    0H
+         MVC   PRTRECORD(80),MSG41        | Msg='Query command failed'|
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15
+         B     EXIT
+QFAIL2   DS    0H
+         MVC   PRTRECORD(80),MSG42        | Msg='Incorrect number of '|
+         L     R15,=A(X'80000000'+PRINT)  |      containers'          |
+         BALR  R14,R15
+         B     EXIT
+QCONT    DS    0H
+         EXEC CICS STARTBROWSE CONTAINER CHANNEL('FIRST_CHANNEL   ')   *
+               BROWSETOKEN(BTOK) RETCODE(EXEC_RETAREA)
+         CLC   EXEC_RESP,ZERO
+         BNE   BFAIL
+*
+         L     R8,CCNT                    | get container count       |
+BNEXT    DS    0H
+         EXEC CICS GETNEXT CONTAINER(CNTR)                             *
+               BROWSETOKEN(BTOK) RETCODE(EXEC_RETAREA)
+         CLC   EXEC_RESP,ZERO
+         BNE   BFAIL
+         BCT   R8,BNEXT                   | Loop throough containers  |
+*
+         EXEC CICS ENDBROWSE CONTAINER                                 *
+              BROWSETOKEN(BTOK) RETCODE(EXEC_RETAREA)
+         CLC   EXEC_RESP,ZERO
+         BNE   BFAIL
+         B     BCONT
+*
+BFAIL    DS    0H
+         MVC   PRTRECORD(80),MSG44        | Msg='Browse failed'       |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15
+         B     EXIT
+BCONT    DS    0H
+         MVC   PRTRECORD(80),MSG43        | Msg='Browse worked'       |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15
+*
+*=====================================================================*
+*   Delete the response container to be tidy.                         *
+*=====================================================================*
+*
+         EXEC CICS DELETE CONTAINER('EXCI_RESPONSE')                   *
+               CHANNEL('FIRST_CHANNEL   ')                             *
+               RETCODE(EXEC_RETAREA)
+*
+         EXEC CICS PUT CONTAINER('REQUEST_TYPE2')                      *
+               CHANNEL('FIRST_CHANNEL   ')                             *
+               FROM('LINK2')                                           *
+               RETCODE(EXEC_RETAREA)
+*
+*=====================================================================*
+*   The PUT container  call above  put the  wrong container into the  *
+*   wrong channel. This can be corrected by using the MOVE container  *
+*   command.                                                          *
+*                                                                     *
+*   MOVE the container to the correct channel. The MOVE also provides *
+*   the opportunity to rename a container.                            *
+*=====================================================================*
+*
+         EXEC CICS MOVE CONTAINER('REQUEST_TYPE2')                     *
+               AS('REQUEST_TYPE')                                      *
+               CHANNEL('FIRST_CHANNEL   ')                             *
+               TOCHANNEL('SECOND_CHANNEL  ')                           *
+               RETCODE(EXEC_RETAREA)
+*
+         MVC   PUT_AREA(32),=CL32'     More data in this container'
+         MVC   PUT_LENGTH,=F'32'
+         EXEC CICS PUT CONTAINER('ASCII_DATA')                         *
+               CHANNEL('SECOND_CHANNEL  ')                             *
+               FROM(PUT_AREA)                                          *
+               FLENGTH(PUT_LENGTH)                                     *
+               DATATYPE(1019)                                          *
+               RETCODE(EXEC_RETAREA)
+*
+*=====================================================================*
+*   Using the INTOCCSID parameter on the GET CONTAINER causes the     *
+*   contents of the container to be codepage  translated into the     *
+*   specified codepage.                                               *
+*=====================================================================*
+*
+         MVC   GET_LENGTH,=F'100'
+         XC    GET_AREA,GET_AREA
+*
+         EXEC CICS GET CONTAINER('ASCII_DATA')                         *
+               CHANNEL('SECOND_CHANNEL  ')                             *
+               INTO(GET_AREA)                                          *
+               FLENGTH(GET_LENGTH)                                     *
+               INTOCCSID(UTF8)                                         *
+               RETCODE(EXEC_RETAREA)
+*
+*=====================================================================*
+*   Using the FROMCCSID parameter on the PUT CONTAINER causes the     *
+*   contents  of the  container  to be  treated  as  being in the     *
+*   specified codepage.                                               *
+*=====================================================================*
+*
+         EXEC CICS PUT CONTAINER('ASCII_DATA')                         *
+               CHANNEL('SECOND_CHANNEL  ')                             *
+               FROM(GET_AREA)                                          *
+               FROMCCSID(UTF8)                                         *
+               DATATYPE(1019)                                          *
+               RETCODE(EXEC_RETAREA)
+*                                                                     *
+*=====================================================================*
+*   Perform LINK request.                                             *
+*=====================================================================*
+*
+LINKPRO2 DS    0H
+         EXEC CICS LINK PROGRAM(TARGET_PROGRAM)                        *
+               TRANSID(TARGET_TRANSID)                                 *
+               APPLID(TARGET_SYSTEM)                                   *
+               CHANNEL('SECOND_CHANNEL  ')                             *
+               RETCODE(EXEC_RETAREA)                                   *
+               SYNCONRETURN
+*
+*=====================================================================*
+*   Did the call fail?  Check the Return Codes.                       *
+*=====================================================================*
+*
+         CLC   EXEC_RESP,ZERO
+         BNE   LINKFAIL
+*
+*=====================================================================*
+*   Check the response container to see if we are OK to continue.     *
+*=====================================================================*
+*
+         XC    GET_AREA,GET_AREA
+         MVC   GET_LENGTH,=F'100'
+*
+         EXEC CICS GET CONTAINER('EXCI_RESPONSE')                      *
+               CHANNEL('SECOND_CHANNEL  ')                             *
+               INTO(GET_AREA)                                          *
+               FLENGTH(GET_LENGTH)                                     *
+               RETCODE(EXEC_RETAREA)
+*
+         CLC   GET_AREA(2),=C'OK'
+         BE    OKSOFAR2                   | OK so far, continue
+         MVC   PRTRECORD(80),MSG34        | Msg='Response not OK'     |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG16        | Msg='Aborting       '     |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     EXIT                       | So exit                   |
+*
+OKSOFAR2 DS    0H
+*
+*=====================================================================*
+*   Delete the response container to be tidy.                         *
+*=====================================================================*
+*
+         EXEC CICS DELETE CONTAINER('EXCI_RESPONSE')                   *
+               CHANNEL('SECOND_CHANNEL  ')                             *
+               RETCODE(EXEC_RETAREA)
+*
+         MVC   PRTRECORD(80),MSG06        | Msg='Link worked ok'      |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG35        | Msg='Checking container'  |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     SECTION2                   | OK so far, continue
+*
+*
+*=====================================================================*
+*   YES:  LINK failed so output reason and abort processing.          *
+*=====================================================================*
+*
+LINKFAIL DS    0H                         *===========================*
+         MVC   SAVED_RESP,EXEC_RESP       | Save a copy of rc         |
+         MVC   PRTRECORD(80),MSG09        | Msg='The link has failed' |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXEC_RESP               | Convert Return codes to   |
+         CVD   R5,WORK1                   |   displayable Decimal.    |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG(16),MSG11           | Msg='*    Resp='          |
+         MVC   ERRMSG1(8),WORK2           | EXEC_RESP                 |
+         L     R5,EXEC_RESP2              |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG2(10),MSG12          | Msg='*   Resp2='          |
+         MVC   ERRMSG3(8),WORK2           | EXEC_RESP2                |
+         MVC   ERRMSG4(16),MSG13          | Msg='*   Abend:'          |
+         MVC   ERRMSG5(8),MSG00           | blank out all 8 bytes.    |
+         MVC   ERRMSG5(4),EXEC_ABCODE     | EXEC_ABCODE               |
+         MVC   ERRMSG6(16),MSG14          |                           |
+         MVC   PRTRECORD(80),ERRMSG       | Msg=Return codes.         |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    | Has CICS issued a message?|
+         CLC   EXEC_MSG_PTR,ZERO          |                           |
+         BE    NOMSG1                     | No: Continue.             |
+MSG1     MVC   PRTRECORD(80),MSG15        | Yes: Msg='A message...'   |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG02        | Msg='*    *'              |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXEC_MSG_PTR            | Get message pointer and   |
+         L     R6,EXEC_MSG_LEN            | length                    |
+LOOP     DS    0H                         |                           |
+         LR    R8,R6                      | Start with length = msg l |
+         LA    R7,80                      |                           |
+         CR    R6,R7                      | Is it > 80 ?              |
+         BL    SMLMSG                     |                           |
+         LA    R8,80                      | Yes - move first 80       |
+SMLMSG   DS    0H                         | No - move whole message   |
+         BCTR  R8,0                       | Less one for MVC          |
+         EX    R8,PRTMSG1                 | Move in message           |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    | Send message              |
+         MVC   PRTRECORD(80),MSG00        | Clear buffer              |
+         LA    R5,80(,R5)                 | Bump message pointer      |
+         SR    R6,R7                      | and decrement length      |
+         BP    LOOP                       | Loop if more message      |
+         MVC   PRTRECORD(80),MSG02        | Msg='*    *'              |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+NOMSG1   MVC   PRTRECORD(80),MSG16        | Yes: Msg='Aborting...'    |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     EXIT                       |                           |
+PRTMSG1  MVC   PRTRECORD(0),0(R5)         *___________________________*
+*
+SECTION2 DS    0H
+*=====================================================================*
+*                                                                     *
+*   SECTION II:                                                       *
+*                                                                     *
+*   This section performs the required Initialise User, Allocate Pipe *
+*   and Open  pipe calls  prior to a looping  section  of  sequential *
+*   DPL calls to the TARGET_PROGRAM  program passing  containers each *
+*   time and checking a response container.                           *
+*                                                                     *
+*   No checks are made as to how  successful the Initialise_User, and *
+*   Allocate_Pipe calls have been in this sample, as the check at the *
+*   Open_Pipe call will  suffice in this simple linear context of the *
+*   call API.                                                         *
+*                                                                     *
+*=====================================================================*
+*
+         MVC   PRTRECORD(80),MSG38        | Msg='Response OK      '   |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+*
+         MVC   PRTRECORD(80),MSG02       |                            |
+         L     R15,=A(X'80000000'+PRINT) | Msg=''*     *'             |
+         BALR  R14,R15                   |                            |
+         MVC   PRTRECORD(80),MSG17       |                            |
+         L     R15,=A(X'80000000'+PRINT) | Msg='CALL level processor' |
+         BALR  R14,R15                   *____________________________*
+*
+*=====================================================================*
+*   Initialise User call;                                             *
+*=====================================================================*
+*                                         *===========================*
+INITUSER DS    0H                         |  START OF PARAMETERS:     |
+         MVC   VERSION,=AL4(VERSION_1)    |  Set up version num       |
+         MVC   EXCI_CALL,=AL4(INIT_USER)  |  Load Call-type and       |
+*                                         *___________________________*
+*
+*
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               APPLICATION),                                           *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+         MVC   PRTRECORD(80),MSG18        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Initialise user call'|
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Allocate Pipe call;                                               *
+*=====================================================================*
+*                                         *===========================*
+ALOCPIPE DS    0H                         |  START OF PARAMETERS:     |
+*
+         MVC   EXCI_CALL,=AL4(ALLOCATE_PIPE) Load call-type and       |
+         MVC   OPTIONS,=AL1(SPECIFIC_PIPE) | Set specific pipe        |
+*                                         *___________________________*
+*
+*
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN,                                                *
+               TARGET_SYSTEM,                                          *
+               OPTIONS),                                               *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+         MVC   PRTRECORD(80),MSG19        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Allocate pipe call'  |
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Open Pipe call;                                                   *
+*=====================================================================*
+*                                         *===========================*
+OPENPIPE DS    0H                         |  START OF PARAMETERS:     |
+         MVC   EXCI_CALL,=AL4(OPEN_PIPE)  |  Load call-type and       |
+*                                         *___________________________*
+*
+*
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN),                                               *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+         MVC   PRTRECORD(80),MSG20        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Mgs='Open pipe call'      |
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Is the Link set up correctly?  If not, then abort the Dpl.        *
+*=====================================================================*
+*
+CHCKLINK DS    0H
+         ICM   R5,15,EXCI_RESPONSE
+         BZ    DPLREQ
+CONNFAIL DS    0H                         *===========================*
+         MVC   SAVED_RESP,EXCI_RESPONSE   | Save a copy of response   |
+         MVC   PRTRECORD(80),MSG22        | Msg='The link has failed' |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXCI_RESPONSE           | Convert Return codes to   |
+         CVD   R5,WORK1                   |   displayable Decimal.    |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG(16),MSG23           | Msg='*   Response='       |
+         MVC   ERRMSG1(8),WORK2           | EXCI_RESPONSE             |
+         L     R5,EXCI_REASON             |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG2(10),MSG24          | Msg='*   reason='         |
+         MVC   ERRMSG3(8),WORK2           | EXCI_REASON               |
+         L     R5,EXCI_SUB_REASON1        |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG4(16),MSG25          | Msg='*   Subreason='      |
+         MVC   ERRMSG5(8),WORK2           | EXCI_SUB_REASON1          |
+         MVC   ERRMSG6(16),MSG14          | Msg='      *'             |
+         MVC   PRTRECORD(80),ERRMSG       | Msg=Return codes.         |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG16        | Msg='Aborting...'         |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     SECTION3                   |                           |
+*                                         *___________________________*
+DPLREQ   DS    0H
+*=====================================================================*
+*                                                                     *
+*   Dpl Request;                                                      *
+*                                                                     *
+*   This is the multiple Dpl looping section which includes all code  *
+*   to read in several containers and print messages to the SYSPRINT  *
+*   log.                                                              *
+*                                                                     *
+*=====================================================================*
+*
+         MVC   PRTRECORD(80),MSG21        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Connect successful'  |
+         BALR  R14,R15                    |                           |
+*                                         *___________________________*
+*=====================================================================*
+*   Set up Outbound channel with parameters                           *
+*=====================================================================*
+*                                                                     *
+*=====================================================================*
+*   Dpl request;                                                      *
+*      No UOWid is passed on the call. A zero value is specified      *
+*      for  this  parameter, which  causes a  null address to be      *
+*      placed in the parameter list and passed to DFHXCIS.            *
+*                                                                     *
+*      A userid  is passed  if one was  provided  as the  second      *
+*      positional parameter in  the PARM field, otherwise a zero      *
+*      value is  passed, as  above. This  causes the current job      *
+*      userid to be used by the EXCI processor.                       *
+*=====================================================================*
+*                                         *===========================*
+DPLCALL  DS    0H                         |  START OF PARAMETERS:     |
+         MVC   VERSION,=AL4(VERSION_3)    |  Set up version for call  |
+         MVC   EXCI_CALL,=AL4(DPL_REQUEST) | Load call-type and       |
+         MVC   OPTIONS,=AL1(SYNCONRETURN) |  Set SYNCONRETURN         |
+         MVC   CHANNEL(16),FIRST_CHANNEL  |  Set up channel name      |
+*                                         *___________________________*
+*
+         EXEC CICS PUT CONTAINER('REQUEST_TYPE')                       *
+               CHANNEL('FIRST_CHANNEL   ')                             *
+               FROM('CALL1')                                           *
+               RETCODE(EXEC_RETAREA)
+*
+MORE_DPL DS    0H
+         SR    R2,R2              Clear userid pointer
+         CLI   TARGET_USERID,C' ' Is there a userid?
+         BE    DPLUSER            No, leave pointer null
+         LA    R2,TARGET_USERID   Yes, point to supplied userid
+DPLUSER  DS    0H                 Userid pointer is set
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN,                                                *
+               TARGET_PROGRAM,                                         *
+               CHANNEL,                                                *
+               0,                                                      *
+               0,                                                      *
+               TARGET_TRANSID,                                         *
+               0,                                                      *
+               (R2),                                                   *
+               DPL_RETAREA,                                            *
+               OPTIONS,                                                *
+               0,                                                      *
+               0,                                                      *
+               0),                                                     *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+*=====================================================================*
+*   Did the Dpl Request succeed? We must check both the call and the  *
+*   Dpl return codes to be certain that it did.                       *
+*   End processing if either is non-zero.                             *
+*=====================================================================*
+*
+CHCKDPL  DS    0H
+         MVC   SAVED_RESP,EXCI_RESPONSE   | Save a copy of rc         |
+         CLC   EXCI_RESPONSE,ZERO
+         BNE   DPL_FAIL
+         MVC   SAVED_RESP,EXCI_DPL_RESP   | Save a copy of rc         |
+         CLC   EXCI_DPL_RESP,ZERO
+         BNE   DPL_FAIL
+         B     CHK_SERV
+DPL_FAIL DS    0H                         *===========================*
+         MVC   PRTRECORD(80),MSG00        |                           |
+         MVC   PRTRECORD(80),MSG26        | Msg='The Dpl has failed'  |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG27        | Msg='Link return codes..' |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXCI_RESPONSE           | Convert Return codes to   |
+         CVD   R5,WORK1                   |   displayable Decimal.    |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG(16),MSG23           | Msg='*   Response='       |
+         MVC   ERRMSG1(8),WORK2           | EXCI_RESPONSE             |
+         L     R5,EXCI_REASON             |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG2(10),MSG24          | Msg='*   reason='         |
+         MVC   ERRMSG3(8),WORK2           | EXCI_REASON               |
+         L     R5,EXCI_SUB_REASON1        |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG4(16),MSG25          | Msg='*   Subreason='      |
+         MVC   ERRMSG5(8),WORK2           | EXCI_SUB_REASON1          |
+         MVC   ERRMSG6(16),MSG14          | Msg='      *'             |
+         MVC   PRTRECORD(80),ERRMSG       | Msg=Return codes.         |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG28        | Msg='Dpl return codes..'  |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXCI_DPL_RESP           | Convert Return codes to   |
+         CVD   R5,WORK1                   |   displayable Decimal.    |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG(16),MSG11           | Msg='*    Resp='          |
+         MVC   ERRMSG1(8),WORK2           | EXCI_DPL_RESP             |
+         L     R5,EXCI_DPL_RESP2          |    !                      |
+         CVD   R5,WORK1                   |    !                      |
+         UNPK  WORK2,WORK1                |    !                      |
+         OI    WORK2+7,X'F0'              |    !                      |
+         MVC   ERRMSG2(10),MSG12          | Msg='*   Resp2='          |
+         MVC   ERRMSG3(8),WORK2           | EXCI_DPL_RESP2            |
+         MVC   ERRMSG4(16),MSG13          | Msg='*   Abend:'          |
+         MVC   ERRMSG5(8),MSG00           | blank out all 8 bytes.    |
+         MVC   ERRMSG5(4),EXCI_DPL_ABCODE | EXCI_DPL_ABCODE           |
+         MVC   ERRMSG6(16),MSG14          |                           |
+         MVC   PRTRECORD(80),ERRMSG       | Msg=Return codes.         |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    | Has CICS issued a message?|
+         CLC   EXCI_MSG_PTR,ZERO          |                           |
+         BE    NOMSG2                     | No: Continue.             |
+MSG2     MVC   PRTRECORD(80),MSG15        | Yes: Msg='A message...'   |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG02        | Msg='*    *'              |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         L     R5,EXCI_MSG_PTR            | Get ptr to message        |
+         LH    R6,0(,R5)                  | Get the length            |
+         LA    R7,4                       |                           |
+         SR    R6,R7                      | Subtract LLBB from length |
+         LA    R5,4(,R5)                  | Bump ptr past the LLBB    |
+LOOP2    DS    0H                         |                           |
+         LR    R8,R6                      | Start with length = msg l |
+         LA    R7,80                      |                           |
+         CR    R6,R7                      | Is it > 80 ?              |
+         BL    SMLMSG2                    |                           |
+         LA    R8,80                      | Yes - move first 80       |
+SMLMSG2  DS    0H                         | No - move whole message   |
+         BCTR  R8,0                       | Less one for MVC          |
+         EX    R8,PRTMSG1                 | Move in message           |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    | Send message              |
+         MVC   PRTRECORD(80),MSG00        | Clear buffer              |
+         LA    R5,80(,R5)                 | Bump message pointer      |
+         SR    R6,R7                      | and decrement length      |
+         BP    LOOP2                      | Loop if more message      |
+EXMSG2   MVC   PRTRECORD(80),MSG02        | Msg='*    *'              |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+NOMSG2   MVC   PRTRECORD(80),MSG16        | Yes: Msg='Aborting...'    |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     SECTION3                   |                           |
+PRTMSG2  MVC   PRTRECORD(0),0(R6)         *___________________________*
+*
+*=====================================================================*
+*   Now, the Dpl was a success, but also check the server return code *
+*   for a serious error.  End processing if it is found.              *
+*=====================================================================*
+*
+CHK_SERV DS    0H                         *===========================*
+         CLC   CALL,RET_ERROR             |                           |
+         BNE   PRT_CON1                   |                           |
+         MVC   SAVED_RESP,RET_ERROR       |                           |
+         MVC   PRTRECORD(80),MSG07        |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Server response'     |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG08        |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Serious error'       |
+         BALR  R14,R15                    |                           |
+         B     SECTION3                   *___________________________*
+*
+*=====================================================================*
+*   The call was good;                                                *
+*   Get the EBCDIC_DATA container and write a message.
+*=====================================================================*
+*
+PRT_CON1 DS    0H
+         CLC   CHANNEL(16),=C'SECOND_CHANNEL  '
+         BE    PRT_CON2
+*
+         XC    GET_AREA,GET_AREA
+         MVC   GET_LENGTH,=F'100'
+*
+         EXEC CICS GET CONTAINER('EXCI_RESPONSE')                      *
+               CHANNEL('FIRST_CHANNEL   ')                             *
+               INTO(GET_AREA)                                          *
+               FLENGTH(GET_LENGTH)                                     *
+               RETCODE(EXEC_RETAREA)
+*
+         CLC   GET_AREA(2),=C'OK'
+         BNE   DPLNOTOK                   | OK so far, continue
+*
+         MVC   GET_LENGTH,=F'100'
+         XC    GET_AREA,GET_AREA
+*
+         EXEC CICS GET CONTAINER('EBCDIC_DATA')                        *
+               CHANNEL('FIRST_CHANNEL   ')                             *
+               INTO(GET_AREA)                                          *
+               FLENGTH(GET_LENGTH)                                     *
+               RETCODE(EXEC_RETAREA)
+*                                         *===========================*
+         MVC   PRTRECORD(80),MSG36        |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg=Container received    |
+         BALR  R14,R15                    *___________________________*
+*
+         MVC   CHANNEL(16),SECOND_CHANNEL
+*
+         EXEC CICS PUT CONTAINER('REQUEST_TYPE')                       *
+               CHANNEL('SECOND_CHANNEL  ')                             *
+               FROM('CALL2')                                           *
+               RETCODE(EXEC_RETAREA)
+*                                         *===========================*
+         B     MORE_DPL                   | Now get the other channel |
+*                                         *___________________________*
+*
+DPLNOTOK DS    0H
+         MVC   PRTRECORD(80),MSG34        | Msg='Response not OK'     |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG16        | Msg='Aborting       '     |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     SECTION3                   | So exit                   |
+*
+*=====================================================================*
+*   Now check the second channel                                      *
+*=====================================================================*
+*                                                                     *
+PRT_CON2  DS    0H
+*
+         XC    GET_AREA,GET_AREA
+         MVC   GET_LENGTH,=F'100'
+*
+         EXEC CICS GET CONTAINER('EXCI_RESPONSE')                      *
+               CHANNEL('SECOND_CHANNEL  ')                             *
+               INTO(GET_AREA)                                          *
+               FLENGTH(GET_LENGTH)                                     *
+               RETCODE(EXEC_RETAREA)
+*
+         CLC   GET_AREA(2),=C'OK'
+         BE    DPLOK                      | OK so far, continue
+*
+         MVC   PRTRECORD(80),MSG34        | Msg='Response not OK'     |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG16        | Msg='Aborting       '     |
+         L     R15,=A(X'80000000'+PRINT)  |                           |
+         BALR  R14,R15                    |                           |
+         B     SECTION3                   | So exit                   |
+*
+DPLOK    DS    0H
+         MVC   GET_LENGTH,=F'100'
+         XC    GET_AREA,GET_AREA
+*
+         EXEC CICS GET CONTAINER('ASCII_DATA')                         *
+               CHANNEL('SECOND_CHANNEL  ')                             *
+               INTO(GET_AREA)                                          *
+               FLENGTH(GET_LENGTH)                                     *
+               INTOCCSID(UTF8)                                         *
+               RETCODE(EXEC_RETAREA)
+*                                         *===========================*
+         MVC   PRTRECORD(80),MSG37        |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg=Container received    |
+         BALR  R14,R15                    *___________________________*
+*
+SECTION3 DS    0H
+*=====================================================================*
+*                                                                     *
+*   Processing is complete, so  tidy up by deleting  the channels     *
+*   used. This will also delete any containers on those channels.     *
+*   The Link will then be finished with, so it will be terminated     *
+*   by issuing Close, and Deallocate pipe calls.                      *
+*                                                                     *
+*=====================================================================*
+*
+*=====================================================================*
+*   Delete the channels used.                                         *
+*=====================================================================*
+*
+         EXEC CICS DELETE CHANNEL('FIRST_CHANNEL   ')                  *
+               RETCODE(EXEC_RETAREA)
+*
+         EXEC CICS DELETE CHANNEL('SECOND_CHANNEL  ')                  *
+               RETCODE(EXEC_RETAREA)
+*
+         MVC   PRTRECORD(80),MSG29        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Channels have been   |
+         BALR  R14,R15                    *______deleted' ____________*
+*
+*=====================================================================*
+*   Close Pipe call;                                                  *
+*=====================================================================*
+*                                         *===========================*
+CLOSPIPE DS    0H                         |  START OF PARAMETERS:     |
+         MVC   EXCI_CALL,=AL4(CLOSE_PIPE) |  Load call-type and       |
+         MVC   VERSION,=AL4(VERSION_1)    |  Put version back to 1    |
+*                                         *___________________________*
+*
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN),                                               *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+         MVC   PRTRECORD(80),MSG30        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Close pipe call'     |
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Deallocate Pipe call;                                             *
+*=====================================================================*
+*                                         *===========================*
+DEALPIPE DS    0H                         |  START OF PARAMETERS:     |
+         MVC   EXCI_CALL,=AL4(DEALLOCATE_PIPE) Load call-type &       |
+*                                         *___________________________*
+*
+*
+         CALL  DFHXCIS,                                                *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN),                                               *
+               VL,                                                     *
+               MF=(E,PARM_LIST)
+*
+         MVC   PRTRECORD(80),MSG31        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='Deallocate pipe call'|
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Return caller's registers and return to caller                    *
+*=====================================================================*
+*
+EXIT     DS    0H
+         MVC   PRTRECORD(80),MSG02        *===========================*
+         L     R15,=A(X'80000000'+PRINT)  | Msg='*        *'          |
+         BALR  R14,R15                    |                           |
+         MVC   PRTRECORD(80),MSG33        |                           |
+         L     R15,=A(X'80000000'+PRINT)  | Msg='*===End of EXCI ===*'|
+         BALR  R14,R15                    *___________________________*
+*
+*=====================================================================*
+*   Set the output SYSPRINT log closed.                               *
+*=====================================================================*
+*
+         MVC   CLSEPARM,CLSELIST
+         LA    R1,CLSEPARM
+         CLOSE OUTPUT,                                                 *
+               MODE=31,                                                *
+               MF=(E,(1))
+*
+*=====================================================================*
+*   Set Register 15 to return code and exit.                          *
+*=====================================================================*
+*
+         L     R15,SAVED_RESP
+         DFHEIRET RCREG=(15)
+*
+*=====================================================================*
+*   PRINT subroutine for outputting anything to the SYSPRINT log.     *
+*=====================================================================*
+*
+PRINT    DS    0H                      *==============================*
+         ST    R14,RET_ADDR            | Store return address         |
+         L     R8,=A(PRINT10)          | Get 24 bit address           |
+         BSM   R8,R8                   | Switch to Amode 24           |
+PRINT10  DS    0H                      |                              |
+*                                      |                              |
+         PUT   DCBPARM,PRTRECORD       | Output Print record.         |
+*                                      |                              |
+         N     R8,=X'80000000'         | Isolate saved amode          |
+         O     R8,=A(PRINT20)          | Add address to it            |
+         BSM   0,R8                    | Switch back to original mode |
+PRINT20  DS    0H                      |                              |
+         L     R14,RET_ADDR            | Retrieve return address      |
+         BR    R14                     *______________________________*
+*
+*=====================================================================*
+*                                                                     *
+*    Constants.                                                       *
+*                                                                     *
+*=====================================================================*
+*
+*                                    *===============================*
+TARGET_INFO    DS 0F                 |Target Variable Constants.     |
+TARGET_PROGRAM DC CL8'DFH$AXNS'      |  Server program name .        |
+TARGET_TRANSID DC CL4'EXCI'          |  Name of Target Transaction.  |
+DEFAULT_SYSTEM DC CL8'DBDCCICS'      |  If no CICS name is passed    |
+FIRST_CHANNEL  DC CL16'FIRST_CHANNEL   '  | Channel name             |
+SECOND_CHANNEL  DC CL16'SECOND_CHANNEL  ' | Channel name             |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+EXEC_INFO    DS 0F                   |EXEC level specific information|
+EXEC_DAT_LEN DC  AL2(18)             |  Outbound length(EXEC call)   |
+EXEC_COM_LEN DC  AL2(18)             |  Inbound length(EXEC call)    |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+CALL_INFO    DS 0F                   |Call level specific information|
+APPLICATION  DC CL8'BATCHCLI'        |  Client program name.         |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+PROG_INFO    DS 0F                   |Program specific variables.    |
+ZERO         DC F'0'                 |                               |
+BLANKS       DC CL8'        '        |                               |
+NOUSD        DC CL11'           '    | Blank Userid in message       |
+NOAPP        DC CL7'       '         | No Parameters provided        |
+FILLAPP      DC CL7'APPLID='         |                               |
+FILLUSD      DC CL11'    USERID='    |                               |
+MSGPARM      DC CL18'*     Parameters: '                             |
+MSGLAST      DC CL28'                           *'                   |
+UTF8         DC F'1208'              |                               |
+RET_ERROR    DC F'16'                | Serious error detected        |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+*                                    |DCB for SYSPRINT output file.  |
+OUTPUT   DCB   DSORG=PS,             | Physical sequential           | X
+               DDNAME=SYSPRINT,      | DDNAME                        | X
+               MACRF=(PM),           | PUT MOVE                      | X
+               LRECL=80,             | LOGICAL RECORD LENGTH         | X
+               RECFM=F               | FIXED BLOCK W ASCII CC        |
+DCBLEN   EQU   *-OUTPUT              | Length of storage needed.     |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+*                                    |List form of 31 bit open macro |
+OPENLIST OPEN  OPENLIST,             |                               | X
+               MODE=31,              |                               | X
+               MF=L                  |                               |
+OPENLEN  EQU   *-OPENLIST            | Length of storage needed      |
+*                                    *_______________________________*
+*                                    *===============================*
+*                                    |List form of 31 bit close macro|
+CLSELIST CLOSE CLSELIST,             |                               | X
+               MODE=31,              |                               | X
+               MF=L                  |                               |
+CLSELEN  EQU   *-CLSELIST            | Length of storage needed      |
+*                                    *_______________________________*
+*
+*====================================================================*
+*    Messages for output to the SYSPRINT log.                        *
+*====================================================================*
+*
+MESSAGES DS 0F
+MSG00    DC CL80' '
+MSG01    DC CL40'*===================== EXCI Sample Batch'
+         DC CL40' Client Program =======================*'
+MSG02    DC CL40'*                                       '
+         DC CL40'                                       *'
+MSG03    DC CL40'*  EXEC Level Processor.                '
+         DC CL40'                                       *'
+MSG04    DC CL40'*    Setting up the EXEC level call.    '
+         DC CL40'                                       *'
+MSG05    DC CL40'*    The Link Request with channel FIRST'
+         DC CL40'_CHANNEL has completed successfully.   *'
+MSG06    DC CL40'*    The Link Request with channel SECON'
+         DC CL40'D_CHANNEL has completed successfully.  *'
+MSG07    DC CL40'*    Server Response:                   '
+         DC CL40'                                       *'
+MSG08    DC CL40'*      A serious error was detected.    '
+         DC CL40'                                       *'
+MSG09    DC CL40'*    The Link Request has failed.  Retur'
+         DC CL40'n codes are;                           *'
+MSG10    DC CL40'*    A PUT_CONTAINER command has failed.'
+         DC CL40' Return codes are;                     *'
+MSG11    DC CL16'*        Resp = '
+MSG12    DC CL10'  Resp2 = '
+MSG13    DC CL14'  Abend Code: '
+MSG14    DC CL16'               *'
+MSG15    DC CL40'*    A message was received from the tar'
+         DC CL40'get CICS region:                       *'
+MSG16    DC CL40'*    >>>> Aborting further processing <<'
+         DC CL40'<<                                     *'
+MSG17    DC CL40'*  CALL Level Processor.                '
+         DC CL40'                                       *'
+MSG18    DC CL40'*    Initialise_User call complete.     '
+         DC CL40'                                       *'
+MSG19    DC CL40'*    Allocate_Pipe call complete.       '
+         DC CL40'                                       *'
+MSG20    DC CL40'*    Open_Pipe call complete.           '
+         DC CL40'                                       *'
+MSG21    DC CL40'*    The connection has been successful.'
+         DC CL40'                                       *'
+MSG22    DC CL40'*    The connection has been unsuccessfu'
+         DC CL40'l.  Return codes are:                  *'
+MSG23    DC CL16'*    Response = '
+MSG24    DC CL10' Reason = '
+MSG25    DC CL14' Subreason = '
+MSG26    DC CL40'*      The Dpl request has failed.      '
+         DC CL40'                                       *'
+MSG27    DC CL40'*      Link return codes are:           '
+         DC CL40'                                       *'
+MSG28    DC CL40'*      Dpl return codes are:            '
+         DC CL40'                                       *'
+MSG29    DC CL40'*    Channels have been deleted.        '
+         DC CL40'                                       *'
+MSG30    DC CL40'*    Close_Pipe call complete.          '
+         DC CL40'                                       *'
+MSG31    DC CL40'*    Deallocate_Pipe call complete.     '
+         DC CL40'                                       *'
+MSG33    DC CL40'*=================== End of EXCI Sample '
+         DC CL40'Batch Client Program ==================*'
+MSG34    DC CL40'*    Response container does not contain'
+         DC CL40' OK.                                   *'
+MSG35    DC CL40'*    Checking response container sent by'
+         DC CL40' server.                               *'
+MSG36    DC CL40'*    Container EBCDIC_DATA was received '
+         DC CL40'correctly in channel FIRST_CHANNEL.    *'
+MSG37    DC CL40'*    Container ASCII_DATA was received c'
+         DC CL40'orrectly in channel SECOND_CHANNEL.    *'
+MSG38    DC CL40'*    Response OK, continue processing.  '
+         DC CL40'                                       *'
+MSG39    DC CL40'*    Query channel command completed suc'
+         DC CL40'cessfully.                             *'
+MSG40    DC CL40'*    Correct number of containers return'
+         DC CL40'ed.                                    *'
+MSG41    DC CL40'*    Query channel command failed.     *'
+         DC CL40'                                       *'
+MSG42    DC CL40'*    Incorrect number of containers retu'
+         DC CL40'rned.                                  *'
+MSG43    DC CL40'*    Browse of channel names completed s'
+         DC CL40'uccessfully.                           *'
+MSG44    DC CL40'*    Browse of channel names failed.   *'
+         DC CL40'                                       *'
+*
+*====================================================================*
+*                                                                    *
+*    Definitions for Working Storage.                                *
+*                                                                    *
+*====================================================================*
+*
+DFHEISTG     DSECT
+CLEAR_START  DS 0F
+STOREYE      DS 8C                   *===============================*
+*                                    |Storage for Tokens;            |
+TOKENEYE     DS 8C                   |                               |
+U_TOKEN      DS F                    |  User token storage.          |
+P_TOKEN      DS F                    |  Pipe token storage.          |
+*                                    |                               |
+*                                    *_______________________________*
+*                                    *===============================*
+*                                    |                               |
+VERSION      DS F                    |  Vehicle for Version num      |
+EXCI_CALL    DS F                    |  Vehicle for call type.       |
+CALL_RETCODE DS F                    |  Return Code Area.            |
+RET_ADDR     DS F                    |  Print routine return address.|
+SAVED_RESP   DS F                    |  Save area for return code    |
+OPTIONS      DS XL1                  |  Vehicle for dpl,aloc opts.   |
+*                                    *_______________________________*
+*
+*                                    *===============================*
+*                                    | Storage allocation (Return    |
+*                                    |    Codes and parameters.)     |
+EXECEYE      DS 8C                   |                               |
+EXEC_RETAREA DS CL(EXCI_EXEC_RETURN_CODE__LEN)                       |
+             DS 0D
+PARMEYE      DS 8C                   |                               |
+* Reserve storage for CALL API parm list. Use list form of CALL macro
+* for DPL call which has the largest number of parameters.
+PARM_LIST    CALL ,                                                    *
+               (VERSION,                                               *
+               CALL_RETAREA,                                           *
+               U_TOKEN,                                                *
+               EXCI_CALL,                                              *
+               P_TOKEN,                                                *
+               TARGET_PROGRAM,                                         *
+               CHANNEL,                                                *
+               0,                                                      *
+               0,                                                      *
+               TARGET_TRANSID,                                         *
+               0,                                                      *
+               0,                                                      *
+               DPL_RETAREA,                                            *
+               OPTIONS,                                                *
+               0,                                                      *
+               0,                                                      *
+               0),                                                     *
+               VL,                                                     *
+               MF=L
+EXCIEYE      DS 8C                   |                               |
+CALL_RETAREA DS CL(EXCI_RETURN_CODE__LEN)                            |
+DPL_EYE      DS 8C                   |                               |
+DPL_RETAREA  DS CL(EXCI_DPL_RETAREA__LEN)                            |
+*                                    |                               |
+CLEAR_LEN    EQU *-CLEAR_START       |                               |
+*                                    *_______________________________*
+GET_AREA     DS CL100
+GET_LENGTH   DS F
+*
+CALL         DS F
+CHANNEL      DS 16C                  |  Channel name                 |
+             DS 0D                   |                               |
+WORK1        DS D                    |  Workarea1 for conversion.    |
+WORK2        DS D                    |  Workarea2 for conversion.    |
+             DS 0F                   |  Error Msg storage.           |
+ERRMSG       DS 16C                  |                               |
+ERRMSG1      DS 8C                   |  first code area.             |
+ERRMSG2      DS 10C                  |                               |
+ERRMSG3      DS 8C                   |  second code area.            |
+ERRMSG4      DS 14C                  |                               |
+ERRMSG5      DS 8C                   |  third/abend code area.       |
+ERRMSG6      DS 16C                  |                               |
+MSG32        DS 18C                  |  Set up Parameter message     |
+MSG32A       DS 7C                   |                               |
+MSG32B       DS 8C                   |                               |
+MSG32C       DS 11C                  |                               |
+MSG32D       DS 8C                   |                               |
+MSG32E       DS 28C                  |                               |
+TARGET_SYSTEM DS CL8                 |  Applid of Target CICS        |
+TARGET_USERID DS CL8                 |  Userid on Target CICS        |
+*                                    |                               |
+*                                    *_______________________________*
+*
+*
+*                                    *===============================*
+*                                    |                               |
+PRTRECORD    DS 80C                  | Output buffer for printing.   |
+DCBPARM  DS  CL(DCBLEN)              | Allocation for DCB.           |
+OPENPARM DS  CL(OPENLEN)             | Allocation for open plist     |
+CLSEPARM DS  CL(CLSELEN)             | Allocation for Close plist    |
+*                                    |                               |
+*                                    *_______________________________*
+PUT_LENGTH   DS F
+PUT_AREA     DS CL64
+CCNT         DS F
+BTOK         DS F
+CNTR         DS CL16
+             DFHREGS
+             END DFH$AXNC

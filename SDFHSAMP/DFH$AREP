@@ -1,0 +1,277 @@
+*ASM     XOPTS(NOPROLOG NOEPILOG)
+*
+         TITLE 'DFH$AREP - CICS SAMPLE FILEA LOW BALANCE INQUIRY - ASSE*
+               MBLER'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$AREP                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Low Balance Inquiry for Sample Application       *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1984, 2012"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$AREP),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 840717 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*         R31410 680 120411 HDFVGMB: Story 30827 - AMODE 64 RMODE 31  *
+*                                                                     *
+***********************************************************************
+         DFHEISTG DSECT
+KEYNUM   DS    CL6                 KEY TO FILE
+RESPONSE DS    1F                  RESPONSE TO CICS COMMAND
+TERMLENG DS    H                   MAXIMUM LENGTH OF KEYED DATA
+TERMDATA DS    CL1                 INPUT AREA FOR KEYED DATA
+*                                  (IN PRACTICE LENGTH OF KEYED DATA
+*                                   WILL BE ZERO AS OPERATOR WILL ONLY
+*                                   PRESS ENTER)
+EDVAL    DS    CL3                 PAGE NUMBER EDITING FIELD
+PAGEN    DS    CL2                 PAGE NUMBER FIELD
+RETREG   EQU   4                   LINK REG
+WORKREG  EQU   7
+R9       EQU   9                   Reserved - used by DFHEIENT
+         COPY  DFH$AGD             OUTPUT MAP
+         COPY  DFH$AFIL            FILEA'S RECORD DESCRIPTION
+         DFHEIEND
+DFH$AREP CSECT
+DFH$AREP AMODE 31
+DFH$AREP RMODE ANY
+         DFHEIENT DATAREG=13,EIBREG=11,STATREG=9,STATIC=STATR,CODEREG=0
+*
+*
+*
+*             Licensed Materials - Property of IBM
+*
+*             "Restricted Materials of IBM"
+*
+*             5655-Y04
+*
+*             (C) Copyright IBM Corp. 1984, 2012"
+*
+*
+*
+*        NOTE    NOTE   NOTE   NOTE   NOTE   NOTE   NOTE   NOTE
+*        ====    ====   ====   ====   ====   ====   ====   ====
+*
+*        EXEC CICS HANDLE CONDITION commands are NOT supported in
+*        AMODE 64 which means that this program cannot be converted.
+*
+*        FOLLOWING LINE NEEDED TO FORCE CICS TO RECOGNISE OVERFLOW
+*        CONDITION EVEN THOUGH WE ARE USING THE RESP OPTION.
+*        THE EXIT FOR THE "OVERFLOW" CONDITION IS SET UP, EVEN THOUGH
+*        THE PROGRAM DETECTS ERROR CONDITIONS ON CICS COMMANDS USING
+*        THE "RESP" OPTION. THIS IS BECAUSE CICS WILL NOT RAISE THE
+*        "OVERFLOW" CONDITION UNLESS AN EXIT HAS BEEN SET UP.
+*
+         EXEC CICS HANDLE CONDITION OVERFLOW(OFLOW)
+*
+*        THE INITIAL KEY VALUE IS SET UP FOR THE "START BROWSE" COMMAND
+*
+         MVC   KEYNUM(6),=C'000000' SET RECORD KEY TO ZERO
+         MVI   PAGENA,X'00'        MOVE X'00' TO ATTRIBUTE
+         MVC   PAGEN,PAGE1         INITIALIZE PAGE NUMBER TO 1
+*
+*        A PAGE NUMBER OF 1 IS MOVED TO THE HEADING MAP.
+*
+         BRAS  RETREG,MAPNUM      MOVE PAGENUMBER TO MAP AREA
+*
+*        THIS "BMS" COMMAND SETS UP THE HEADING IN THE PAGE BUILD
+*        OPERATION. "BMS" BUILDS THE PAGES IN TEMPORARY STORAGE.
+*
+         EXEC CICS SEND MAP('HEADING') MAPSET('DFH$AGD') ACCUM PAGING  *
+                   ERASE RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)            CHECK RESPONSE
+         JNE   ERRORS
+*
+*        THE "STARTBR" COMMAND SETS UP THE FILE BROWSE TO BEGIN AT
+*        THE FIRST RECORD WITH A KEY EQUAL TO OR GREATER THAN THE
+*        "RIDFLD", IN THIS CASE THE FIRST RECORD ON FILE.
+*
+         EXEC CICS STARTBR FILE('FILEA') RIDFLD(KEYNUM) RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)            CHECK RESPONSE
+         JNE   ERRORS
+REPEAT   DS    0H
+*
+*        THIS COMMAND READS THE NEXT CUSTOMER RECORD FROM "FILEA".
+*
+         EXEC CICS READNEXT INTO(FILEA) FILE('FILEA')                  *
+                   RIDFLD(KEYNUM) RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(ENDFILE)           CHECK RESPONSE
+         JE    ENDFILE                         END OF FILE REACHED
+         CLC   RESPONSE,DFHRESP(LENGERR)
+         JE    ENDTASK                         LENGTH ERROR
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+*
+*        THE SEARCH CRITERION FOR CREATING THE REPORT IS THAT THE
+*        CUSTOMER HAS A BANK BALANCE WHICH IS $50 OR LESS.
+*
+         CLC   AMOUNT,LOWLIM       COMPARE AMOUNT ON RECORD WITH LIM
+         JH    REPEAT              ..OK, GREATER THAN $50, TRY NEXT
+         XC    DFH$AGDO(DFH$AGDE-DFH$AGDO),DFH$AGDO CLEAR MAP
+*
+*        FIELDS ARE MOVED FROM THE SELECTED CUSTOMER RECORD TO THE
+*        MAP AREA FOR THE DETAIL LINE.
+*
+         MVC   AMOUNTO,AMOUNT      MOVE AMOUNT ON FILE TO MAP
+         MVC   NUMBERO,NUMB        MOVE ACOUNT NUMBER TO MAP
+         MVC   NAMEO,NAME          MOVE NAME TO MAP
+*
+*        THE CUSTOMER DETAIL MAP IS SET UP FOR SUBSEQUENT PAGING.
+*
+         EXEC CICS SEND MAP('DFH$AGD') MAPSET('DFH$AGD') ACCUM PAGING  *
+                   RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(OVERFLOW)       CHECK RESPONSES
+         JE    OFLOW
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         J     REPEAT              GO BUILD NEXT MAP
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1984, 2012"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*    END ROUTINE  AND GENERAL ROUTINES                                *
+***********************************************************************
+MAPNUM   DS    0H                  ROUTINE PUTS PAGE NUM IN CHAR FORM
+         UNPK  EDVAL,PAGEN
+         OI    EDVAL+L'EDVAL-1,X'F0' ZERO FILL PAGE NUMBER
+         MVC   PAGENO,EDVAL        MOVE PAGE NUMBER TO OUTPUT MAP
+         BR    RETREG              RETURN
+ENDFILE  DS    0H                  END OF FILE CONDITION RAISED
+*
+*        WHEN THE "ENDFILE" CONDITION IS RAISED, THE LAST MAP IS SENT
+*        TO "BMS".
+*
+         EXEC CICS SEND MAP ('FINAL') MAPSET ('DFH$AGD') MAPONLY       *
+                   ACCUM PAGING RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)           CHECK RESPONSE
+         JNE   ERRORS
+*
+*        THE "SEND PAGE" COMMAND MAKES ALL THE PAGES OF THE REPORT
+*        AVAILABLE FOR PAGING, AT THE TERMINAL, WHEN THE CURRENT
+*        TRANSACTION TERMINATES.
+*
+         EXEC CICS SEND PAGE RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)           CHECK RESPONSE
+         JNE   ERRORS
+*
+*        A MESSAGE IS SENT TO THE TERMINAL. THIS MESSAGE WILL BE
+*        DISPLAYED BEFORE THE PAGES OF THE LOW BALANCE REPORT.
+*
+         EXEC CICS SEND TEXT FROM (OPINSTR) ERASE RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)           CHECK RESPONSE
+         JNE   ERRORS
+*
+*        THE FILE BROWSE IS TERMINATED.
+*
+         EXEC CICS ENDBR FILE('FILEA') RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)       CHECK RESPONSE
+         JNE   ERRORS
+*                                  A RECEIVE COMMAND IS ISSUED TO GIVE
+*                                  THE TERMINAL OPERATOR A CHANCE TO
+*                                  READ THE PROMPTING MESSAGE.
+*
+*                                  THE TRANSACTION WILL TERMINATE WHEN
+*                                  THE OPERATOR PRESSES THE ENTER KEY.
+*
+*                                  PAGING COMMANDS CAN THEN BE ISSUED.
+*
+*                                  NO HARM IS DONE IF THE OPERATOR
+*                                  TYPES IN DATA BEFORE PRESSING THE
+*                                  ENTER KEY.
+         LA   WORKREG,1
+         STH  WORKREG,TERMLENG
+*
+*        THIS "RECEIVE MAP" COMMAND READS FROM THE TERMINAL AND ALLOWS
+*        THE TERMINAL OPERATOR TO READ THE PROMPTING MESSAGE BEFORE THE
+*        FIRST PAGE OF THE REPORT IS DIPLAYED.
+*
+         EXEC CICS RECEIVE INTO(TERMDATA) LENGTH(TERMLENG)             *
+                   RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(LENGERR)      CHECK RESPONSE
+         JE    ENDTASK
+         CLC   RESPONSE,DFHRESP(EOC)
+         JE    ENDTASK
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+ENDTASK  EQU  *
+*
+*        THE PROGRAM ENDS, THE FIRST PAGE OF THE REPORT WILL NOW BE
+*        DISPLAYED.
+*
+         EXEC CICS RETURN
+ERRORS   DS    0H
+*
+*        IF THE PROGRAM DETECTS THAT AN "ERROR" CONDITION HAS OCURRED
+*        ON A CICS COMMAND, THEN THIS ROUTINE GAINS CONTROL. ANY DATA
+*        SENT TO "BMS" SO FAR IS PURGED AND THE PROGRAM TERMINATES
+*        ABNORMALLY WITH A TRANSACTION DUMP.
+*
+         EXEC CICS PURGE MESSAGE
+         EXEC CICS ABEND ABCODE('ERRS')
+OFLOW    DS    0H                  PAGE BUILT HERE
+*
+*        IF THE PROGRAM DETECTS AN "OVERFLOW" CONDITION WHEN A DETAIL
+*        LINE IS SENT TO "BMS", THE PROGRAM BRANCHES HERE.
+*        THIS ROUTINE COMPLETES THE CURRENT PAGE AND STARTS THE NEXT
+*        ONE. THIS "BMS" COMMAND SETS UP THE FOOTING FOR THE CURRENT
+*        PAGE.
+*
+         EXEC CICS SEND MAP('FOOTING') MAPSET('DFH$AGD')               *
+                   MAPONLY ACCUM PAGING ERASE RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         AP    PAGEN,=P'1'         INCREMENT PAGE COUNT
+         MVI   PAGENA,X'00'        MOVE X'00' INTO ATTRIBUTE
+         BRAS  RETREG,MAPNUM       GO SET UP PAGE NUMBER ON MAP
+*
+*        THIS "BMS" COMMAND SETS UP THE HEADING FOR THE NEXT PAGE.
+*
+         EXEC CICS SEND MAP('HEADING') MAPSET('DFH$AGD') ACCUM PAGING  *
+                   ERASE RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)    CHECK RESPONSE
+         JNE   ERRORS
+*
+*        THIS "BMS" COMMAND SENDS THE DETAIL LINE WHICH CAUSED THE
+*        "OVERFLOW" CONDITION.
+*
+         EXEC CICS SEND MAP('DFH$AGD') MAPSET('DFH$AGD') ACCUM PAGING  *
+                   RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)    CHECK RESPONSE
+         JNE   ERRORS
+         J     REPEAT
+STATR    DS    0D
+PAGE1    DC    PL2'1'              INITIAL PAGE NUM
+LOWLIM   DC    CL8'$0050.00'       LOWER LIMIT FOR OK AMOUNT
+OPINSTR  DC    CL52'PRESS THE ENTER KEY AND FOLLOW WITH PAGING COMMANDS*
+               '                   OPERATOR INSTRUCTION
+         LTORG
+         END

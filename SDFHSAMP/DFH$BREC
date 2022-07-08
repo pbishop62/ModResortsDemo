@@ -1,0 +1,709 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* MODULE NAME = DFH$BREC                                           */
+ /*                                                                  */
+ /* DESCRIPTIVE NAME = CICS TS  (BR) Sample 3270 Bridge Client       */
+ /*                                                    Program       */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*      Licensed Materials - Property of IBM                        */
+ /*                                                                  */
+ /*      "Restricted Materials of IBM"                               */
+ /*                                                                  */
+ /*      5655-Y04                                                    */
+ /*                                                                  */
+ /*      (C) Copyright IBM Corp. 2001"                               */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* STATUS = 7.2.0                                                   */
+ /*                                                                  */
+ /* FUNCTION = Sample 3270 Bridge ECI Program                        */
+ /*                                                                  */
+ /*   DFH$BREC is a simple client which calls the bridge client      */
+ /*   program DFH$BRLC. It is calls DFH$BRLC with a commarea         */
+ /*   mapped by DFH$BRSH. The commarea contains the business         */
+ /*   data returned or the error information.                        */
+ /*                                                                  */
+ /*   This program is invoked an an ECI program from a DOS window.   */
+ /*                                                                  */
+ /*   DFH$BREC performs the following functions.                     */
+ /*   1. Run the search function to get the account number           */
+ /*      from a surname.                                             */
+ /*   2. Run the display function to get account details from        */
+ /*      the account number.                                         */
+ /*   3. Display the information in SYSPRINT.                        */
+ /*                                                                  */
+ /* NOTES :                                                          */
+ /*  DEPENDENCIES = S/390                                            */
+ /*  RESTRICTIONS = Same as Link3270                                 */
+ /*  REGISTER CONVENTIONS = Normal                                   */
+ /*  MODULE TYPE = Executable                                        */
+ /*  PROCESSOR = C/370                                               */
+ /*  ATTRIBUTES = Read only, Serially Reusable                       */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* ENTRY POINT = DFH$BREC                                           */
+ /*                                                                  */
+ /*   PURPOSE = All functions                                        */
+ /*                                                                  */
+ /*   LINKAGE = Normal CICS program                                  */
+ /*                                                                  */
+ /*   INPUT = None                                                   */
+ /*                                                                  */
+ /*   OUTPUT = Messages on DOS window                                */
+ /*                                                                  */
+ /*   EXIT-NORMAL = 0                                                */
+ /*                                                                  */
+ /*   EXIT-ERROR =  1000 Invalid briv-output-header                  */
+ /*                 1001 briv.sm_mapset not DFH0MNA                  */
+ /*                 1002 briv.sm_map not ACCTMNU after initialising  */
+ /*                 1003 briv.sm_map not ACCTMNU after search        */
+ /*                 1004 briv.sm_map not ACCTDTL after display       */
+ /*                 1005 Invalid search parameter                    */
+ /*                 2000 ECI Error                                   */
+ /*                 2001 Link3270 Error                              */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* CHANGE ACTIVITY :                                                */
+ /*      $MOD(DFH$BREC),COMP(BRIDGE),PROD(CICS TS ):                 */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXXIII : REMARKS                        */
+ /*  $L0= 775    620 010828 HDDLCRP : Bridge C ECI sample            */
+ /*  $P1= D02652 620 011010 HDFXAB  : Nact install (Part 4)          */
+ /*  $P2= D03450 620 011112 HDDLCRP : Review of Link3270 bridge sampl*/
+ /*                                                                  */
+ /********************************************************************/
+
+
+/* The Client is available for a number of different operating       */
+/* environments and to ensure the correct sections of this header    */
+/* are included, one of the following constants must be defined      */
+/* prior to inclusion:                                               */
+/*                                                                   */
+/*   CICS_OS2  -  if building an OS/2 application                    */
+/*   CICS_W32  -  if building a Windows NT or Windows 95 application */
+/*   CICS_AIX  -  if building an AIX Unix application                */
+/*   CICS_SOL  -  if building a Solaris Unix application             */
+
+#ifndef CICS_W32
+#define CICS_W32
+#endif
+
+
+/* Include section */
+#include "stdlib.h"
+#include "string.h"
+#include "dfh$brsh.h"
+#include "dfhbrich.h"
+#include "dfhbrihh.h"
+#include "dfhaid.h"
+#include  "ctype.h"
+#include <cics_eci.h>
+
+
+/* CONSTANTS */
+#define SURNAME_LEN           18
+#define FIRSTNAME_LEN         12
+#define APPLID          "DBDCCICS"
+
+/******************************************************/
+/* Application mapset                                 */
+/******************************************************/
+#define struct _Packed struct
+#include "dfh$brmh.h"
+#undef struct
+
+/* ioArea sends search info, receives display info */
+iodataArea ioArea;
+iodataArea *pIOArea;
+
+/* commArea is passed to CICS as part of the ECI call  */
+/* It contains the Bridge Header and send/receive maps */
+char *pCommArea;
+char commArea[2000];
+
+/* pointers to the structs within the commArea   */
+/* make manipulation of the commArea much easier */
+brih             *pBridgeHeader;
+briv_receive_map *pReceive_Map;
+briv_send_map    *pSend_Map;
+briv_receive_map *pDefault_Receive_Map;
+
+/* setup the default Bridge header structures */
+brih             default_Bridge_Header = BRIH_DEFAULT;
+briv_receive_map default_Briv_Receive_Map  = BRIV_RECEIVE_MAP_DEFAULT;
+
+/* Facility is used to identify the bridge session with CICS */
+char facility[8];
+long int vectorOffset;
+
+/* FUNCTION PROTOTYPES */
+void searchRequest();
+void displayRequest();
+void check_NACT_Response();
+void setupSearch();
+void getSearchData();
+void setupDisplayRequest();
+void getDisplayData();
+void setDfltBridgeHeader();
+void initialiseBrivReceiveMap();
+void checkBrivSendMap();
+void allocateBridgeFacility();
+void deleteBridgeFacility();
+void link3270();
+/******************************************************************/
+/* MAIN                                                           */
+/******************************************************************/
+void main(void)
+{
+  /* Initialise the surname and firstname for the search */
+  char custSurname[SURNAME_LEN+1]   = "JONES             ";
+  char custFirstName[FIRSTNAME_LEN+1] = "JACOB       ";
+
+  /* Initialise the ioArea and the commArea with nulls */
+  memset(&ioArea, '\0', sizeof(ioArea));
+  memset(&commArea, '\0', sizeof(commArea));
+
+  /* Set pointers to their respective memory areas */
+  pIOArea  = &ioArea;
+  pCommArea = &commArea[0];
+
+  /* Also point bridge header at the commArea */
+  pBridgeHeader    = (brih*) commArea;
+
+
+  /* PART 1 - Build data in the ioArea, ready for a search */
+  ioArea.inputData.reqType = 'S';
+  memcpy(&ioArea.inputData.search.surname[0],
+         &custSurname[0],SURNAME_LEN);
+  memcpy(&ioArea.inputData.search.firstName[0],
+         &custFirstName[0],FIRSTNAME_LEN);
+
+  /* Run the search Request over the Link3270 Bridge */
+  /* and print out the account summary               */
+  searchRequest();
+
+  /* PART 2 - Now build data ready for a display */
+  ioArea.inputData.reqType = 'D';
+  memcpy(&ioArea.inputData.display.acctNo[0],
+         &ioArea.outputData.search.acctNo[0],
+         sizeof(ioArea.outputData.search.acctNo));
+
+  /* Run the display request over the LINK3270 Bridge */
+  /* and print out the full account details           */
+  displayRequest();
+
+  exit(0);
+}
+/*******************************************************************/
+/* Search request                                                  */
+/*******************************************************************/
+void searchRequest()
+{
+  /* Run the Bridge_Allocate_Facility transaction over             */
+  /* the Link3270 bridge to allocate a 'facility' or 'session'     */
+  allocateBridgeFacility();
+
+  /* set the commArea to the default bridge header                 */
+  /* Note: default transactionid in header is the NACT transaction */
+  setDfltBridgeHeader();
+
+  /* run bridge NACT transaction, and get response into commArea   */
+  link3270();
+
+  /* check that the received map returned in commArea, is the one  */
+  /* we expect                                                     */
+  check_NACT_Response();
+
+  /* move ioData into commArea ready for surname/firstname search  */
+  setupSearch();
+
+  /* run the LINK3270 bridge and get response into commArea        */
+  link3270();
+
+  /* check that the returned map is what we expect and extract     */
+  /* the data from commArea into ioArea                            */
+  /* This gives the account number and brief details that can      */
+  /* then be used with a Display request to get more details       */
+  getSearchData();
+
+  /* Call the Bridge Delete Facility Transaction to release the    */
+  /* bridge facility                                               */
+  deleteBridgeFacility();
+
+}
+/******************************************************************/
+/* Display request                                                */
+/******************************************************************/
+void displayRequest()
+{
+  /* Allocate bridge session */
+  allocateBridgeFacility();
+
+  /* Setup default Bridge header i.e. Transaction NACT */
+  setDfltBridgeHeader();
+
+  /* run the NACT transaction over the bridge */
+  link3270();
+
+  /* sets up commArea or a request to display the account details */
+  setupDisplayRequest();
+
+  /* Run the NACT transaction requesting further */
+  /* info about the account searched on          */
+  link3270();
+
+  /* copy data from Display request into ioArea  */
+  /* and print out the received details          */
+  getDisplayData();
+
+  /* Delete session */
+  deleteBridgeFacility();
+}
+/******************************************************************/
+/* Interpret menu output map                                      */
+/******************************************************************/
+void check_NACT_Response()
+{
+
+  /* Check that the sendmap is correct */
+  checkBrivSendMap();
+
+  /* Check that the sm_map equals ACCTMNU */
+  if (strncmp(pSend_Map->sm_map,"ACCTMNU ",8) != 0)
+  {
+    printf("Link3270 failed wrong initial map\n");
+    exit(1002);
+  }
+}
+/******************************************************************/
+/* Create search request with input map                           */
+/******************************************************************/
+void setupSearch()
+{
+  /* clear and setup header to run NACT */
+  setDfltBridgeHeader();
+
+  /* Initialise the commArea to contain the map Acctmnui */
+  initialiseBrivReceiveMap();
+
+  /* Copies surname into input data */
+  memcpy(&bmsmapbr->acctmnui.snamemi,
+        &(pIOArea->inputData.search.surname),
+         sizeof(pIOArea->inputData.search.surname));
+
+  /* Copies length of surname into input data */
+  bmsmapbr->acctmnui.snameml =
+         sizeof(pIOArea->inputData.search.surname);
+
+  /* copies firstname into input data */
+  memcpy(&bmsmapbr->acctmnui.fnamemi,
+         &(pIOArea->inputData.search.firstName),
+         sizeof(pIOArea->inputData.search.firstName));
+
+  /* copies length of firstname into data */
+  bmsmapbr->acctmnui.fnameml =
+        sizeof(pIOArea->inputData.search.firstName);
+
+}
+/******************************************************************/
+/* get Search data and Interpret search output map                */
+/******************************************************************/
+void getSearchData()
+{
+  /* Validate the send map */
+  checkBrivSendMap();
+
+  /* check the sm_map equals ACCTMNU */
+  if(strncmp(pSend_Map->sm_map,"ACCTMNU ",8) != 0)
+  {
+    printf("Link3270 failed wrong search map\n");
+    exit(1003);
+  }
+
+  /* set pointer to the data in the send map */
+  bmsmapbr=(union dfh0mna*)((char*)pSend_Map
+                            + pSend_Map->sm_data_offset);
+
+  /* check for message indicating invalid search parameters */
+  if( bmsmapbr->acctmnuo.msgmo[0] != ' ')
+  {
+    printf("Link3270 failed invalid search parameters\n");
+    printf("Output was: %s\n",bmsmapbr->acctmnuo.msgmo);
+    exit(1005);
+  }
+
+  /* Extract search output data from outbound message */
+    memcpy(pIOArea->outputData.search.acctNo,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[0],5);
+    memcpy(pIOArea->outputData.search.surname,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[8],5);
+    memcpy(pIOArea->outputData.search.firstName,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[22],5);
+    memcpy(&(pIOArea->outputData.search.midInit),
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[31],1);
+    memcpy(pIOArea->outputData.search.title,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[34],4);
+    memcpy(pIOArea->outputData.search.address1,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[40],14);
+    memcpy(pIOArea->outputData.search.acStatus,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[66],2);
+    memcpy(pIOArea->outputData.search.acLimit,
+           &bmsmapbr->acctmnuo.sumlnme[0].sumlnmo[72],8);
+
+    /* Print out the info returned from the initial search */
+    printf("\nSEARCH INFO\n");
+    printf("Account No: %.5s\n",pIOArea->outputData.search.acctNo);
+    printf("Surname: %s\n", pIOArea->outputData.search.surname);
+    printf("FirstName: %s\n", pIOArea->outputData.search.firstName);
+    printf("midInit: %c\n", pIOArea->outputData.search.midInit);
+    printf("Title: %s\n", pIOArea->outputData.search.title);
+    printf("Address1: %s\n", pIOArea->outputData.search.address1);
+    printf("Status: %s\n", pIOArea->outputData.search.acStatus);
+    printf("Account Limit: %s\n", pIOArea->outputData.search.acLimit);
+
+}
+/******************************************************************/
+/* Create display request with input map                          */
+/******************************************************************/
+void setupDisplayRequest()
+{
+  /* Setup the default Bridge Header */
+  setDfltBridgeHeader();
+
+  /* load defaults for receive map */
+  initialiseBrivReceiveMap();
+
+  /* copy the action type into the receive map (commArea) */
+  /* for sending to CICS                                  */
+  memcpy(&(bmsmapbr->acctmnui.reqmi),
+         &(pIOArea->inputData.reqType),
+         sizeof(pIOArea->inputData.reqType));
+
+  /* copy length of action type field into receive map */
+  bmsmapbr->acctmnui.reqml = sizeof(pIOArea->inputData.reqType);
+
+  /* copy the account number (found from the search) */
+  /* into the commArea for sending to CICS           */
+  memcpy(&(bmsmapbr->acctmnui.acctmi),
+         &(pIOArea->inputData.display.acctNo),
+         sizeof(pIOArea->inputData.display.acctNo));
+
+  /* copy the length of account number field */
+  /* into commArea/receive_map               */
+  bmsmapbr->acctmnui.acctml =
+    sizeof(pIOArea->inputData.display.acctNo);
+
+}
+/******************************************************************/
+/* Interpret display input map                                    */
+/******************************************************************/
+void getDisplayData()
+{
+  /* check the sendmap is what we expect */
+  checkBrivSendMap();
+
+  /* check that sm_map equals 'ACCTDTL' */
+  if(strncmp(pSend_Map->sm_map,"ACCTDTL ",8) != 0)
+  {
+    printf("Link3270 failed wrong display map\n");
+    exit(1004);
+  }
+
+  /* set bmsmapbr to point at the returned data area */
+  bmsmapbr =(union dfh0mna*)((char*)pSend_Map
+                             + pSend_Map->sm_data_offset);
+
+  /* copy the returned data into the ioArea */
+  memcpy(pIOArea->outputData.display.line1.acctNo,
+          bmsmapbr->acctdtlo.acctdo, 5);
+  memcpy(pIOArea->outputData.display.line1.surname,
+          bmsmapbr->acctdtlo.snamedo, 18);
+  memcpy(pIOArea->outputData.display.line1.title,
+          bmsmapbr->acctdtlo.ttldo, 4);
+  memcpy(pIOArea->outputData.display.line1.firstName,
+          bmsmapbr->acctdtlo.fnamedo, 12);
+  memcpy(&(pIOArea->outputData.display.line1.midInit),
+         &bmsmapbr->acctdtlo.mido, 1);
+  memcpy(pIOArea->outputData.display.line1.phone,
+          bmsmapbr->acctdtlo.teldo, 10);
+  memcpy(pIOArea->outputData.display.line2.address1,
+          bmsmapbr->acctdtlo.addr1do, 24);
+  memcpy(pIOArea->outputData.display.line2.address2,
+          bmsmapbr->acctdtlo.addr2do, 24);
+  memcpy(pIOArea->outputData.display.line2.address3,
+          bmsmapbr->acctdtlo.addr3do, 24);
+  memcpy(&(pIOArea->outputData.display.line3.cardsIssd),
+         &bmsmapbr->acctdtlo.cardsdo, 1);
+  memcpy(&(pIOArea->outputData.display.line3.cCode),
+         &bmsmapbr->acctdtlo.ccodedo, 1);
+  memcpy(pIOArea->outputData.display.line3.issueMon,
+          bmsmapbr->acctdtlo.imodo, 2);
+  memcpy(pIOArea->outputData.display.line3.issueDay,
+          bmsmapbr->acctdtlo.idaydo, 2);
+  memcpy(pIOArea->outputData.display.line3.issueYr,
+          bmsmapbr->acctdtlo.iyrdo, 2);
+  memcpy(&(pIOArea->outputData.display.line3.rsnCode),
+         &bmsmapbr->acctdtlo.rsndo, 1);
+  memcpy(pIOArea->outputData.display.line3.apprBy,
+          bmsmapbr->acctdtlo.apprdo, 3);
+  memcpy(&(pIOArea->outputData.display.line3.spCode1),
+         &bmsmapbr->acctdtlo.scode1do, 1);
+  memcpy(&(pIOArea->outputData.display.line3.spCode2),
+         &bmsmapbr->acctdtlo.scode2do, 1);
+  memcpy(&(pIOArea->outputData.display.line3.spCode3),
+         &bmsmapbr->acctdtlo.scode3do, 1);
+  memcpy(pIOArea->outputData.display.line3.history,
+          bmsmapbr->acctdtlo.histtldo, 33);
+  memcpy(pIOArea->outputData.display.line3.acLimit,
+          bmsmapbr->acctdtlo.limitdo, 8);
+  memcpy(pIOArea->outputData.display.line3.acStatus,
+          bmsmapbr->acctdtlo.statdo, 2);
+  memcpy(pIOArea->outputData.display.line4.auth1,
+          bmsmapbr->acctdtlo.auth1do, 32);
+  memcpy(pIOArea->outputData.display.line4.auth2,
+          bmsmapbr->acctdtlo.auth2do, 32);
+  memcpy(pIOArea->outputData.display.line4.auth3,
+          bmsmapbr->acctdtlo.auth3do, 32);
+  memcpy(pIOArea->outputData.display.line4.auth4,
+          bmsmapbr->acctdtlo.auth4do, 32);
+
+  /* print the full account details */
+  printf("\nFULL ACCOUNT DETAILS\n");
+  printf("Account No: %.5s\n",
+         pIOArea->outputData.display.line1.acctNo);
+  printf("Surname: %.18s\n",
+         pIOArea->outputData.display.line1.surname);
+  printf("Title: %.4s\n",
+         pIOArea->outputData.display.line1.title);
+  printf("FirstName: %.12s\n",
+         pIOArea->outputData.display.line1.firstName);
+  printf("Middle Initial: %.1s\n",
+         &(pIOArea->outputData.display.line1.midInit));
+  printf("Phone: %.10s\n",
+         pIOArea->outputData.display.line1.phone);
+  printf("Address1: %.24s\n",
+         pIOArea->outputData.display.line2.address1);
+  printf("Address2: %.24s\n",
+         pIOArea->outputData.display.line2.address2);
+  printf("Address3: %.24s\n",
+         pIOArea->outputData.display.line2.address3);
+  printf("CardsIssd: %c\n",
+         &(pIOArea->outputData.display.line3.cardsIssd));
+  printf("Card Code: %c\n",
+         pIOArea->outputData.display.line3.cCode);
+  printf("issueMon: %.2s\n",
+         pIOArea->outputData.display.line3.issueMon);
+  printf("issueDay: %.2s\n",
+         pIOArea->outputData.display.line3.issueDay);
+  printf("issueYr: %.2s\n",
+         pIOArea->outputData.display.line3.issueYr);
+  printf("rsnCode: %c\n",
+         &(pIOArea->outputData.display.line3.rsnCode));
+  printf("apprBy: %.3s\n",
+         pIOArea->outputData.display.line3.apprBy);
+  printf("spCode1: %c\n",
+         (pIOArea->outputData.display.line3.spCode1));
+  printf("spCode2: %c\n",
+         (pIOArea->outputData.display.line3.spCode2));
+  printf("spCode3: %c\n",
+         (pIOArea->outputData.display.line3.spCode3));
+  printf("history: %.33s\n",
+         pIOArea->outputData.display.line3.history);
+  printf("acLimit: %.8s\n",
+         pIOArea->outputData.display.line3.acLimit);
+  printf("acStatus: %.2s\n",
+         pIOArea->outputData.display.line3.acStatus);
+  printf("auth1: %.32s\n",
+         pIOArea->outputData.display.line4.auth1);
+  printf("auth2: %.32s\n",
+         pIOArea->outputData.display.line4.auth2);
+  printf("auth3: %.32s\n",
+         pIOArea->outputData.display.line4.auth3);
+  printf("auth4: %.32s\n",
+         pIOArea->outputData.display.line4.auth4);
+
+}
+/******************************************************************/
+/* Set up BRIDGE DEFAULT HEADER                                   */
+/******************************************************************/
+void setDfltBridgeHeader()
+{
+  /* Copy a default bridge header into the commArea */
+  memcpy(pCommArea,&default_Bridge_Header,
+         sizeof(default_Bridge_Header));
+
+  /* set msgArea transaction id to NACT */
+  memcpy(pBridgeHeader->transactionid,"NACT",4);
+
+  /* set AdsDescriptor to NO */
+  pBridgeHeader->adsdescriptor = BRIHADSD_NO;
+
+  /* copy facility into commArea */
+  memcpy(pBridgeHeader->facility,facility,8);
+
+}
+/******************************************************************/
+/* Set up BRIV-RECEIVE-MAP with null/default input data           */
+/******************************************************************/
+void initialiseBrivReceiveMap()
+{
+
+  /* setup the ReceiveMap pointer to point to the */
+  /*receivemap within commArea                    */
+  pReceive_Map = (briv_receive_map*) &commArea[sizeof(brih)];
+
+  /* copy the default receive map into commArea */
+  memcpy(pReceive_Map,&default_Briv_Receive_Map,
+         sizeof(default_Briv_Receive_Map));
+
+  /* initialise the mapset value to DFH0MNA */
+  memcpy(pReceive_Map->rm_mapset,"DFH0MNA ",8);
+
+  /* initialise the map value to ACCTMNU */
+  memcpy(pReceive_Map->rm_map,"ACCTMNU ",8);
+
+  /* set the cursor position within the map to 422 on 24/80 screen */
+  /* this is the position of the input field                       */
+  pReceive_Map->rm_cposn = 422;
+
+  /* set receive map data length to length of acctmnui structure */
+  pReceive_Map->rm_data_len = sizeof(bmsmapbr->acctmnui);
+
+  /* set the bmsmap pointer to the position with commArea */
+  /* beyond header+receive_map                            */
+  bmsmapbr = (union dfh0mna*) &commArea[sizeof(brih)+
+                                       sizeof(briv_receive_map)];
+
+  /* initialise the acctmnui within commArea to zeros */
+  memset(&(bmsmapbr->acctmnui),0,sizeof(bmsmapbr->acctmnui));
+
+  /* increase the input vector within msgArea by the */
+  /* size of the acctmnui map                        */
+  pReceive_Map->rm_vector_header.input_vector_length +=
+    sizeof(bmsmapbr->acctmnui);
+
+  /* reflect this increase in the datalength */
+  pBridgeHeader->datalength+=
+      pReceive_Map->rm_vector_header.input_vector_length;
+
+}
+/******************************************************************/
+/* Validate that we have a SEND MAP vector for mapset DFH0MNA     */
+/******************************************************************/
+void checkBrivSendMap()
+{
+
+  /* get the struclength returned in commArea into a variable */
+  vectorOffset = pBridgeHeader->struclength;
+
+  /* point Send_Map pointer at the offset within */
+  /*commArea given by struclength                */
+  pSend_Map = (briv_send_map*) (pCommArea + vectorOffset);
+
+  /* check that the received header equals the bridge header */
+  if (strncmp(pSend_Map->sm_vector_header.output_vector_descriptor,
+      BRIVDSC_SEND_MAP,4) != 0)
+  {
+    printf("Link3270 failed SEND MAP not found\n");
+    exit(1000);
+  }
+
+  /*check that the received Mapset equals DFH0MNA */
+  if (strncmp(pSend_Map->sm_mapset,"DFH0MNA ",8) != 0)
+  {
+    printf("Link3270 failed wrong mapset\n");
+    exit(1001);
+  }
+
+}
+/******************************************************************/
+/* Call the Link3270 bridge using ECI                             */
+/******************************************************************/
+void link3270()
+{
+  short rc;
+  char *ECI;
+  ECI_PARMS EciParms;
+
+  /* define an ECIParm structure, initialise it to 0 */
+  /* then initialise the following values            */
+  memset(&EciParms, 0, sizeof(ECI_PARMS));
+  EciParms.eci_version              = ECI_VERSION_1A;
+  EciParms.eci_call_type            = ECI_SYNC;
+  memcpy(&EciParms.eci_program_name,"DFHL3270",8);
+  memcpy(&EciParms.eci_system_name, APPLID,  8);
+  EciParms.eci_commarea             = pCommArea;
+  EciParms.eci_commarea_length      = sizeof(commArea);
+  EciParms.eci_extend_mode          = ECI_NO_EXTEND;
+  EciParms.eci_luw_token            = ECI_LUW_NEW;
+  EciParms.eci_timeout              = 30;
+
+  /* call the CICS function and pass the ECIParms */
+  rc = CICS_ExternalCall (&EciParms);
+  if (rc != ECI_NO_ERROR)
+  {
+    printf("ECI link failed RC=%d ABCODE=%4.4s\n",
+           rc,
+           EciParms.eci_abend_code);
+    exit(2000);
+  }
+
+  /* If a non-zero return code, output a failure message */
+  if (pBridgeHeader->returncode != 0)
+  {
+    printf("Link3270 failed RC=%d RSN=%d COMP=%d ABCODE=%4.4s\n",
+           pBridgeHeader->returncode,
+           pBridgeHeader->reason,
+           pBridgeHeader->compcode,
+           pBridgeHeader->abendcode);
+    exit(2001);
+  }
+}
+/******************************************************************/
+/* Allocate session and save facility                             */
+/******************************************************************/
+void allocateBridgeFacility()
+{
+  /* setup the default Bridge Header */
+  setDfltBridgeHeader();
+
+  /* overwrite transactionid with CBRA (bridge allocate facility) */
+  strncpy(pBridgeHeader->transactionid,BRIHT_ALLOCATE_FACILITY,4);
+
+  /* set facilitykeeptime to 300 */
+  pBridgeHeader->facilitykeeptime = 300;
+
+  /* call the bridge */
+  link3270();
+
+  /* save the facility returned to us from CICS in the commArea */
+  memcpy(facility, pBridgeHeader->facility,8);
+}
+/******************************************************************/
+/* Delete session                                                 */
+/******************************************************************/
+void deleteBridgeFacility()
+{
+  /* setup the default bridge header */
+  setDfltBridgeHeader();
+
+  /* overwrite transactionid in header with */
+  /* the delete facility trans              */
+  strncpy(pBridgeHeader->transactionid,BRIHT_DELETE_FACILITY,4);
+
+  /* put the current facility into the bridge header     */
+  /* so CICS knows which session it's communicating with */
+  memcpy(pBridgeHeader->facility,facility,8);
+
+  /* run the Link3270 Bridge */
+  link3270();
+
+  /* Store the facility back into local variable */
+  memcpy(facility,pBridgeHeader->facility,8);
+}

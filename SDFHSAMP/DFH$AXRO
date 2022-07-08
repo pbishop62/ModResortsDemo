@@ -1,0 +1,1649 @@
+&LOOPWARN SETB  0           0 - NO LOOP WARN ; 1 - LOOP WARNING
+***********************************************************************
+*                                                                     *
+*   MODULE NAME = DFH$AXRO                                            *
+*                                                                     *
+* DESCRIPTIVE NAME = C.I.C.S./VS ....                                 *
+**       SAMPLE CICS XRF OVERSEER PROGRAM                             *
+**                                                                    *
+*                                                                     *
+* TRANSACTION NAME = Cxxx                                             *
+**       Not applicable as the overseer is not a transaction          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1986, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0   F                                                  *
+**       NEW FOR CICS 2.1.0                                           *
+*                                                                     *
+* FUNCTION =                                                          *
+*        CICS XRF SAMPLE OVERSEER PROGRAM                             *
+**                                                                    *
+**       The sample Overseer is an online program which               *
+**       runs in a CICS/XRF environment and interfaces with the       *
+**       CICS supplied Overseer service.                              *
+**       The Overseer runs in a separate address space from           *
+**       the CICS active or alternate  systems.                       *
+**       Information is returned from the CICS overseer regarding     *
+**       the current status of CICS/XRF systems and this information  *
+**       is used to perform 2 main functions                          *
+**          1)To display the status of the XRF systems to the         *
+**           console operator.                                        *
+**          2)Automatically restart failed CICS/XRF jobs in certain   *
+**            circumstances by issuing an MVS START command           *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*                 MVS/XA ONLY                                         *
+**         List any dependencies on the CICS tables, bring-up,        *
+**         OR SYSGEN.                                                 *
+*    RESTRICTIONS =                                                   *
+**         None                                                       *
+*    REGISTER CONVENTIONS =                                           *
+**         See the module Register Equates for a full definition      *
+**         R10 R11 are base code registers for the main CSECT         *
+**         R12 is the base code register for subroutine CSECTS        *
+**         R9 is used to address the main control block the RAB       *
+**         R8 is used to address the individual GEN elements (one     *
+**            per Active ALternate(Backup) pair of CICS systems )     *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = READ ONLY                                           *
+*                                                                     *
+*------------------------------------------------------------------   *
+*                                                                     *
+* ENTRY POINT = DFHXRONA                                              *
+*                                                                     *
+*     PURPOSE =                                                       *
+**        This is the only entry point                                *
+*                                                                     *
+*     LINKAGE =                                                       *
+**        Called from the CICS Overseer program DFHWOS                *
+*                                                                     *
+*     INPUT =                                                         *
+**        R1  contains a token from DFHWOS that is required           *
+**            for subsequent calls to the Overseer                    *
+**        Data is read in from a VSAM KSDS DFHOSD to build the        *
+**        necessary data structures to represent the CICS/XRF         *
+**        systems to be monitored. The definition of this file        *
+**        can be found in the job DFHIVXRO and the record layout      *
+**        can be found in the DSECT DFHOSDDS.                         *
+*                                                                     *
+*     OUTPUT =                                                        *
+**        None return is to MVS                                       *
+*                                                                     *
+*     EXIT-NORMAL =                                                   *
+*         Return to MVS by request of the console operator.           *
+*                                                                     *
+*         Messages from the sample have the characters OVERSEER       *
+*         at the front of the message.                                *
+*         The multiline WTO used to display the status of the         *
+*         CICS/XRF systems has it on the first line of each           *
+*         block.                                                      *
+*                                                                     *
+*         MESSAGES DISPLAYED                                          *
+*                                                                     *
+*              'OVERSEER: ENTERING INITIALIZATION'                    *
+*                   OVERSEER IS ENTERING INITILIZATION                *
+*                                                                     *
+*              'OVERSEER: INITIALIZATION COMPLETE'                    *
+*                   OVERSEER IS LEAVING INITILIZATION                 *
+*                                                                     *
+*              'OVERSEER: DFHOSD DATASET OPENED'                      *
+*                   DFHOSD DATA SET SUCCESFULLY OPENED                *
+*                                                                     *
+*              'OVERSEER: DFHOSD DATASET CLOSED '                     *
+*                   DFHOSD DATA SET SUCCESFULLY CLOSED                *
+*                                                                     *
+*              'OVERSEER: RESTART IN PLACE IS NOW ENABLED'            *
+*                   RESTART IN PLACE IS NOW ENABLED                   *
+*                   FOR ALL ELIGIBLE REGIONS (SEE ALSO THE            *
+*                   RND INDICATOR DEFINED IN THE DFHOSD               *
+*                   WHICH APPLIES TO INDIVIDUAL SYSTEMS)              *
+*                                                                     *
+*              'OVERSEER: RESTART IN PLACE IS NOW DISABLED'           *
+*                   RESTART IN PLACE IS NOW DISABLED                  *
+*                                                                     *
+*              'OVERSEER: SNAP DUMP TAKEN'                            *
+*                   A SNAP DUMP IS TAKEN TO THE SNAPOUT DATASET       *
+*                                                                     *
+*              'OVERSEER: TIMEOUT ON JES INQ, JOB EXECUTION STATUS IN *
+*               DOUBT '                                               *
+*                   A JES INQUIRY HAS TIMED OUT WHICH MEANS THAT      *
+*                   ALL JOB EXECUTION STATUS IS IN DOUBT UNTIL JES    *
+*                   STARTS RESPONDING AGAIN. IN THIS STATE THE        *
+*                   OVERSEER LEAVES THE JOB EXECUTION STATES SET TO   *
+*                   THEIR LAST KNOWN VALUE.                           *
+*                                                                     *
+*              'OVERSEER: JES NOW RESPONDING AGAIN'                   *
+*                   JES IS RESPONDING AGAIN, SO THE JOB EXECUTION     *
+*                   STATES SHOULD BE VALID AGAIN                      *
+*                                                                     *
+*              'OVERSEER: UNKNOWN DBLL LIST ENTRY, SNAP DUMP TAKEN'   *
+*                   THE OVERSEER HAS BEEN RETURNED INFORMATION        *
+*                   ABOUT AN ITEM UNKNOWN TO IT. THIS INDICATES       *
+*                   A MISSING OR INCORRECT ITEM IN THE EXTTAB         *
+*                   (AN INTERNAL TABLE)                               *
+*                                                                     *
+*              'OVERSEER: UNKNOWN MODIFY COMMAND ENTERED'             *
+*                   AN UNRECOGNIZED COMMAND WAS ENTERED. RETRY        *
+*                   WITH A VALID COMMAND.                             *
+*                                                                     *
+*              'OVERSEER: "STOP" COMMAND NOT SUPPORTED - IGNORED'     *
+*                   AN UNSUPPORTED COMMAND, "STOP", WAS               *
+*                   ENTERED. THE COMMAND IS IGNORED. RETRY            *
+*                   WITH A VALID COMMAND                              *
+*                                                                     *
+*              'OVERSEER: UNRECOVERABLE ERROR ON DFHWOSM READ CALL'   *
+*                   THE OVERSEER WAS UNABLE TO OBTAIN INFORMATION     *
+*                   ABOUT A GEN SYSTEM DUE TO A READ ERROR            *
+*                                                                     *
+*              'OVERSEER: DFHWOS BUILD ERROR'                         *
+*                   AN ERROR OCCURED TRYING TO INITIALIZE             *
+*                   THE OVERSEER CANNOT CONTINUE                      *
+*                                                                     *
+*              'OVERSEER: VSAM READ ERROR OCCURRED FOR DFHOSD DATASET'*
+*                   AN ERROR OCCURED TRYING TO READ THE DFHOSD DATA   *
+*                   SET.THE OVERSEER CANNOT CONTINUE                  *
+*                                                                     *
+*              'OVERSEER: OPEN ERROR FOR DFHOSD DATASET'              *
+*                   AN OPEN ERROR FOR THE DFHOSD DATA SET OCCURED     *
+*                   THE OVERSEER CANNOT CONTINUE                      *
+*                                                                     *
+*              'OVERSEER: CLOSE ERROR FOR DFHOSD DATASET'             *
+*                   A CLOSE ERROR FOR THE DFHOSD DATA SET OCCURED     *
+*                   THE OVERSEER WILL CONTINUE                        *
+*                                                                     *
+*              'OVERSEER: GETMAIN ERROR FOR ROOT CONTROL BLOCK'       *
+*                   AN MVS GETMAIN FAILED FOR THE MAIN CONTROL BLOCK  *
+*                   THE OVERSEER CANNOT CONTINUE                      *
+*                                                                     *
+*              'OVERSEER: GETMAIN ERROR OCCURRED'                     *
+*                   AN MVS GETMAIN FAILED FOR AN EXTRACT BUFFER,      *
+*                   A GENDS ENTRY, AN RLT ENTRY OR THE CONTROL BLOCK  *
+*                   STORAGE THE OVERSEER CANNOT CONTINUE              *
+*                                                                     *
+*              'OVERSEER: OPEN  FAILED FOR GEN GGGGGGGG, CONTINUING'  *
+*                   AN OPEN REQUEST FOR GEN GGGGGGGG HAS FAILED. THE  *
+*                   OVERSEER WILL CONTINUE WITHOUT THIS GEN SYSTEM    *
+*                                                                     *
+*              'OVERSEER: CLOSE FAILED FOR GEN GGGGGGGG, CONTINUING'  *
+*                   A CLOSE REQUEST FOR GEN GGGGGGGG HAS FAILED. THE  *
+*                   OVERSEER WILL CONTINUE TERMINATION.               *
+*                                                                     *
+*              'OVERSEER: LOGIC ERROR DETECTED RESTART ABORTED'       *
+*                   AN INTERNAL ERROR HAS BEEN DETECTED MAKING        *
+*                   A RESTART IN PLACE UNDESIRABLE. THE OVERSEER      *
+*                   ATTEMPTS TO CONTINUE WITHOUT RESTARTING THE JOB   *
+*                                                                     *
+*             'OVERSEER: JOB RESTART BYPASSED DUE TO PENDING TAKEOVER'*
+*                   A JOB RESTART OF AN ACTIVE HAS BEEN BYPASSED      *
+*                   BECAUSE THE OVERSEER HAS DETECTED                 *
+*                    1) A TAKEOVER IS IN PROGRESS OR HAS TAKEN        *
+*                       PLACE                                         *
+*                    2) A RELATED SYSTEM IS TAKING OVER OR HAS        *
+*                       ALREADY TAKEN OVER TO ANOTHER CEC             *
+*                                                                     *
+*              'OVERSEER: JOB IS BEING RESTARTED'                     *
+*                   A FAILED JOB HAS PASSED THE NECESSARY TESTS       *
+*                   AND AN ATTEMPT AT RESTART WILL BE MADE            *
+*                                                                     *
+*              'OVERSEER: TERMINATION COMPLETE'                       *
+*                   OVERSEER HAS NOW SUCCESFULLY TERMINATED           *
+*                                                                     *
+*            'OVERSEER: POSSIBLE LOOP (OR WAIT) DETECTED FOR jjjjjjjj'*
+*                    A POSSIBLE LOOP OR WAIT HAS BEEN DETECTED FOR    *
+*                    JOB jjjjjjjj. THE CICS TCB TIMESTAMP HAS STOPPED *
+*                    INCREASING,WHEREAS THE CAVM TCB TIMESTAMP IS     *
+*                    STILL INCREASING.                                *
+*                    THIS MESSAGE ONLY APPEARS IF THE 'LOOP WARNING'  *
+*                    CODE IS INCLUDED.                                *
+*                    SEE THE CICS/XRF BOOKS ON HOW TO CUSTOMIZE THE   *
+*                    OVERSEER SAMPLE PROGRAM.                         *
+*                                                                     *
+*            'OVERSEER: REGISTER 15 AT TIME OF ERROR IS X'NNNNNNNN    *
+*                    THIS MSG FOLLOWS A PREVIOUS ERROR MSG AND GIVES  *
+*                    THE VALUE OF R15 AT THE TIME OF THE ERROR        *
+*                                                                     *
+*     EXIT-ERROR =                                                    *
+*         IF AN ERROR OCCURS  A SNAP DUMP WILL BE TAKEN AND R15       *
+*         WILL CONTAIN A CUMULATIVE R/C AND REASON CODE               *
+*         FOR SOME ERRORS THE VALUE OF R15 AT THE TIME OF THE ERROR   *
+*         IS OUTPUT IN READABLE FORMAT                                *
+*                                                                     *
+*------------------------------------------------------------------   *
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+**        The only items referenced are DSECTS as defined in the      *
+**        copy book DFH$XRDS and system control blocks as listed      *
+**        below                                                       *
+*                                                                     *
+*     ROUTINES =                                                      *
+**        DFHWOS CALLED VIA DFHWOSM MACRO EXPANSION                   *
+**         DFHWOSM FUNC=BUILD                                         *
+**         DFHWOSM FUNC=OPEN                                          *
+**         DFHWOSM FUNC=CLOSE                                         *
+**         DFHWOSM FUNC=OSCMD                                         *
+**         DFHWOSM FUNC=QJJS                                          *
+**         DFHWOSM FUNC=JJC                                           *
+**         DFHWOSM FUNC=TERM                                          *
+*                                                                     *
+*     DATA AREAS =                                                    *
+**        Identify any fields referenced or set in operating system   *
+**        communication areas.  This i seldom applicable to CICS code *
+*                                                                     *
+*     CONTROL BLOCKS =                                                *
+**        INTERNAL CONTROL BLOCKS TO THE SAMPLE PROGRAM SEE DFH$XRDS  *
+**        SSOB     READ ONLY                                          *
+**        CVT      READ ONLY                                          *
+**        SMCA     READ ONLY                                          *
+*                                                                     *
+*     GLOBAL VARIABLES =                                              *
+**        List all referenced global variables set by SYSGEN.         *
+*                                                                     *
+* TABLES =                                                            *
+**        NONE                                                        *
+*                                                                     *
+* MACROS =                                                            *
+**        NONE                                                        *
+*                                                                     *
+*------------------------------------------------------------------   *
+*                                                                     *
+* DESCRIPTION                                                         *
+**        This section should identify the major code elements in     *
+**        the module, and describe their purpose. If there is a bug   *
+**        in part of the module, this section should enable you to    *
+**        quickly find the piece of code responsible for the          *
+**        erroneous function.                                         *
+**        Major code elements are identified by:                      *
+**          a) The names and functions of all internal procedures     *
+**          b) Each major block of in line code should be 'labeled'   *
+**             WITH A 'LABEL' IN THE BLOCK COMMENT PRECEDING THAT     *
+**             code element.                                          *
+*                                                                     *
+*      THE OVERSEER SAMPLE CONSISTS OF THE FOLLOWING MODULES          *
+*      DFH$AXRO THE MAIN MODULE                                       *
+*      DFH$AGCB to build the RPLs ACBs etc in getmained storage       *
+*      DFH$ADSP to display the XRF system status                      *
+*      DFH$ARES to restart a failed region                            *
+*                                                                     *
+*      ALL MODULES NEED TO BE LINK EDITED TOGETHER                    *
+*                                                                     *
+*      DFH$AXRO CSECT                                                 *
+*                                                                     *
+*      DFHXRONA ENTRY                                                 *
+*      Entry is from DFHWOS passing an entry token.Storage for the    *
+*      main control block is obtained and the initial 'BUILD' call    *
+*      to DFHWOS is made.                                             *
+*      Subroutine DFH$AGCB is called to set up the RPL ACB etc and    *
+*      on return from there,the DFHOSD data set is opened and         *
+*      each record is read in turn. For each record (which represents *
+*      a pair of XRF CICS (Active and Alternate) a GEN(eric)          *
+*      entry is built and a DFHWOS 'OPEN' call issued. If any of the  *
+*      systems are 'related' an RLT entry is built, or the            *
+*      entry is added to an existing chain.                           *
+*                                                                     *
+*      The MVS MODIFY interface is set up to accept modify commands   *
+*      and control enters the main execution loop at label XRFPH2     *
+*                                                                     *
+*      XRFPH2                                                         *
+*      A check is made for any commands entered via mvs modify and    *
+*      the relevant routine called to handle                          *
+*                                                                     *
+*      The checking code will allow the full command to be entered    *
+*      or an abbreviation. Any abbreviation must have the characters  *
+*      spelt correctly, and any abbreviation must be uniquely        *
+*      identifiable. Supported commands are                           *
+*                                                                     *
+*      SNAP or S                                                      *
+*      snapdump command (internal subroutine call)                    *
+*      RESTART or R                                                   *
+*      alter restart in place command  (internal subroutine call)     *
+*      DISPLAY or D                                                   *
+*      display command (CSECT DFH$ADSP is called)                     *
+*      OPEN OR O                                                      *
+*      OPEN COMMAND, LABEL OPENRTY IS BRANCHED TO                     *
+*      END or E                                                       *
+*      end command   label CLSDOWN is branched to                     *
+*                                                                     *
+*      After all commands have been handled, the code loops to        *
+*      extract information about each generic xrf system by           *
+*      issuing dfhwos read calls for systems that were succesfully    *
+*      opened earlier. the information (if any) that is returned      *
+*      is saved in the Extract control block for each gen system      *
+*      which is chained from the gen entry. After extracting data,    *
+*      A JES INQUIRY IS DONE IF REQUESTED.NOTE,A JES INQUIRY
+*      IS DONE INITIALLY FOR ALL JOBS KNOWN TO THE OVERSEER
+*      AND THEN ONLY IF A CHANGE IS SEEN FROM CAVM DATA.
+*                                                                     *
+*      The request is passed to JES and the sample program sets       *
+*      a timer and waits for jes to return(via dfhwos) or the         *
+*      timeout to occur. if JES responds, the timer is canceled       *
+*      and we continue, however if JES doesnt respond, and the        *
+*      timer pops, we continue but do not do any further jes inquiries*
+*      until JES does respond. In the case where JEs has failed to    *
+*      respond, the execution state of all jobs is in doubt and       *
+*      the operator is informed. If JES does return some time later   *
+*      the operator is informed of the fact.                          *
+*                                                                     *
+*      ----start of optional code---------------                      *
+*                                                                     *
+*      Some optional code is entered if the assembler variable        *
+*      &LOOPWARN is set to 1.                                         *
+*      (Note that the program needs to be reassembled to              *
+*      pick up these changes).                                        *
+*                                                                     *
+*      LOOP/WAIT WARNING                                              *
+*      The purpose of this code is to detect possible loops           *
+*      in the CICS TCB (of the active only) and warn the operator     *
+*      if an active CICS timestamp has not increased for a            *
+*      specified time. This time is determined by the variable LOOPTM *
+*      such that if the CICS TCB timestamp remains stationary for     *
+*      a greater time than LOOPTM and the CAVM TCB timestamp          *
+*      is still increasing, a loop is suspected.                      *
+*                                                                     *
+*      If used, the setting of LOOPTM should be carefully             *
+*      considered so as not to detect CICS transaction loops          *
+*      (it should be set somewhat higher than ICVR), and also         *
+*      the value should not be too low, thus detecting other normal   *
+*      situations that would stop the CICS TCB                        *
+*                                                                     *
+*      ----end of the optional code---------------                    *
+*                                                                     *
+*      Once the cycle is complete and a new set of data is available  *
+*      for each XRF system the CSECT DFH$ARES is called to            *
+*      check if any jobs need restarting in place.                    *
+*                                                                     *
+*      On return from DFH$ARES the sample waits a few seconds         *
+*      before doing the next cycle from label XRFPH2                  *
+*                                                                     *
+*      CLSDOWN                                                        *
+*      We enter here if the operator enters the END command           *
+*      Each open Generic system is closed using a DFHWOS CLOSE        *
+*      call and when complete, control is returned to MVS             *
+*                                                                     *
+*------------------------------------------------------------------   *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+**                                                                    *
+*        $MOD(DFH$AXRO),COMP(XRF),PROD(CICS TS ):                     *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $01= A28493 310 8811   HD1HSS :FIX APAR PL28493                  *
+*    $02= A09811 330 911217 HDBNJAS : APAR PN09811 migrate            *
+*    $03= A55973 410 940802 HDCWNRB : Migrate PN55973 from SPA R410   *
+*    $02  Reserved for APAR fix                                       *
+*    $03  Reserved for APAR fix                                       *
+*    $D1  Reserved for DCR                                            *
+*    $D2  Reserved for DCR                                            *
+*    $D3  Reserved for DCR                                            *
+*    $H1  Reserved for hardware support                               *
+*    $H2  Reserved for hardware support                               *
+*    $H3  Reserved for hardware support                               *
+*    $L0= X00    210 8602   HD1HSS : CREATE DFH$AXR0                  *
+*    $L1  Reserved for line item                                      *
+*    $L2  Reserved for line item                                      *
+*    $L3  RESERVED FOR LINE ITEM                                      *
+*    $P1= M40873 210 8703   HD1HSS : MAKE RESTART CHOICE DYNAMIC      *
+*    $P2= M40878 210 8704   HD1HSS : REMOVE OPTIONAL JOB CANCEL       *
+*    $P3= M51001 310 8708   HD1HSS : SEPARATE OVERSEER CODE           *
+*    $P4= M55152 310 8812   HD1HSS : MAKE OPEN RETRYABLE              *
+*    $P5= M82920 410 930617 HDCQMDB: Addressability after STIMERM exit*
+*    $P6= M93116 510 940718 HDCQMDB : Clear GEN control block         *
+*                                                                     *
+***********************************************************************
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*              CICS SAMPLE OVERSEER PROGRAM                           *
+*                                                                     *
+*                                                                     *
+***********************************************************************
+*                                  COPY DSECTS
+         COPY DFH$XRDS                  CICS/XRF OVERSEER SAMPLE
+         COPY DFHXRHDS                  CICS/XRF HEALTH DATA
+         CVT DSECT=YES                  MVS CVT
+         IEZCOM                         MVS COM (MODIFY)
+         IEZCIB                         MVS CIB (MODIFY)
+         IEESMCA                        MVS SMCA
+         IEFJSSOB (CS)                  JES SSOB
+         IFGRPL AM=VSAM                 VSAM RPL
+         IFGACB AM=VSAM                 VSAM ACB
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2                   WORK REG
+R3       EQU   3                   WORK REG
+R4       EQU   4                   WORK REG
+R5       EQU   5                   WORK REG
+R6       EQU   6                   WORK REG
+R7       EQU   7
+OSDBAR   EQU   7                   BASE REG FOR OSD ENTRY
+GENBAR   EQU   8                   BASE REG FOR GEN ENTRY
+RABBAR   EQU   9                   BASE REG FOR RAB
+R10      EQU   10                  CODE BASE REG1
+R11      EQU   11                  CODE BASE REG2
+R12      EQU   12                  SUBROUTINE BASE REG
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+DFH$AXRO CSECT
+         ENTRY DFHXRONA
+         DFHVM $AXRO,ENTRY=DFHXRONA
+DFHXRONA DS    0H
+         SAVE  (14,12)
+         BALR  R10,0
+         USING *,R10,R11
+         LA    R11,4095(R10)
+         LA    R11,1(R11)
+         LR    R5,R1               REMEMBER THE ENTRY TOKEN PASSED
+*
+*          INITIALIZATION
+***********************************************************************
+***********************************************************************
+**                                                                   **
+**                  PHASE I                                          **
+**                  INITIALIZATION                                   **
+**                                                                   **
+**                                                                   **
+***********************************************************************
+***********************************************************************
+         WTO   'OVERSEER: ENTERING INITIALIZATION'
+*
+*        OBTAIN ROOT ANCHOR STORAGE
+*
+         GETMAIN RC,LV=RABLEN
+         LTR   R15,R15
+         BNZ   RABGMFL
+         LR    RABBAR,R1
+         USING RABDS,RABBAR        ADDRESS THE RAB
+         LA    R1,RABSAV1          LOCATE SAVE AREA FOR THIS PROGRAM
+         ST    R1,8(,R13)          FORWARD POINTER
+         ST    R13,4(,R1)          BACKWARD POINTER
+         LR    R13,R1              SET R13 TO OUR SAVE AREA
+         MVC   RABIDNT,=C'**RABDS*'
+         ST    R5,RABENTTK         REMEMBER THE ENTRY TOKEN
+*
+*        BUILD CALL
+*
+         LR    R14,R5              PUT ENTRY TOKEN IN R14
+         DFHWOSM FUNC=BUILD
+         LTR   R15,R15             BUILD OK
+         BNZ   BUILDERR            NO, ERROR
+         ST    R1,RABBLDTK         YES SAVE THE BUILD TOKEN RETURNED
+BLDBYP   DS    0H
+*
+*        SET UP THE DFHOSD RPL ,ACB AND OPEN CLOSE PARMLIST
+*        ALSO THE SNAP DUMP DCB, AND MODIFY PARMLIST (EXTRACT)
+*
+         L     R15,=V(DFHGCBNA)
+         BALR  R14,R15
+         LTR   R15,R15      IF NON ZERO WE HAD A GETM ERROR
+         BNZ   GETMERR
+*
+*        OPEN THE DFHOSD DATA SET
+*
+         L     R2,RABACBA
+         OPEN  ((R2)),MF=(E,RABACBA)
+         LTR   R15,R15
+         BNZ   OPENERR
+         OI    RABSTAT1,RABOPE     INDICATE OPENED
+         WTO   'OVERSEER: DFHOSD DATASET OPENED'
+         XC    RABGENF,RABGENF          ZERO POINTER TO FIRST ENTRY
+         XC    RABGENL,RABGENL          ZERO POINTER TO LAST ENTRY
+         XC    RABRLTF,RABRLTF          ZERO POINTER TO FIRST ENTRY
+         XC    RABRLTL,RABRLTL          ZERO POINTER TO LAST ENTRY
+*
+*        LOOP TO READ THE OSD RECORDS
+*
+         L     OSDBAR,RABINPA
+         USING OSDDS,OSDBAR     ADDRESS THE OSD ENTRY
+GETNEXT  DS    0H
+         L     R2,RABRPLA
+         GET   RPL=((R2))
+         TM    RABSTAT1,RABEOD
+         BO    CONT1
+         LTR   R15,R15
+         BNZ   GETERR
+         CLC   OSDTYPE,GNKEY       IS IT AN GENNAME ENTRY ?
+         BNE   CONT1               NO, LEAVE THE LOOP
+         BAL   R14,ADDGEN
+*
+*        OPEN CALL TO CICS OVERSEER
+*        GENBAR SHOULD BE ADDRESSING THE NEWLY ADDED ENTRY
+         USING GENDS,GENBAR     ADDRESS THE GEN ENTRY
+         BAL   R14,GENOPEN
+         CLC   GENOPNRC,=A(RCOPERR)  IS IT ONE OF THE GOOD R/CS ?
+         BH    WOSOPERR            NO,ERROR DURING OPEN
+         OI    GENSTAT1,GENOPOK    INDICATE OPENED ISSUED OK
+OBTSTOR  DS    0H
+*
+*        OBTAIN STORAGE FOR THE BUFFER
+*        TO BE USED FOR THE DFHWOSM READ CALLS (USED TO EXTRACT THE
+*        ACTIVE AND BACKUP DATA)
+*
+         GETMAIN RC,LV=EXLEN       GET STORAGE TO SAVE EXTRACTED
+*                                  DATA
+         LTR   R15,R15
+         BNZ   GETMERR
+         ST    R1,GENEXDTP         SAVE AS EXTRACTED DATA POINTER
+OPENBYP  DS    0H
+         CLC   OSDRLTID,=CL8' '    ANY RELATE ID
+         BE    GETNEXT             NO, GET NEXT ENTRY
+         BAL   R14,ADDRLT
+         B     GETNEXT
+CONT1    DS    0H
+         L     R2,RABACBA
+         CLOSE ((R2)),MF=(E,RABACBA)
+         LTR   R15,R15
+         BNZ   CLOSERR
+         WTO   'OVERSEER: DFHOSD DATASET CLOSED'
+         B     CLSERRBY
+CLOSERR  DS    0H            NOTE THE FACT BUT CONTINUE
+         ST    R15,RABR15          SET R15 FOR TRANSLATION
+         LA    R3,RABWTORA         AND SEND IT
+         WTO   'OVERSEER: CLOSE ERROR FOR DFHOSD DATASET'
+         BAL   R14,MSGR15
+         OI    RABRSN2,RABCLERR
+         OI    RABRC,RABRCWN
+CLSERRBY DS    0H
+*
+*        DETERMINE THE SMF ID OF THE CEC ON WHICH WE
+*        ARE EXECUTING
+*
+*
+*
+         USING CVT,R4
+         USING SMCABASE,R5
+         L     R4,16(0,0)          ADDR OF CVT
+         L     R5,CVTSMCA          ADDR OF SMCA
+         MVC   RABSMID,SMCASID    SAVE THE SMF ID
+         DROP  R4
+         DROP  R5
+         LA    R1,RABJSECB         SET UP THE ECBLIST FOR LATER
+         ST    R1,RABECBA1         USE ON THE WAIT FOLLOWING
+         LA    R1,RABTOECB         THE QJJS CALL
+         ST    R1,RABECBA2
+         OI    RABECBA2,X'80'
+         OI    RABSTAT1,RABRIP     SET RESTART IN PLACE 'ON'
+*
+*        SET UP THE INTERFACE TO ACCEPT MVS MODIFY COMMANDS
+*
+         L     R2,RABMODA          ADDRESS THE MODIFY PARM LIST
+         EXTRACT  RABMODAA,MF=(E,(R2))
+         L     R2,RABMODAA         ADDRESS THE COMM AREA
+         USING COMLIST,R2
+         QEDIT ORIGIN=COMCIBPT,CIBCTR=2   SET THE LIMIT TO 2
+*
+*
+*        INITIALIZATION NOW COMPLETE
+*
+*
+         WTO   'OVERSEER: INITIALIZATION COMPLETE'
+***********************************************************************
+***********************************************************************
+**                                                                   **
+**                  PHASE II                                         **
+**                  MAIN EXECUTION LOOP                              **
+**                                                                   **
+**                                                                   **
+***********************************************************************
+***********************************************************************
+XRFPH2   DS    0H
+MAINLOOP DS    0H
+         L     R2,RABMODAA         ADDRESS THE COMM AREA
+         USING COMLIST,R2
+         L     R3,COMECBPT         ADDRESS THE COMM ECB
+         TM    0(R3),X'40'        MODIFY ECB POSTED  ?
+         BNO   MDFYBYP           NO, CONTINUE NORMAL CYCLE
+         L     R3,COMCIBPT
+         USING CIBNEXT,R3
+         CLI   CIBVERB,CIBSTOP     IS IT A STOP REQ ?               @02
+         BNE   MODREQ              NO, CHECK FOR MODIFY             @02
+         WTO   'OVERSEER: "STOP" COMMAND NOT SUPPORTED - IGNORED'   @02
+         QEDIT ORIGIN=COMCIBPT,    ELSE RESET CIBCTR LIMIT             *
+               CIBCTR=2              TO TWO                         @02
+         B     QEDITFRE            AND FREE THE CIB                 @02
+MODREQ   DS    0H                                                   @02
+         CLI   CIBVERB,CIBMODFY    IS IT A MODIFY REQ ?
+         BNE   QEDITFRE            NO,NOT SUPPORTED, BYPASS
+*        FIND THE NUMBER OF CHARACTERS ENTERED BEFORE THE FIRST
+*        BLANK OR END OF DATA IF NO BLANKS IN THE DATA
+*        USE R1 R2 AND R4
+         SR    R2,R2               RESET COUNT
+         LA    R1,CIBDATA          START OF DATA
+BLANKLP  DS    0H
+         CH    R2,CIBDATLN         HAVE WE TESTED ALL THE DATA ?
+         BNL   NOBLANK             YES, SO NO BLANKS IN DATA
+         CLI   0(R1),X'40'         IS IT BLANK ?
+         BE    BLANKFND
+         LA    R2,1(0,R2)          ADD 1 TO THE COUNT
+         LA    R1,1(0,R1)          ADD 1 TO DATA PTR
+         B     BLANKLP
+BLANKFND DS    0H
+NOBLANK  DS    0H
+         LA    R1,CIBDATA          START OF DATA
+         LR    R4,R2
+         S     R4,=A(1)            SUBTRACT ONE (FOR CLC)
+         LTR   R4,R4               MAKE SURE THE ANSWERS NOT NEGATIVE
+         BM    CMDUNKN             IF SO WE CANT RECOGNISE THIS CMD
+*
+*        R1 SHOULD ADDRESS THE FIRST DATA CHARACTER ENTERED
+*        R2 SHOULD NOW HAVE THE NUMBER OF CHARACTERS BEFORE THE
+*        FIRST BLANK, OR CIBDATLN IF NO BLANKS EXIST
+*        R4 CONTAINS R2-1 FOR THE CLC INSTRUCTION
+*
+********************************************************************
+*
+ENDCHK   DS    0H
+         CH    R2,ENDMN            DO WE HAVE LESS THAN THE MIN REQUD?
+         BL    DISPCHK             NOT ENOUGH DATA, TRY NEXT
+         CH    R2,ENDMX            DO WE HAVE MORE THAN THE MAX REQUD?
+         BH    DISPCHK             NOT ENOUGH DATA, TRY NEXT
+*        MUST BE WITHIN RANGE SO COMPARE FOR THE NUMBER OF CHARACTERS
+*        AS SPECIFIED IN R2 (NOTE THE CLC HAS A VALUE OF R2-1 FOR THE
+*        LENGTH) AND THIS IS IN R4
+         EX    R4,EXCLC2
+         BE    CLSDOWN             YES,
+DISPCHK  DS    0H
+         CH    R2,DISPMN           DO WE HAVE LESS THAN THE MIN REQUD?
+         BL    SNAPCHK             NOT ENOUGH DATA, TRY NEXT
+         CH    R2,DISPMX           DO WE HAVE MORE THAN THE MAX REQUD?
+         BH    SNAPCHK             NOT ENOUGH DATA, TRY NEXT
+*        MUST BE WITHIN RANGE SO COMPARE FOR THE NUMBER OF CHARACTERS
+*        AS SPECIFIED IN R2 (NOTE THE CLC HAS A VALUE OF R2-1 FOR THE
+*        LENGTH) AND THIS IS IN R4
+         EX    R4,EXCLC3
+         BNE   SNAPCHK            YES,
+         L     R15,=V(DFHDSPNA)
+         BALR  R14,R15
+         B     QEDITFRE            FREE OFF CIB
+SNAPCHK  DS    0H
+         CH    R2,SNAPMN           DO WE HAVE LESS THAN THE MIN REQUD?
+         BL    RSTCHK              NOT ENOUGH DATA, TRY NEXT
+         CH    R2,SNAPMX           DO WE HAVE MORE THAN THE MAX REQUD?
+         BH    RSTCHK              NOT ENOUGH DATA, TRY NEXT
+*        MUST BE WITHIN RANGE SO COMPARE FOR THE NUMBER OF CHARACTERS
+*        AS SPECIFIED IN R2 (NOTE THE CLC HAS A VALUE OF R2-1 FOR THE
+*        LENGTH) AND THIS IS IN R4
+         EX    R4,EXCLC4
+         BNE   RSTCHK              NOT EQ, TRY NEXT
+         BAL   R14,SNAPDUMP
+         B     QEDITFRE            FREE OFF CIB
+RSTCHK   DS    0H
+         CH    R2,RESTMN           DO WE HAVE LESS THAN THE MIN REQUD?
+         BL    OPNCHK              NOT ENOUGH DATA, TRY NEXT
+         CH    R2,RESTMX           DO WE HAVE MORE THAN THE MAX REQUD?
+         BH    OPNCHK              YES , CHECK NEXT
+*        MUST BE WITHIN RANGE SO COMPARE FOR THE NUMBER OF CHARACTERS
+*        AS SPECIFIED IN R2 (NOTE THE CLC HAS A VALUE OF R2-1 FOR THE
+*        LENGTH) AND THIS IS IN R4
+         EX    R4,EXCLC1
+         BNE   OPNCHK              UNKNOWN COMMAND
+         XI    RABSTAT1,RABRIP     FLIP THE RESTART BIT
+         TM    RABSTAT1,RABRIP
+         BNO   WTONRIP
+         WTO   'OVERSEER: RESTART IN PLACE IS NOW ENABLED'
+         B     QEDITFRE            FREE OFF CIB
+WTONRIP  DS    0H
+         WTO   'OVERSEER: RESTART IN PLACE IS NOW DISABLED'
+         B     QEDITFRE            FREE OFF CIB
+OPNCHK   DS    0H
+         CH    R2,OPENMN           DO WE HAVE LESS THAN THE MIN REQUD?
+         BL    RSTCHK              NOT ENOUGH DATA, TRY NEXT
+         CH    R2,OPENMX           DO WE HAVE MORE THAN THE MAX REQUD?
+         BH    CMDUNKN             YES ,UNKNOWN COMMAND
+*        MUST BE WITHIN RANGE SO COMPARE FOR THE NUMBER OF CHARACTERS
+*        AS SPECIFIED IN R2 (NOTE THE CLC HAS A VALUE OF R2-1 FOR THE
+*        LENGTH) AND THIS IS IN R4
+         EX    R4,EXCLC5
+         BNE   CMDUNKN             UNKNOWN COMMAND
+         B     OPENRTY
+EXCLC1   CLC   0(0,R1),RESTART     CHANGE RESTART PROCESS?
+EXCLC2   CLC   0(0,R1),END         END ?
+EXCLC3   CLC   0(0,R1),DISPLAY     DISPLAY ?
+EXCLC4   CLC   0(0,R1),SNAP        SNAP ?
+EXCLC5   CLC   0(0,R1),OPEN        OPEN ?
+CMDUNKN  DS    0H
+         WTO   'OVERSEER: UNKNOWN MODIFY COMMAND ENTERED'
+*                             JUST FREE OFF CIB
+QEDITFRE DS    0H
+*
+*        FREE OFF THE CIB JUST ACTIONED
+*
+         L     R2,RABMODAA         ADDRESS THE COMM AREA
+         L     R3,COMCIBPT
+         QEDIT ORIGIN=COMCIBPT,BLOCK=(R3)
+         DROP R2
+         DROP R3
+         B     XRFPH2              CHECK FOR ANY MORE MODIFIES
+MDFYBYP  DS    0H
+*
+*        EXTRACT DATA FOR EACH GEN SYSTEM THAT WE HAVE OPENED OK
+*        ALSO DETERMINE IF THE JOB IS EXECUTING UNDER JES
+*
+         L     GENBAR,RABGENF      POINT AT THE FIRST SLOT
+EXTNXT   DS    0H
+         LTR   GENBAR,GENBAR       IS THIS LAST IN THE CHAIN ?
+         BZ    EXTREND             YES,EXTRACT NO MORE
+         TM    GENSTAT1,GENOPOK    OPEN OK
+         BNO   EXTRBYP
+         TM    GENSTAT1,GENDTNU    PREVIOUS UNRECOV ERROR ON READ
+         BO    EXTRBYP
+         BAL   R14,EXTRACT
+*
+*        CHECK THE JES EXECUTION STATUS
+*        IF THE LAST JES INQ TIMED OUT ,WE STILL HAVENT HEARD
+*        BACK FROM JES, SO BYPASS ANY FURTHER CALLS TO JES
+*
+         TM    RABSTAT1,RABJTOO    DID A TIMEOUT OCCUR PREVIOUSLY ?
+         BNO   NOTIM               NO, JUST CONTINUE
+         TM    RABJSECB,X'40'      HAS JES RETURNED (VIA DFHWOS) YET ?
+         BNO   EXTRBYP             NO BYPASS THE LOT
+         WTO   'OVERSEER: JES NOW RESPONDING AGAIN'
+         NI    RABSTAT1,X'FF'-RABJTOO RESET THE TIMEOUT INDICATOR
+NOTIM    DS    0H
+         XC    RABJPARM(JPARMLEN),RABJPARM   CLEAR THE JES PARM AREA
+         TM    GENSTAT1,GENACTDT    ANY ACTIVE DATA ?
+         BNO   JESBINQ
+         TM    GENSTAT2,GENDOJSA    JES INQ NEEDED ?               @01C
+         BNO   JESBINQ             NO, TRY THE BACKUP              @01C
+         USING EXTDS,R2
+         LA    R1,EXAJOBN          ACTIVE JOB AS PARM1
+         ST    R1,RABJ1
+         LA    R1,EXAJESJ          JES JOBID AS PARM2
+         ST    R1,RABJ2
+         LA    R1,RABJES           AREA FOR RETURNED JES SSOB AS PARM3
+         ST    R1,RABJ3
+         XC    RABJSECB,RABJSECB  CLEAR THE JES ECB
+*        XC    RABTMECB,RABTMECB  WOSM TIMEOUT ECB NOT USED
+         XC    RABTOECB,RABTOECB  CLEAR OUR TIMEOUT ECB
+         LA    R1,RABECBS         JESINQ AND TIMEOUT ECBS IN THAT ORDER
+         ST    R1,RABJ4           AS PARM4
+         LA    R1,RABJPARM
+         BAL   R14,JESINQ
+         ST    R15,GENJSARC        DEBUG
+         LTR   R15,R15             IS THE JOB EXECUTING ?
+         BZ    AEX                 YES
+         C     R15,=A(JESJOBNX)    IS JOB NOT EXECUTING ?
+         BE    ANEX                YES
+         B     JESBINQ             OTHERWISE WE DONT KNOW SO LEAVE THE
+*                                  THE STATE ALONE. TRY THE BACKUP
+AEX      DS    0H
+*     THIS JOB IS EXECUTING UNDER JES, IS IT ONE WE'VE BEEN FOLLOWING?
+         NI    GENSTAT2,X'FF'-GENDOJSA RESET JES INQ REQ FLG       @01C
+         OI    GENCJSA,GENJESX    INDICATE ITS EXECUTING
+         NI    GENCJSA,X'FF'-GENRSTIP COMPLETE ANY RESTART ATTEMPT
+         NI    GENSTAT2,X'FF'-GENRSABY RESET THE BYPASS MSG ANYWAY
+         TM    GENPJSA,X'FF'       ANY INITIAL STATUS?
+         BZ    INITA              NO SET IT UP
+         CLC   GENPJJIA,EXAJESJ    SAME JOBID
+         BNE   INITA               NO ITS A NEW ONE
+         CLC   GENPJJNA,EXAJOBN    SAME JOBNAME
+         BE    JESBINQ             YES, CARRY ON
+*                                  NO ITS A NEW ONE
+INITA    DS    0H
+*                    REMEMBER WE HAVE SEEN THIS JOBNAME/JOBID EXECUTING
+         OI    GENPJSA,GENJESX
+         MVC   GENPJJIA,EXAJESJ    JOBID
+         MVC   GENPJJNA,EXAJOBN    JOBNAME
+*      NOW RESET FLAGS ETC THAT MAY BE FROM AN OLD INSTANCE
+         NI    GENSTAT2,X'FF'-GENLOOPA   RESET THE LOOPING MESSAGE SENT
+         MVC   GENALPDT,=A(0)      ENSURE LOOP DETECT TIME IS ZERO
+         TM    GENSTAT2,GENALSAC   HAS ALTERNATE SEEN PREV ACTIVE ?
+         BNO   ALSEENAC           NO, CONTINUE
+         OI    GENSTAT2,GENFALRS  FORCE AN ALTERNATE RESTART IF IT SOFN
+         NI    GENSTAT2,X'FF'-GENALSAC  RESET ALT SEEN ACT
+         B     JESBINQ
+ALSEENAC DS    0H
+         TM    GENCJSB,GENJESX     ALTERNATE EXECUTING ?
+         BNO   JESBINQ             NO JUST CONTINUE
+         OI    GENSTAT2,GENALSAC   SAY THE ALT HAS/WILL SEE THE ACT
+         B     JESBINQ
+ANEX     DS    0H
+         NI    GENSTAT2,X'FF'-GENDOJSA RESET JES INQ REQ FLG       @01C
+         NI    GENCJSA,X'FF'-GENJESX    SHOW NOT EXECUTING         @01C
+*        ENSURE THE  PREVIOUS JOB DATA IS PRIMED,EVEN
+*        THOUGH THIS MAY BE FOR A JOB WE HAVE
+*        NEVER SEEN EXECUTING(OLD DATA)
+*
+         MVC   GENPJJIA,EXAJESJ    JOBID                           @01C
+         MVC   GENPJJNA,EXAJOBN    JOBNAME                         @01C
+         CLC   EXASTAT,=C'SOFN'    IF ACTIVE HAS SOFN              @01C
+         BNE   ANEX2                                               @01C
+         NI    GENSTAT2,X'FF'-GENALSAC RESET ALT SEEN ACT FL       @01C
+ANEX2    DS    0H                                                  @01C
+         TM    RABSTAT1,RABRIP     HAS THIS ACTIVE JOB FAILED WHILE THE
+*                                  SYSTEM RESTART IN PLACE IS DISABLED
+         BO    JESBINQ             NO LEAVE IT ALONE
+         NI    GENPJSA,X'FF'-GENJESX  PRETEND WE NEVER DID SEE IT
+*                                     EXECUTING
+*                              TURN THIS OFF WHENEVER A NEW JOB APPEARS
+JESBINQ  DS    0H
+         TM    RABSTAT1,RABJTOO    DID A TIMEOUT OCCUR PREVIOUSLY ?
+         BO    EXTRBYP             YES,BYPASS THE LOT
+NOTIM2   DS    0H
+         TM    GENSTAT1,GENBKPDT    ANY BACKUP DATA ?
+         BNO   EXTRBYP                   NO
+         TM    GENSTAT2,GENDOJSB     JES INQ FOR BACKUP RQD?       @01C
+         BNO   EXTRBYP                   NO,BYPASS JES             @01C
+*        BUILD A PARM LIST
+         LA    R1,EXBJOBN          JOBNAME PARM1
+         ST    R1,RABJ1
+         LA    R1,EXBJESJ          JES JOB ID AS PARM2
+         ST    R1,RABJ2
+         LA    R1,RABJES           AREA FOR JES SSOB RETURNED PARM3
+         ST    R1,RABJ3
+         XC    RABJSECB,RABJSECB    CLEAR JES ECB
+*        XC    RABTMECB,RABTMECB    WOSM TIMEOUT ECB NOT USED
+         XC    RABTOECB,RABTOECB  CLEAR OUR TIMEOUT  ECB
+         LA    R1,RABECBS         JESINQ AND TIMEOUT ECBS IN THAT ORDER
+         ST    R1,RABJ4           AS PARM4
+         LA    R1,RABJPARM
+         BAL   R14,JESINQ
+         ST    R15,GENJSBRC        DEBUG
+         LTR   R15,R15             IS THE JOB EXECUTING ?
+         BZ    BEX                 YES
+         C     R15,=A(JESJOBNX)    IS JOB NOT EXECUTING ?
+         BE    BNEX                YES
+         B     EXTRBYP             OTHERWISE WE DONT KNOW SO LEAVE THE
+*                                  THE STATE ALONE.
+BEX      DS    0H
+*     THIS JOB IS EXECUTING UNDER JES, IS IT ONE WE'VE BEEN FOLLOWING?
+         NI    GENSTAT2,X'FF'-GENDOJSB RESET JES INQ REQ FLG       @01C
+         OI    GENCJSB,GENJESX    INDICATE ITS EXECUTING
+         NI    GENCJSB,X'FF'-GENRSTIP COMPLETE ANY RESTART ATTEMPT
+*
+*        AFTER A TAKEOVER THE BACKUP DATA IS MOVED TO THE
+*        ACTIVE SLOT IN THE CAVM DATA SET. THE BACKUP SLOT
+*        IS UNCHANGED APART FROM BEING MARKED AS SOFN. THIS
+*        WILL LEAD TO MISLEADING INFO REGARDING THE BACKUP
+*        AS THE DATA IS NOW 'OLD' INFO BUT WILL OTHERWISE
+*        APPEAR AS AN EXECUTING JOB. IF THE BACKUP SLOT
+*        IS MARKED AS SOFN (EXECUTING) AND JOB NAME AND
+*        NUMBER MATCH THE NEW ACTIVE SLOT, THE BACKUP
+*        STATUS WILL BE MADE TO INDICATE NOT EXECUTING.
+*        IF THE ABOVE IS NOT TRUE, THE TRUE EXECUTION STATE
+*        IS LEFT.
+*        THIS CODE SHOULD LEAD TO A MORE MEANINGFUL DISPLAY
+*        AND ENSURE THE CODE DOES NOT DO UNECESSARY
+*        JES INQUIRIES FOR THIS SPECIAL CASE
+*
+         CLC   EXBSTAT,=C'SOFN'    SIGNED OFF NORMAL ?             @01C
+         BNE   NOCHNG              NO CONTINUE NORMALLY            @01C
+         CLC   EXBJOBN,EXAJOBN     ACTIVE NAME=BACKUP NAME?        @01C
+         BNE   NOCHNG              NO CONTINUE NORMALLY            @01C
+         CLC   EXBJESJ,EXAJESJ     ACTIVE JOBID=BKP JOBID?         @01C
+         BNE   NOCHNG              NO CONTINUE NORMALLY            @01C
+         NI    GENCJSB,X'FF'-GENJESX  YES,CHNG TO NOT EXEC         @01C
+         NI    GENPJSB,X'FF'-GENJESX  YES,CHNG TO NOT EXEC         @01C
+         B     EXTRBYP                DO NO MORE                   @01C
+NOCHNG   DS    0H                                                  @01C
+         TM    GENPJSB,X'FF'       ANY INITIAL STATUS?
+         BZ    INITB              NO SET IT UP
+         CLC   GENPJJIB,EXBJESJ    SAME JOBID
+         BNE   INITB               NO ITS A NEW ONE
+         CLC   GENPJJNB,EXBJOBN    SAME JOBNAME
+         BE    EXTRBYP             YES, CARRY ON
+*                                  NO ITS A NEW ONE
+INITB    DS    0H
+*                    REMEMBER WE HAVE SEEN THIS JOBNAME/JOBID EXECUTING
+         OI    GENPJSB,GENJESX
+         MVC   GENPJJIB,EXBJESJ    JOBID
+         MVC   GENPJJNB,EXBJOBN    JOBNAME
+*    SEE IF AN ACTIVE IS ALREADY AROUND ?
+         TM    GENCJSA,GENJESX      ACTIVE EXECUTING ?
+         BO    ALTSNACT
+         NI    GENSTAT2,X'FF'-GENALSAC-GENFALRS  RESET FLAGS
+         B     EXTRBYP
+ALTSNACT DS    0H         THIS ALERNATE HAS/SHOULD SEE THE ACTIVE
+         NI    GENSTAT2,X'FF'-GENFALRS  RESET FLAG
+         OI    GENSTAT2,GENALSAC        SHOW ALT SEEN ACT
+         B     EXTRBYP
+BNEX     DS    0H
+         NI    GENSTAT2,X'FF'-GENDOJSB RESET JES INQ REQ FLG       @01C
+         NI    GENCJSB,X'FF'-GENJESX   INDICATE ITS NOT EXECUTING
+*
+*        ENSURE THE  PREVIOUS JOB DATA IS PRIMED,EVEN
+*        THOUGH THIS MAY BE FOR A JOB WE HAVE
+*        NEVER HAVE SEEN EXECUTING(OLD DATA)
+*
+         MVC   GENPJJIB,EXBJESJ    JOBID                           @01C
+         MVC   GENPJJNB,EXBJOBN    JOBNAME                         @01C
+         TM    RABSTAT1,RABRIP     HAS THIS BACKUP JOB FAILED WHILE THE
+*                                  SYSTEM RESTART IN PLACE IS DISABLED
+         BO    EXTRBYP             NO LEAVE IT ALONE
+         NI    GENPJSB,X'FF'-GENJESX  PRETEND WE NEVER DID SEE IT
+*                                     EXECUTING
+         DROP  R2
+*
+EXTRBYP  DS    0H
+         L     GENBAR,GENNXGEN          NEXT ENTRY
+         B     EXTNXT             ROUND AGAIN
+EXTREND  DS    0H
+         AIF   (NOT &LOOPWARN).NOLOOP
+*
+*        CHECK FOR ANY LOOPING ACTIVE JOBS
+*        ONLY THOSE THAT ARE EXECUTING UNDER JES AND CURRENTLY
+*        SIGNED ON AS 'ACT ' (ACTIVE) TO CAVM
+*        NOTE THAT A IF CICS IS WAITING THIS MAY APPEAR
+*        LIKE A LOOP, BUT EVEN SO THE OPERATOR MAY NOT REALISE CICS
+*        IS WAITING AND A MESSAGE MAY HELP
+*
+         L     GENBAR,RABGENF      ADDRESS THE FIRST GEN ENTRY
+LOOPLP   DS    0H
+         TM    GENCJSA,GENJESX     IS THE JOB EXECUTING ?
+         BNO   LOOPNXT             NO IGNORE THIS ENTRY
+         TM    GENSTAT1,GENACTDT   DO WE HAVE SOME DATA ?
+         BNO   LOOPNXT             NO IGNORE THIS ENTRY
+         L     R7,GENEXDTP         ADDRESS THE EXTRACTED DATA FOR GEN
+         USING EXTDS,R7
+         CLC   EXASTAT,=C'ACT '    ACTIVE  ?
+         BNE   LOOPNXT             NO IGNORE THIS ENTRY
+         LA    R6,EXAHLTH          ADDRESS THE ACTIVES HEALTH DATA
+         USING DFHXRHDS,R6
+         CLC   XRSHCLK2,GENACAVT   IS CAVM TIME INCREASING ?
+         BNH   LOOPNXT             NO, CANT DETERMINE IF CICS
+*                                  IS LOOPING IF CAVM TIME IS NOT
+*                                  INCREASING
+         MVC   GENACAVT,XRSHCLK2   REMEMBER THIS TIME
+         CLC   XRSHCLK1,GENACICT   IS CICS TIME INCREASING ?
+         BNH   POSSLOOP            NO, POSSIBLE LOOP CHECK SOME
+*                                  MORE
+         MVC   GENACICT,XRSHCLK1   REMEMBER THIS TIME
+         MVC   GENALPDT,=A(0)      ENSURE LOOP DETECT TIME IS ZERO
+         NI    GENSTAT2,X'FF'-GENLOOPA  ENSURE 'LOOP MSG' RESET
+         B     LOOPNXT
+POSSLOOP DS    0H
+         CLC   GENALPDT,=A(0)      HAVE WE ALREADY DETECTED THIS ?
+         BE    LOOPBGN             NO, START THE CLOCK TICKING
+*
+*        CICS TCB TIME IS NOT INCREASING, CAVM TIME IS INCREASING
+*        IF CICS TIME HAS BEEN STATIONARY FOR A REASONABLE TIME (SAY
+*        120 SECONDS) WE MAY HAVE A LOOP
+*        NOTE THAT THIS TIME MUST BE GREATER THAN THE CICS ICVR
+*        OTHERWISE WE COULD DETECT USER TRANSACTION LOOPS
+*
+         L     R5,GENACAVT
+         L     R3,GENALPDT
+         SR    R5,R3
+LOOPTM   EQU   120
+         C     R5,=A(LOOPTM)
+         BL    LOOPNXT             LET IT CONTINUE LONGER
+*        A LOOP HAS BEEN DETECTED
+         TM    GENSTAT2,GENLOOPA   DID WE SEND THE LOOPING MESSAGE ?
+         BO    BYPLPMSG            YES, DO NOT PUT IT OUT AGAIN
+         LA    R5,RABWTORA
+         MVC   0(LENLOOPM,R5),LOOPMSG     MOVE MSG TO BUFFER
+         LA    R3,JBNOFFS(,R5)
+         MVC   0(8,R3),EXAJOBN              MOVE IN THE JOB NAME
+         WTO   ,MF=(E,RABWTORA)
+         OI    GENSTAT2,GENLOOPA   REMEMBER LOOPING MESSAGE SENT
+*              SHOULD BE RESET IF A NEW ACTIVE JOB APPEARS OR
+*              IF THE CICS TIME STARTS INCREASING (AGAIN)
+BYPLPMSG DS    0H
+         B     LOOPNXT
+LOOPBGN  DS    0H
+         MVC   GENALPDT,GENACAVT
+LOOPNXT  DS    0H
+         L     GENBAR,GENNXGEN     ADDRESS NEXT ENTRY
+         LTR   GENBAR,GENBAR       IS THERE ONE ?
+         BNZ   LOOPLP              YES, INVESIGATE THE NEXT ONE
+         DROP  R7
+.NOLOOP  ANOP  ,
+*
+*        GO AND CHECK FOR ANY JOBS TO RESTART
+*
+         TM    RABSTAT1,RABRIP     RESTART PROCESS ENABLED ?
+         BNO   RIPBYP
+         L     R15,=V(DFHRESNA)
+         BALR  R14,R15
+RIPBYP   DS    0H
+*
+*        WAIT A FEW SECONDS BEFORE CONTINUING
+*
+         STIMER WAIT,BINTVL=DELAYTM       WAIT A FEW SECONDS
+         B     MAINLOOP
+*
+* ----------------------------------------------------------------
+*        ON ENTRY R9 POINTS TO THE RAB AND R7 POINTS TO THE OSD
+*        FOR THE GEN DATA TO BE ADDED
+*
+ADDGEN   DS    0H
+         LR    R3,R14
+         GETMAIN RC,LV=GENLEN
+         LTR   R15,R15
+         BNZ   GETMERR            DIRECT BRANCH TO  GETMAIN ERROR MSG
+         XC    0(GENLEN,1),0(1)   CLEAR GETMAINED GEN              @P6A
+         LR    R14,R3
+         USING OSDDS,OSDBAR
+         ICM   R4,B'1111',RABGENF  ALREADY SOME ENTRIES IN USE ?
+         BNZ   ADDIT               YES, ADD NEW ENTRY
+*                                  NO,..
+         ST    R1,RABGENF          ADDRESS THIS ONE AS FIRST SLOT
+         ST    R1,RABGENL          AND AS LAST USED
+         LR    GENBAR,R1
+         B     DONEADD
+ADDIT    DS    0H
+         L     R5,GENNXGEN         ADDRESS NEXT ONE
+         LTR   R5,R5               LAST ONE ?
+         BNZ   ADDLOOP             NO
+         ST    R1,GENNXGEN         YES, UPDATE THE POINTER
+         LR    GENBAR,R1           AND  POINT AT NEW ENTRY
+         ST    GENBAR,RABGENL      UPDATE LAST ADDRESS
+*
+*        BUILD THE GEN ENTRY
+*
+DONEADD  DS    0H
+         MVC   GENNAME,OSDGENN
+         MVC   GENRLTID,OSDRLTID
+         MVC   GENCTLDD,OSDCTLDD
+         MVC   GENMSGDD,OSDMSGDD
+         OI    GENSTAT2,GENDOJSA   REQUEST INITL ACT JES INQ       @01C
+         OI    GENSTAT2,GENDOJSB   REQUEST INITL BKP JES INQ       @01C
+         OI    GENSTAT1,GENRSTEN   SET RESTART ENABLED
+         CLC   OSDRSTIP,=C'N'      DISABLE RESTART ?
+         BNE   ADDRET              NO, RETURN
+         NI    GENSTAT1,X'FF'-GENRSTEN SET RESTART DISABLED
+ADDRET   DS    0H
+         BR    R14                 RETURN
+ADDLOOP  DS    0H
+         LR    GENBAR,R5
+         B     ADDIT
+*
+*        END OF ADD GEN ENTRY
+*
+*--------------------------------------
+*
+*        ADD RELATE INFO
+*       ON ENTRY R9 POINTS TO THE RAB AND R7 POINTS TO THE OSD
+*        R8 POINTS AT THE CURRENT GEN ENTRY
+*       FOR THE RLT DATA TO BE ADDED
+*
+ADDRLT   DS    0H
+         USING RLTDS,R4
+         ICM   R4,B'1111',RABRLTF  FIRST RLT ENTRY ?
+         BZ    RLTADD              IF ZERO NONE EXIST YET
+LOCRLT   DS    0H                  ELSE IT MAY EXIST ALREADY
+         L     R4,RABRLTF          START AT FIRST IN LIST
+RLTLOOP1 DS    0H
+         CLC   GENRLTID,RLTNAME    EQUAL TO THIS NAME?
+         BE    RLTFOUND
+         ICM   R5,B'1111',RLTNXRLT GET NEXT IN LIST
+         BZ    RLTADD              IF ZERO, MUST BE A NEW ONE
+         LR    R4,R5
+         B     RLTLOOP1            CHECK THIS ONE
+RLTADD   DS    0H
+         LR    R3,R14
+         GETMAIN RC,LV=RLTLEN      GET STORAGE FOR THIS RELATED ENTRY
+         LTR   R15,R15
+         BNZ   GETMERR            DIRECT BRANCH TO  GETMAIN ERROR MSG
+         LR    R14,R3
+         LTR   R4,R4               R4 WILL POINT TO THE LAST OR ZERO
+         BZ    NOPREV
+         ST    R1,RLTNXRLT         POINT LAST RLT TO THIS NEW ONE
+NOPREV   DS    0H
+         ST    R1,RABRLTL          UPDATE THE LAST IN LIST
+         ICM   R3,B'1111',RABRLTF  HAS THE FIRST POINTER BEEN DONE ?
+         BNZ   FSTRLTBY            YES, DONT UPDATE IT
+         ST    R1,RABRLTF          NO, UPDATE THE FIRST IN LIST
+FSTRLTBY DS    0H
+         LR    R4,R1               ADDRESS THIS RLT ENTRY
+         MVC   RLTNAME,GENRLTID
+         ST    GENBAR,RLTFST       SAVE THIS GEN AS FIRST IN THE CHAIN
+         B     RLTDONE
+RLTFOUND DS    0H
+         LR    R5,GENBAR           REMEMBER THE GEN ENTRY WE ARE
+*                                  INSTALLING
+         L     GENBAR,RLTFST       ADDRESS THE FIRST GEN TO CHECK
+RLTLOOP2 DS    0H
+         ICM   R6,B'1111',GENRLTNX
+         BZ    ENDCHAIN            YES
+         LR    GENBAR,R6
+         B     RLTLOOP2            TRY NEXT ONE
+ENDCHAIN DS    0H
+         ST    R5,GENRLTNX         ADD OURS TO THE CHAIN
+         LR    GENBAR,R5           RESTORE THE ONE JUST INSTALLED
+RLTDONE  DS    0H
+         ST    R4,GENRLTFS         POINT THE GEN BACK TO THIS RLT ENTRY
+         BR    R14
+         DROP  R4
+*
+*        END OF ADD RLT
+*
+*--------------------------------------
+*        EXTRACT DATA
+*
+*        ON ENTRY
+*        R8 POINTS AT THE GEN FOR WHICH DATA IS TO BE EXTRACTED
+*
+*        R2 CONTAINS THE TYPE VALUE FOR THE EXTRACT
+*        R3 CONTAINS THE HIGHEST TYPE VALUE TO BE RETURNED
+*        R4 IS USED TO STEP DOWN THE DOUBLE LIST
+EXTRACT  DS    0H
+*        BUILD THE PARAMETER LIST
+         XC    RABPARM(PARMLEN),RABPARM   CLEAR THE PARM AREA
+         LA    R4,RABDBLL+4        ADDRESS THE FIRST TYPE FIELD
+*                                  IN THE DBLLLIST
+         XC    RABDBLL(DBLLLEN),RABDBLL   CLEAR THE DBLL AREA
+         LA    R2,EXTTAB           ADDRESS THE FIRST VALUE TO BE USED
+*        ASSUME AT LEAST ONE VALUE IN EXTAB ....
+NXTDBLL  DS    0H
+         MVC   0(2,R4),0(R2)       MOVE IN THE ID
+         LA    R2,4(0,R2)          NEXT EXTTAB 'VALUE' ADDRESS
+         CLI   0(R2),X'80'         EXTTAB END STOPPER ?
+         BE    ENDFLAG             YES, WE NEED THE DBLL ENDFLAG
+         LA    R4,8(0,R4)          NEXT DBLL 'VALUE' ADDRESS
+         B     NXTDBLL
+ENDFLAG  LA    R1,4(0,0)           END FLAG
+         SR    R4,R1               BACK UP 4 BYTES
+         OI    0(R4),X'80'         SAVE STOPPER
+         LA    R1,GENNAME          ADDRESS THE GEN NAME
+         ST    R1,RABPARM1         AND INTO THE PARM LIST
+         LA    R1,RABDBLL          ADDRESS THE DBLL LIST
+         ST    R1,RABPARM2         AND INTO THE PARM LIST
+         LA    R1,RABPARM          ADDRESS THE PARM LIST
+         LR    R5,R14              R14 GETS DESTROYED SO SAVE IT
+         L     R14,RABBLDTK        GET THE BUILD TOKEN
+         DFHWOSM FUNC=READ
+         LR    R14,R5              RESTORE R14
+         ST    R15,GENEXTRC        SAVE THE EXTRACT R/C
+         CLC   GENEXTRC,=A(RCRDERR)  BAD R/C ?
+         BH    EXTFAIL             HIGHER, DO NO MORE BUT REMEMBER
+*
+*        START MOVING THE EXTRACTED DATA BACK TO
+*        OUR OWN STORAGE
+*
+         LA    R1,RABDBLL          ADDRESS THE DBLL LIST
+EXTLOOP  LA    R6,EXTTAB            ADDRESS THE EXTRACT TABLE
+EXTLOOP2 CLC   0(2,R6),4(R1)       SAME ID
+         BE    EXTFND              YES FOUND A MATCH
+         LA    R6,4(0,R6)          BUMP TO NEXT ID
+         CLI   0(R6),X'80'         END STOPPER ?
+         BE    EXTNFND             ENTRY NOT KNOWN
+         B     EXTLOOP2            TRY THIS ONE
+EXTFND   DS    0H
+*        R2 WILL BE THE 'TO' ADDR
+*        R3 WILL BE THE 'TO' LENGTH
+*        R4 WILL BE THE 'FROM' ADDR
+*        R5 WILL BE THE 'FROM' LENGTH
+*        R6 POINTS TO THE EXTTAB TABLE ENTRY
+*        R1 POINTS AT THE DBLL LIST ENTRY
+         L     R2,GENEXDTP        POINT AT THE EXTRACT DATA BUFFER
+         LH    R3,2(0,R6)          GET THE OFFSET
+         AR    R2,R3               THE TO ADDR
+         L     R4,0(0,R1)          THE FROM ADDR
+         LTR   R4,R4               CHECK ITS NOT ZERO
+         BZ    EXTCONT             GET OUT QUICK
+         LH    R3,6(0,R1)          THE TO LENGTH
+         LR    R5,R3               THE FROM LENGTH THE SAME
+         MVCL  R2,R4               MOVE IN THE DATA
+         B     EXTCONT
+EXTNFND  DS    0H
+         BAL   R14,SNAPDUMP
+         WTO   'OVERSEER: UNKNOWN DBLL LIST ENTRY, SNAP DUMP TAKEN'
+*        IGNORE THE ENTRY BUT CONTINUE
+EXTCONT  DS    0H
+         CLI   0(R1),X'80'         END STOPPER ?
+         BE    EXTRET              YES ALL DONE, RETURN
+         LA    R1,8(0,R1)          NO,BUMP TO NEXT DBLL LIST ENTRY
+         B     EXTLOOP             NO, DO THE NEXT
+EXTFAIL  DS    0H
+         CLC   GENEXTRC,=A(RCRDNI)  BAD R/C DUE TO NOT INITIALIZED ?
+         BE    NOBKPDAT            NOT A PERM ERROR, BUT NO DATA
+         ST    R15,RABR15
+         OI    GENSTAT1,GENDTNU    INDICATE DATA SETS NOT USABLE
+         WTO   'OVERSEER: UNRECOVERABLE ERROR ON DFHWOSM READ'
+         BAL   R14,MSGR15
+         B     NOBKPDAT
+EXTRET   DS    0H
+*                                  NEED TO CHECK IF THE DATA
+*                                  RETURNED IS VALID. THIS GEN SYSTEM'S
+*                                  FILES MAY BE FORMATTED BUT
+*                                  NOT USED YET
+         L     R2,GENEXDTP        POINT AT THE EXTRACT DATA BUFFER
+         USING EXTDS,R2         ADDRESS THE EXTRACTED DATA
+         CLC   EXAJSUB,NULLS       HAS THE FILE BEEN USED BY AN ACTIVE
+         BE    NOACTDAT            NO
+         OI    GENSTAT1,GENACTDT   YES, ACTIVE DATA RETURNED
+***********************************************************
+*        THIS NEXT PIECE OF CODE DETERMINES IF WE WISH TO
+*        DO A JES INQUIRY. WE WILL ONLY DO ONE IF WE HAVE
+*        DETECTED A NEW JOB (FROM THE 'NEW'CAVM DATA) OR WE
+*        HAVE DETECTED A PREV EXECUTING JOB THAT HAS JUST
+*        SOFN,SOFA. IF NEITHER, WE BYPASS THE JES CALL
+***********************************************************
+         CLC   GENPJJIA,EXAJESJ    JOBID CHANGED ?                 @01C
+         BNE   SETAJESI            YES                             @01C
+         CLC   GENPJJNA,EXAJOBN    JOBNAME CHANGED ?               @01C
+         BNE   SETAJESI            YES                             @01C
+         TM    GENCJSA,GENJESX     EXECUTING JOB ?                 @01C
+         BNO   BYPAJESI            NO, BYPASS                      @01C
+         CLC   EXASTAT,=C'SOFN'    JOB SIGNED OFF (& EXEC)         @01C
+         BE    SETAJESI            YES                             @01C
+         CLC   EXASTAT,=C'SOFA'    JOB SIGNED OFF (& EXEC)         @01C
+         BNE   BYPAJESI            NO, BYPASS                      @01C
+SETAJESI DS    0H                                                  @01C
+         OI    GENSTAT2,GENDOJSA   REQ A JES INQ FROM JOB          @01C
+BYPAJESI DS    0H                  BYPASS SETTING JES REQ          @01C
+NOACTDAT DS    0H
+         CLC   EXBJSUB,NULLS       HAS THE FILE BEEN USED BY A BACKUP
+         BE    NOBKPDAT            NO
+         OI    GENSTAT1,GENBKPDT   YES, BACKUP DATA RETURNED
+************************************************************
+*        THIS NEXT PIECE OF CODE DETERMINES IF WE WISH TO DO
+*        A JES INQUIRY. WE WILL ONLY DO ONE IF WE HAVE
+*        DETECTED A NEW JOB (FROM THE 'NEW'CAVM DATA) OR WE
+*        HAVE DETECTED A PREV EXECUTING JOB THAT HAS JUST
+*        SOFN,SOFA. IF NEITHER, WE BYPASS THE JES CALL
+***********************************************************
+         CLC   GENPJJIB,EXBJESJ    JOBID CHANGED ?                 @01C
+         BNE   SETBJESI            YES                             @01C
+         CLC   GENPJJNB,EXBJOBN    JOBNAME CHANGED ?               @01C
+         BNE   SETBJESI            YES                             @01C
+         TM    GENCJSB,GENJESX     EXECUTING JOB ?                 @01C
+         BNO   BYPBJESI            NO, BYPASS                      @01C
+         CLC   EXBSTAT,=C'SOFN'    JOB SIGNED OFF(& EXEC)          @01C
+         BE    SETBJESI            YES                             @01C
+         CLC   EXBSTAT,=C'SOFA'    JOB SIGNED OFF(& EXEC)          @01C
+         BNE   BYPBJESI            NO, BYPASS                      @01C
+SETBJESI DS    0H                                                  @01C
+         OI    GENSTAT2,GENDOJSB   REQUEST A JES INQ FOR JOB       @01C
+BYPBJESI DS    0H                  BYPASS SETTING JES REQST        @01C
+NOBKPDAT DS    0H
+         DROP  R2
+         BR    R14                 RETURN
+*
+*        END OF EXTRACT
+*
+*--------------------------------------
+*        JES INQUIRE
+*
+*
+JESINQ   DS    0H
+         LR    R5,R14              R14 GETS TRODDEN ON
+         L     R14,RABBLDTK         GET THE BUILD TOKEN
+         DFHWOSM FUNC=QJJS
+*        CONTROL IS PASSED BACK AS SOON AS THE REQUEST IS ACCEPTED SO
+*        NOW SET A TIMEOUT IN CASE THE JES CALL HANGS
+*
+         LA    R3,RABJTID
+         L     R1,RABSTIMA         ADDRESS TIMER PLIST
+         STIMERM SET,ID=(R3),BINTVL=JESTIME,EXIT=TIMEX,PARM=RABECBA2,  *
+               MF=(E,(R1))
+*
+*        NOW WAIT FOR THE JES CALL TO RETURN OR THE TIMER TO POP.
+*        IF JES RETURNS FIRST CANCEL THE TIMER REQUEST.
+*        IF THE TIMER POPS FIRST, PUT A MSG OUT AND CONTINUE
+*        WITHOUT JES INQUIRIES UNTIL THE ORIGINAL REQUEST COMPLETES
+*
+         WAIT  1,ECBLIST=RABELIST  WAIT FOR 1 EVENT TO OCCUR
+         LR    R14,R5           RESTORE R14
+         TM    RABJSECB,X'40'      DID THE JES INQ COMPLETE ?
+         BNO   JESTMOUT            NO,MUST BE JES TIMEOUT
+*                                  LEAVE THE EXECUTION STATUS ALONE
+*        CANCEL THE TIMER REQUEST
+         L     R1,RABSTIMA         ADDRESS TIMER PLIST
+         STIMERM CANCEL,ID=(R3),             CANCEL THE TIMER          *
+               MF=(E,(R1))
+*
+*        EVEN THO JES CAME BACK ITS POSSIBLE THAT THE TIMEOUT
+*        ALSO GOT POSTED (I.E WE CAME OFF THE WAIT WITH BOTH POSTED)
+*        IF SO WE HAD BETTER TELL THE OPERATOR THAT JES IS GOING AGAIN
+*        NOTE THE OPERATOR WILL GET TOLD THAT JES IS RESPONDING AGAIN
+*        WHEN WE RE-ENTER THE TOP OF THE LOOP THUS ENSURING HE GETS
+*        A MATCHING PAIR OF MESSAGES
+*
+         TM    RABTOECB,X'40'      DID THE TIMEOUT GET POSTED AS WELL ?
+         BNO   JESONLY             NO, CONTINUE AS NORMAL
+         OI    RABSTAT1,RABJTOO    SHOW THAT A TIMEOUT OCCURRED
+JESONLY  DS    0H
+*
+*        ANALYSE THE SSOB AND SET R15 ACCORDINGLY
+*
+*        R15=00000      JOB EXECUTING
+*        R15=00001      JOB NOT EXECUTING
+*        R15=00002      JOB STATUS INQUIRE ERROR
+         LA    R3,RABJES
+         USING SSOB,R3             ADDRESS THE SSOB
+         CLC   SSOBRETN,=A(SSCSNOJB)   NO JOB FOUND
+         BE    JESNOJOB            JOB NOT EXECUTING
+         CLC   SSOBRETN,=A(SSCSBADI)   NO JOB WITH THIS NAME AND NUMBER
+         BE    JESNOJOB            JOB NOT EXECUTING
+         OC    SSOBRETN,SSOBRETN    ANY OTHER VALUE ?
+         BNZ   JESERR              CANT BE SURE IF JOB EXECUTING OR NOT
+         TM    SSCSFLG1,SSCSJACT         IS JOB EXECUTING ?
+         BO    JESEXEC             YES
+*                                  NO, BUT STILL KNOWN TO JES
+*                                  ON INPUT,OUTPUT OR HELD Q ETC
+         DROP  R3
+JESJOBX  EQU   0                   JES INDICATES THIS JOB IS EXECUTING
+JESJOBNX EQU   1                   JES INDICATES THIS JOB IS NO EXECUTG
+JESNOJOB DS    0H
+         LA    R15,JESJOBNX(0,0)
+         BR    R14
+JESEXEC  DS    0H
+         LA    R15,JESJOBX(0,0)
+         BR    R14
+JESTMOUT DS    0H
+         OI    RABSTAT1,RABJTOO    SHOW THAT A TIMEOUT OCCURRED
+JESERR   DS    0H
+         LA    R15,2(0,0)
+         BR    R14
+*
+*        END OF JES INQUIRE
+*
+*--------------------------------------
+*        TAKE A SNAP DUMP
+*
+SNAPDUMP DS    0H
+         LR    R4,R14
+         L     R2,RABSDCBA
+         OPEN  ((R2),OUTPUT),MF=(E,RABSDCBA)
+         L     R15,RABERR          SET R15 TO THE CUMULATIVE R/C REASON
+         L     R3,RABSNAPA         ADDRESS SNAP PARM LIST
+         SNAP  DCB=((R2)),MF=(E,(R3))
+         CLOSE ((R2)),MF=(E,RABSDCBA)
+         LR    R14,R4
+         WTO   'OVERSEER: SNAP DUMP TAKEN'
+         BR    R14
+*
+*        END OF SNAP DUMP
+*
+*-------------------------------------------------------------
+*        OPEN A GENERIC ENTRY
+*
+GENOPEN  DS    0H
+*
+*        OPEN CALL TO CICS OVERSEER
+*
+         USING GENDS,GENBAR     ADDRESS THE GEN ENTRY
+         LR    R5,R14              SAVE RET REG
+         L     R14,RABBLDTK        LOAD THE BUILD TOKEN(RET FROM
+*                                  THE BUILD CALL)
+         XC    RABPARM(PARMLEN),RABPARM   CLEAR THE PARM AREA
+         ST    GENBAR,RABPARM1     SAVE THE GENNAME PTR IN PARM LIST
+         LA    R1,GENCTLDD         POINT TO CTLDD NAME
+         ST    R1,RABPARM2         SAVE IT IN PARM LIST
+         LA    R1,GENMSGDD         POINT TO MSGDD NAME
+         ST    R1,RABPARM3         SAVE IT PARM LIST
+         LA    R1,RABPARM          ADDRESS PARM LIST
+         DFHWOSM FUNC=OPEN         CALL THE CICS OVERSEER
+         ST    R15,GENOPNRC        SAVE THE R/C FOR DEBUGGING
+         LR    R14,R5              RESTORE RETURN REG
+         BR    R14
+*
+*        END OF GENERIC OPEN
+*
+*--------------------------------------
+*        CLOSING DOWN
+*
+CLSDOWN  DS    0H
+         L     GENBAR,RABGENF      ADDRESS FIRST GEN SLOT
+CLSLOOP  DS    0H
+         LTR   GENBAR,GENBAR       LAST IN CHAIN ?
+         BZ    RET                 YES,NORMAL RETURN
+         XC    RABPARM(PARMLEN),RABPARM   CLEAR THE PARM AREA
+         TM    GENSTAT1,GENOPOK    WAS THE FILE OPEN
+         BNO   CLSCONT             NO ,BYPASS CLOSE
+         ST    GENBAR,RABPARM1     SAVE THE GENNAME PTR IN PARM LIST
+         LA    R1,RABPARM
+         L     R14,RABBLDTK         GET THE BUILD TOKEN
+         DFHWOSM FUNC=CLOSE
+         LTR   R15,R15
+         BNZ   WOSCLERR
+         OI    GENSTAT1,GENCLSOK   INDICATE CLOSE ISSUED OK
+CLSCONT  DS    0H
+         L     GENBAR,GENNXGEN       ADDRESS NEXT
+         B     CLSLOOP
+*--------------------------------------
+*        RETRY OPEN
+* ANY SYSTEMS THAT FAILED TO OPEN AND ARE THOUGHT TO BE RETRYABLE
+* ARE ATTEMPTED HERE
+OPENRTY  DS    0H
+         L     GENBAR,RABGENF      ADDRESS FIRST GEN SLOT
+RTRYLOOP DS    0H
+         LTR   GENBAR,GENBAR       LAST IN CHAIN ?
+         BZ    QEDITFRE            YES RETURN
+         TM    GENSTAT2,GENOPNRT   RETRYABLE ?
+         BNO   RTRY1               NO
+         NI    GENSTAT2,X'FF'-GENOPNRT RESET THE FLAG
+         XC    GENCLSRC,GENCLSRC   CLEAR OLD R/C
+         XC    RABPARM(PARMLEN),RABPARM   CLEAR THE PARM AREA
+         ST    GENBAR,RABPARM1     SAVE THE GENNAME PTR IN PARM
+         LA    R1,RABPARM
+         L     R14,RABBLDTK         GET THE BUILD TOKEN
+         DFHWOSM FUNC=CLOSE
+         ST    R15,GENCLSRC        SAVE THE CLOSE R/C
+         LTR   R15,R15               GOOD R/C ?
+         BNZ   EXTRBYP            NO, DO NO MORE
+         XC    GENOPNRC,GENOPNRC   CLEAR OLD R/C
+         BAL   R14,GENOPEN         NOW RETRY THE OPEN
+         CLC   GENOPNRC,=A(RCOPERR)  IS IT ONE OF THE GOOD R/CS
+         BNH   RTRY1               YES
+         CLC   GENOPNRC,=A(RCOPER2)  IS IT A RETRYABLE ERROR ?
+         BNE   RTRYBYP              NO
+         OI    GENSTAT2,GENOPNRT    POSSIBLY RETRYABLE
+         B     RTRYBYP
+RTRY1    DS    0H
+         OI    GENSTAT1,GENOPOK    INDICATE OPENED ISSUED OK
+RTRYBYP  DS    0H
+         L     GENBAR,GENNXGEN        GET NEXT ENTRY
+         B     RTRYLOOP
+*--------------------------------------
+*        ERROR SITUATIONS
+*
+WOSOPERR DS    0H
+         ST    R15,RABR15          SET R15 FOR TRANSLATION
+         LA    R3,RABWTORA
+         MVC   0(LENOPERR,R3),WOSOPWT    MOVE MESSAGE SKELETON
+         LA    R4,TYPEOFFS(,R3)
+         MVC   0(5,R4),OPENF                MOVE IN OPEN FAILURE
+         LA    R4,NAMOFFS(,R3)
+         MVC   0(8,R4),GENNAME              MOVE IN GENNAME
+         WTO   ,                                                       *
+               MF=(E,RABWTORA)
+         BAL   R14,MSGR15
+         CLC   GENOPNRC,=A(RCOPER2)
+         BNE   NORETRY
+         OI    GENSTAT2,GENOPNRT    POSSIBLY RETRYABLE SO OBTAIN
+         B     OBTSTOR              THE STORAGE IN CASE RETRY WORKS
+NORETRY  DS    0H
+         B     OPENBYP             GO AND TRY THE NEXT
+WOSCLERR DS    0H                  ERROR CLOSING DATA SET
+         ST    R15,RABR15          SET R15 FOR TRANSLATION
+         ST    R15,GENCLSRC        SAVE THE CLOSE R/C
+         LA    R3,RABWTORA
+         MVC   0(LENOPERR,R3),WOSOPWT    MOVE MESSAGE SKELETON
+         LA    R4,TYPEOFFS(,R3)
+         MVC   0(5,R4),CLSEF                MOVE IN CLOSE FAILURE
+         LA    R4,NAMOFFS(,R3)
+         MVC   0(8,R4),GENNAME              MOVE IN GENNAME
+         WTO   ,                                                       *
+               MF=(E,RABWTORA)
+         BAL   R14,MSGR15
+         B     CLSCONT             TRY TO CLOSE THE NEXT
+BUILDERR DS    0H
+         ST    R15,RABR15          SAVE RC
+         WTO   'OVERSEER: DFHWOSM BUILD ERROR'
+         BAL   R14,MSGR15
+         OI    RABRSN1,RABBDERR
+         B     ERRET
+OPENERR  DS    0H                  OPEN ERROR FOR DFHOSD DATASET
+         ST    R15,RABR15          SAVE RC
+         WTO   'OVERSEER: OPEN ERROR FOR DFHOSD DATASET'
+         BAL   R14,MSGR15
+         OI    RABRSN1,RABOPERR
+         B     ERRET
+GETERR   DS    0H
+         ST    R15,RABR15          SAVE RC
+         WTO   'OVERSEER: VSAM READ ERROR OCCURRED FOR DFHOSD DATASET'
+         BAL   R14,MSGR15
+         OI    RABRSN1,RABGTERR
+         B     ERRET
+GETMERR  DS    0H
+         OI    RABRSN1,RABGMERR
+         ST    R15,RABR15          SAVE RC FROM BAD GETMAIN
+         WTO   'OVERSEER: GETMAIN ERROR OCCURRED'
+         BAL   R14,MSGR15
+         B     ERRET
+RABGMFL  DS    0H
+         LR    R5,R15              SAVE RC
+         WTO   'OVERSEER: GETMAIN ERROR FOR ROOT CONTROL BLOCK'
+         LR    R15,R5
+         B     RETIMM              RETURN WITHOUT CLEANUP
+ERRET    DS    0H
+         OI    RABRC,RABRCFL
+         BAL   R14,SNAPDUMP
+RET      DS    0H
+*        TERMINATE CALL TO DFHWOSM
+*        NO PARMS REQUIRED
+         XC    RABPARM(PARMLEN),RABPARM   CLEAR THE PARM AREA
+         LA    R1,RABPARM          ADDRESS PARM LIST
+         L     R14,RABBLDTK         GET THE BUILD TOKEN
+         DFHWOSM FUNC=TERM
+RETIMM   DS    0H
+         WTO   'OVERSEER: TERMINATION COMPLETE'
+         L     R13,RABSAV1+4       RESTORE R13
+         RETURN (14,12),RC=(15)
+*
+*
+*         TIMER EXIT
+*
+TIMEX    DS    0H
+         SAVE (14,12)
+         BASR  R3,0                Set up addressability in..      @P5A
+         USING *,R3                ..STIMERM exit routine          @P5A
+         L     R2,4(0,R1)          PARM IS ADDRES OF THE ECB TO POST
+         WTO   'OVERSEER:  TIMEOUT ON JES INQ, JOB EXECUTION STATUS IN *
+               DOUBT'
+         POST  (R2)                TELL THE MAIN TASK THAT A TIMEOUT
+*                                  OCCURRED
+         RETURN (14,12),RC=(15)
+         DROP  R3                                                  @P5A
+*
+*
+*        SEND R15 ERROR MSG
+*        THIS ROUTINE EXPECTS REGISTER 15 TO BE SAVED IN RAB15
+*        THIS FIELD IS THEN MADE PRINTABLE AND OUTPUT TO THE CONSOLE
+*        R3 , R4 AND R1 CORRUPTED IN THIS ROUTINE
+*
+MSGR15   DS    0H
+         XC    RABTRANS,RABTRANS   CLEAR TRANSLATE WORK AREA
+         UNPK  RABTRANS(9),RABR15(5)     TRANSLATE R15 TO...
+         TR    RABTRANS(8),HEXTAB-C'0'       ....PRINTABLE
+         LA    R3,RABWTORA         MOVE IN MESSAGE SKELETON
+         MVC   0(LENERR15,R3),ERR15
+         LA    R4,RCOFFS(,R3)
+         MVC   0(8,R4),RABTRANS    AND MOVE IN RET CODE INSERT
+         WTO   ,                                                       *
+               MF=(E,RABWTORA)
+         BR    R14
+*
+GNKEY    DC    CL4'GN  '           GENNAME KEY
+RCOPERR  EQU   5                   OPEN ERROR R/C GREATER THAN 5
+*                                  PROBABLY NOT RECOVERABLE
+RCOPER2  EQU   12                  OPEN ERROR WHICH MAY BE
+*                                  RETRYABLE
+RCRDERR  EQU   5                   READ ERROR R/C GRETER THAN 5
+*                                  PROBABLY NOT RECOVERABLE EXCEPT
+*                                  RC=8 CAN BE RETRIED AS
+*                                  THE DATA SET MAY BE
+*                                  INITIALIZED IN THE MEANTIME
+RCRDNI   EQU   8                   READ ERROR FILES NOT INITIALIZED
+*                                  THIS IS DONE BY FIRST CICS TO
+*                                  SIGN ON AS ACT OR ALTERNATE
+*
+*            WTOS AND WTORS
+*
+*
+WOSOPWT  WTO   'OVERSEER: ????? FAILED FOR GEN GGGGGGGG, CONTINUING',  *
+               MF=L
+LENOPERR EQU   *-WOSOPWT             LENGTH OF THIS MESSAGE
+NAMOFFS  EQU   35                    OFFSET TO NAME INSERT
+TYPEOFFS EQU   14                    OFFSET TO TYPE INSERT
+OPENF    DC    CL5'OPEN '
+CLSEF    DC    CL5'CLOSE'
+*
+ERR15    WTO 'OVERSEER: REGISTER 15 AT TIME OF ERROR IS X''NNNNNNNN''',*
+               MF=L
+LENERR15 EQU   *-ERR15
+RCOFFS   EQU   48                    OFFSET TO RC INSERT
+*
+         AIF   (NOT &LOOPWARN).NOLOOP2
+LOOPMSG  WTO 'OVERSEER: POSSIBLE LOOP (OR WAIT) DETECTED FOR JJJJJJJJ',*
+               MF=L
+LENLOOPM EQU   *-LOOPMSG
+JBNOFFS  EQU   51
+.NOLOOP2 ANOP  ,
+END      DC    C'END'
+ENDMN    DC    H'1'                MIN NUM OF CHARS TO SATISFY
+ENDMX    DC    H'3'                MAX NUM OF CHARS TO SATISFY
+RESTART  DC    C'RESTART'
+RESTMN   DC    H'1'                MIN NUM OF CHARS TO SATISFY
+RESTMX   DC    H'7'                MAX NUM OF CHARS TO SATISFY
+SNAP     DC    C'SNAP'
+SNAPMN   DC    H'1'                MIN NUM OF CHARS TO SATISFY
+SNAPMX   DC    H'4'                MAX NUM OF CHARS TO SATISFY
+DISPLAY  DC    C'DISPLAY'
+DISPMN   DC    H'1'                MIN NUM OF CHARS TO SATISFY
+DISPMX   DC    H'7'                MAX NUM OF CHARS TO SATISFY
+OPEN     DC    C'OPEN'
+OPENMN   DC    H'1'                MIN NUM OF CHARS TO SATISFY
+OPENMX   DC    H'4'                MAX NUM OF CHARS TO SATISFY
+NULLS    DC    D'0'
+DELAYTM  DC    F'00000400'         APPROX 4 SECONDS                @01C
+JESTIME  DC    F'00002000'         APPROX 20 SECONDS FOR JES TIMEOUT
+*
+*        HEX TABLE FOR TRANSLATE TO PRINTABLE CHARACTERS
+*
+HEXTAB   DC    C'0123456789ABCDEF'
+*
+*        EXTRACT TABLE FOR MOVING DATA TO THE EXTRACT BUFFER
+*        CONSISTS OF EXTRACT 'VALUES' AND OFFSETS TO EXTRACT DSECT
+*
+EXTTAB   DS    0H
+EXTTABA  DC    XL2'0001',AL2(EXAJOBN-EXTDS)
+         DC    XL2'0002',AL2(EXAJESJ-EXTDS)
+         DC    XL2'0003',AL2(EXAJSUB-EXTDS)
+         DC    XL2'0004',AL2(EXAJSAT-EXTDS)
+         DC    XL2'0005',AL2(EXASTTN-EXTDS)
+         DC    XL2'0006',AL2(EXAJSID-EXTDS)
+         DC    XL2'0007',AL2(EXASMID-EXTDS)
+         DC    XL2'0008',AL2(EXAMIPL-EXTDS)
+         DC    XL2'0009',AL2(EXASAPPL-EXTDS)
+         DC    XL2'000A',AL2(EXAASID-EXTDS)
+         DC    XL2'000B',AL2(EXARST-EXTDS)                         @03A
+         DC    XL2'0020',AL2(EXAHBI-EXTDS)
+         DC    XL2'0021',AL2(EXAHBC-EXTDS)
+         DC    XL2'0022',AL2(EXAMSWC-EXTDS)
+         DC    XL2'0023',AL2(EXASTAT-EXTDS)
+         DC    XL2'0024',AL2(EXAHLTH-EXTDS)
+EXTTABB  DC    XL2'0101',AL2(EXBJOBN-EXTDS)
+         DC    XL2'0102',AL2(EXBJESJ-EXTDS)
+         DC    XL2'0103',AL2(EXBJSUB-EXTDS)
+         DC    XL2'0104',AL2(EXBJSAT-EXTDS)
+         DC    XL2'0105',AL2(EXBSTTN-EXTDS)
+         DC    XL2'0106',AL2(EXBJSID-EXTDS)
+         DC    XL2'0107',AL2(EXBSMID-EXTDS)
+         DC    XL2'0108',AL2(EXBMIPL-EXTDS)
+         DC    XL2'0109',AL2(EXBSAPPL-EXTDS)
+         DC    XL2'010A',AL2(EXBASID-EXTDS)
+         DC    XL2'010B',AL2(EXBRST-EXTDS)                         @03A
+         DC    XL2'0120',AL2(EXBHBI-EXTDS)
+         DC    XL2'0121',AL2(EXBHBC-EXTDS)
+         DC    XL2'0122',AL2(EXBMSWC-EXTDS)
+         DC    XL2'0123',AL2(EXBSTAT-EXTDS)
+         DC    XL2'0124',AL2(EXBHLTH-EXTDS)
+         DC    XL2'8000',AL2(0)
+         LTORG
+         END

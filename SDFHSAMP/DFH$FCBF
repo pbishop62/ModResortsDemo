@@ -1,0 +1,860 @@
+*ASM XOPTS(CICS,SP,NOEDF,NOPROLOG,NOEPILOG)
+         TITLE 'DFH$FCBF - Sample XFCBFAIL Exit Program'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$FCBF                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Sample global user exit program for XFCBFAIL     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*      Licensed Materials - Property of IBM                           *
+*                                                                     *
+*      "Restricted Materials of IBM"                                  *
+*                                                                     *
+*      5655-Y04                                                       *
+*                                                                     *
+*      (C) Copyright IBM Corp. 1994, 2014"                            *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*                                                                     *
+*   This program provides sample processing for the File Control      *
+*   backout failure GLobal User Exit (GLUE) XFCBFAIL.                 *
+*   It is called if an error occurs during an attempt to back out     *
+*   a File Control update.                                            *
+*                                                                     *
+*   This GLUE was introduced in CICS for MVS/ESA, version 5 release 1 *
+*   and does not exist in prior versions of CICS for MVS/ESA.         *
+*   It replaces XDBFERR, XRCFCER and XRCOPER which exist in versions  *
+*   prior to CICS 5.1.                                                *
+*                                                                     *
+* NOTES :                                                             *
+*  DEPENDENCIES   = S/390                                             *
+*  RESTRICTIONS   = CICS/ESA GLUE restrictions                        *
+*                   GLUEs have certain unique restrictions. These     *
+*                   include, but are not limited to, such things as   *
+*                   addressing mode, the use of CICS services and the *
+*                   CICS storage protection facility. Please refer to *
+*                   the CICS/ESA Customization Guide for details.     *
+*  REGISTER CONVENTIONS = On entry, these registers have values:      *
+*                   R1 - address of the user exit parameter list      *
+*                        DFHUEPAR                                     *
+*                   R13- address of a standard register save area     *
+*                        R13 must have this value when returning to   *
+*                        the caller.                                  *
+*                   R14- address to which this program must return    *
+*                   R15- entry address of this program                *
+*                   No other register values are guaranteed on entry  *
+*                   The exit should save and restore any registers    *
+*                   that it modifies, using the save area addressed   *
+*                   by R13.                                           *
+*                                                                     *
+*                   These registers are used in this program:         *
+*                   R2 - Work register                                *
+*                   R3 - Code base                                    *
+*                   R4 - Spare                                        *
+*                   R5 - Log record addressing register               *
+*                   R6 - DFHUEPAR base                                *
+*                   R7 - Address FC response byte                     *
+*                   R8 - Address error-type byte                      *
+*                   R9 - Spare                                        *
+*                   R10- DFHEISTG base (DFHEIPLR)                     *
+*                   R11- EIB base (DFHEIBR)                           *
+*                   R12- Work register and Stored return code         *
+*                   R13- Kernel stack base                            *
+*  MODULE TYPE    = Executable                                        *
+*  PROCESSOR      = Assembler                                         *
+*  ATTRIBUTES     = Read only, AMODE 31, RMODE ANY                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$FCBF                                              *
+*                                                                     *
+*   PURPOSE     = All functions                                       *
+*                                                                     *
+*   LINKAGE     = Called by the CICS exit handler                     *
+*                                                                     *
+*   INPUT       = R1 contains the address of DFHUEPAR                 *
+*                 DFHUEPAR contains the following exit-specific       *
+*                 parameters:                                         *
+*                                                                     *
+*                 UEPBLOGR  Address of the File Control portion of    *
+*                           the log record that was being backed      *
+*                           out when the failure occurred.            *
+*                           The FC part of the log record consists of *
+*                                Control-data + Key + Data.           *
+*                           Copybook DFHFCLGD maps the Control-data.  *
+*                           The Data is the before-image of the       *
+*                           updated data set record.                  *
+*                                                                     *
+*                 UEPTRANS  Address of the Transaction ID under       *
+*                           which the update that is being backed     *
+*                           out was made. This is a 4-byte field      *
+*                           containing the name of the transaction.   *
+*                                                                     *
+*                 UEPTRMNL  Address of the Terminal ID for the        *
+*                           terminal or principal facility from       *
+*                           which the update that is being backed     *
+*                           out was made.  This is a 4-byte field     *
+*                           containing the name of the principal      *
+*                           facility (or blanks if there was none).   *
+*                                                                     *
+*                 UEPTASK   Address of the Task Number for the        *
+*                           task under which the update that is       *
+*                           being backed out was made.  This is a     *
+*                           4-byte field containing the task number   *
+*                           in packed decimal.                        *
+*                                                                     *
+*                 UEPFCRSP  Address of the File Control response      *
+*                           byte.  This indicates either the error    *
+*                           response from a File Control record       *
+*                           management request, or that the failure   *
+*                           occurred on a File Control OPEN request.  *
+*                           The values that UEPCFRSP can take are     *
+*                           defined by the DFHUEXIT macro.            *
+*                                                                     *
+*                 UEPERR    Address of a one-byte field containing    *
+*                           the error type.  This indicates which     *
+*                           record management request caused an error *
+*                           to be returned.  Its values are defined   *
+*                           by the DFHUEXIT macro.                    *
+*                           This sample program does not make use of  *
+*                           UEPERR, apart from tracing its contents.  *
+*                                                                     *
+*   OUTPUT      = R15 = Return code (UERNORM or UERCBYP)              *
+*                                                                     *
+*   A return code of UERCNORM specifies that CICS backout failure     *
+*   processing should be carried out (CICS will issue a backout       *
+*   failure error message and, for a VSAM data set, will ensure that  *
+*   the record remains locked until the backout can be retried and    *
+*   will save the log record for later retry).                        *
+*                                                                     *
+*   A return code of UERCBYP specifies that the error should be       *
+*   ignored (CICS will therefore not attempt to retry the backout,    *
+*   it will be as if the data were committed instead of being backed  *
+*   out).                                                             *
+*                                                                     *
+*   EXIT-NORMAL = Return to CICS with R15 = UERCNORM or UERCBYP       *
+*                                                                     *
+*   EXIT-ERROR  = Return to CICS with R15 = UERCNORM                  *
+*                 having issued a user exception trace                *
+*                                                                     *
+*   This program does not check for purged responses from EXEC CICS   *
+*   or XPI calls that it makes because the exit is invoked during     *
+*   backout processing and hence                                      *
+*     (1) purged responses cannot be returned by such calls,          *
+*     (2) UERCPURG is not an allowed return code from the exit.       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+*                                                                     *
+*     CALLS = EXEC CICS ADDRESS EIB                                   *
+*             EXEC CICS INQUIRE FILE                                  *
+*             EXEC CICS WRITE OPERATOR                                *
+*             DFHTRPTX TRACE_PUT                                      *
+*                                                                     *
+*     DATA AREAS = None                                               *
+*                                                                     *
+*     CONTROL BLOCKS = DFHUEPAR                                       *
+*                      DFHFCLGD                                       *
+*                                                                     *
+*     GLOBAL VARIABLES = None                                         *
+*                                                                     *
+* TABLES = None                                                       *
+*                                                                     *
+* MACROS = None                                                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+* ------------------------------------------------------------------- *
+*   The purpose of this sample program is to demonstrate the use of   *
+*   File Control backout failure exit XFCBFAIL, and to show the kind  *
+*   of information which can be derived from the exit parameter list. *
+*                                                                     *
+* * * YOU SHOULD TAILOR IT BEFORE USE IN A PRODUCTION ENVIRONMENT * * *
+*                                                                     *
+*   Some suggested extensions to the sample program are included in   *
+*   a section at the end of this description.                         *
+* ------------------------------------------------------------------- *
+*                                                                     *
+*   The environment in DFH$FCBF is set up to conform to CICS global   *
+*   user exit programming standards, and also to allow both EXEC CICS *
+*   (API) calls and CICS user exit programming interface (XPI) calls  *
+*   to be made. This is achieved by the following:                    *
+*                                                                     *
+*   - NOPROLOG, NOEPILOG, NOEDF specified on the ASM XOPTS statement  *
+*   - DATAREG other than R13 specified on the DFHEIENT macro          *
+*   - EXEC CICS ADDRESS EIB used to obtain EIB address                *
+*   - DFHUEXIT TYPE=XPIENV specified                                  *
+*   - R13 set to address kernel stack entry (UEPSTACK)                *
+*   - RCREG specified on the DFHEIRET macro                           *
+*                                                                     *
+*   Note that the translator preserves R13 across API calls so there  *
+*   is no need to reload it before each XPI call.                     *
+*                                                                     *
+*                                                                     *
+* DFH$FCBF Processing consists of the following steps:                *
+*                                                                     *
+*   -Generate the prolog code with the DFHEIENT macro.                *
+*      Specify CODEREG, DATAREG and EIBREG.                           *
+*      This enables use of EXEC CICS (API) calls.                     *
+*                                                                     *
+*   -Include DSECTS needed for:                                       *
+*      User Exit Parameter List - DFHUEPAR                            *
+*      Log Record format - DFHFCLGD                                   *
+*      XPI Support - XPI macro DFHxxyyX requires copy book DFHxxyyY   *
+*                                                                     *
+*   -Address the DFHUEPAR parameter list.                             *
+*                                                                     *
+*   -Address the EIB and the kernel stack entry.                      *
+*                                                                     *
+*   -Address the File Control portion of the log record.              *
+*                                                                     *
+*   -Calculate the length of the log record.                          *
+*      A File Control backout log record consists of                  *
+*        General Data part  (length equ FLJB_GENERAL_DATA__LEN)       *
+*        Common Data part   (length equ FLJB_COMMON_DATA__LEN)        *
+*        Key                (length in a field in the common part)    *
+*        Data               (length in a field in the common part)    *
+*      so its length is the sum of these lengths.                     *
+*                                                                     *
+*   -Address the error-type field and the FC response byte.           *
+*                                                                     *
+*   -Make a user trace entry if tracing is active for File Control.   *
+*    Use the XPI, DFHTRPTX, specifying TRACE_PUT. The trace point id  *
+*    must be in the range X'0100' through X'01FF'.                    *
+*    If any trace XPI call fails, this is ignored.                    *
+*    The following data is traced:                                    *
+*      DATA1: Eyecatcher 'DFH$FCBF ENTRY'                             *
+*      DATA2: FC response byte                                        *
+*      DATA3: Error type                                              *
+*      DATA4: File Control portion of log record                      *
+*                                                                     *
+*    If any trace XPI call fails, this is ignored.                    *
+*                                                                     *
+*    Trace entries could alternatively be written using the           *
+*    EXEC CICS ENTER TRACENUM command.  This program uses DFHTRPTX    *
+*    to demonstrate use of an XPI interface.                          *
+*                                                                     *
+*   -Check the access method to see if the data set is BDAM.          *
+*    If so, CICS does not support backout retries, so write a message *
+*    to the operator console advising that either this file and any   *
+*    other files using the base data set (named in message DFHFC4702) *
+*    should be closed, or CICS should be shutdown quickly, in order   *
+*    to prevent further corruption.  Set a response of UERCNORM       *
+*    and go to the normal exit processing.                            *
+*                                                                     *
+*   -Check whether the file is one for which it has been decided      *
+*    that backout failures will be ignored, by checking the filename  *
+*    (field FLJB_FILE_NAME in the log record).  Write a message to    *
+*    the operator console to say so, then set a response of UERCBYP   *
+*    and go to the normal exit processing.                            *
+*                                                                     *
+*   -Examine the FC response code and issue a message to the operator *
+*    console describing the procedure to be followed for this error.  *
+*    This sample program provides slots for each possible FC response *
+*    code, and includes suggested messages for some of them.          *
+*    You could customise the sample program by expanding the set of   *
+*    messages to describe procedures which your installation has      *
+*    decided to follow for each error, or to take other action within *
+*    the exit program.                                                *
+*    If you do not add a message for any particular response code,    *
+*    then the operator will still see message DFHFC4701, issued as    *
+*    part of the CICS backout failure processing, which will advise   *
+*    him on any action which needs to be taken.                       *
+*                                                                     *
+*   -Set a response code of UERCNORM.                                 *
+*                                                                     *
+*   -Normal exit processing for the program                           *
+*      Make a user trace entry if tracing is active for File Control  *
+*      and there were no errors during processing.                    *
+*      The following data is traced:                                  *
+*        DATA1: Eyecatcher 'DFH$FCBF EXIT OK'                         *
+*        DATA2: File Control portion of log record                    *
+*        DATA3: Text 'Handle backout failure'                         *
+*                 or 'Bypass backout failure' as appropriate.         *
+*                                                                     *
+*   -Error exit processing for the program                            *
+*      If errors occur during processing or if CICS functions fail,   *
+*      a user exception trace entry is made regardless of the trace   *
+*      setting.                                                       *
+*      In those cases, the following is traced:                       *
+*        DATA1: Eyecatcher 'USEREXC'                                  *
+*        DATA2: Eyecatcher 'DFH$FCBF EXIT FAIL'                       *
+*        DATA4: File Control portion of log record                    *
+*      A response of UERCNORM is returned so that although some error *
+*      has occurred in the exit, CICS will still perform its normal   *
+*      backout failure processing.                                    *
+*                                                                     *
+*   -Generate epilog code with the DFHEIRET macro                     *
+*    The DFHEIRET macro frees DFHEISTG working storage,               *
+*    restores caller's registers, and sets R15 before exiting         *
+*                                                                     *
+*                                                                     *
+*   Suggested Extensions to the Backout Failure Exit Sample Program   *
+*   ---------------------------------------------------------------   *
+*   This XFCBFAIL exit program could be extended to make use of other *
+*   parameters or XPI calls, for example:                             *
+*                                                                     *
+*   - The transaction ID tells you which transaction made the update  *
+*     which is now failing to backout.  You might perhaps know that   *
+*     this transaction makes updates which do not necessarily have to *
+*     be backed out, or you might use EXEC CICS INQUIRE TRANSACTION   *
+*     to obtain relevant information about the transaction.           *
+*                                                                     *
+*   - The terminal ID tells you the terminal from which the update    *
+*     that is now failing to backout was made, and this might be used *
+*     to determine the action taken by the exit program.              *
+*                                                                     *
+*   - The INQUIRE_TRANSACTION function on the DFHXMIQX XPI interface  *
+*     can be used to check whether the user exit is still running     *
+*     under the environment from which the update was made (this      *
+*     information is returned in the RE_ATTACHED_TRANSACTION          *
+*     parameter).  You can use this if there are actions which you    *
+*     want your program only to perform when the first attempt at     *
+*     backing out fails, and not on any backout retries (for example, *
+*     if your exit terminates CICS when a BDAM backout failure occurs *
+*     you will probably not want to terminate CICS if the backout     *
+*     fails again when it is driven at emergency restart).            *
+*     There are also certain actions which your exit program will not *
+*     be able to perform if it has been invoked during a backout      *
+*     retry, when it will be running under a transaction which has    *
+*     been re-attached for the purpose of attempting the retry.       *
+*     For example, you will need to know whether the original         *
+*     transaction environment is still available if you want to send  *
+*     text to the terminal (bear in mind, however, that sending text  *
+*     to the terminal could cause problems with a BMS map being used  *
+*     by the application, that any message you send should avoid      *
+*     confusing the end-user, and that not all applications are run   *
+*     from a terminal).                                               *
+*                                                                     *
+*   - If the file control response (UEPFCRSP) is UENOLDEL, which      *
+*     indicates that a write to an ESDS could not be backed out       *
+*     because no logical delete exit program was enabled at the       *
+*     XFCLDEL exit point, then you could enable your XFCLDEL exit     *
+*     program.  This would require that the program was defined to    *
+*     the CICS system. Note that the backout retry should then be     *
+*     driven by issuing SET DSNAME RETRY after the backout failure    *
+*     processing has been completed; it is not possible to drive the  *
+*     retry by issuing an EXEC CICS SET DSNAME(dataset) ACTION(RETRY) *
+*     command from within the XFCBFAIL exit program, because the      *
+*     exit is invoked from within backout.  SET DSNAME RETRY only     *
+*     operates on shunted units of work.                              *
+*                                                                     *
+*   Suggestions for BDAM                                              *
+*   --------------------                                              *
+*     CICS does not support backout retry following backout failures  *
+*     to BDAM data sets.  You could use the XFCBFAIL exit to preserve *
+*     data integrity by terminating CICS, and going through emergency *
+*     restart.  If you do not terminate CICS from the exit then the   *
+*     locks will be released and the data will be committed.  You     *
+*     could use the exit to save the log record, for example in a     *
+*     file of backout failure information, and use the saved value    *
+*     to help you sort out the record later (but be aware that you    *
+*     must be careful when trying to sort out any specific record,    *
+*     that you do not back out other changes made between the time    *
+*     of the backout failure and the time of your recovery actions).  *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$FCBF),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 654    510 941028 HDAVCMM : Sample Backout Exit Programs    *
+*    $P1= M93297 510 941207 HDAVCMM : previous_rls_failure change     *
+*    $P2= M94007 510 950316 HDAVCMM : Improve suggested actions       *
+*    $P3= M94782 510 950705 HDAVCMM : Change CICS name in comments    *
+*    $P4= M95039 510 950809 HDAVCMM : Update suggested extensions     *
+*    $P5= M96537 510 960425 HDMMFM  : VSAM Lock Structure Full        *
+*                                                                     *
+***********************************************************************
+***********************************************************************
+*
+***********************************************************************
+* Ensure AMODE(31) and RMODE(ANY).                                    *
+***********************************************************************
+DFH$FCBF CSECT
+DFH$FCBF AMODE 31
+DFH$FCBF RMODE ANY
+***********************************************************************
+*   -Generate the prolog code with the DFHEIENT macro.                *
+*      Specify CODEREG, DATAREG and EIBREG.                           *
+*      This enables use of EXEC CICS (API) calls.                     *
+***********************************************************************
+         DFHEIENT CODEREG=3,DATAREG=10,EIBREG=11
+***********************************************************************
+*   -Include DSECTS needed for:                                       *
+*      User Exit Parameter List - DFHUEPAR                            *
+*      Log Record format - DFHFCLGD                                   *
+*      XPI Support - XPI macro DFHxxyyX requires copy book DFHxxyyY   *
+***********************************************************************
+         DFHUEXIT TYPE=EP,ID=XFCBFAIL    DFHUEPAR plist for XFCBFAIL
+         EJECT
+         COPY  DFHFCLGD                  File Control log record
+         EJECT
+         DFHUEXIT TYPE=XPIENV            XPI environment
+         EJECT
+         COPY  DFHTRPTY                  DFHTRPTX macro parameter list
+         EJECT
+***********************************************************************
+* DFHEISTG working storage.                                           *
+***********************************************************************
+         DFHEISTG                        Start working storage
+ACCMETH        DS    F                   File access method
+CICSRESP       DS    F                   EXEC CICS RESP code
+LOG_LENGTH     DS    F                   Length of FC log record
+FCRESP         DS    CL1                 File Control Response
+MSGBDAM        DS    CL(L'BDAMTXT1+8+L'BDAMTXT2)  BDAM message text
+MSGBYP         DS    CL(L'BYPTXT+8)      Bypass message text
+               DS    0D                  Doubleword align XPI plist
+XPI_PLIST_STG  DS    CL256               Storage for XPI plists
+         DFHEIEND                        End working storage
+         EJECT
+DFH$FCBF CSECT
+***********************************************************************
+*   -Address the DFHUEPAR parameter list.                             *
+***********************************************************************
+         LR    R6,R1                     Address DFHUEPAR
+         USING DFHUEPAR,R6
+***********************************************************************
+*   -Address the EIB and the kernel stack entry.                      *
+***********************************************************************
+         L     R13,UEPSTACK              Address kernel stack entry
+*
+         EXEC CICS ADDRESS EIB(DFHEIBR)
+*
+***********************************************************************
+*   -Address the File Control portion of the log record.              *
+***********************************************************************
+         L     R5,UEPBLOGR               Address FC log record
+*
+***********************************************************************
+*   -Calculate the length of the log record.                          *
+*      A File Control backout log record consists of                  *
+*        General Data part  (length equ FLJB_GENERAL_DATA__LEN)       *
+*        Common Data part   (length equ FLJB_COMMON_DATA__LEN)        *
+*        Key                (length in a field in the common part)    *
+*        Data               (length in a field in the common part)    *
+*      so its length is the sum of these lengths.                     *
+***********************************************************************
+         USING FLJB_COMMON_DATA-FLJB_GENERAL_DATA__LEN,R5
+         LA    R12,FLJB_GENERAL_DATA__LEN+FLJB_COMMON_DATA__LEN
+         AH    R12,FLJB_CD_KEY_LENGTH
+         A     R12,FLJB_CD_DATA_LENGTH
+         ST    R12,LOG_LENGTH
+*
+         DROP  R5
+         USING FLJB_GENERAL_DATA,R5      Base FC log record structure
+*
+***********************************************************************
+*   -Address the FC response byte and the error-type field.           *
+***********************************************************************
+         L     R7,UEPFCRSP               Address the FC response code
+         MVC   FCRESP,0(R7)              Save FC response code
+         L     R8,UEPERR                 Address the error-type byte
+*
+***********************************************************************
+*   -Make a user trace entry if tracing is active for File Control.   *
+*    Use the XPI, DFHTRPTX, specifying TRACE_PUT. The trace point id  *
+*    must be in the range X'0100' through X'01FF'.                    *
+*    The following data is traced:                                    *
+*      DATA1: Eyecatcher 'DFH$FCBF ENTRY'                             *
+*      DATA2: FC response byte                                        *
+*      DATA3: Error type                                              *
+*      DATA4: File Control portion of log record                      *
+***********************************************************************
+*
+         L     R2,UEPTRACE               Address the trace flag
+         TM    0(R2),UEPTRON             Is FC level 1 tracing active?
+         BZ    NO_ENTRY_TRACE            No...skip trace
+*
+         LA    R2,XPI_PLIST_STG          Yes..make user trace entry
+         USING DFHTRPT_ARG,R2            Address DFHTRPTX plist
+*
+         DFHTRPTX CALL,                  Trace XPI call                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(ENTRY_TPID),                                   *
+               DATA1(A(ENTRY_EYE),L'ENTRY_EYE),    Eyecatcher          *
+               DATA2((R7),1),                      FC response code    *
+               DATA3((R8),1),                      Error-type field    *
+               DATA4((R5),LOG_LENGTH),             FC log record       *
+               OUT,                                                    *
+               RESPONSE(*)
+*
+         DROP  R2                        Lose addressability to plist
+*
+NO_ENTRY_TRACE DS 0H                     Skip to here if no trace
+***********************************************************************
+*   -Check the access method to see if the data set is BDAM.          *
+*    If so, CICS does not support backout retries, so write a message *
+*    to the operator console advising that either this file and any   *
+*    other files using the base data set (named in message DFHFC4702) *
+*    should be closed, or CICS should be shutdown quickly, in order   *
+*    to prevent further corruption.  Set a response of UERCNORM       *
+*    and go to the normal exit processing.                            *
+***********************************************************************
+         EXEC CICS INQUIRE FILE(FLJB_FILE_NAME)                        *
+               ACCESSMETHOD(ACCMETH)                                   *
+               RESP(CICSRESP)
+*
+         CLC   CICSRESP,DFHRESP(NORMAL)  Inquire successful?
+         BNE   RETURN_FAILED             No...issue exception trace
+*
+         CLC   ACCMETH,DFHVALUE(BDAM)    BDAM file?
+         BNE   NON_BDAM                  No...skip BDAM processing
+*        Set up and issue message
+         MVC   MSGBDAM(L'BDAMTXT1),BDAMTXT1
+         MVC   MSGBDAM+L'BDAMTXT1(8),FLJB_FILE_NAME
+         MVC   MSGBDAM+L'BDAMTXT1+8(L'BDAMTXT2),BDAMTXT2
+         EXEC CICS WRITE OPERATOR                                      *
+               TEXT(MSGBDAM)                                           *
+               TEXTLENGTH(L'MSGBDAM)                                   *
+               RESP(CICSRESP)
+*
+         LA    R12,UERCNORM              Set up NORM return code
+         B     RETURN_NORMAL             Return
+*
+NON_BDAM CLC   ACCMETH,DFHVALUE(VSAM)    VSAM file?
+         BNE   RETURN_FAILED             No...must be an error
+         EJECT
+*
+BYP_CHECK     DS 0H
+***********************************************************************
+*   -Check whether the file is one for which it has been decided      *
+*    that backout failures will be ignored, by checking the filename  *
+*    (field FLJB_FILE_NAME in the log record).  Write a message to    *
+*    the operator console to say so, then set a response of UERCBYP   *
+*    and go to the normal exit processing.                            *
+***********************************************************************
+         USING FLJB_GENERAL_DATA,R5      Address log record
+         CLC   FLJB_FILE_NAME,INSIG_FILE Ignore bfail for this file?
+         BNE   HANDLE_BFAIL              No...go on to handle bfail
+*        Set up and issue message about bypassing backout failure
+         MVC   MSGBYP(L'BYPTXT),BYPTXT
+         MVC   MSGBYP+L'BYPTXT(8),FLJB_FILE_NAME
+         EXEC CICS WRITE OPERATOR                                      *
+               TEXT(MSGBYP)                                            *
+               TEXTLENGTH(L'MSGBYP)                                    *
+               RESP(CICSRESP)
+         LA    R12,UERCBYP               Set up BYP return code
+         B     RETURN_NORMAL             Return
+*
+HANDLE_BFAIL  DS 0H
+***********************************************************************
+*   -Examine the FC response code and issue a message to the operator *
+*    console describing the procedure to be followed for this error.  *
+*    This sample program provides slots for each possible FC response *
+*    code, and includes suggested messages for some of them.          *
+*    You could customise the sample program by expanding the set of   *
+*    messages to describe procedures which your installation has      *
+*    decided to follow for each error, or to take other action within *
+*    the exit program.                                                *
+*    If you do not add a message for any particular response code,    *
+*    then the operator will still see message DFHFC4701, issued as    *
+*    part of the CICS backout failure processing, which will advise   *
+*    him on any action which needs to be taken.                       *
+***********************************************************************
+*        Issue introductory message
+         EXEC CICS WRITE OPERATOR                                      *
+               TEXT(MSGINTRO)                                          *
+               TEXTLENGTH(L'MSGINTRO)                                  *
+               RESP(CICSRESP)
+         EJECT
+*
+* Check for UEAIXFUL response
+         CLI   FCRESP,UEAIXFUL
+         BNE   NOT_AIXFUL
+*        The procedure to be followed when an error occurs on adding
+*        to a non-unique alternate index could be added here
+         B     NORM_RESP
+         SPACE 1
+NOT_AIXFUL DS 0H
+         SPACE 1
+* Check for UECACHE response
+         CLI   FCRESP,UECACHE
+         BNE   NOT_CACHE
+*        The procedure to be followed when an RLS cache structure
+*        error occurs could be added here
+         B     NORM_RESP
+         SPACE 1
+NOT_CACHE  DS 0H
+         SPACE 1
+* Check for UEDLOCK response
+         CLI   FCRESP,UEDLOCK
+         BNE   NOT_DLOCK
+*        The procedure to be followed when a deadlock occurs is:
+*        Write a message to the operator advising a retry
+         EXEC CICS WRITE OPERATOR                                      *
+               TEXT(MSGRTRY)                                           *
+               TEXTLENGTH(L'MSGRTRY)                                   *
+               RESP(CICSRESP)
+         B     NORM_RESP
+         SPACE 1
+NOT_DLOCK  DS 0H
+         SPACE 1
+* Check for UEDUPREC response
+         CLI   FCRESP,UEDUPREC
+         BNE   NOT_DUPREC
+*        The procedure to be followed when an error occurs trying
+*        to add a duplicate key to a unique alternate index could
+*        be added here
+         B     NORM_RESP
+         SPACE 1
+NOT_DUPREC DS 0H
+         SPACE 1
+* Check for UEIOEROR response
+         CLI   FCRESP,UEIOEROR
+         BNE   NOT_IOEROR
+*        The procedure to be followed when an I/O error occurs
+*        could be added here
+         B     NORM_RESP
+         SPACE 1
+NOT_IOEROR DS 0H
+         SPACE 1
+* Check for UELCKFUL response
+         CLI   FCRESP,UELCKFUL
+         BNE   NOT_LCKFUL
+*        The procedure to be followed when a lock structure full
+*        error occurs could be added here
+         B     NORM_RESP
+         SPACE 1
+NOT_LCKFUL DS 0H
+         SPACE 1
+* Check for UENBWBAK response
+         CLI   FCRESP,UENBWBAK
+         BNE   NOT_NBWBAK
+*        The procedure to be followed in a non-BWO backup is in
+*        progress at the time of the backout is:
+*        Write message to operator advising that no action is required
+         EXEC CICS WRITE OPERATOR                                      *
+               TEXT(MSGAUTO)                                           *
+               TEXTLENGTH(L'MSGAUTO)                                   *
+               RESP(CICSRESP)
+         B     NORM_RESP
+         SPACE 1
+NOT_NBWBAK DS 0H
+         SPACE 1
+* Check for UENOLDEL response
+         CLI   FCRESP,UENOLDEL
+         BNE   NOT_NOLDEL
+*        The procedure to be followed when backing out of a write
+*        to an ESDS fails because no XFCLDEL exit is enabled could
+*        be added here.  For example, enable such an exit program.
+         B     NORM_RESP
+         SPACE 1
+NOT_NOLDEL DS 0H
+         SPACE 1
+* Check for UENOSPAC response
+         CLI   FCRESP,UENOSPAC
+         BNE   NOT_NOSPAC
+*        The procedure to be followed when an error occurs because
+*        the data set has no space could be added here
+         B     NORM_RESP
+         SPACE 1
+NOT_NOSPAC DS 0H
+         SPACE 1
+* Check for UEOPENER response
+         CLI   FCRESP,UEOPENER
+         BNE   NOT_OPENER
+*        The procedure to be followed when an OPEN error occurs
+*        could be added here
+         B     NORM_RESP
+         SPACE 1
+NOT_OPENER DS 0H
+         SPACE 1
+* Check for UERLSCON response
+         CLI   FCRESP,UERLSCON
+         BNE   NOT_RLSCON
+*        The procedure to be followed when an error occurs trying
+*        to continue a request thread because the RLS server has
+*        recycled since the thread was started could be added here
+         B     NORM_RESP
+         SPACE 1
+NOT_RLSCON DS 0H
+         SPACE 1
+* Check for UERLSDIS response
+         CLI   FCRESP,UERLSDIS
+         BNE   NOT_RLSDIS
+*        The procedure to be followed when an 'RLS access disabled'
+*        error occurs could be added here
+         B     NORM_RESP
+         SPACE 1
+NOT_RLSDIS DS 0H
+         SPACE 1
+* Check for UERLSERR response
+         CLI   FCRESP,UERLSERR
+         BNE   NOT_RLSERR
+*        The procedure to be followed when an RLS error occurs is:
+*        Write message to operator advising that the server should
+*        restart automatically
+         EXEC CICS WRITE OPERATOR                                      *
+               TEXT(MSGRLS)                                            *
+               TEXTLENGTH(L'MSGRLS)                                    *
+               RESP(CICSRESP)
+         B     NORM_RESP
+         SPACE 1
+NOT_RLSERR DS 0H
+         SPACE 1
+*        The procedure to be followed when an unexpected response
+*        occurs could be added here
+         B     NORM_RESP
+         SPACE 1
+*
+NORM_RESP     DS 0H
+***********************************************************************
+*   -Set a response code of UERCNORM.                                 *
+***********************************************************************
+         LA    R12,UERCNORM              Set up NORM return code
+         B     RETURN_NORMAL             Return
+*
+***********************************************************************
+*   -Normal exit processing for the program                           *
+*      Make a user trace entry if tracing is active for File Control  *
+*      and there were no errors during processing.                    *
+*      The following data is traced:                                  *
+*        DATA1: Eyecatcher 'DFH$FCBF EXIT OK'                         *
+*        DATA2: File Control portion of log record                    *
+*        DATA3: Text 'Handle backout failure'                         *
+*                 or 'Bypass backout failure' as appropriate.         *
+***********************************************************************
+RETURN_NORMAL  DS 0H
+         L     R2,UEPTRACE               Address the trace flag
+         TM    0(R2),UEPTRON             Is FC level 1 tracing active?
+         BZ    NO_EXIT_TRACE             No...skip trace
+*
+         LA    R2,XPI_PLIST_STG          Yes..make user trace entry
+         USING DFHTRPT_ARG,R2            Address DFHTRPTX plist
+*
+         CH    R12,=Y(UERCBYP)           Are we bypassing BFailure?
+         BE    BYPASS_TEXT               Yes, go and say so
+         DFHTRPTX CLEAR,                 Set up trace data field       *
+               IN,                                                     *
+               DATA3(A(NORM_TEXT),L'NORM_TEXT)
+         B     ISSUE_TRACE               Go and issue the trace entry
+*
+BYPASS_TEXT    DS 0H
+         DFHTRPTX CLEAR,                 Set up trace data field       *
+               IN,                                                     *
+               DATA3(A(BYP_TEXT),L'BYP_TEXT)
+*
+ISSUE_TRACE    DS 0H
+         DFHTRPTX CALL,                  Trace exit from program       *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(EXIT_TPID),                                    *
+               DATA1(A(EXIT_EYE),L'EXIT_EYE),      Eyecatcher          *
+               DATA2((R5),LOG_LENGTH),             FC log record       *
+               DATA3(*),                           Text                *
+               OUT,                                                    *
+               RESPONSE(*)
+*
+         DROP  R2                        Lose addressability to plist
+NO_EXIT_TRACE DS 0H                      Skip to here if no trace
+         LR    R15,R12                   Copy return code from R12
+         B     RETURN_TO_CICS            Return to CICS
+*
+***********************************************************************
+*   -Error exit processing for the program                            *
+*      If errors occur during processing or if CICS functions fail,   *
+*      a user exception trace entry is made regardless of the trace   *
+*      setting.                                                       *
+*      In those cases, the following is traced:                       *
+*        DATA1: Eyecatcher 'USEREXC'                                  *
+*        DATA2: Eyecatcher 'DFH$FCBF EXIT FAIL'                       *
+*        DATA3: File Control portion of log record                    *
+*      A response of UERCNORM is returned so that although some error *
+*      has occurred in the exit, CICS will still perform its normal   *
+*      backout failure processing.                                    *
+***********************************************************************
+RETURN_FAILED DS 0H
+         LA    R2,XPI_PLIST_STG          Address DFHTRPTX plist
+         USING DFHTRPT_ARG,R2
+*
+         DFHTRPTX CALL,                  Trace XPI call                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(FAIL_TPID),                                    *
+               DATA1(A(UEXC_EYE),L'UEXC_EYE),      Eyecatcher          *
+               DATA2(A(FAIL_EYE),L'FAIL_EYE),      Eyecatcher          *
+               DATA3((R5),LOG_LENGTH),             FC log record       *
+               OUT,                                                    *
+               RESPONSE(*)
+         DROP  R2                        Lose addressability to plist
+*
+         LA    R15,UERCNORM              Set normal response code
+         B     RETURN_TO_CICS            Return to CICS
+*
+***********************************************************************
+*   -Generate epilog code with the DFHEIRET macro                     *
+*    The DFHEIRET macro frees DFHEISTG working storage,               *
+*    restores caller's registers, and sets R15 before exiting         *
+***********************************************************************
+RETURN_TO_CICS DS 0H
+         DFHEIRET RCREG=15               Return with rc in R15
+*
+         DROP  R5,R6,DFHEIBR,DFHEIPLR    Lose addressability to DSECTs
+         EJECT
+***********************************************************************
+* Trace point ids. User trace entries issued from exit programs       *
+* should have trace point ids in the range X'0100' to X'01FF' for     *
+* CICS to interpret them as such.                                     *
+***********************************************************************
+         DS    0D
+ENTRY_TPID     DC    XL2'01D0'                Entry trace point id
+EXIT_TPID      DC    XL2'01D1'                Exit ok trace point id
+FAIL_TPID      DC    XL2'01D2'                Exit fail trace point id
+*
+***********************************************************************
+* Operator Messages.                                                  *
+***********************************************************************
+BDAMTXT1 DC    C'DFH$FCBF Backout failure for BDAM file '
+BDAMTXT2 DC    C'. Either close all files using the BDAM data set named*
+                in message DFHFC4702 which follows, or shut CICS down.'
+BYPTXT   DC    C'DFH$FCBF Backout failure ignored for file '
+MSGINTRO DC    C'DFH$FCBF Advice on backout failure from XFCBFAIL exit *
+               may follow.'
+MSGRTRY  DC    C'DFH$FCBF Retry backout using SET DSNAME RETRY for data*
+               set included in message DFHFC4701 which will follow.'
+MSGAUTO  DC    C'DFH$FCBF Take no action: backout retry should be autom*
+               atic.'
+MSGRLS   DC    C'DFH$FCBF The SMSVSAM server has failed.  It should rec*
+               ycle and the backout be retried automatically.  If the s*
+               erver does not restart, investigate the problem.'
+*
+***********************************************************************
+* Other constants.                                                    *
+***********************************************************************
+ENTRY_EYE      DC    C'DFH$FCBF ENTRY'        Entry eyecatcher
+EXIT_EYE       DC    C'DFH$FCBF EXIT OK'      Exit ok eyecatcher
+NORM_TEXT      DC    C'Handle backout failure' Text traced on UERCNORM
+BYP_TEXT       DC    C'Bypass backout failure' Text traced on UERCBYP
+FAIL_EYE       DC    C'DFH$FCBF EXIT FAIL'    Exit fail eyecatcher
+UEXC_EYE       DC    C'USEREXC'               User exc trace eyecatcher
+*
+***********************************************************************
+* File for which backout failure processing is bypassed.              *
+* This could be expanded into a table of files or data sets (see      *
+* sample DFH$FCBV for an example of using a table in an exit program) *
+* but if your installation is concerned about data integrity then it  *
+* is perhaps unlikely that there would be any files or data sets      *
+* for which you would want to bypass backout failure processing.      *
+***********************************************************************
+INSIG_FILE     DC    CL8'RLS2A'
+***********************************************************************
+* End of DFH$FCBF                                                     *
+***********************************************************************
+         DROP
+         END DFH$FCBF

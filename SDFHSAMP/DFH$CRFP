@@ -1,0 +1,1549 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$CRFP                                           */
+ /*                                                                  */
+ /* Descriptive Name = CSD Cross Referencing Sample Program          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1987, 2007"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* The function of this program is to produce a cross reference     */
+ /* listing of objects or keywords on the CICS system definition file*/
+ /* (DFHCSD). The program is driven by a user exit in the CSD        */
+ /* off-line utility DFHCSDUP. Data describing resource definitions  */
+ /* on the CSD is passed to this exit, in a standard parameter list  */
+ /* format, and the pertinent data saved in a cross reference table  */
+ /* which is built in store.                                         */
+ /*                                                                  */
+ /*  After all the data passed to the exit has been processed, that  */
+ /*  is on the FINAL call to the exit, the contents of the cross     */
+ /*  reference table are printed out in collating sequence.          */
+ /*                                                                  */
+ /* This exit assumes that it is run via a EXTRACT command of the    */
+ /* form:                                                            */
+ /*        EXTRACT GROUP(<group name>) OBJECTS                       */
+ /*          where <group name> may be generic                       */
+ /*     or                                                           */
+ /*        EXTRACT LIST(<list name>) OBJECTS                         */
+ /*          where <list name> is NOT generic                        */
+ /*                                                                  */
+ /* N.B This program must be link-edited after module DFHEXLE using  */
+ /*     the control statement CHANGE EXITEP(CREFCSD) immediately     */
+ /*     before DFHEXLE is included, as described in the section on   */
+ /*     DFHCSDUP LE user exits in the CICS publications.  It must be */
+ /*     linked with RMODE(24).  It should preferably be linked with  */
+ /*     AMODE(31).  However, the AMODE in which this module is       */
+ /*     called is not determined by the load module AMODE but by the */
+ /*     CEEPIPI table entry in DFHEXLE, which specifies AMODE 31.    */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /*                                                                  */
+ /*  $MOD(DFH$CRFP),COMP(SPI),PROD(CICS TS ):                        */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 210 870708 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $P2= D15838 650 060519 HD4PALS: Fix compile errors for bin(8)   */
+ /*  $P3= D15844 650 070126 HDBNJAS: Fix return, simplify parameters */
+ /*  $D1= I07267 630 020418 HDHYJB : Compile samples                 */
+ /*                                                                  */
+ /********************************************************************/
+ CREFCSD: PROC( EXIT_FUNCTION_CODE,
+                EXIT_WORK_AREA_PTR,
+                EXIT_BACK_TRANSLATED_CMD_PTR,
+                EXIT_LIST_NAME,
+                EXIT_GROUP_NAME,
+                EXIT_OBJECT_TYPE,
+                EXIT_OBJECT_NAME,
+                EXIT_KEYWORD_NAME,
+                EXIT_KEYWORD_LENGTH,
+                EXIT_KEYWORD_VALUE ) OPTIONS(ASM RETCODE);      /*@P3C*/
+
+                                   /* User exit call type code   */
+   DCL  EXIT_FUNCTION_CODE                BINARY FIXED(15);     /*@P3C*/
+                                  /* User work area ptr          */
+   DCL  EXIT_WORK_AREA_PTR                POINTER;              /*@P3C*/
+                                  /* Back translated command ptr */
+   DCL  EXIT_BACK_TRANSLATED_CMD_PTR      POINTER;              /*@P3C*/
+                                  /* RDO List name               */
+   DCL  EXIT_LIST_NAME                    CHAR(8);              /*@P3C*/
+                                  /* RDO Group name              */
+   DCL  EXIT_GROUP_NAME                   CHAR(8);              /*@P3C*/
+                                  /* Object type                 */
+   DCL  EXIT_OBJECT_TYPE                  CHAR(12);             /*@P3C*/
+                                  /* Object name                 */
+   DCL  EXIT_OBJECT_NAME                  CHAR(8);              /*@P3C*/
+                                  /* Keyword name                */
+   DCL  EXIT_KEYWORD_NAME                 CHAR(12);             /*@P3C*/
+                                  /* Keyword length of value     */
+   DCL  EXIT_KEYWORD_LENGTH               BINARY FIXED(15);     /*@P3C*/
+                                  /* Keyword value               */
+   DCL  EXIT_KEYWORD_VALUE                CHAR(255);            /*@P3C*/
+                                  /* Return code from exit       */
+   DCL  EXIT_RETURN_CODE                  BINARY FIXED(31) INIT(0);
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*   D E F I N E  T H E  I N P U T  A N D  O U T P U T  F I L E S   */
+ /*                                                                  */
+ /*   INPUT: The input file defines the objects/keywords to be cross */
+ /*          referenced. There is one record for each object/keyword.*/
+ /*          The file should be defined as a file of fixed length    */
+ /*          records of 80 characters each, with one record for each */
+ /*          object or keyword to be  cross referenced.              */
+ /*          Only the characters in columns 1-12 of a record will be */
+ /*          considered to be significant.                           */
+ /*          e.g To cross reference PROGRAMs with TRANSACTIONs  and  */
+ /*              TYPETERMs with TERMINALs the input would be:        */
+ /*                                                                  */
+ /*                    PROGRAM                                       */
+ /*                    TYPETERM                                      */
+ /*                                                                  */
+ /*   OUTPUT: The output file is used to construct the cross         */
+ /*           reference report. It is assumed that it will ultimately*/
+ /*           be printed, so carriage control information is         */
+ /*           imbedded in the output file.                           */
+ /*                                                                  */
+ /* **************************************************************** */
+
+   DCL CRFINPT                             FILE INPUT
+                                               RECORD
+                                               SEQUENTIAL
+                                               ENV(F RECSIZE(80)
+                                                     BLKSIZE(80))
+                                               BUFFERED;
+
+   DCL CRFOUT                             FILE OUTPUT
+                                               STREAM
+                                               PRINT;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*           D E F I N E  U S E R  W O R K  A R E A                 */
+ /*                                                                  */
+ /* A 4 byte work area provided by the exit in DFHCSDUP (which is    */
+ /* addressed by EXIT_WORK_AREA_PTR) is used to address this area.   */
+ /* The contents of this 4 byte work area are preserved between      */
+ /* calls to this program, and so addressability to this programs    */
+ /* work area can be re-established on all calls subsequent to the   */
+ /* INITIAL call. The work area defined below is allocated on the    */
+ /* INITIAL call and the 4 byte work area provided by the exit       */
+ /* initialised to its address.                                      */
+ /* **************************************************************** */
+
+   DCL WORK_AREA_PTR                      POINTER
+                                          BASED(EXIT_WORK_AREA_PTR);
+
+   DCL 1 USER_WORK_AREA                   BASED(WORK_AREA_PTR),
+         3 START_OF_TYPE_CHAIN            OFFSET(TYPE_POOL_AREA),
+         3 BACK_TRANSLATED_CMD_PTR        POINTER,
+         3 TYPE_POOL_PTR                  POINTER,
+         3 TYPE_POOL_SIZE                 BINARY FIXED(31),
+         3 NAME_POOL_PTR                  POINTER,
+         3 NAME_POOL_SIZE                 BINARY FIXED(31),
+         3 DEFINED_POOL_PTR               POINTER,
+         3 DEFINED_POOL_SIZE              BINARY FIXED(31),
+         3 USED_POOL_PTR                  POINTER,
+         3 USED_POOL_SIZE                 BINARY FIXED(31),
+         3 INPUT_FILE_OPEN                BIT(1),
+         3 OUTPUT_FILE_OPEN               BIT(1),
+         3 SUFFICIENT_STORAGE             BIT(1);
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*   D E F I N E  T H E  C R O S S  R E F E R E N C E  T A B L E    */
+ /*                                                                  */
+ /*                                                                  */
+ /*  The table consists of 4 different elements. They are:           */
+ /*                                                                  */
+ /*   1) Type Elements   -  These define the objects or keywords     */
+ /*                         which are to be cross referenced.        */
+ /*                         The values are those read from the       */
+ /*                         input file. Each type element has a      */
+ /*                         chain of 'name' elements associated with */
+ /*                         it.                                      */
+ /*                                                                  */
+ /*   2) Name Elements   -  These define the different values found  */
+ /*                         on the CSD for a particular object or    */
+ /*                         keyword name. Each name element has a    */
+ /*                         chain of 'defined' elements and a chain  */
+ /*                         of 'used' elements associated with it.   */
+ /*                                                                  */
+ /*   3) Defined Elements-  These define where a object of a given   */
+ /*                         name is defined (keywords cannot be      */
+ /*                         defined). As no two objects in a given   */
+ /*                         group can have the same name all that    */
+ /*                         it is necessary to record is the RDO     */
+ /*                         group name.                              */
+ /*                                                                  */
+ /*   4) Used Elements   -  These define in which resource           */
+ /*                         definitions a particular value of a      */
+ /*                         object name or a keyword value is used.  */
+ /*                         The object type, name and group must     */
+ /*                         recorded to uniquely define a use.       */
+ /*                                                                  */
+ /*                                                                  */
+ /* **************************************************************** */
+
+   DCL ( TYPE_ELEMENT_PTR,
+         CURRENT_TYPE_ELEMENT_PTR)        OFFSET(TYPE_POOL_AREA);
+   DCL 1  TYPE_ELEMENT                    BASED(TYPE_ELEMENT_PTR),
+         3 TYPE_KEY                       CHAR(12),
+         3  NEXT_TYPE_ELEMENT_PTR         OFFSET(TYPE_POOL_AREA),
+         3  NAME_CHAIN_START              OFFSET(NAME_POOL_AREA),
+         3  NAME_CHAIN_COUNT              BINARY FIXED(15);
+
+   DCL 1 TYPE_ELEMENT_POOL                BASED(TYPE_POOL_PTR)
+                                          ALIGNED,
+         3  TPSIZE                        BINARY FIXED(31),
+         3  TYPE_POOL_AREA                AREA(TYPE_POOL_SIZE
+                                               REFER(TPSIZE));
+
+
+   DCL ( NAME_ELEMENT_PTR,
+         CURRENT_NAME_ELEMENT_PTR,
+         PREVIOUS_NAME_ELEMENT_PTR)       OFFSET(NAME_POOL_AREA);
+   DCL 1  NAME_ELEMENT                    BASED(NAME_ELEMENT_PTR),
+          3  NAME_KEY                     CHAR(44),
+          3  NEXT_NAME_ELEMENT_PTR        OFFSET(NAME_POOL_AREA),
+          3  DEFINED_CHAIN_START          OFFSET(DEFINED_POOL_AREA),
+          3  DEFINED_CHAIN_COUNT          BINARY FIXED(15),
+          3  USED_CHAIN_START             OFFSET(USED_POOL_AREA),
+          3  USED_CHAIN_COUNT             BINARY FIXED(15);
+
+   DCL 1  NAME_ELEMENT_POOL               BASED(NAME_POOL_PTR)
+                                          ALIGNED,
+          3  NPSIZE                       BINARY FIXED(31),
+          3  NAME_POOL_AREA               AREA(NAME_POOL_SIZE
+                                               REFER(NPSIZE));
+
+
+   DCL ( DEFINED_ELEMENT_PTR,
+         CURRENT_DEFINED_ELEMENT_PTR,
+         PREVIOUS_DEFINED_ELEMENT_PTR)    OFFSET(DEFINED_POOL_AREA);
+   DCL 1 DEFINED_ELEMENT                  BASED(DEFINED_ELEMENT_PTR),
+         3  DEFINED_KEY                   CHAR(8),
+         3  NEXT_DEFINED_ELEMENT_PTR      OFFSET(DEFINED_POOL_AREA);
+
+   DCL 1 DEFINED_ELEMENT_POOL             BASED(DEFINED_POOL_PTR)
+                                          ALIGNED,
+         3  DPSIZE                        BINARY FIXED(31),
+         3  DEFINED_POOL_AREA             AREA(DEFINED_POOL_SIZE
+                                               REFER(DPSIZE));
+
+
+   DCL ( USED_ELEMENT_PTR,
+         CURRENT_USED_ELEMENT_PTR,
+         PREVIOUS_USED_ELEMENT_PTR)       OFFSET(USED_POOL_AREA);
+   DCL 1 USED_ELEMENT                     BASED(USED_ELEMENT_PTR),
+         3 USED_KEY,
+            5 OBJECT_TYPE                 CHAR(12),
+            5 OBJECT_NAME                 CHAR(8),
+            5 RDO_GROUP_NAME              CHAR(8),
+         3 NEXT_USED_ELEMENT_PTR          OFFSET(USED_POOL_AREA);
+
+   DCL 1 USED_ELEMENT_POOL                BASED(USED_POOL_PTR)
+                                          ALIGNED,
+         3  UPSIZE                        BINARY FIXED(31),
+         3  USED_POOL_AREA                AREA(USED_POOL_SIZE
+                                               REFER(UPSIZE));
+ /* **************************************************************** */
+ /* Define all possible error cases trapped directly by this program */
+ /* **************************************************************** */
+
+   DCL OBJECTS_OPTION_MISSING             BINARY FIXED(31) INIT(1);
+   DCL INPUT_FILE_OPEN_ERROR              BINARY FIXED(31) INIT(2);
+   DCL INPUT_FILE_READ_ERROR              BINARY FIXED(31) INIT(3);
+   DCL OUTPUT_FILE_OPEN_ERROR             BINARY FIXED(31) INIT(4);
+   DCL OUTPUT_FILE_WRITE_ERROR            BINARY FIXED(31) INIT(5);
+   DCL INSUFFICIENT_INITIAL_SPACE         BINARY FIXED(31) INIT(6);
+   DCL INSUFFICIENT_TYPE_AREA_SPACE       BINARY FIXED(31) INIT(7);
+   DCL INSUFFICIENT_NAME_AREA_SPACE       BINARY FIXED(31) INIT(8);
+   DCL INSUFFICIENT_DEFINED_AREA_SPACE    BINARY FIXED(31) INIT(9);
+   DCL INSUFFICIENT_USED_AREA_SPACE       BINARY FIXED(31) INIT(10);
+
+ /* **************************************************************** */
+ /* Declare PL/I built in functions used by this program             */
+ /* **************************************************************** */
+
+   DCL(NULL,
+       ADDR,
+       HIGH,
+       LOW,
+       LENGTH,
+       PLIDUMP,
+       PLIRETC,                                                 /*@P3A*/
+       STRING,
+       INDEX,
+       SUBSTR)                            BUILTIN;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*         M A I N  L I N E  C O D E  S T A R T S  H E R E          */
+ /*         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~          */
+ /*                                                                  */
+ /* **************************************************************** */
+
+ /* **************************************************************** */
+ /* Establish action to be taken on all errors not specifically      */
+ /* trapped by the program                                           */
+ /* **************************************************************** */
+   ON ERROR BEGIN;
+     ON ERROR SYSTEM;
+          CALL PLIDUMP('HBTF','UNEXPECTED ERROR');
+   END;
+
+
+ /* ************************************************************** */
+ /* Determine the type of call being made to this program and      */
+ /* proceed accordingly. The only types of call of significance    */
+ /* to this program are:                                           */
+ /*                      INITIAL call                              */
+ /*                      OBJECT START calls                        */
+ /*                      DETAIL calls                              */
+ /*                      FINAL call                                */
+ /* All other call types are ignored.                              */
+ /*                                                                */
+ /* ************************************************************** */
+
+   SELECT (EXIT_FUNCTION_CODE);
+       WHEN (0)
+         CALL PROCESS_INITIAL_CALL;
+       WHEN (6)
+         CALL PROCESS_OBJECT_START_CALL;
+       WHEN (8)
+         CALL PROCESS_KEYWORD_DETAIL_CALL;
+       WHEN (16)
+         CALL PROCESS_FINAL_CALL;
+       OTHERWISE
+         ;
+   END; /* of select on call type */
+
+ /* **************************************************************** */
+ /* Return to DFHCSDUP, returning current value of return code.      */
+ /* A non-zero value will result in the termination of the current   */
+ /* EXTRACT command. A check is made on the return code before       */
+ /* return, if it is non zero then all open files are closed to      */
+ /* avoid any C03 abends.                                            */
+ /* **************************************************************** */
+ CALL CHECK_RETURN_CODE;
+
+ CALL PLIRETC(EXIT_RETURN_CODE);   /* Set return code for R15     @P3A*/
+ RETURN;                                                        /*@P3C*/
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*          P R O C E S S  A  I N I T I A L  C A L L                */
+ /*                                                                  */
+ /*                                                                  */
+ /*   This procedure:                                                */
+ /*     1) Checks that the use specified OBJECT on the EXTRACT       */
+ /*        command. Quit now if OBJECTS not specified                */
+ /*     2) Allocates the the user work area                          */
+ /*     3) Allocates the initial cross reference table element pools */
+ /*                                                                  */
+ /*       If either of the above allocates fails then an immediate   */
+ /*       exit will be made after setting the return code to identify*/
+ /*       the problem.                                               */
+ /*                                                                  */
+ /*     4) Controls the opening of the input and output files.       */
+ /*     5) Controls the reading of the input records into type       */
+ /*        elements of the cross reference table.                    */
+ /*     6) Saves a copy of the back-translated command issued        */
+ /*        which caused this program to be loaded and invoked.       */
+ /*                                                                  */
+ /* **************************************************************** */
+ PROCESS_INITIAL_CALL: PROC ;
+   DCL BACK_TRANSLATED_COMMAND             CHAR(100)
+       BASED(EXIT_BACK_TRANSLATED_CMD_PTR);
+
+   DCL END_OF_INPUT_FILE                    BIT(1);
+   DCL XREF_OBJECT                          CHAR(80);
+ /* **************************************************************** */
+ /* Establish action to be taken if the allocation of the work area  */
+ /* fails. A immediate exit from this subroutine will be made after  */
+ /* the return code has been set.                                    */
+ /* **************************************************************** */
+   ON AREA BEGIN;
+        EXIT_RETURN_CODE= INSUFFICIENT_INITIAL_SPACE;
+        GO TO RETURN_FROM_INITIAL;  /* exit this subroutine */
+   END;
+   ON ENDFILE(CRFINPT) END_OF_INPUT_FILE= '1'B;
+
+ /* *****************************/
+ /* Initialise end of file flag */
+ /* *****************************/
+   END_OF_INPUT_FILE= '0'B;
+
+   IF INDEX(BACK_TRANSLATED_COMMAND,'OBJECTS') = 0 THEN
+     EXIT_RETURN_CODE= OBJECTS_OPTION_MISSING;
+   ELSE
+   DO;
+       /* ********************************************************** */
+       /* Allocate work area from system storage. If allocation fails*/
+       /* the ON AREA condition is raised and a immediate exit from  */
+       /* subroutine results. Initialise work area.                  */
+       /* ************************************************************/
+        ALLOCATE USER_WORK_AREA;
+        INPUT_FILE_OPEN= '0'B;
+        OUTPUT_FILE_OPEN= '0'B;
+        SUFFICIENT_STORAGE= '1'B;
+        START_OF_TYPE_CHAIN= NULL;
+       /* ********************************************************* */
+       /* Allocate the initial element pool areas. These allow for  */
+       /* approx. 10 type elements and 100  name, defined and used  */
+       /* elements.                                                 */
+       /* ********************************************************* */
+        TYPE_POOL_SIZE= 300;
+        ALLOCATE TYPE_ELEMENT_POOL;
+
+        NAME_POOL_SIZE= 7000;
+        ALLOCATE NAME_ELEMENT_POOL;
+
+        DEFINED_POOL_SIZE= 1500;
+        ALLOCATE DEFINED_ELEMENT_POOL;
+
+        USED_POOL_SIZE= 4000;
+        ALLOCATE USED_ELEMENT_POOL;
+
+        /* *************************** */
+        /* Open input and output files */
+        /* *************************** */
+        CALL OPEN_FILES;
+  END;
+ /* ***************** */
+ /* Files opened ok ? */
+ /* ***************** */
+   IF EXIT_RETURN_CODE = 0 THEN
+   DO;
+        /* ********************************************************* */
+        /* Read the contents of the input file into the TYPE chain   */
+        /* of the cross reference table. The process is terminated   */
+        /* either by the end of the input file being reached or a    */
+        /* I/O or element allocation error being detected.           */
+        /* ********************************************************* */
+        READ FILE(CRFINPT) INTO(XREF_OBJECT);
+        DO WHILE (^END_OF_INPUT_FILE & EXIT_RETURN_CODE = 0);
+           CALL ADD_TYPE_TO_TYPE_CHAIN;
+           IF EXIT_RETURN_CODE = 0 THEN
+                READ FILE(CRFINPT) INTO(XREF_OBJECT);
+        END;
+       /************************************************************* */
+       /* Save ptr to back translated command to be used in reportr   */
+       /* *********************************************************** */
+       BACK_TRANSLATED_CMD_PTR= EXIT_BACK_TRANSLATED_CMD_PTR;
+   END;
+ RETURN_FROM_INITIAL:
+   RETURN;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*                 O P E N  F I L E S                               */
+ /*                                                                  */
+ /*   This subroutine opens the input and output files to be used    */
+ /*   by this program. A open failure will result in the setting     */
+ /*   of the return code to a unique value to identify the reason    */
+ /*   for the error.                                                 */
+ /*                                                                  */
+ /* **************************************************************** */
+ OPEN_FILES: PROC;
+
+   ON UNDEFINEDFILE(CRFINPT) EXIT_RETURN_CODE= INPUT_FILE_OPEN_ERROR;
+   ON UNDEFINEDFILE(CRFOUT) EXIT_RETURN_CODE= OUTPUT_FILE_OPEN_ERROR;
+
+   OPEN FILE(CRFINPT) INPUT RECORD BUFFERED;
+
+   IF EXIT_RETURN_CODE = 0 THEN
+   DO;
+        INPUT_FILE_OPEN= '1'B;
+        OPEN FILE(CRFOUT) PRINT OUTPUT STREAM LINESIZE(131);
+        IF EXIT_RETURN_CODE = 0 THEN
+            OUTPUT_FILE_OPEN= '1'B;
+        ELSE
+            CLOSE FILE(CRFINPT);
+   END;
+
+   RETURN;
+
+ END OPEN_FILES;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*    A D D  A  T Y P E  E L E M E N T  T O  I T S  C H A I N       */
+ /*                                                                  */
+ /*  This procedure adds a new element to the type chain in the      */
+ /*  order in which they occur in the input file XREFIN. As a new    */
+ /*  type element is defined the associated name chain is            */
+ /*  initialised, and dummy head and tail elements are added so as to*/
+ /*  make the algorithm for adding a new name element much easier.   */
+ /*                                                                  */
+ /* **************************************************************** */
+ ADD_TYPE_TO_TYPE_CHAIN: PROC;
+
+   DCL WORK_PTR                             OFFSET(TYPE_POOL_AREA);
+
+
+ /* *********************************** */
+ /* Allocate storage for a TYPE element */
+ /* *********************************** */
+   CALL ALLOCATE_A_TYPE_ELEMENT;
+   IF SUFFICIENT_STORAGE THEN
+   DO;
+        IF START_OF_TYPE_CHAIN = NULL THEN
+             /* **************************************************** */
+             /* Initialise type chain ptr, this is the first TYPE    */
+             /* element                                              */
+             /* **************************************************** */
+
+             START_OF_TYPE_CHAIN = TYPE_ELEMENT_PTR;
+        ELSE
+             /* **************************************************** */
+             /* Add the new TYPE element to the end of the existing  */
+             /* chain                                                */
+             /* **************************************************** */
+             DO;
+                   /* ********************************************** */
+                   /* Scan for the end of the existing chain         */
+                   /* ********************************************** */
+                   WORK_PTR= START_OF_TYPE_CHAIN;
+                   DO WHILE (WORK_PTR-> NEXT_TYPE_ELEMENT_PTR ^= NULL);
+                        WORK_PTR = WORK_PTR -> NEXT_TYPE_ELEMENT_PTR;
+                   END;
+                   /* ********************************************** */
+                   /* Link new element onto end of current TYPE chain*/
+                   /* ********************************************** */
+                   WORK_PTR -> NEXT_TYPE_ELEMENT_PTR= TYPE_ELEMENT_PTR;
+             END;
+
+        /* ****************************** */
+        /* Initialise the new TYPE element */
+        /* ****************************** */
+        NEXT_TYPE_ELEMENT_PTR= NULL; /* new element now end of chain */
+        TYPE_KEY= SUBSTR(XREF_OBJECT,1,12);
+        NAME_CHAIN_COUNT= 0;
+
+        /* ********************************************************* */
+        /* Initialise the NAME chain for the new TYPE element.       */
+        /* Get the dummy head element.                               */
+        /* ********************************************************* */
+        CALL ALLOCATE_A_NAME_ELEMENT;
+
+        IF SUFFICIENT_STORAGE THEN
+        DO;
+            /* ***************************************************** */
+            /* Initialise the NAME chain dummy head element          */
+            /* ***************************************************** */
+            TYPE_ELEMENT_PTR -> NAME_CHAIN_START= NAME_ELEMENT_PTR;
+            NAME_KEY= LOW(LENGTH(NAME_KEY));
+            PREVIOUS_NAME_ELEMENT_PTR= NAME_ELEMENT_PTR;
+            /* ********************************** */
+            /* Get storage for dummy tail element */
+            /* ********************************** */
+            CALL ALLOCATE_A_NAME_ELEMENT;
+        END;
+
+        IF SUFFICIENT_STORAGE THEN
+        DO;
+            /* ***************************************************** */
+            /* Initialise the NAME chain dummy tail element          */
+            /* ***************************************************** */
+            NAME_KEY= HIGH(LENGTH(NAME_KEY));
+            PREVIOUS_NAME_ELEMENT_PTR -> NEXT_NAME_ELEMENT_PTR=
+                                         NAME_ELEMENT_PTR;
+            NEXT_NAME_ELEMENT_PTR= NULL; /* signify end of name chain*/
+        END;
+   END;
+ END ADD_TYPE_TO_TYPE_CHAIN;
+
+ END PROCESS_INITIAL_CALL;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*      P R O C E S S  A N  O B J E C T  S T A R T  C A L L         */
+ /*                                                                  */
+ /*                                                                  */
+ /*  This subroutine performs the following:                         */
+ /*                                                                  */
+ /*    1) Searches the type chain to see if the new object is a      */
+ /*       object in which we are interested i.e one specified in     */
+ /*       the input file CRFINPT.                                    */
+ /*    2) If it is then:                                             */
+ /*       a) Search the name chain associated with the appropriate   */
+ /*          type element to see if a object with the same name      */
+ /*          has already been encountered. If not then a new name    */
+ /*          element is added in collating sequence, and the         */
+ /*          associated defined and used chains are initialised.     */
+ /*       b) The definition of the name is then added to the         */
+ /*          defined chain associated with the name.                 */
+ /*                                                                  */
+ /* **************************************************************** */
+ PROCESS_OBJECT_START_CALL: PROC;
+
+ DCL  WORK_NAME                           CHAR(44);
+
+ /* **************************************************************** */
+ /* Search the type chain for a element with key equal to object type*/
+ /* **************************************************************** */
+   CALL FIND_TYPE_IN_CHAIN(EXIT_OBJECT_TYPE);
+   IF CURRENT_TYPE_ELEMENT_PTR ^= NULL THEN
+   DO;
+        /* ************************************************ */
+        /* TYPE element with key equal to object type found */
+        /* ************************************************ */
+        WORK_NAME= EXIT_OBJECT_NAME;
+        /* ********************************************************* */
+        /* Search name chain for a element with key equal to object  */
+        /* name or keyword value. If one is not found then add a new */
+        /* element in collating sequence.                            */
+        /* ********************************************************* */
+        CALL FIND_NAME_IN_CHAIN(WORK_NAME);
+        IF SUFFICIENT_STORAGE THEN
+             /* **************************************************** */
+             /* Record definition of a 'object with name'.           */
+             /* **************************************************** */
+             CALL FIND_DEFINITION_IN_CHAIN(EXIT_GROUP_NAME);
+   END;
+
+ END PROCESS_OBJECT_START_CALL;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*      P R O C E S S  A  K E Y W O R D  D E T A I L  C A L L       */
+ /*                                                                  */
+ /*  This subroutine performs the following:                         */
+ /*                                                                  */
+ /*    1) Searches the 'type' chain to see if the keyword is one     */
+ /*       in which we are interested i.e one specified in the input  */
+ /*       file XREFIN.                                               */
+ /*    2) If it is then:                                             */
+ /*       a) Search the name chain associated with the appropriate   */
+ /*          type element to see if a keyword or object with the     */
+ /*          same name has already been encountered. If it is a      */
+ /*          new name then a new element is added in collating       */
+ /*          sequence, and the associated defined and used chains    */
+ /*          initialised.                                            */
+ /*       b) The use of the keyword is then added to the 'used'      */
+ /*          chain associated with the name.                         */
+ /*                                                                  */
+ /* **************************************************************** */
+ PROCESS_KEYWORD_DETAIL_CALL: PROC;
+
+   DCL   WORK_KEYWORD_VALUE               CHAR(44);
+   DCL   1  WORK_USED_KEY,
+            3  WORK_OBJECT_TYPE           CHAR(12),
+            3  WORK_OBJECT_NAME           CHAR(8),
+            3  WORK_GROUP_NAME            CHAR(8);
+
+   WORK_KEYWORD_VALUE= ' ';
+   IF EXIT_KEYWORD_LENGTH > 0 THEN
+   DO;
+        /* ********************************************************* */
+        /* The maximum length of keyword value which was considered  */
+        /* likely to be cross referenced is the DSNAME on a FILE     */
+        /* definition. All characters after the 44th of any value    */
+        /* are considered insignificant and truncated.               */
+        /* ********************************************************* */
+        IF EXIT_KEYWORD_LENGTH >= 44 THEN
+             WORK_KEYWORD_VALUE = SUBSTR(EXIT_KEYWORD_VALUE,1,44);
+        ELSE
+             WORK_KEYWORD_VALUE = SUBSTR(EXIT_KEYWORD_VALUE,1,
+                                         EXIT_KEYWORD_LENGTH);
+   END;
+ /* **************************************************************** */
+ /* Search the type chain for a element with key equal to keyword    */
+ /* name.                                                            */
+ /* **************************************************************** */
+   CALL FIND_TYPE_IN_CHAIN(EXIT_KEYWORD_NAME);
+   IF CURRENT_TYPE_ELEMENT_PTR ^= NULL THEN
+   DO;
+        /* ********************************************************* */
+        /* TYPE element with same key as keyword name found. Search  */
+        /* for keyword value in NAME chain. If no element with key   */
+        /* equal to keyword value then a new element is added in     */
+        /* collating sequence                                        */
+        /* ********************************************************* */
+        CALL FIND_NAME_IN_CHAIN(WORK_KEYWORD_VALUE);
+        IF SUFFICIENT_STORAGE THEN
+        DO;
+             /* **************************************************** */
+             /* Record the use of a keyword value in the USED chain  */
+             /* of the current NAME chain                            */
+             /* **************************************************** */
+             WORK_OBJECT_TYPE = EXIT_OBJECT_TYPE;
+             WORK_OBJECT_NAME = EXIT_OBJECT_NAME;
+             WORK_GROUP_NAME  = EXIT_GROUP_NAME;
+             CALL FIND_USE_IN_CHAIN(WORK_USED_KEY);
+        END;
+   END;
+
+ END PROCESS_KEYWORD_DETAIL_CALL;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*            P R O C E S S  A  F I N A L  C A L L                  */
+ /*                                                                  */
+ /*  This subroutine controls the printing out of the contents of    */
+ /*  the cross-reference table in the required format. It also       */
+ /*  handles the closing of the input and output files.              */
+ /*                                                                  */
+ /* **************************************************************** */
+ PROCESS_FINAL_CALL: PROC ;
+
+ /* **************************************************************** */
+ /* Scan along the type chain and for each type element produce a    */
+ /* analysis of the named occurrences of it, where these occurrences */
+ /* are defined and in which resource definitions they are used.     */
+ /* **************************************************************** */
+    TYPE_ELEMENT_PTR= START_OF_TYPE_CHAIN;
+    DO WHILE (TYPE_ELEMENT_PTR ^= NULL & EXIT_RETURN_CODE = 0);
+         CALL LIST_XREF_DETAILS_FOR_TYPE;
+         TYPE_ELEMENT_PTR= NEXT_TYPE_ELEMENT_PTR;
+    END;
+
+ /* ******************************** */
+ /* Close the input and output files */
+ /* ******************************** */
+    CLOSE FILE(CRFINPT);
+    CLOSE FILE(CRFOUT);
+
+    RETURN;
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*      L I S T  X R E F  D E T A I L S  F O R  T Y P E             */
+ /*                                                                  */
+ /*  This subroutine is invoked once for each type element in the    */
+ /*  type chain. If function is to produce a analysis of the         */
+ /*  definition and/or use of the objects and keywords specified     */
+ /*  in the input file. Each report on a type is started on a new    */
+ /*  page and the general format of each report is as follows:       */
+ /*                                                                  */
+ /*              < back translated command line>                     */
+ /*                                                                  */
+ /*              < type name line>                                   */
+ /*                                                                  */
+ /*          |~~ <number times name defined line>                    */
+ /*          |           <where defined line>  ~~| once per def      */
+ /* once per |           <where defined line>  __| of named type     */
+ /* named    |                                                       */
+ /*occurrence|   <number times name used>                            */
+ /* of a type|           <where used line>     ~~| once per use      */
+ /*          |           <where used line>     __| of named type     */
+ /*          |__                                                     */
+ /*                                                                  */
+ /*                                                                  */
+ /* **************************************************************** */
+ LIST_XREF_DETAILS_FOR_TYPE: PROC;
+
+   DCL  BACK_TRANSLATED_CMD               CHAR(75)
+        BASED(BACK_TRANSLATED_CMD_PTR);
+
+   DCL  1 NEW_PAGE_HEADER_LINE           STATIC,
+           5  FILLER_1                   CHAR(28) INIT(''),
+           5  FORMATTED_BACK_TRANS_CMD   CHAR(75),
+           5  FILLER_2                   char(28) INIT('');
+
+   DCL  1  CROSS_REFERENCE_OBJECT_LINE   STATIC,
+           5  FILLER_1                   CHAR(8)
+              INIT ('* * * * '),
+           5  FILLER_2                   CHAR(19)
+              INIT ('CROSS REFERENCE OF '),
+           5  TYPE_NAME                  CHAR(12),
+           5  FILLER_3                   CHAR(8)
+              INIT (' * * * *'),
+           5  FILLER_4                   CHAR(84) INIT('');
+
+   DCL  1  EMPTY_NAME_CHAIN_LINE         STATIC,
+           5  FILLER_1                   CHAR(33)
+              INIT ('THERE ARE NO DEFINITIONS/USES OF '),
+           5  EMPTY_TYPE                  CHAR(12),
+           5  FILLER_3                   CHAR(31)
+              INIT (' IN THE SPECIFIED GROUPS/LISTS.'),
+           5  FILLER_4                   CHAR(55) INIT('');
+
+   DCL  1   DEFINED_MSG_LINE             STATIC,
+           5  NUMBER_TIMES_DEFINED       PIC 'ZZZ9',
+           5  FILLER_1                   CHAR(33)
+               INIT(' GROUP(S) CONTAIN DEFINITIONS OF '),
+           5  DEFINED_NAME               CHAR(12),
+           5  FILLER_2                   CHAR(82) INIT('');
+
+   DCL  1  WHERE_DEFINED_LINE            STATIC,
+           5  FILLER_1                   CHAR(14) INIT(''),
+           5  RDO_GROUP_NAME             CHAR(8),
+           5  FILLER_2                   CHAR(109) INIT('');
+
+   DCL  1  USED_MSG_LINE                 STATIC,
+           5  NUMBER_TIMES_USED          PIC 'ZZZ9',
+           5  FILLER_1                   CHAR(18)
+               INIT(' USES ARE MADE OF '),
+           5  USED_NAME                  CHAR(44),
+           5  FILLER_3                   CHAR(66) INIT('');
+
+   DCL  1  WHERE_USED_LINE               STATIC,
+           5  FILLER_1                   CHAR(14) INIT(''),
+           5  OBJECT_TYPE                CHAR(12),
+           5  FILLER_2                   CHAR(1) INIT(''),
+           5  OBJECT_NAME                CHAR(8),
+           5  FILLER_3                   CHAR(4) INIT(' IN '),
+           5  RDO_GROUP_NAME             CHAR(8),
+           5  FILLER_4                   CHAR(84) INIT('');
+
+   DCL  1  THEY_ARE_LINE                 STATIC,
+           5  FILLER_1                   CHAR(5) INIT(''),
+           5  FILLER_2                   CHAR(9) INIT('THEY ARE:'),
+           5  FILLER_3                   CHAR(117) INIT('');
+
+   DCL  1  SPACING_LINE                  STATIC,
+           5  FILLER_1                   CHAR(131) INIT('');
+
+   DCL (PAGE_EJECT,SKIP_LINES)           BIT(1) INIT('0'B);
+
+ /* **************************************************************** */
+ /* Write out new type page header line after a page eject           */
+ /* **************************************************************** */
+    FORMATTED_BACK_TRANS_CMD= BACK_TRANSLATED_CMD;
+    PAGE_EJECT= '1'B;
+    CALL WRTLINE(ADDR(NEW_PAGE_HEADER_LINE));
+
+ /* ****************************** */
+ /* Write out TYPE descriptor line */
+ /* ****************************** */
+    TYPE_NAME= TYPE_KEY;
+    SKIP_LINES= '1'B;
+    CALL WRTLINE(ADDR(CROSS_REFERENCE_OBJECT_LINE));
+ /* **************************************************************** */
+ /* Are there  any entries in the name chain for this type element ? */
+ /* **************************************************************** */
+    IF NAME_CHAIN_COUNT = 0 THEN
+    DO;
+         /* ******************************************************** */
+         /* No...So put out the 'no definition/uses' msg.            */
+         /* ******************************************************** */
+         EMPTY_TYPE= TYPE_KEY;
+         CALL WRTLINE(ADDR(EMPTY_NAME_CHAIN_LINE));
+    END;
+    ELSE
+    DO;
+         /* ******************************************************** */
+         /* Scan name chain associated with TYPE and for each name   */
+         /* output lines to describe the definition of, and uses     */
+         /* made of a named occurrence of the TYPE.                  */
+         /* ******************************************************** */
+         NAME_ELEMENT_PTR = NAME_CHAIN_START-> NEXT_NAME_ELEMENT_PTR ;
+         DO WHILE (SUBSTR(NAME_KEY,1,1) ^= HIGH(1) &
+                   EXIT_RETURN_CODE = 0);
+              IF DEFINED_CHAIN_COUNT > 0 THEN
+              DO;
+                   /* ********************************************** */
+                   /* Defined chain contains details on definition(s)*/
+                   /* of a named occurrence of a type so list them   */
+                   /* ********************************************** */
+                   DEFINED_NAME = SUBSTR(NAME_KEY,1,12);
+                   NUMBER_TIMES_DEFINED= DEFINED_CHAIN_COUNT;
+                   SKIP_LINES= '1'B;
+                   /* ********************************************** */
+                   /* Output the 'number times defined' line         */
+                   /* ********************************************** */
+                   CALL WRTLINE(ADDR(DEFINED_MSG_LINE));
+                   /* ********************************************** */
+                   /* Output the 'They are:' line                    */
+                   /* ********************************************** */
+                   CALL WRTLINE(ADDR(THEY_ARE_LINE));
+                   DEFINED_ELEMENT_PTR =
+                       DEFINED_CHAIN_START-> NEXT_DEFINED_ELEMENT_PTR;
+                   /* ********************************************** */
+                   /* Scan along DEFINED chain producing an output   */
+                   /* line for each 'definition' of a name           */
+                   /* ********************************************** */
+                   DO WHILE (SUBSTR(DEFINED_KEY,1,1) ^= HIGH(1) &
+                             EXIT_RETURN_CODE = 0);
+                       WHERE_DEFINED_LINE.RDO_GROUP_NAME = DEFINED_KEY;
+                       CALL WRTLINE(ADDR(WHERE_DEFINED_LINE));
+                       /* ****************************************** */
+                       /* SET PTR TO NEXT DEFINED ELEMENT ON DEFINED */
+                       /* CHAIN                                      */
+                       /* ****************************************** */
+                       DEFINED_ELEMENT_PTR= NEXT_DEFINED_ELEMENT_PTR;
+                   END;
+              END;
+              ELSE
+              DO;
+                   SKIP_LINES= '1'B;
+                   CALL WRTLINE(ADDR(SPACING_LINE));
+              END;
+              IF USED_CHAIN_COUNT > 0 & EXIT_RETURN_CODE = 0 THEN
+              DO;
+                   /* ********************************************** */
+                   /* Used chain contains details on use(s) of a     */
+                   /* named occurrence of a type so list them        */
+                   /* ********************************************** */
+                   USED_NAME = NAME_KEY;
+                   NUMBER_TIMES_USED= USED_CHAIN_COUNT;
+                   /* ********************************************** */
+                   /* Output the 'number times used' line            */
+                   /* ********************************************** */
+                   CALL WRTLINE(ADDR(USED_MSG_LINE));
+                   /* ********************************************** */
+                   /* Output the 'They are:' line                    */
+                   /* ********************************************** */
+                   CALL WRTLINE(ADDR(THEY_ARE_LINE));
+                   USED_ELEMENT_PTR =
+                       USED_CHAIN_START-> NEXT_USED_ELEMENT_PTR;
+                   /* ********************************************** */
+                   /* Scan along USED chain producing an output line */
+                   /* for each 'use' of a name                       */
+                   /* ********************************************** */
+                   DO WHILE(SUBSTR(USED_KEY.OBJECT_TYPE,1,1) ^= HIGH(1)
+                           & EXIT_RETURN_CODE= 0);
+                        WHERE_USED_LINE.OBJECT_TYPE=
+                             USED_KEY.OBJECT_TYPE;
+                        WHERE_USED_LINE.OBJECT_NAME=
+                             USED_KEY.OBJECT_NAME;
+                        WHERE_USED_LINE.RDO_GROUP_NAME=
+                             USED_KEY.RDO_GROUP_NAME;
+                        CALL WRTLINE(ADDR(WHERE_USED_LINE));
+                        /* ***************************************** */
+                        /* Set ptr to next USED element on USED chain*/
+                        /* ***************************************** */
+                        USED_ELEMENT_PTR = NEXT_USED_ELEMENT_PTR;
+                   END;
+              END;
+              /* ****************************************** */
+              /* Set ptr to next NAME element on NAME chain */
+              /* ****************************************** */
+              NAME_ELEMENT_PTR = NEXT_NAME_ELEMENT_PTR;
+         END;
+    END;
+    RETURN ;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*   W R I T E  A  R E C O R D  T O  T H E  O U T P U T  F I L E    */
+ /*                                                                  */
+ /* This subroutine writes out the current contents of the output    */
+ /* files buffer in a manner as described by the current setting of  */
+ /* the PAGE_EJECT and SKIP_LINES flags. If an I/O error is          */
+ /* encountered then the return code is set to a non-zero value.     */
+ /*                                                                  */
+ /* **************************************************************** */
+ WRTLINE:PROC(PRINT_REC_PTR);
+   DCL 1  PRINT_REC_PTR                   POINTER;
+
+   DCL 1  PRINT_REC_TEMP                  CHAR(131)
+                                          BASED(PRINT_REC_PTR);
+   DCL 1  PRINT_REC                       CHAR(131);
+
+ /* **************************************************************** */
+ /* Clear the output buffer to spaces then move in the record passed */
+ /* **************************************************************** */
+   PRINT_REC= '';
+   PRINT_REC= PRINT_REC_TEMP;
+ /* ************************************************ */
+ /* Write out the record after the necessary spacing */
+ /* ************************************************ */
+   IF PAGE_EJECT THEN
+   DO;
+        /* ************************************* */
+        /* Write out record after a page advance */
+        /* ************************************* */
+        PUT  FILE(CRFOUT) PAGE EDIT(PRINT_REC) (A(131));
+        PAGE_EJECT= '0'B;
+   END;
+   ELSE
+        IF SKIP_LINES THEN
+        DO;
+             /* ************************************* */
+             /* Write out line after skipping 2 lines */
+             /* ************************************* */
+             PUT FILE(CRFOUT) SKIP(3) EDIT(PRINT_REC) (A(131));
+             SKIP_LINES= '0'B;
+        END;
+        ELSE
+             /* ******************************* */
+             /* Write out line with no skipping */
+             /* ******************************* */
+             PUT FILE(CRFOUT) EDIT(PRINT_REC) (A(131));
+
+   RETURN;
+
+ END WRTLINE ;
+
+ END LIST_XREF_DETAILS_FOR_TYPE;
+
+ END PROCESS_FINAL_CALL;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*      F I N D  A  T Y P E  I N  T H E  T Y P E  C H A I N         */
+ /*                                                                  */
+ /*  This subroutine scans the type chain to see if a given type     */
+ /*  (may be a object type or a keyword name) exists in the chain    */
+ /*  or not. If CURRENT_TYPE_ELEMENT_PTR is non NULL at the end of   */
+ /*  the search then the search successfully located a TYPE element  */
+ /*  with a key equal to WORK_TYPE.                                  */
+ /*                                                                  */
+ /* **************************************************************** */
+ FIND_TYPE_IN_CHAIN: PROC(WORK_TYPE);
+   DCL 1 WORK_TYPE          CHAR(12);
+
+ /* ***********************/
+ /* Initialise for search */
+ /* ***********************/
+    TYPE_ELEMENT_PTR= START_OF_TYPE_CHAIN;
+ /* **************************************************************** */
+ /* Scan until end of type chain or a element with key equal to      */
+ /* search argument found                                            */
+ /* **************************************************************** */
+    DO WHILE (TYPE_ELEMENT_PTR ^= NULL  &
+              WORK_TYPE ^=  TYPE_KEY) ;
+       TYPE_ELEMENT_PTR= NEXT_TYPE_ELEMENT_PTR;
+    END;
+
+    CURRENT_TYPE_ELEMENT_PTR= TYPE_ELEMENT_PTR;
+
+    RETURN ;
+ END FIND_TYPE_IN_CHAIN;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*     F I N D  A  N A M E  I N  T H E  N A M E  C H A I N          */
+ /*                                                                  */
+ /*  This subroutine scans the name chain associated with the        */
+ /*  currently addressed type element to see if the new named        */
+ /*  occurrence of a type as already been recorded. If not then      */
+ /*  a new name element is added in collating sequence and the       */
+ /*  defined and used chains associated with it are initialised      */
+ /*  i.e the dummy head and tail elements are acquired and linked    */
+ /*  together off the name element.                                  */
+ /*                                                                  */
+ /* **************************************************************** */
+ FIND_NAME_IN_CHAIN: PROC(WORK_NAME) ;
+
+   DCL 1 WORK_NAME                        CHAR(44);
+
+ /* **************************************************************** */
+ /* Scan the name chain for a particular name. The search is         */
+ /* terminated when a name with a value greater than or equal to the */
+ /* specified one is found. This test will always be successful due  */
+ /* to the dummy tail element being set to HIGH values.              */
+ /* **************************************************************** */
+    NAME_ELEMENT_PTR = NAME_CHAIN_START;
+    DO UNTIL(NAME_KEY >= WORK_NAME);
+         PREVIOUS_NAME_ELEMENT_PTR= NAME_ELEMENT_PTR;
+         NAME_ELEMENT_PTR = NEXT_NAME_ELEMENT_PTR;
+    END;
+    CURRENT_NAME_ELEMENT_PTR= NAME_ELEMENT_PTR;
+
+ /* **************************************************************** */
+ /* If the current element after the search does not have a value    */
+ /* equal to the search argument then a new name element must be     */
+ /* added 'before' the current one.                                  */
+ /* **************************************************************** */
+    IF WORK_NAME < NAME_KEY THEN
+    DO;
+         CURRENT_TYPE_ELEMENT_PTR-> NAME_CHAIN_COUNT=
+              CURRENT_TYPE_ELEMENT_PTR-> NAME_CHAIN_COUNT + 1;
+         CALL ALLOCATE_A_NAME_ELEMENT;
+         /* ******************************************************** */
+         /* If sufficient storage initialise the new name element    */
+         /* and link it into the name chain so that:                 */
+         /*               Previous-----> Current--->                 */
+         /*                         becomes                          */
+         /*               Previous-----> New-------> Current----->   */
+         /* The new element then becomes the current element.        */
+         /*                                                          */
+         /* ******************************************************** */
+         IF SUFFICIENT_STORAGE THEN
+         DO;
+              NAME_KEY= WORK_NAME;
+              DEFINED_CHAIN_COUNT= 0;
+              USED_CHAIN_COUNT= 0;
+              PREVIOUS_NAME_ELEMENT_PTR-> NEXT_NAME_ELEMENT_PTR=
+                   NAME_ELEMENT_PTR;
+              NEXT_NAME_ELEMENT_PTR= CURRENT_NAME_ELEMENT_PTR;
+              CURRENT_NAME_ELEMENT_PTR= NAME_ELEMENT_PTR;
+              /* *************************************************** */
+              /* Allocate storage for defined chain head element     */
+              /* *************************************************** */
+              CALL ALLOCATE_A_DEFINED_ELEMENT;
+         END;
+
+         IF SUFFICIENT_STORAGE THEN
+         DO;
+              /* *************************************************** */
+              /* Initialise the  defined chain head element          */
+              /* *************************************************** */
+              DEFINED_CHAIN_START= DEFINED_ELEMENT_PTR;
+              DEFINED_KEY = LOW(LENGTH(DEFINED_KEY));
+              PREVIOUS_DEFINED_ELEMENT_PTR= DEFINED_ELEMENT_PTR;
+              /* *************************************************** */
+              /* Allocate storage for defined chain tail element     */
+              /* *************************************************** */
+              CALL ALLOCATE_A_DEFINED_ELEMENT;
+         END;
+         IF SUFFICIENT_STORAGE THEN
+         DO;
+              /* *************************************************** */
+              /* Initialise the  defined chain tail element          */
+              /* *************************************************** */
+              DEFINED_KEY= HIGH(LENGTH(DEFINED_KEY));
+              PREVIOUS_DEFINED_ELEMENT_PTR-> NEXT_DEFINED_ELEMENT_PTR=
+                   DEFINED_ELEMENT_PTR;
+              NEXT_DEFINED_ELEMENT_PTR= NULL;
+              /* *************************************************** */
+              /* Allocate storage for used chain head element        */
+              /* *************************************************** */
+              CALL ALLOCATE_A_USED_ELEMENT;
+         END;
+
+         IF SUFFICIENT_STORAGE THEN
+         DO;
+              /* *************************************************** */
+              /* Initialise the used chain head element              */
+              /* *************************************************** */
+              USED_CHAIN_START= USED_ELEMENT_PTR;
+              USED_KEY.OBJECT_TYPE=
+                   LOW(LENGTH(USED_KEY.OBJECT_TYPE));
+              USED_KEY.OBJECT_NAME=
+                   LOW(LENGTH(USED_KEY.OBJECT_NAME));
+              USED_KEY.RDO_GROUP_NAME=
+                   LOW(LENGTH(USED_KEY.RDO_GROUP_NAME));
+              PREVIOUS_USED_ELEMENT_PTR= USED_ELEMENT_PTR;
+              /* *************************************************** */
+              /* Allocate storage for used chain tail element        */
+              /* *************************************************** */
+              CALL ALLOCATE_A_USED_ELEMENT;
+         END;
+         IF SUFFICIENT_STORAGE THEN
+         DO;
+              /* *************************************************** */
+              /* Initialise the dummy used chain tail element        */
+              /* *************************************************** */
+              USED_KEY.OBJECT_TYPE=
+                   HIGH(LENGTH(USED_KEY.OBJECT_TYPE));
+              USED_KEY.OBJECT_NAME=
+                   HIGH(LENGTH(USED_KEY.OBJECT_NAME));
+              USED_KEY.RDO_GROUP_NAME=
+                   HIGH(LENGTH(USED_KEY.RDO_GROUP_NAME));
+              PREVIOUS_USED_ELEMENT_PTR-> NEXT_USED_ELEMENT_PTR=
+                   USED_ELEMENT_PTR;
+              NEXT_USED_ELEMENT_PTR= NULL;
+         END;
+    END;
+    RETURN ;
+ END FIND_NAME_IN_CHAIN;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*   F I N D  A  D E F I N I T I O N  I N  I T S  C H A I N         */
+ /*                                                                  */
+ /*  This subroutine adds a new element to the 'defined' chain       */
+ /*  at the correct place in the collating sequence.                 */
+ /*                                                                  */
+ /*                                                                  */
+ /* **************************************************************** */
+ FIND_DEFINITION_IN_CHAIN: PROC(WORK_DEFINITION) ;
+
+    DCL 1 WORK_DEFINITION                 CHAR (8);
+
+    DEFINED_ELEMENT_PTR=
+         CURRENT_NAME_ELEMENT_PTR-> DEFINED_CHAIN_START;
+
+ /* **************************************************************** */
+ /* Scan the defined chain to determine the place in the collating   */
+ /* sequence for the recording of a definition of a named type       */
+ /* occurrence. The search is terminated when a element is found with*/
+ /* a value greater than the search argument. This search will always*/
+ /* be successful due to the dummy tail element being set to HIGH    */
+ /* VALUES.                                                          */
+ /* **************************************************************** */
+    DO UNTIL(DEFINED_KEY >=  WORK_DEFINITION);
+       PREVIOUS_DEFINED_ELEMENT_PTR= DEFINED_ELEMENT_PTR;
+       DEFINED_ELEMENT_PTR = NEXT_DEFINED_ELEMENT_PTR;
+    END;
+ /* **************************************************************** */
+ /* Was a defined element with the same key found ?. This test       */
+ /* should always be true as no two resources of the same type can   */
+ /* have the same name in any one RDO group.                         */
+ /* **************************************************************** */
+    IF WORK_DEFINITION ^= DEFINED_KEY THEN
+    DO;
+         /* ******************************************************** */
+         /* No... Make the first element with a key greater than the */
+         /* search argument the current element and increment the    */
+         /* defined count in the currently addressed name element.   */
+         /* ******************************************************** */
+         CURRENT_DEFINED_ELEMENT_PTR= DEFINED_ELEMENT_PTR;
+         CURRENT_NAME_ELEMENT_PTR-> DEFINED_CHAIN_COUNT=
+              CURRENT_NAME_ELEMENT_PTR-> DEFINED_CHAIN_COUNT + 1;
+         /* ****************************************** */
+         /* Allocate storage for a new defined element */
+         /* ****************************************** */
+         CALL ALLOCATE_A_DEFINED_ELEMENT;
+         IF SUFFICIENT_STORAGE THEN
+         DO;
+              DEFINED_KEY= WORK_DEFINITION;
+              /* *************************************************** */
+              /* Link the new element into the defined chain by      */
+              /* setting the 'next element' ptrs in the previous     */
+              /* element and the new element so that:                */
+              /*       Previous-----> Current--->                    */
+              /*                 becomes                             */
+              /*       Previous-----> New-------> Current----->      */
+              /*                                                     */
+              /* The new element then becomes the current element    */
+              /* *************************************************** */
+              NEXT_DEFINED_ELEMENT_PTR= CURRENT_DEFINED_ELEMENT_PTR;
+              PREVIOUS_DEFINED_ELEMENT_PTR-> NEXT_DEFINED_ELEMENT_PTR=
+                   DEFINED_ELEMENT_PTR;
+              CURRENT_DEFINED_ELEMENT_PTR= DEFINED_ELEMENT_PTR;
+         END;
+    END;
+    RETURN;
+
+ END FIND_DEFINITION_IN_CHAIN;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*        F I N D  A  U S E  I N  T H E  U S E  C H A I N           */
+ /*                                                                  */
+ /*  This subroutine adds a new element to the 'used' chain at       */
+ /*  the correct place in the collating sequence.                    */
+ /*                                                                  */
+ /* **************************************************************** */
+ FIND_USE_IN_CHAIN: PROC(WORK_USE_KEY);
+
+    DCL 1 WORK_USE_KEY,
+          3  WORK_OBJECT_TYPE               CHAR(12),
+          3  WORK_OBJECT_NAME               CHAR(8),
+          3  WORK_GROUP_NAME                CHAR(8);
+
+
+    USED_ELEMENT_PTR=
+         CURRENT_NAME_ELEMENT_PTR-> USED_CHAIN_START;
+
+    /* ************************************************************* */
+    /* Scan the used chain to determine the place in the collating   */
+    /* sequence for the recording of a use of a named type occurrence*/
+    /* The search is terminated when a element is found with a value */
+    /* greater or equal to than the search argument. This search will*/
+    /* always be successful due to the dummy tail element being set  */
+    /* to HIGH values.                                               */
+    /* ************************************************************* */
+    DO UNTIL(STRING(USED_KEY) >=  STRING(WORK_USE_KEY));
+       PREVIOUS_USED_ELEMENT_PTR= USED_ELEMENT_PTR;
+       USED_ELEMENT_PTR = NEXT_USED_ELEMENT_PTR;
+    END;
+    /* ************************************************************* */
+    /* Was a used element with the same key found in the used chain ?*/
+    /* This test should always be true as no two resources of the    */
+    /* same type can have the same name in any one RDO group, and so */
+    /* no combination of resource type, resource name and group      */
+    /* should ever be the same.                                      */
+    /* ************************************************************* */
+    IF (STRING(USED_KEY) ^= STRING(WORK_USE_KEY)) THEN
+    DO;
+         /* ******************************************************** */
+         /* No... Make the first element with a key greater than the */
+         /* search argument the current used element and increment   */
+         /* the used count in the currently addressed name element.  */
+         /* ******************************************************** */
+         CURRENT_USED_ELEMENT_PTR= USED_ELEMENT_PTR;
+         CURRENT_NAME_ELEMENT_PTR-> USED_CHAIN_COUNT=
+              CURRENT_NAME_ELEMENT_PTR-> USED_CHAIN_COUNT + 1;
+         /* ********************************* */
+         /* Allocate a new used chain element */
+         /* ********************************* */
+         CALL ALLOCATE_A_USED_ELEMENT;
+         IF SUFFICIENT_STORAGE THEN
+         DO;
+              /* ******************************* */
+              /* Initialise the new used element */
+              /* ******************************* */
+              USED_KEY= WORK_USE_KEY;
+              /* *************************************************** */
+              /* Link the new element into the used chain by setting */
+              /* the 'next element' ptrs in the previous element     */
+              /* and the new element so that:                        */
+              /*       Previous-----> Current--->                    */
+              /*                 becomes                             */
+              /*       Previous-----> New-------> Current----->      */
+              /*                                                     */
+              /* The new element then becomes the current element    */
+              /* *************************************************** */
+              NEXT_USED_ELEMENT_PTR= CURRENT_USED_ELEMENT_PTR;
+              PREVIOUS_USED_ELEMENT_PTR-> NEXT_USED_ELEMENT_PTR=
+                   USED_ELEMENT_PTR;
+              CURRENT_USED_ELEMENT_PTR= USED_ELEMENT_PTR;
+         END;
+    END;
+    RETURN;
+
+ END FIND_USE_IN_CHAIN;
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*            A L L O C A T E  A  T Y P E  E L E M E N T            */
+ /*                                                                  */
+ /*  This subroutine allocates a TYPE element in the TYPE pool       */
+ /*                                                                  */
+ /* **************************************************************** */
+ ALLOCATE_A_TYPE_ELEMENT: PROC;
+
+  DCL NEW_TYPE_POOL_PTR            POINTER;
+
+ /* **************************************************************** */
+ /* If storage is not available then try to allocate a TYPE pool     */
+ /* which is 50% larger than the current one, then either            */
+ /*      1) If storage is available for the new pool then            */
+ /*          a) Copy the contents of the current pool to the new     */
+ /*             pool.                                                */
+ /*          b) Free the old pool.                                   */
+ /*          c) Set the type pool ptr to point to the new TYPE pool. */
+ /*          d) Re-attempt the allocation of the TYPE element        */
+ /*   or 2) If sufficient storage is not available for the new pool  */
+ /*         then the return code id set to a non-zero value and a    */
+ /*         immediate exit from this subroutine is made. This will in*/
+ /*         turn result in a return to DFHCSUP which will terminate  */
+ /*         the current extract command with a error message which   */
+ /*         specifies the return code set by this program.           */
+ /*                                                                  */
+ /* **************************************************************** */
+   ON AREA BEGIN;
+        TYPE_POOL_SIZE= TYPE_POOL_SIZE * 1.5;
+        ON AREA BEGIN;
+           EXIT_RETURN_CODE= INSUFFICIENT_TYPE_AREA_SPACE;
+           SUFFICIENT_STORAGE= '0'B;
+           GO TO ALLOC_TYPE_RETURN;
+        END;
+        ALLOCATE TYPE_ELEMENT_POOL SET(NEW_TYPE_POOL_PTR);
+        NEW_TYPE_POOL_PTR-> TYPE_ELEMENT_POOL.TYPE_POOL_AREA=
+             TYPE_POOL_AREA;
+        FREE TYPE_ELEMENT_POOL;
+        TYPE_POOL_PTR= NEW_TYPE_POOL_PTR;
+   END;
+
+ /* ******************************************* */
+ /* Allocate a TYPE element in the current pool */
+ /* ******************************************* */
+   ALLOCATE TYPE_ELEMENT IN(TYPE_POOL_AREA);
+
+ ALLOC_TYPE_RETURN:
+   RETURN;
+
+ END ALLOCATE_A_TYPE_ELEMENT;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*            A L L O C A T E  A  N A M E  E L E M E N T            */
+ /*                                                                  */
+ /*  This subroutine allocates a NAME element in the NAME pool       */
+ /*                                                                  */
+ /* **************************************************************** */
+ ALLOCATE_A_NAME_ELEMENT: PROC;
+
+   DCL NEW_NAME_POOL_PTR            POINTER;
+
+ /* **************************************************************** */
+ /* If storage is not available then try to allocate a NAME pool     */
+ /* which is 50% larger than the current one, then either            */
+ /*      1) If storage is available for the new pool then            */
+ /*          a) Copy the contents of the current pool to the new     */
+ /*             pool.                                                */
+ /*          b) Free the old pool.                                   */
+ /*          c) Set the type pool ptr to point to the new NAME pool. */
+ /*          d) Re-attempt the allocation of the NAME element        */
+ /*   or 2) If sufficient storage is not available for the new pool  */
+ /*         then the return code id set to a non-zero value and a    */
+ /*         immediate exit from this subroutine is made. This will in*/
+ /*         turn result in a return to DFHCSUP which will terminate  */
+ /*         the current extract command with a error message which   */
+ /*         specifies the return code set by this program.           */
+ /*                                                                  */
+ /* **************************************************************** */
+   ON AREA BEGIN;
+        NAME_POOL_SIZE= NAME_POOL_SIZE * 1.5;
+        ON AREA BEGIN;
+           EXIT_RETURN_CODE= INSUFFICIENT_NAME_AREA_SPACE;
+           SUFFICIENT_STORAGE= '0'B;
+           GO TO ALLOC_NAME_RETURN;
+        END;
+        ALLOCATE NAME_ELEMENT_POOL SET(NEW_NAME_POOL_PTR);
+        NEW_NAME_POOL_PTR-> NAME_ELEMENT_POOL.NAME_POOL_AREA=
+             NAME_POOL_AREA;
+        FREE NAME_ELEMENT_POOL;
+        NAME_POOL_PTR= NEW_NAME_POOL_PTR;
+   END;
+
+ /* ******************************************* */
+ /* Allocate a NAME element in the current pool */
+ /* ******************************************* */
+   ALLOCATE NAME_ELEMENT IN(NAME_POOL_AREA);
+
+ ALLOC_NAME_RETURN:
+   RETURN;
+
+ END ALLOCATE_A_NAME_ELEMENT;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*        A L L O C A T E  A  D E F I N E D   E L E M E N T         */
+ /*                                                                  */
+ /*  This subroutine allocates a DEFINED element in the DEFINED pool */
+ /*                                                                  */
+ /* **************************************************************** */
+ ALLOCATE_A_DEFINED_ELEMENT: PROC;
+
+   DCL NEW_DEFINED_POOL_PTR         POINTER;
+
+ /* **************************************************************** */
+ /* If storage is not available then try to allocate a DEFINED pool  */
+ /* which is 50% larger than the current one, then either            */
+ /*      1) If storage is available for the new pool then            */
+ /*          a) Copy the contents of the current pool to the new     */
+ /*             pool.                                                */
+ /*          b) Free the old pool.                                   */
+ /*          c) Set the type pool ptr to point to the new DEFINED    */
+ /*             pool.                                                */
+ /*          d) Re-attempt the allocation of the DEFINED element.    */
+ /*   or 2) If sufficient storage is not available for the new pool  */
+ /*         then the return code id set to a non-zero value and a    */
+ /*         immediate exit from this subroutine is made. This will in*/
+ /*         turn result in a return to DFHCSUP which will terminate  */
+ /*         the current extract command with a error message which   */
+ /*         specifies the return code set by this program.           */
+ /*                                                                  */
+ /* **************************************************************** */
+   ON AREA BEGIN;
+        DEFINED_POOL_SIZE= DEFINED_POOL_SIZE * 1.5;
+        ON AREA BEGIN;
+           EXIT_RETURN_CODE= INSUFFICIENT_DEFINED_AREA_SPACE;
+           SUFFICIENT_STORAGE= '0'B;
+           GO TO ALLOC_DEFINED_RETURN;
+        END;
+        ALLOCATE DEFINED_ELEMENT_POOL SET(NEW_DEFINED_POOL_PTR);
+        NEW_DEFINED_POOL_PTR-> DEFINED_ELEMENT_POOL.DEFINED_POOL_AREA=
+             DEFINED_POOL_AREA;
+        FREE DEFINED_ELEMENT_POOL;
+        DEFINED_POOL_PTR= NEW_DEFINED_POOL_PTR;
+   END;
+
+ /* ********************************************** */
+ /* Allocate a DEFINED element in the current pool */
+ /* ********************************************** */
+   ALLOCATE DEFINED_ELEMENT IN(DEFINED_POOL_AREA);
+
+ ALLOC_DEFINED_RETURN:
+   RETURN;
+
+ END ALLOCATE_A_DEFINED_ELEMENT;
+
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*            A L L O C A T E  A  U S E D  E L E M E N T            */
+ /*                                                                  */
+ /*  This subroutine allocates a USED element in the USED pool       */
+ /*                                                                  */
+ /* **************************************************************** */
+ ALLOCATE_A_USED_ELEMENT: PROC;
+
+   DCL NEW_USED_POOL_PTR            POINTER;
+
+ /* **************************************************************** */
+ /* If storage is not available then try to allocate a USED pool     */
+ /* which is 50% larger than the current one, then either            */
+ /*      1) If storage is available for the new pool then            */
+ /*          a) Copy the contents of the current pool to the new     */
+ /*             pool.                                                */
+ /*          b) Free the old pool.                                   */
+ /*          c) Set the type pool ptr to point to the new USED pool. */
+ /*          d) Re-attempt the allocation of the USED element        */
+ /*   or 2) If sufficient storage is not available for the new pool  */
+ /*         then the return code id set to a non-zero value and a    */
+ /*         immediate exit from this subroutine is made. This will in*/
+ /*         turn result in a return to DFHCSUP which will terminate  */
+ /*         the current extract command with a error message which   */
+ /*         specifies the return code set by this program.           */
+ /*                                                                  */
+ /* **************************************************************** */
+   ON AREA BEGIN;
+        USED_POOL_SIZE= USED_POOL_SIZE * 1.5;
+        ON AREA BEGIN;
+           EXIT_RETURN_CODE= INSUFFICIENT_USED_AREA_SPACE;
+           SUFFICIENT_STORAGE= '0'B;
+           GO TO ALLOC_USED_RETURN;
+        END;
+        ALLOCATE USED_ELEMENT_POOL SET(NEW_USED_POOL_PTR);
+        NEW_USED_POOL_PTR-> USED_ELEMENT_POOL.USED_POOL_AREA=
+             USED_POOL_AREA;
+        FREE USED_ELEMENT_POOL;
+        USED_POOL_PTR= NEW_USED_POOL_PTR;
+   END;
+
+ /* ******************************************* */
+ /* Allocate a USED element in the current pool */
+ /* ******************************************* */
+   ALLOCATE USED_ELEMENT IN(USED_POOL_AREA);
+
+ ALLOC_USED_RETURN:
+   RETURN;
+
+ END ALLOCATE_A_USED_ELEMENT;
+ %PAGE;
+ /* **************************************************************** */
+ /*                                                                  */
+ /*            C H E C K  R E T U R N  C O D E                       */
+ /*                                                                  */
+ /*  This subroutine checks the return code setting and if it is     */
+ /*  none zero then any openfiles are closed. Any close errors are   */
+ /*  ignored. No need to perform chack for a INITIAL call.           */
+ /*                                                                  */
+ /* **************************************************************** */
+ CHECK_RETURN_CODE: PROC ;
+
+ IF EXIT_FUNCTION_CODE ^= 0 & EXIT_RETURN_CODE ^= 0 THEN
+ DO;
+      IF INPUT_FILE_OPEN THEN
+           CLOSE FILE(CRFINPT);
+      IF OUTPUT_FILE_OPEN THEN
+           CLOSE FILE(CRFOUT);
+ END;
+
+ RETURN;
+
+ END CHECK_RETURN_CODE;
+
+ END CREFCSD;

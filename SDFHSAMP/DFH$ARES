@@ -1,0 +1,615 @@
+***********************************************************************
+*                                                                     *
+*   MODULE NAME = DFH$ARES                                            *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS/MVS ....                                    *
+**       SAMPLE CICS XRF OVERSEER ROUTINE TO RESTART A                *
+**       cics xrf region that has failed                              *
+*                                                                     *
+* TRANSACTION NAME = Cxxx                                             *
+**       not a cics transaction                                       *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1987, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+**       code separated into separate source                          *
+*        SEE ALSO DFH$AXRO DFH$ADSP DFH$AGCB                          *
+*                                                                     *
+* FUNCTION =                                                          *
+*      DFH$ARES CSECT                                                 *
+*                                                                     *
+*      DFHRESNA is the entry point. Control is passed here from       *
+*                                                                     *
+*      DFH$AXRO, once for each 'extract' cycle.                       *
+*      Each generic entry (each system) is examined and if            *
+*      an active system has failed and passes the necessary           *
+*      requirements an attempt is made to restart it.                 *
+*      Likewise if an alternate system has failed and passes the      *
+*      necessary requirements an attempt is made to restart it.       *
+*                                                                     *
+*      The tests that have to be satisfied for a restart to be        *
+*      done are different for an active and an alternate. If the      *
+*      region is a related region (e.g. MRO) additional tests         *
+*      are done before attemting a restart.                           *
+*                                                                     *
+*      For an Alternate to be restarted                               *
+*                                                                     *
+*      1)Job is NOT executing now                                     *
+*      2)Job was known to have been executing during a previous       *
+*        pass of the program                                          *
+*      3)Job was executing on this CEC                                *
+*      4)Restart in Place is enabled for this generic pair of systems *
+*      5)RESTART IS ENABLED FOR THE OVERSEER SAMPLE
+*      6)Job has not signed off normally from the CAVM (which means   *
+*        it has stopped executing for normal reasons)                 *
+*      7)An attempt at restart is not already in progress             *
+*                                                                     *
+*      In addition for an Active to be restarted                      *
+*                                                                     *
+*      8)If an alternate is executing, it must have TAKEOVER=COMMAND  *
+*        If not the assumption is that the alternate will takeover    *
+*        or ask the operator (TAKEOVER=MANUAL)                        *
+*                                                                     *
+*      In addition for an Active that is related to other regions     *
+*      (e.g.MRO) to be restarted                                      *
+*                                                                     *
+*      9)No related systems can be taking over to another CEC         *
+*     10)No related systems can currently be executing on another     *
+*       CEC                                                           *
+*                                                                     *
+*      The restart is done by issuing an MVS START command via the    *
+*      DFHWOS COMMAND call. There are 2 types of START command and    *
+*      the one produced is determined dynamically depending           *
+*      on whether the failed region was a JOB or STC.                 *
+*                                                                     *
+*      RESTART REGION AS A JOB WILL GENERATE THIS COMMAND             *
+*      --------------------------------------------------             *
+*                                                                     *
+*      START DFHCRST,CJOB=jjjjjjj,CSTART=AUTO|STANDBY                 *
+*                                                                     *
+*      to restart the failed region as a job (jjjjjj)                 *
+*      DFHCRST is a supplied procedure that manipulates source JCL    *
+*      and adds the necessary START overide to restart the region     *
+*      as an active or alternate. Restrictions apply on having        *
+*      the original (source) JCL with inline SYSIN overides containing*
+*      the original START=xxxx keyword. See DFHCRST for details.      *
+*      The procedure submits the manipulated jcl as a job.            *
+*                                                                     *
+*                                                                     *
+*      RESTART REGION AS A JOB WILL GENERATE THIS COMMAND             *
+*      --------------------------------------------------             *
+*                                                                     *
+*      START sssssss,CSTART=AUTO|STANDBY                              *
+*                                                                     *
+*      to restart the failed region as a started task (ssssss)        *
+*      The user has to set up the necessary jcl procedures            *
+*      (one each for the active/alternate pair of XRF CICS systems)   *
+*      with a symbolic variable START=&CSTART. The required start     *
+*      option is substituted when the procedure is executed           *
+*                                                                     *
+*     Once all systems have been checked,any START commands are       *
+*     issued as necessary, control is returned to the caller          *
+*     (DFH$AXRO).                                                     *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+**         MVS/XA ONLY                                                *
+*    RESTRICTIONS =                                                   *
+**         NONE                                                       *
+*    REGISTER CONVENTIONS =                                           *
+*         SEE THE REGISTER EQUATES FOR A FULL DESCRIPTION
+**        R9 USED TO ADDRESS THE RABDS CONTROL BLOCK                  *
+**        R12 IS USED AS A BASE REGISTER                              *
+*    MODULE TYPE = EXECUTABLE                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = READ ONLY                                           *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* ENTRY POINT = DFHRESNA                                              *
+*                                                                     *
+*                                                                     *
+**        The following sections through EXIT ERROR are repeated for  *
+**        each entry point.  They provide a more formal definition    *
+**        of the module and its interfaces than the FUNCTION section. *
+**        They can refer back to the FUNCTION section, rather than    *
+**        repeat it.                                                  *
+**        Note that multiple entry point modules should be avoided    *
+*                                                                     *
+*     PURPOSE =                                                       *
+**        this is the only entry point                                *
+*                                                                     *
+*     LINKAGE =                                                       *
+**        called from DFH$AXRO on its normal execution cycle to       *
+**        determine if  any region has failed, and if it needs to     *
+**        be restarted                                                *
+*                                                                     *
+*     INPUT =                                                         *
+**        r9 addresses the RABDS control block.                       *
+**        no specific parameters passed                               *
+*                                                                     *
+*     OUTPUT =                                                        *
+**        no return code set                                          *
+*                                                                     *
+*     EXIT-NORMAL =                                                   *
+**        return to caller DFH$AXRO                                   *
+*                                                                     *
+*     EXIT-ERROR =                                                    *
+**        return to caller DFH$AXRO                                   *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+*                                                                     *
+*     ROUTINES =                                                      *
+**       DFHWOSM FUNC=OSCMD is issued to issue the necessary command  *
+**       to restart a failed region                                   *
+*                                                                     *
+*     DATA AREAS =                                                    *
+**        none                                                        *
+*                                                                     *
+*     CONTROL BLOCKS =                                                *
+**        none                                                        *
+*                                                                     *
+*     GLOBAL VARIABLES =                                              *
+**        none                                                        *
+*                                                                     *
+* TABLES =                                                            *
+**        none                                                        *
+* MACROS =                                                            *
+**        none                                                        *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* DESCRIPTION                                                         *
+*      CSECT DFH$ARES entry DFHRESNA                                  *
+*      Control is passed here from                                    *
+*      DFH$AXRO, once for each 'extract' cycle.                       *
+*      Each generic entry (each system) is examined and if            *
+*      an active system has failed and passes the necessary           *
+*      requirements an attempt is made to restart it.                 *
+*      Likewise if an alternate system has failed and passes the      *
+*      necessary requirements an attempt is made to restart it.       *
+*                                                                     *
+*      The tests that have to be satisfied for a restart to be        *
+*      done are different for an active and an alternate. If the      *
+*      region is a related region (e.g. MRO) additional tests         *
+*      are done before attemting a restart.                           *
+*                                                                     *
+*      For an Alternate to be restarted                               *
+*                                                                     *
+*      1)Job is NOT executing now                                     *
+*      2)Job was known to have been executing during a previous       *
+*        pass of the program                                          *
+*      3)Job was executing on this CEC                                *
+*      4)Restart in Place is enabled for this generic pair of systems *
+*      5)Resatart is enabled for the Overseer sample                  *
+*      6)Job has not signed off normally from the CAVM (which means   *
+*        it has stopped executing for normal reasons)                 *
+*      7)An attempt at restart is not already in progress             *
+*                                                                     *
+*      In addition for an Active to be restarted                      *
+*                                                                     *
+*      8)If an alternate is executing, it must have TAKEOVER=COMMAND  *
+*        If not the assumption is that the alternate will takeover    *
+*        or ask the operator (TAKEOVER=MANUAL)                        *
+*                                                                     *
+*      In addition for an Active that is related to other regions     *
+*      (e.g.MRO) to be restarted                                      *
+*                                                                     *
+*      9)No related systems can be taking over to another CEC         *
+*     10)No related systems can currently be executing on another     *
+*       CEC                                                           *
+*                                                                     *
+*      The restart is done by issuing an MVS START command via the    *
+*      DFHWOS COMMAND call. There are 2 types of START command and    *
+*      the one produced is determined dynamically depending           *
+*      on whether the failed region was a JOB or STC.                 *
+*                                                                     *
+*      RESTART REGION AS A JOB WILL GENERATE THIS COMMAND             *
+*      --------------------------------------------------             *
+*                                                                     *
+*      START DFHCRST,CJOB=jjjjjjj,CSTART=AUTO|STANDBY                 *
+*                                                                     *
+*      to restart the failed region as a job (jjjjjj)                 *
+*      DFHCRST is a supplied procedure that manipulates source JCL    *
+*      and adds the necessary START overide to restart the region     *
+*      as an active or alternate. Restrictions apply on having        *
+*      the original (source) JCL with inline SYSIN overides containing*
+*      the original START=xxxx keyword. See DFHCRST for details.      *
+*      The procedure submits the manipulated jcl as a job.            *
+*                                                                     *
+*                                                                     *
+*      RESTART REGION AS A JOB WILL GENERATE THIS COMMAND             *
+*      --------------------------------------------------             *
+*                                                                     *
+*      START sssssss,CSTART=AUTO|STANDBY                              *
+*                                                                     *
+*      to restart the failed region as a started task (ssssss)        *
+*      The user has to set up the necessary jcl procedures            *
+*      (one each for the active/alternate pair of XRF CICS systems)   *
+*      with a symbolic variable START=&CSTART. The required start     *
+*      option is substituted when the procedure is executed           *
+*                                                                     *
+*     Once all systems have been checked,any START commands are       *
+*     issued as necessary, control is returned to the caller          *
+*     (DFH$AXRO).                                                     *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+**                                                                    *
+*        $MOD(DFH$ARES),COMP(XRF),PROD(CICS TS ):                     *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*     P0= REASON REL YYMMDD HDXIII : Implicit flag.                   *
+**        This flag should be defined when the module is created.    **
+**        Lines with no flags will be assumed to belong to this      **
+**        reason code. 'P' will usually be 'L' but may be 'D','H'etc.**
+*    $01= A28493 310 881130 HD1HSS : MIGRATE APAR PL28493             *
+*    $02= A55973 410 940802 HDCWNRB : Migrate PN55973 from SPA R410   *
+*    $02  Reserved for APAR fix                                       *
+*    $03  Reserved for APAR fix                                       *
+*    $D1  Reserved for DCR                                            *
+*    $D2  Reserved for DCR                                            *
+*    $D3  Reserved for DCR                                            *
+*    $H1  Reserved for hardware support                               *
+*    $H2  Reserved for hardware support                               *
+*    $H3  Reserved for hardware support                               *
+*    $L1  Reserved for line item                                      *
+*    $L2  Reserved for line item                                      *
+*    $L3  Reserved for line item                                      *
+*    $P1= M51001 310 870830 HD1HSS : SEPARATE OVERSEER CODE           *
+*    $P2= M15870 610 010126 HDBNJAS : Fix HLASM warnings              *
+*    $P2  Reserved for PTM                                            *
+*    $P3  Reserved for PTM                                            *
+*                                                                     *
+***********************************************************************
+*                                                                     *
+*        COPY DSECTS                                                  *
+         COPY DFH$XRDS                  CICS/XRF OVERSEER SAMPLE
+         COPY DFHXRHDS                  CICS/XRF HEALTH DATA
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2                   WORK REG
+R3       EQU   3                   WORK REG
+R4       EQU   4                   WORK REG
+R5       EQU   5                   WORK REG
+R6       EQU   6                   WORK REG
+R7       EQU   7
+OSDBAR   EQU   7                   BASE REG FOR OSD ENTRY
+GENBAR   EQU   8                   BASE REG FOR GEN ENTRY
+RABBAR   EQU   9                   BASE REG FOR RAB
+R10      EQU   10                  CODE BASE REG1
+R11      EQU   11                  CODE BASE REG2
+R12      EQU   12                  SUBROUTINE BASE REG
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+DFH$ARES CSECT
+***********************************************************************
+*
+*        RESTART IN PLACE
+*
+*        THIS PIECE OF CODE WILL USE THE INFORMATION RETURNED
+*        FROM THE DATA EXTRACT/JES INQUIRE TO
+*        DETERMINE IF WE SHOULD ATTEMPT A RESTART IN PLACE
+*        OF A FAILED CICS/XRF JOB
+*        CRITERIA TO BE SATISFIED ARE
+*        1) JOB IS NOT EXECUTING NOW
+*        2) JOB IS KNOWN TO HAVE BEEN EXECUTING DURING A PREVIOUS
+*         PASS OF THIS PROGRAM
+*        3) JOB WAS EXECUTING ON THIS CEC
+*        4) TAKEOVER OPTION=COMMAND FOR THE BACKUP (IF THE ACTIVE
+*        HAS FAILED)
+*        5)JOB HAS NOT SIGNED OFF NORMALLY
+*        6)AN ATTEMPT TO RESTART A JOB IS NOT IN PROGRESS
+*        7)IF A RELATED REGION, NO OTHER RELATED REGION IS TAKING OVER
+*          TO ANOTHER CEC
+*        8)IF A RELATED REGION, NO OTHER RELATED REGION IS EXECUTING
+*          ON ANOTHER CEC
+*        9)RESTART IN PLACE IS ENABLED FOR THIS CICS/XRF SYSTEM
+*
+*        ON ENTRY
+*        R9 POINTS AT THE RAB
+*        R8 POINTS AT THE CURRENT GEN SYSTEM
+***********************************************************************
+         ENTRY DFHRESNA
+         DFHVM $ARES,ENTRY=DFHRESNA
+DFHRESNA DS    0H
+         SAVE  (14,12)
+         BALR  R12,0
+         USING *,R12
+         USING RABDS,RABBAR     ADDRESS THE RAB
+         USING GENDS,GENBAR     ADDRESS THE GEN
+         USING EXTDS,R7         ADDRESS THE EXTRACTED DATA
+         LA    R1,RABSAV2          ADDRESS SAVE AREA FOR THIS CODE
+         ST    R1,8(,R13)          FWD PTR
+         ST    R13,4(,R1)          BKWD POINTER
+         LR    R13,R1              POINT AT OUR SAVE AREA
+         L     GENBAR,RABGENF      ADDRESS THE FIRST GEN SYS
+RSTLOOP  DS    0H
+         L     R7,GENEXDTP         ADDRESS THE EXTRACTED DATA FOR GEN
+         TM    GENSTAT1,GENRSTEN   RESTART ENABLED HERE ?
+         BNO   RESNXT              NO BYPASS THIS ENTRY
+*        ACTIVE JOB CHECKS
+         TM    GENSTAT1,GENACTDT    ACTIVE DATA AVAILABLE ?
+         BNO   BRST                NO DON'T CHECK ANY MORE
+         TM    GENCJSA,GENJESX     IS IT EXECUTING ?
+         BO    BRST                YES DON'T CHECK ANY MORE
+         CLC   EXASMID,RABSMID     ON THIS CEC (SAME SMF ID) ?
+         BNE   BRST                NO DON'T CHECK ANY MORE
+         CLC   EXASTAT,=C'SOFN'    HAVE WE JUST SIGNED OFF NORMALLY ?
+         BE    BRST                YES,DON'T CHECK ANY MORE
+         TM    GENPJSA,GENJESX     WAS IT EVER EXECUTING ?
+         BNO   BRST                NO DON'T CHECK ANY MORE
+*        CHECK ITS THE SAME JOB WERE TALKING ABOUT. IF ITS
+*        DIFFERENT WE HAVE AN ERROR SO JUST BYPASS RESTART
+         CLC   GENPJJIA,EXAJESJ    SAME JOBID
+         BNE   BUG                 ITS A BUG
+         CLC   GENPJJNA,EXAJOBN    SAME JOBNAME
+         BNE   BUG                 ITS A BUG
+         TM    GENCJSA,GENRSTIP    IS A RESTART ATTEMPT IN PROGRESS ?
+         BO    BRST                YES DON'T CHECK ANY MORE
+         TM    GENCJSB,GENJESX     IS THE BACKUP EXECUTING ?
+         BNO   CHKRLT              NO DON'T WORRY ABOUT TKOVR OPTION
+*                                  JUST CHECK RELATED SYSTEMS
+         TM    GENSTAT1,GENBKPDT   BACKUP DATA AVAILABLE ?
+         BNO   CHKRLT              NO STRAIGHT TO CHECK RELATED SYSTEMS
+         LA    R6,EXBHLTH          ADDRESS THE BACKUP HEALTH DATA
+         USING DFHXRHDS,R6
+         CLI   XRSHTAK,XRSHTAKC AS WE ARE AN ACTIVE IT MUST BE
+*                                    COMMAND IN THE BACKUP
+         BNE   BYPRSTA             FORGET IT, THERES A BACKUP
+*                                  WITH TAKEOVR NOT COMMAND THAT
+*                                  TAKES PRECEDENCE OVER US
+         DROP  R6
+*        EVEN THOUGH THE  BACKUP HAS TAKEOVR=COMMAND,
+*        CHECK THAT CEBT PERFORM TAKEOVER ISSUED TO IT IS NOT THE
+*        CAUSE OF OUR REGION ENDING. IF IT IS DO NOT ATTEMPT A RESTART
+*        CHECK FOR TKOV STATE IN THE BACKUP (INDICATING TKOVR IN PROG)
+*        CHECK FOR INCIPIENT ACTIVE IN THE ACTIVE (WE MAY NEVER HIT
+*        THIS AS THE JESINQ CODE SHOULD CATCH THE INCA JOB AS A NEW
+*        JOB MEANING WE JUST MISSED THE OLD ONE GOING AWAY ??)
+*
+         CLC   EXBSTAT,=C'TKOV'    BACKUP TAKING OVER?
+         BE    BYPRSTA             YES, CHECK NO MORE
+         CLC   EXASTAT,=C'INCA'    INCIPIENT ACTIVE  ?
+         BE    BYPRSTA             YES CHECK NO MORE
+CHKRLT   DS    0H
+         L     R6,GENRLTFS
+         LTR   R6,R6               ANY RELATED SYSTEMS TO CHECK?
+         BZ    PASSCHKA            NO WE PASSED ALL CHECKS, GO DO IT
+*        CHECK FOR RELATED SYSTEMS DOING ANYTHING OF INTEREST
+*        DO WE NEED TO TRAVERSE THIS PATH 2 OR MORE TIMES TO BE SURE ?
+         DROP  GENBAR
+         USING RLTDS,R6            USE R6 FOR RLT HEADER
+         L     R6,RLTFST           ADDRESS FIRST RELATED SYSTEM
+         DROP  R6
+         USING GENDS,R6            USE R6 FOR RELATED SYSTEMS CHECK
+CHECKLP  DS    0H
+         CR    R6,GENBAR           IS IT OUR GENSYSTEM
+         BE    CHECKNXT            YES, BYPASS IT, ITS BEEN DONE
+*        CHECK THAT THE ACTIVE IS NOT AN INCIPIENT ACTIVE OR THAT
+*        THE BACKUP IS TAKING OVER OR THAT THE ACTIVE IS NOT RUNNING
+*        ON A DIFFERENT CEC. ANY OF THE ABOVE IMPLY A TAKEOVER
+*        IS IN PROGRESS AND WE SHOULD LEAVE ALL ALONE
+         L     R7,GENEXDTP
+         TM    GENSTAT1,GENACTDT   ACTIVE DATA AVAILABLE ?
+         BNO   CHECKB              NO BYPASS IT
+         TM    GENCJSA,GENJESX     IS IT EXECUTING ?
+         BNO   CHECKB              NO, DO BACKUP CHECKS
+         CLC   RABSMID,EXASMID    IS THIS RELATED ACTIVE SYSTEM RUNNING
+*                                  ON ANOTHER CEC? RULE IS THEY MUST
+*                                  ALL END UP ON THE SAME CEC
+         BE    CHECKB              NO, DO BACKUP CHECKS
+*        THE RELATED ACTIVE IS EXECUTING,AND ON ANOTHER CEC.
+*        NOW  CHECK IF ITS ACTIVE OR INCA
+*        IF SO WE HAVE A CONFLICT IN THAT WEVE JUST SEEN OUR
+*        ACTIVE DIE ON THIS CEC, BUT A RELATED SYSTEM IS
+*        ACTIVE OR INCA ON ANOTHER CEC. WE MUST ASSUME THAT IT
+*        IS OR HAS TAKEN OVER AND MUST BYPASS RESTARTING THIS
+*        SYSTEM ON THIS CEC.
+         CLC   EXASTAT,=C'INCA'    INCIPIENT ACTIVE  ?
+         BE    BYPRSTA             YES, BYPASS THE RESTART
+         CLC   EXASTAT,=C'ACT '    ACTIVE  ?
+         BE    BYPRSTA             YES,BYPASS THE RESTART
+*        MUST BE SIGNED OFF, SO NOW DO BACKUP CHECKS
+CHECKB   DS    0H
+         TM    GENSTAT1,GENBKPDT   BACKUP DATA AVAILABLE ?
+         BNO   CHECKNXT            NO CHECK NEXT
+         TM    GENCJSB,GENJESX     IS IT EXECUTING ?
+         BNO   CHECKNXT            NO, TRY NEXT RELATED SYSTEM
+*        MUST NOW SEE IF THIS RELATED SYSTEM'S BACKUP IS TAKING
+*        OVER TO ANOTHER CEC
+         CLC   RABSMID,EXBSMID    IS THIS RELATED BACKUP SYSTEM RUNNING
+*                                  ON ANOTHER CEC
+         BE    CHECKNXT            NO CHECKNXT
+*        A RELATED BACKUP IS EXECUTING ON ANOTHER CEC
+         CLC   EXBSTAT,=C'TKOV'    IS IT TAKING OVER?
+         BE    BYPRSTA             YES BYPASS THE RESTART
+CHECKNXT DS    0H
+         L     R6,GENRLTNX         POINT AT THE NEXT RELATED SYSTEM
+         LTR   R6,R6               IS THERE ONE ?
+         BNZ   CHECKLP             ROUND AGAIN
+         DROP  R6                                                  @P2A
+         USING GENDS,GENBAR        REUSE GENBAR
+PASSCHKA DS    0H
+         L     R7,GENEXDTP   ENSURE WE GET THE CORRECT EXTRACT DATA
+*                            FOR OUR GEN AND NOT A RELATED ONE
+         OI    GENCJSA,GENRSTIP    SHOW THAT A RESTART IS IN PROGRESS
+*        THIS BIT SHOULD BE TURNED OFF AS SOON AS WE DETERMINE (ANY)NEW
+*        ACTIVE IS EXECUTING. COULD BE FROM OUR ATTEMPT OR OTHER SOURCE
+*
+         OI    GENSTAT1,GENRSTAC    INDICATE ITS AN ACTIVE REQUEST
+         BAL   R14,RSTJOB          WE PASSED ALL TESTS GO RSTART ACT
+         B     BRST
+BYPRSTA  DS    0H
+         TM    GENSTAT2,GENRSABY   DID WE SEND THE MSG ONCE FOR ACTIVE
+         BO    NOMSG               YES, NOT AGAIN FOR THIS JOB
+         WTO   'OVERSEER: JOB RESTART BYPASSED DUE TO PENDING TAKEOVER'
+         OI    GENSTAT2,GENRSABY   INDICATE MSG SENT
+*        THIS BIT SHOULD BE TURNED OFF AS SOON AS WE DETERMINE (ANY)NEW
+*        ACTIVE IS EXECUTING.
+NOMSG    DS    0H
+*
+*        BACKUP JOB CHECKS
+BRST     DS    0H
+         L     R7,GENEXDTP   ENSURE WE GET THE CORRECT EXTRACT DATA
+*                            FOR OUR GEN AND NOT A RELATED ONE
+         TM    GENSTAT1,GENBKPDT   BACKUP DATA AVAILABLE ?
+         BNO   RESNXT              NO DON'T CHECK ANY MORE
+         TM    GENCJSB,GENJESX     IS IT EXECUTING ?
+         BO    RESNXT              YES DON'T CHECK ANY MORE
+         CLC   EXBSMID,RABSMID     ON THIS CEC (SAME SMF ID) ?
+         BNE   RESNXT              NO DON'T CHECK ANY MORE
+         TM    GENSTAT2,GENFALRS   ARE WE FORCING A RESTART ?
+         BNO   SOFNCHK             NO, DO THE SOFN CHECK
+*        IF THE ACTIVE IS EXECUTING AND HAS THE 'ACT' STATE
+*        ALLOW A FORCED RESTART OF THE ALTERNATE . 2 CHECKS ARE NEEDED
+*        AS THE ACTIVE CAN BE EXECUTING AND SOFN FOR A PERIOD DURING
+*        NORMAL SHUTDOWN AND THIS SHOULDNT CAUSE AN ALT RESTART
+         CLC   EXASTAT,=C'ACT '    IS THE ACTIVE IN 'ACT' STATE ?
+         BNE   SOFNCHK             NO, DO THE ALT SOFN TEST
+         TM    GENCJSA,GENJESX     IS THE ACTIVE EXECUTING
+         BO    BYPSOFN             YES, BYPASS THE ALT SOFN CHECK
+*                                  AND ALLOW A FORCED RESTART
+SOFNCHK  DS    0H
+         CLC   EXBSTAT,=C'SOFN'    HAVE WE JUST SIGNED OFF NORMALLY ?
+         BE    RESNXT              YES,DON'T CHECK ANY MORE
+BYPSOFN  DS    0H                  BYPASS OF ALT SOFN CHECK
+         TM    GENPJSB,GENJESX     WAS IT EVER EXECUTING ?
+         BNO   RESNXT              NO DON'T CHECK ANY MORE
+*        CHECK ITS THE SAME JOB WERE TALKING ABOUT. IF ITS
+*        DIFFERENT WE HAVE AN ERROR SO BYPASS RESTART
+         CLC   GENPJJIB,EXBJESJ    SAME JOBID
+         BNE   BUG                 ITS A BUG
+         CLC   GENPJJNB,EXBJOBN    SAME JOBNAME
+         BNE   BUG                 ITS A BUG
+         TM    GENCJSB,GENRSTIP    IS A RESTART ATTEMPT IN PROGRESS ?
+         BO    RESNXT              YES DON'T CHECK ANY MORE
+*        FOR A FAILED BACKUP WE DONT NEED TO CHECK THE STATUS
+*        OF RELATED SYSTEMS
+PASSCHKB DS    0H
+         OI    GENCJSB,GENRSTIP    SHOW THAT A RESTART IS IN PROGRESS
+*        THIS BIT SHOULD BE TURNED OFF AS SOON AS WE DETERMINE (ANY)NEW
+*        BACKUP IS EXECUTING. COULD BE FROM OUR ATTEMPT OR OTHER SOURCE
+*
+         OI    GENSTAT1,GENRSTBK    INDICATE ITS A BACKUP REQUEST
+         BAL   R14,RSTJOB          WE PASSED ALL TESTS GO RSTART BKP
+*
+RESNXT   DS    0H
+         L     GENBAR,GENNXGEN     ADDRESS NEXT IN CHAIN
+         LTR   GENBAR,GENBAR       LAST ONE ?
+         BNZ   RSTLOOP             NO INVESIGATE THE NEXT ONE
+RESRET   DS    0H                  YES RETURN TO THE MAIN CODE
+         L     R13,RABSAV2+4       RESTORE CALLERS SAVE AREA
+         RETURN (14,12),RC=(15)
+*--------------------------------------
+*        RESTART A JOB
+*
+RSTJOB   DS    0H
+         WTO   'OVERSEER: JOB IS BEING RESTARTED'
+         LR    R5,R14              R14 GETS TRODDEN ON
+         XC    RABCMD(CMDLEN),RABCMD   CLEAR THE CMD AREA
+         XC    RABPARM(PARMLEN),RABPARM   CLEAR THE PARM AREA
+         LA    R2,RABCMD           START OF MGCR BUFFER
+         LA    R3,RABCMD+4         BUMP OVER FLAG BYTES
+**
+*       DYNAMICALLY CHOOSE HOW TO RESTART
+**
+         TM    GENSTAT1,GENRSTAC     ACTIVE REQUEST ?              @P1C
+         BNO   CHKBKP                NO, BACKUP                    @P1C
+         CLC   EXAEYECA,=C'>RS'      RESTART EYECATCHER FOUND ?    @02A
+         BNE   CHKAOLD               NO, CHECK EXAJSTY             @02A
+         CLI   EXARSTYP,EXARSSTC     WAS IT A STC                  @02A
+         BE    BLDSTC                YES, BUILD AS A STC           @02A
+         B     BLDJOB                NO MUST BE AS A JOB           @02A
+CHKAOLD  DS    0H                                                  @02A
+         CLC   EXAJSTY,=C'STC'       WAS IT A STC                  @P1C
+         BE    BLDSTC                YES BUILD AS A STC            @P1C
+         B     BLDJOB                NO MUST BE AS A JOB           @P1C
+CHKBKP   DS    0H                    ASSUME BACKUP                 @P1C
+         CLC   EXBEYECA,=C'>RS'      RESTART EYECATCHER FOUND ?    @02A
+         BNE   CHKBOLD               NO, CHECK EXBJSTY             @02A
+         CLI   EXBRSTYP,EXBRSSTC     WAS IT A STC                  @02A
+         BE    BLDSTC                YES, BUILD AS A STC           @02A
+         B     BLDJOB                NO MUST BE AS A JOB           @02A
+CHKBOLD  DS    0H                                                  @02A
+         CLC   EXBJSTY,=C'STC'       WAS IT A STC                  @P1C
+         BE    BLDSTC                YES BUILD AS A STC            @P1C
+*                                    NO, BUILD AS A JOB
+BLDJOB   DS    0H                    JOB                           @P1C
+         MVC   0(L'STARTJOB,R3),STARTJOB       MOVE IN THE COMMAND @P1C
+         LA    R3,L'STARTJOB(0,R3)             ADD LENGTH IN       @P1C
+         B     BLDCONT BRANCH                                      @P1C
+BLDSTC   DS    0H                    STC                           @P1C
+         MVC   0(L'STARTSTC,R3),STARTSTC       MOVE IN THE COMMAND @P1C
+         LA    R3,L'STARTSTC(0,R3)             ADD LENGTH IN       @P1C
+BLDCONT  DS    0H
+         TM    GENSTAT1,GENRSTAC               ACTIVE REQUEST ?    @P1C
+         BNO   BREQ
+         MVC   0(8,R3),EXAJOBN      MOVE IN THE JOB NAME (=TO PROCNAME)
+         B     ADJLEN
+BREQ     DS    0H
+         MVC   0(8,R3),EXBJOBN      MOVE IN THE JOB NAME (=TO PROCNAME)
+ADJLEN   DS    0H
+         LA    R3,8(0,R3)          ADD LENGTH IN
+*        JOB NAME MAY BE LESS THAN 8 CHARACTERS SO NEED TO ADJUST IT
+         LA    R15,7(0,0)          MAX NUMBER OF TRAILING BLANKS
+TRAIL    DS    0H
+         BCTR  R3,0                SUBTRACT 1
+         CLI   0(R3),C' '          IS IT A BLANK
+         BNE   TRAILE              YES END FOUND
+         BCT   R15,TRAIL           ROUND AGAIN
+         BCTR  R3,0
+TRAILE   DS    0H
+         LA    R3,1(0,R3)          POINT AFTER THE LAST CHARACTER
+         TM    GENSTAT1,GENRSTAC   ACTIVE REQUEST ?
+         BNO   STDBY
+         NI    GENSTAT1,X'FF'-GENRSTAC   RESET THE REQUEST NOW
+         MVC   0(L'AUTO,R3),AUTO         MOVE IN THE CICS START O/R
+         LA    R3,L'AUTO(0,R3)     ADD LENGTH IN
+         B     ORDONE
+STDBY    DS    0H
+         NI    GENSTAT1,X'FF'-GENRSTBK   RESET THE REQUEST NOW
+         MVC   0(L'STANDBY,R3),STANDBY      MOVE IN THE CICS START O/R
+         LA    R3,L'STANDBY(0,R3)     ADD LENGTH IN
+ORDONE   DS    0H
+         SR    R3,R2               TOTAL LENGTH
+         STC   R3,RABCMD+1         SAVE THE TOTAL LENGTH AT THE FRONT
+         LA    R1,RABCMD
+         ST    R1,RABPARM1
+         L     R14,RABENTTK        GET THE ENTRY TOKEN
+         LA    R1,RABPARM          ADDRESS THE PARM LIST
+         DFHWOSM FUNC=OSCMD
+         LR    R14,R5           RESTORE R14
+SUBRET   DS    0H
+         BR    R14
+*
+*        END OF RESTART A JOB
+*--------------------------------------
+*
+BUG      DS    0H
+         WTO   'OVERSEER: LOGIC ERROR DETECTED RESTART ABORTED'
+         B     SUBRET
+STARTSTC DC    C'START '           PROC FOR A STARTED TASK
+STARTJOB DC    C'START DFHCRST,CJOB='          PROC TO SUBMIT A JOB
+AUTO     DC    C',CSTART=AUTO'      CICS O/R IN PROC TO RESTART ACTIVE
+STANDBY  DC    C',CSTART=STANDBY'   CICS O/R IN PROC TO RESTART BACKUP
+         LTORG
+         DROP  R7
+         DROP  R12
+         EJECT
+         END

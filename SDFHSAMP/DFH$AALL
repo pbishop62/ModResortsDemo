@@ -1,0 +1,526 @@
+*ASM     XOPTS(NOPROLOG NOEPILOG)
+         SYSSTATE AMODE64=YES,ARCHLVL=2
+*
+         TITLE 'DFH$AALL - CICS SAMPLE FILEA INQUIRY/UPDATE - ASSEMBLER*
+               '
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$AALL                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = File Inquiry/Update for Sample Application       *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1984, 2012"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$AALL),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 840717 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*         R31410 680 120411 HDFVGMB: Story 30827 - AMODE 64 RMODE 31  *
+*                                                                     *
+***********************************************************************
+         DFHEISTG DSECT
+         COPY  DFH$AGA             MAP A
+         COPY  DFH$AGB             MAP B
+RETREG   EQU   2                   SET UP REGISTER USAGE
+R03      EQU   3                   Reserved - used by DFHEIENT
+R06      EQU   6
+R07      EQU   7
+R08      EQU   8
+R09      EQU   9
+FILEDS   DS    0C
+         COPY  DFH$AFIL            RECORD DESCRIPTION FOR FILEA
+COMPTR   EQU   4                   POINTER TO COMMAREA
+         COPY  DFH$ALOG            LOG FILE RECORD DESCRIPTION
+         COPY  DFHBMSCA            BMS ATTRIBUTE BYTES
+MESSAGES DS    CL39                TEMP STORE FOR MESSAGES
+KEYNUM   DS    CL9                 TEMP STORE FOR FILE RECORD KEY
+COMLEN   DS    1H                  LENGTH OF COMMAREA
+RESPONSE DS    1F                  RESPONSES TO CICS COMMANDS
+         DFHEIEND
+DFH$AALL CSECT
+DFH$AALL AMODE 64
+DFH$AALL RMODE 31
+         DFHEIENT DATAREG=13,EIBREG=11,STATREG=3,STATIC=STATR,CODEREG=0
+*
+*        THE POSSIBLE INVOKING TRANSACTION IDENTIFIERS ARE TESTED.
+*
+         CLC   EIBTRNID,=CL(L'EIBTRNID)'AINQ' IS INVOKING T-ID 'AINQ'?
+         JE    OKTRANID            OK HERE, SO CONTINUE
+         CLC   EIBTRNID,=CL(L'EIBTRNID)'AUPD' IS IT 'AUPD'?
+         JE    OKTRANID            OK HERE, SO CONTINUE
+         CLC   EIBTRNID,=CL(L'EIBTRNID)'AADD' FINALLY, IS IT 'AADD'?
+         JNE   ERRORS              IF NOT, GO TO ERROR ROUTINE
+OKTRANID DS    0H                  CORRECT INVOKING TRANSACTION ID HERE
+*
+*        THE LENGTH OF THE "COMMAREA" IS TESTED. IF NOT ZERO THEN
+*        THIS IS THE VALIDATION STAGE OF AN ADD OR UPDATE.
+*
+         LH    COMPTR,EIBCALEN     HAS A COMMAREA BEEN RETURNED?
+         LTR   COMPTR,COMPTR
+         JNZ   COMRETND            ...YES, SO GO GET MAP
+*
+*        THE MENU MAP "DFH$AGA" IS RECEIVED. THE ACCOUNT NUMBER, IF
+*        ENTERED, IS MAPPED INTO "KEYI" IN THE DSECT FOR "DFH$AGA".
+*        NOTICE THAT THE "RESP" OPTION IS SPECIFIED ON THE COMMAND,
+*        RESULTING IN THE RESPONSE TO THE COMMAND BEING MOVED TO
+*        THE FULL WORD BINARY VARIABLE "RESPONSE", DEFINED AT THE TOP
+*        OF THE PROGRAM. THE RESPONSE IS VERIFIED IMMEDIATELY AFTER
+*        THE COMMAND, AND THE APPROPRIATE ACTION IS TAKEN IF THE
+*        RESPONSE WAS NOT "NORMAL".
+*
+         EXEC CICS RECEIVE MAP('DFH$AGA') RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(MAPFAIL)
+         JE    MFAIL
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+*
+*        THE ACCOUNT NUMBER IS VALIDATED AND SAVED.
+*
+         CLC   KEYL,=H'0'          IF ACCOUNT NUMBER NOT ENTERED
+         JE    BADLENG              GO DISPLAY ERROR MS.
+         TRT   KEYI,CHEKTAB        CHECK FOR NUMERIC ACCOUNT NUM,
+         JNZ   BADCHARS             NO GOOD - DISPLAY ERROR MS.
+         MVC   KEYNUM,KEYI         SAVE KEY TO FILE.
+         XC    DFH$AGBO(DFH$AGBE-DFH$AGBO),DFH$AGBO CLEAR MAP
+         CLC   EIBTRNID,=CL(L'EIBTRNID)'AADD' IS INVOKING T-ID 'AADD'?
+         JNE   INQUPD              ..NO, SO GO TEST FOR OTHER ID'S
+*
+*        IF THE PROGRAM IS INVOKED BY "AADD", A TITLE AND COMMAND
+*        MESSAGE ARE MOVED TO THE MAP AREA. THE RECORD KEY IS MOVED
+*        TO THE MAP AREA AND SAVED IN "COMMAREA". THE AMOUNT FIELD
+*        HAS THE ATTRIBUTE BYTE SET TO NUMERIC.
+*
+         MVC   TITLEO,=CL(L'TITLEO)'FILE ADD' SET UP TITLE
+         MVC   MSG3O,=CL(L'MSG3O)'ENTER DATA AND PRESS ENTER KEY'
+         MVC   NUMB,KEYI           PUT KEY IN COMMAREA
+         MVC   NUMBO,KEYI          ...AND ON MAP ENTRY
+         MVI   AMOUNTA,DFHBMUNN   ATTRIBUTE SET TO UNPROTECTED,
+*                                 NUMERIC, DISPLAY, MDT BIT NOT SET
+         MVC   AMOUNTO,=C'$0000.00'  PROMPTING FIELD FOR MAP
+         MVC   COMLEN,=H'7'       SET UP LENGTH OF COMMAREA TO BE RTND
+*
+*        THE ADD SCREEN IS DISPLAYED AND THE PROGRAM TERMINATES
+*        TO AWAIT A REPLY FROM THE TERMINAL.
+*
+         BRAS  RETREG,MAPSEND      GO SEND MAP
+         J     CICSCONT            GO RETURN CONTROL TO CICS
+INQUPD   DS    0H                  HERE INVOKING T-ID IS AINQ, OR AUPD
+*
+*        THE FILE CONTROL "READ" COMMAND READS THE FILE RECORD INTO
+*        THE FILE AREA.
+*
+         EXEC CICS READ FILE('FILEA') INTO(FILEA) RIDFLD(KEYNUM)       *
+                   RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NOTFND)
+         JE    NOTFOUND
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         CLC   EIBTRNID,=CL(L'EIBTRNID)'AINQ' IS INVOKING T-ID AINQ?
+         JNE   UPDTSECT            ..NO, SO BRANCH TO AUPD ROUTINE
+*
+*        IF THE PROGRAM IS INVOKED BY "AINQ", A TITLE AND COMMAND
+*        MESSAGE ARE MOVED TO THE MAP AREA. THE FILE RECORD FIELDS
+*        ARE MOVED TO THE MAP AREA BY A SUBROUTINE.
+*
+         MVC   TITLEO,=CL(L'TITLEO)'FILE INQUIRY' SET UP TITLE ON MAP
+         MVC   MSG3O,=CL(L'MSG3O)'PRESS ENTER TO CONTINUE'
+         BRAS  RETREG,MAPBUILD     GO BUILD MAP
+*                                 PROTECT ALL FIELDS ON MAP
+*
+*        ALL FIELD  ATTRIBUTES ARE SET TO PROTECTED.
+*
+         MVI   NAMEA,DFHBMPRO
+         MVI   ADDRA,DFHBMPRO
+         MVI   PHONEA,DFHBMPRO
+         MVI   DATEA,DFHBMPRO
+         MVI   AMOUNTA,DFHBMPRO
+         MVI   COMMENTA,DFHBMPRO
+*
+*        THE INQUIRY SCREEN IS DISPLAYED AND THE PROGRAM TERMINATES.
+*        THE "TRANSID" OF "AMNU" CAUSES THE OPERATOR INSTRUCTION
+*        PROGRAM TO BE INVOKED WHEN THE NEXT RESPONSE IS RECEIVED
+*        FROM THE TERMINAL.
+*
+         BRAS  RETREG,MAPSEND      GO SEND MAP
+         EXEC CICS RETURN TRANSID('AMNU')
+UPDTSECT DS    0H                  UPDATE ROUTINE
+*
+*        IF THE PROGRAM IS INVOKED BY "AUPD", A TITLE AND COMMAND
+*        MESSAGE ARE MOVED TO THE MAP AREA.
+*
+         MVC   TITLEO,=CL(L'TITLEO)'FILE UPDATE' SET UP MAP TITLE
+         MVC   MSG3O,=CL(L'MSG3O)'CHANGE FIELDS AND PRESS ENTER'
+*
+*        THE LENGTH OF THE "COMMAREA" TO BE RETURNED IS SET UP.
+*
+         MVC   COMLEN,=H'80'      STORE LENGTH OF COMMAREA
+*
+*        DATA IS MOVED TO THE MAP DSECT AND DISPLAYED. CONTROL IS
+*        RETURNED TO CICS.
+*
+         BRAS  RETREG,MAPBUILD     GO BUILD MAP
+         BRAS  RETREG,MAPSEND      GO SEND MAP
+         J     CICSCONT            GO RETURN CONTROL TO CICS
+***********************************************************************
+*                                                                     *
+*    HERE A COMMAREA HAS BEEN RETURNED, AND IS THEREFORE SECOND       *
+*    INVOCATION OF THIS PROGRAM                                       *
+*                                                                     *
+***********************************************************************
+COMRETND DS    0H                  HERE COMMAREA HAS BEEN RETURNED
+*
+*        CONTROL IS PASSED HERE WHEN A TEST AT "OKTRANID" FINDS THAT
+*        A "COMMAREA" HAS BEEN RECEIVED. THIS PART OF THE PROGRAM
+*        MAPS IN DATA FOR AN ADD OR UPDATE REQUEST, PERFORMS VALIDATION
+*        AND UPDATES "FILEA".
+*
+         LG    COMPTR,DFHEICAP     GET ADRESSABILITY TO COMMAREA
+*
+*        THE "RECEIVE MAP" COMMAND MAPS IN THE VARIABLES FROM THE
+*        SCREEN.
+*
+         EXEC CICS RECEIVE MAP('DFH$AGB') RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(MAPFAIL)
+         JE    NOTMODF
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         CLC   EIBTRNID,=CL(L'EIBTRNID)'AUPD' IS INVOKING T-ID AUPD?
+         JNE   SECADD              ..NO, SO BRANCH TO SECOND AADD ROUT
+*
+*        IF THIS IS AN UPDATE REQUEST A FILE CONTROL "READ UPDATE"
+*        COMMAND READS THE EXISTING RECORD USING THE NUMBER STORED
+*        IN "COMMAREA" BY THE LAST INVOCATION OF THIS PROGRAM.
+*
+         EXEC CICS READ UPDATE FILE('FILEA') INTO(FILEA)               *
+                   RIDFLD(NUMB-FILEDS(COMPTR)) RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NOTFND)
+         JE    NOTFOUND
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         CLC   FILEREC,FILEREC-FILEDS(COMPTR) RECORD CHANGED ON FILE?
+         JE    OKREC               ..NO, SO BRANCH AND CONTINUE
+*
+*        IF THE CURRENT FILE RECORD IS NOT THE SAME AS THE ONE SAVED
+*        IN "COMMAREA" THEN ANOTHER USER HAS UPDATED THE RECORD.
+*        A WARNING MESSAGE IS DISPLAYED, WITH FIELDS FROM THE RECORD
+*        READ FROM "FILEA", FOR REENTRY OF THE UPDATES.
+*
+         MVC   MSG1O,=CL(L'MSG1O)'RECORD UPDATED BY OTHER USER, TRY AGA*
+               IN'
+         MVI   MSG1A,DFHBMASB      BRIGHTEN MESSAGE ON SCREEN
+         MVI   MSG3A,DFHPROTN      DARK AND PROTECTED ATTRIBUTE
+         BRAS  RETREG,MAPBUILD     GO BUILD MAP
+         EXEC CICS SEND MAP('DFH$AGB') DATAONLY RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         MVC   COMLEN,=H'80'       SET UP LENGTH OF COMMEREA
+         J     CICSCONT            GO RETURN CONTROL TO CICS
+OKREC    DS    0H                  HERE RECORD IS OK FOR UPDATE
+*
+*        A SUBROUTINE CHECKS THAT UPDATES ARE VALID.
+*
+         BRAS  RETREG,CHECK        GO TEST RECORD TO BE UPDATED
+*
+*        THE UPDATE FLAG IS SET IN THE MODIFIED RECORD AND THE RECORD
+*        IS UPDATED ON "FILEA".
+*
+         MVI   STAT,C'U'           MOVE 'UPDATE' BYTE TO FILE RECORD
+         BRAS  RETREG,FILESTUP     GO SET UP FILE RECORD
+*
+*        THE MESSAGE "RECORD UPDATED" IS MOVED TO THE MESSAGE AREA
+*        FOR DISPLAY ON THE OPERATOR INSTRUCTION SCREEN.
+*
+         MVC   MESSAGES,=CL(L'MESSAGES)'RECORD UPDATED' SET UP MESSAGE
+         J     AMNU                COMPLETE, GO FINISH.
+SECADD   DS    0H                  SECOND ADD ROUTINE
+         MVC   NUMB,NUMB-FILEDS(COMPTR)   MOVE SAVED RECORD KEY TO FILE
+*
+*        IF THIS IS AN ADD REQUEST A SUBROUTINE IS CALLED TO CHECK
+*        THAT THE ENTERED DATA IS VALID.
+*
+         BRAS  RETREG,CHECK        GO CHECK RECORD TO BE ADDED
+         XC    FILEDS,FILEDS       RECORD IS OK HERE,SO CLEAR FILE AREA
+*
+*        THE ADD FLAG IS SET IN THE NEW RECORD AND THE RECORD IS
+*        WRITTEN TO "FILEA".
+*
+         MVI   STAT,C'A'           MOVE 'ADDED' BYTE TO FILE RECORD
+         BRAS  RETREG,FILESTUP     GO WRITE RECORD ON FILE
+*
+*        THE MESSAGE "RECORD ADDED" IS MOVED TO THE MESSAGE AREA FOR
+*        DISPLAY ON THE OPERATOR INSTRUCTION SCREEN.
+*
+         MVC   MESSAGES,=CL(L'MESSAGES)'RECORD ADDED'  SET UP MESSAGE
+         J     AMNU                COMPLETE, GO FINISH.
+CICSCONT DS    0H                  THIS ROUTINE RETURNS CONTROL TO CICS
+*
+*        AFTER THE "FILE ADD" OR "FILE UPDATE" SCREEN HAS BEEN
+*        DISPLAYED, THE PROGRAM BRANCHES HERE TO RETURN TO CICS
+*        AWAITING A RESPONSE FROM THE TERMINAL. THE "RETURN" GIVES
+*        CICS THE TRANSACTION IDENTIFIER FOR THE NEXT TRANSACTION
+*        AT THIS TERMINAL TOGETHER WITH A "COMMAREA" CONTAINING ALL
+*        INFORMATION THAT THE PROGRAM NEEDS TO CONTINUE THE UPDATE.
+*        THE "COMMAREA" IS PASSED TO THE NEXT INVOCATION OF THIS
+*        PROGRAM.
+*
+         EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(FILEDS)           *
+                   LENGTH(COMLEN)
+AMNU     DS    0H                  ENDING ROUTINE
+*
+*        THIS CODE GETS CONTROL WHEN AN ADD OR UPDATE IS COMPLETE.
+*        AN INFORMATION OR ERROR MESSAGE IS IN "MESSAGES".
+*        THE OPERATOR INSTRUCTION MAP AREA IS CLEARED. THE MESSAGE
+*        IS MOVED TO THE MAP AREA AND HIGHLIGHTED.
+*
+         XC    DFH$AGAO(DFH$AGAE-DFH$AGAO),DFH$AGAO CLEAR MAP
+         MVI   MSGA,DFHBMASB       BRIGHTEN MESSAGE FIELD ON MAP
+         MVC   MSGO,MESSAGES       MOVE ANY MESSAGE TO MAP AREA
+*
+*        THE OPERATOR INSTRUCTION MAP "DFH$AGA" IS DISPLAYED ON
+*        AN ERASED SCREEN.
+*
+         EXEC CICS SEND MAP('DFH$AGA') ERASE
+*
+*        THE PROGRAM TERMINATES BY RETURNING TO CICS. NO TRANSACTION
+*        IDENTIFIER OR "COMMAREA" IS SPECIFIED.
+*
+         EXEC CICS RETURN
+***********************************************************************
+*                                                                     *
+*                  GENERAL ROUTINES                                   *
+*                                                                     *
+***********************************************************************
+MAPBUILD DS    0H                  ROUTINE TO BUILD MAP DFH$AGB
+*
+*        THIS SUBROUTINE MOVES FIELDS FROM THE "FILEA" RECORD TO
+*        THE MAP DSECT FOR "DFH$AGB".
+*
+         MVC   NUMBO,NUMB          MOVE FILE KEY TO MAP AREA
+         MVC   NAMEO,NAME          MOVE NAME TO MAP AREA
+         MVC   ADDRO,ADDRX         MOVE ADRESS TO MAP AREA
+         MVC   PHONEO,PHONE        MOVE PHONE TO MAP AREA
+         MVC   DATEO,DATEX         MOVE DATE TO MAP AREA
+         MVC   AMOUNTO,AMOUNT      MOVE AMOUNT TO MAP AREA
+         MVC   COMMENTO,COMMENT    MOVE COMMENT TO MAP AREA
+         BR    RETREG              RETURN
+MAPSEND  DS    0H                  ROUTINE TO SEND MAP DFH$AGB
+*
+*        "MAPSEND" SENDS THE MAP "DFH$AGB" TO THE SCREEN SPECIFYING
+*        THAT THE SCREEN IS TO BE ERASED BEFORE THE MAP IS DISPLAYED.
+*
+         EXEC CICS SEND MAP('DFH$AGB') ERASE RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         BR    RETREG              RETURN
+CHECK    DS    0H                  ANY INPUT FROM SCREEN? ROUTINE
+*
+*        ANY REQUIRED EDITING STEPS SHOULD BE INSERTED HERE.
+*        A SUITABLE FORM OF EDITING SHOULD BE USED TO ENSURE VALID
+*        RECORDS ARE PLACED ON THE FILE.
+*
+         LA    R06,DFH$AGBO        R6 POINTS TO START OF MAP DFH$AGB
+         LA    R07,(DFH$AGBE-DFH$AGBO) R7 CONTAINS LENGTH OF MAP B
+         LARL  R08,HEXZERO         R8 POINTS TO HEXZERO
+         LA    R09,L'HEXZERO       R9 CONTAINS LENGTH OF HEXZERO
+         ICM   R09,B'1000',HEXZERO  X'00' INTO TOP BYTE OF R9
+         CLCL  R06,R08             DOES MAP CONTAIN ANY INPUT?
+         JE    NOTMODF             ..NO, SO RAISE NOTMODIFIED
+         CLC   EIBTRNID,=CL(L'EIBTRNID)'AADD' IS INVOKING T-ID 'ADDS'?
+         JE    ADNAMCHK            ..YES, SO GO TO 'AADD' NAME CHECK
+UPNAMCHK DS    0H                  UPDATE TRANSACTION HERE
+         OC    NAMEI,NAMEI         HAS NAME BEEN CHANGED?
+         BZR   RETREG              ..NO, SO DON'T CHECK IT
+ADNAMCHK TRT   NAMEO,TAB           ..YES, IS IT ALPHABETIC?
+         JM    DATAERR             ..NO, SO RAISE ERROR
+         BR    RETREG              ..YES, SO RETURN
+FILESTUP DS    0H                  ROUTINE TO SET UP FILE RECORD
+*
+*        "FILESTUP" CREATES OR UPDATES THE ACCOUNT RECORD AND WRITES
+*        IT TO "FILEA". ANY FIELD WHICH HAS BEEN ENTERED IS MOVED TO
+*        THE ACCOUNT RECORD.
+*
+         OC    NAMEI,NAMEI         HAS NAME BEEN ENTERED?
+         JZ    ADRTST              ..NO, BRANCH
+         MVC   NAME,NAMEI          ..YES, PUT IN IN FILE AREA
+ADRTST   OC    ADDRI,ADDRI         HAS ADRESS BEEN ENTERED?
+         JZ    PHNTST              ..NO, BRANCH
+         MVC   ADDRX,ADDRI         ..YES, PUT IN IN FILE AREA
+PHNTST   OC    PHONEI,PHONEI       HAS PHONE BEEN ENTERED?
+         JZ    DATTST              ..NO, BRANCH
+         MVC   PHONE,PHONEI        ..YES, PUT IN IN FILE AREA
+DATTST   OC    DATEI,DATEI         HAS DATE BEEN ENTERED?
+         JZ    AMTTST              ..NO, BRANCH
+         MVC   DATEX,DATEI         ..YES, PUT IN IN FILE AREA
+AMTTST   OC    AMOUNTI,AMOUNTI     HAS AMOUNT BEEN ENTERED?
+         JZ    CHEKTRAN            ..NO, BRANCH
+         TRT   AMOUNTI,CHEKTAB     IS AMOUNT NUMERIC
+         JNZ   DATAERR             NO, ASK FOR CORRECT AMOUNT
+         MVC   AMOUNT,AMOUNTI      ..YES, PUT IN IN FILE AREA
+         J     COMTST
+CHEKTRAN CLC   EIBTRNID,=CL(L'EIBTRNID)'AADD' IS INVOKING T-ID 'ADDS'?
+         JNE   COMTST
+*                                 PUT VALID AMOUNT IN NEW RECORD
+         MVC   AMOUNT,=CL8'$0000.00'
+COMTST   OC    COMMENTI,COMMENTI HAS COMMENT BEEN ENTERED?
+         JZ    CONTINUE            ..NO, CONTINUE
+         MVC   COMMENT,COMMENTI    ..YES, PUT IN IN FILE AREA
+CONTINUE DS    0H                  FILE RECORD IS NOW SET UP
+*
+*        THE RECORD FIELDS, THE DATE, THE TIME, AND THE TERMID
+*        ARE MOVED TO THE UPDATE LOG RECORD AREA.
+*
+         MVC   LOGREC,FILEREC      MOVE FILE RECORD TO LOG AREA
+         MVC   LDAY,EIBDATE        MOVE DATE TO LOG AREA
+         MVC   LTIME,EIBTIME       MOVE TIME TO LOG AREA
+         MVC   LTERML,EIBTRMID     MOVE TERMINAL-ID TO LOG AREA
+*
+*        THE RECORD IS WRITTEN TO THE UPDATE LOG WHICH IS A TRANSIENT
+*        DATA QUEUE.
+*
+         EXEC CICS WRITEQ TD QUEUE('LOGA') FROM(LOGA) LENGTH(92)       *
+                   RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         CLC   EIBTRNID,=CL(L'EIBTRNID)'AUPD'  UPDATE REQUIRED?
+         JNE   ADDWRITE            ..NO, SO BRANCH
+*
+*        FOR AN UPDATE REQUEST THE UPDATED ACCOUNT RECORD IS
+*        REWRITTEN TO "FILEA".
+*
+         EXEC CICS REWRITE FILE('FILEA') FROM(FILEA) RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(DUPREC)
+         JE    DUPREC
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         BR    RETREG              FINISHED, SO RETURN
+ADDWRITE DS    0H                  ADD FUNCTION REQUIRED
+*
+*        FOR AN ADD REQUEST THE NEW ACCOUNT RECORD IS WRITTEN
+*        TO THE FILE.
+*
+         EXEC CICS WRITE FILE('FILEA') FROM(FILEA)                     *
+                   RIDFLD(NUMB-FILEDS(COMPTR)) RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(DUPREC)
+         JE    DUPREC
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         BR    RETREG              FINISHED, SO RETURN
+DATAERR  DS    0H                  GENERAL ROUTINES
+*
+*        WHEN A DATA ERROR ES DETECTED THE SCREEN IS REDISPLAYED
+*        FOR ERRORS TO BE CORRECTED. THE MODIFIED DATA TAG IS SET ON
+*        FOR ALL THE DATA FIELDS SO THAT ALL DATA IS RECEIVED AT THE
+*        NEXT "RECEIVE MAP".
+*
+         MVI   NAMEA,DFHBMFSE      PRESERVE CONTENTS OF SCREEN
+         MVI   ADDRA,DFHBMFSE      BY SETTING THE MODIFIED DATA TAG
+         MVI   PHONEA,DFHBMFSE     ON THE FIELDS ON THE SCREEN.
+         MVI   DATEA,DFHBMFSE
+         MVI   AMOUNTA,DFHUNNUM    NUMERIC AND MODIFIED FLAGS
+         MVI   COMMENTA,DFHBMFSE
+         MVI   MSG3A,DFHBMASB      BRIGHTEN ERROR MESSAGE
+         MVI   MSG1A,DFHPROTN      DARK AND PROTECTED ATTRIBUTE
+*
+*        AN ERROR MESSAGE IS MOVED TO THE MAP AREA.
+*
+         MVC   MSG3O,=CL(L'MSG3O)'DATA ERROR - CORRECT AND PRESS ENTER'
+*
+*        THE CONTENTS OF MAP "DFH$AGB" ARE SENT TO THE SCREEN.
+*        THE CONSTANT INFORMATION ON THE SCREEN IS NO REFRESHED AS A
+*        RESULT OF THE USE OF THE "DATAONLY" OPTION.
+*
+*
+         EXEC CICS SEND MAP('DFH$AGB') DATAONLY
+         CLC   EIBTRNID,=CL(L'EIBTRNID)'AUPD'  UPDATE REQUIRED?
+         JE    UPDTERR             ..YES, SO BRANCH
+*
+*        THE SIZE OF THE "COMMAREA" IS SET TO 7 FOR AN ADD REQUEST OR
+*        TO 80 FOR AN UPDATE REQUEST. CODE AT "CICSCONT" RETURNS TO
+*        CICS PASSING THIS VALUE IN THE "LENGTH" OPERAND.
+*
+         MVC   COMLEN,=H'7'       ..NO,SET UP COMLEN
+         J     CICSCONT            GO RETURN CONTROL TO CICS
+UPDTERR  DS    0H
+         MVC   COMLEN,=H'80'       UPDATE, SET UP REQUIRED COMLEN
+         J     CICSCONT
+NOTMODF  DS    0H                  SCREEN NOT CHANGED
+*
+*        THESE SHORT ERROR ROUTINES SET UP AN ERROR MESSAGE IN
+*        "MESSAGES" AND BRANCH TO "AMNU" TO DISPLAY THE MESSAGE IN
+*        THE OPERATOR INSTRUCTION MENU "DFH$AGA".
+*
+         MVC   MESSAGES,=CL(L'MESSAGES)'RECORD NOT MODIFIED'  MESSAGE
+         J     AMNU                COMPLETE, GO FINISH
+DUPREC   DS    0H                  DUPLICATE RECORD
+         MVC   MESSAGES,=CL(L'MESSAGES)'DUPLICATE RECORD'  MESSAGE
+         J     AMNU                COMPLETE, GO FINISH
+BADLENG  DS    0H
+         MVC   MESSAGES,=CL(L'MESSAGES)'PLEASE ENTER AN ACCOUNT NUMBER'
+         J     AMNU
+BADCHARS DS    0H
+         MVC   MESSAGES,=CL(L'MESSAGES)'ACCOUNT NUMBER MUST BE NUMERIC'
+         J     AMNU
+NOTFOUND DS    0H                  RECORD NOT FOUND
+         MVC  MESSAGES,=CL(L'MESSAGES)'INVALID NUMBER - PLEASE REENTER'
+         J     AMNU                COMPLETE, GO FINISH
+MFAIL    DS    0H
+         MVC   MESSAGES,=CL(L'MESSAGES)'PRESS CLEAR TO EXIT'
+         J     AMNU
+ERRORS   DS    0H                  GENERAL ERROR ROUTINE
+*
+*        IF A CICS COMMAND FAILS WITH THE "ERROR" CONDITION OR IF
+*        AN UNKNOWN TRANSACTION IDENTIFIER IS USED TO INVOKE THIS
+*        PROGRAM, A DUMP IS TAKEN AND THE MESSAGE "TRANSACTION
+*        TERMINATED" IS MOVED TO "MESSAGES" FOR DISPLAY ON THE
+*        OPERATOR INSTRUCTION SCREEN.
+*
+         EXEC CICS DUMP DUMPCODE('ERRS')
+         MVC   MESSAGES,=CL(L'MESSAGES)'TRANSACTION TERMINATED'
+         J     AMNU                COMPLETE, GO FINISH
+STATR    DS    0D
+HEXZERO  DC    X'00'               CONSTANT FOR COMPARISONS
+TAB      DC    256X'FF'            TRANSLATE TABLE FOR NAME
+         ORG   TAB+C' '            BLANK
+         DC    X'00'
+         ORG   TAB+C'.'            CHAR '.'
+         DC    X'00'
+         ORG   TAB+C'-'            CHAR '-'
+         DC    X'00'
+         ORG   TAB+C''''           CHAR QUOTE
+         DC    X'00'
+         ORG   TAB+C'A'            CHARS 'A' - 'I'
+         DC    9X'00'
+         ORG   TAB+C'J'            CHARS 'J' - 'R'
+         DC    9X'00'
+         ORG   TAB+C'S'            CHARS 'S' - 'Z'
+         DC    8X'00'
+         ORG
+CHEKTAB  DC    256X'FF'            TRANSLATE TABLE FOR AMOUNT
+         ORG   CHEKTAB+C'›'        ALTERNATE CURRENCY
+         DC    X'00'
+         ORG   CHEKTAB+C'.'        ALLOW FULL STOP
+         DC    X'00'
+         ORG   CHEKTAB+C'$'        ALLOW CURRENCY
+         DC    X'00'
+         ORG   CHEKTAB+C'0'        NUMBERS 0-9
+         DC    10X'00'
+         ORG
+         LTORG
+         END

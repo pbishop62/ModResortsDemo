@@ -1,0 +1,292 @@
+*ASM XOPTS(CICS SP NOEDF NOPROLOG NOEPILOG)
+     TITLE 'DFH$APAD - Sample XAPADMGR Global User Exit Program'
+***********************************************************************
+*                                                                     *
+*   MODULE NAME = DFH$APAD                                            *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  Data Tables Sample XAPADMGR Exit        *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2006, 2007"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*        Sample Global User Exit Program to run at the XAPADMGR exit  *
+*                                                                     *
+*   The program allows additional information to be included          *
+*   at the point of origin of a distributed transaction that          *
+*   makes use of TCPIP resources.                                     *
+*                                                                     *
+* ------------------------------------------------------------------- *
+*   NOTE that this program is only intended to DEMONSTRATE the use    *
+*   of the user exit XAPADMGR, and to show the sort of                *
+*   information which can be obtained from the exit parameter list.   *
+*                                                                     *
+* IT SHOULD BE TAILORED BEFORE BEING USED IN A PRODUCTION ENVIRONMENT *
+* ------------------------------------------------------------------- *
+*                                                                     *
+*   This global user exit program will be invoked, if enabled, when   *
+*   a non-system task is attached without an Origin Descriptor        *
+*   Record (ODR) being passed to it.                                  *
+*                                                                     *
+*   The purpose of the program is to demonstrate the use of the       *
+*   XAPADMGR global exit to include additional information in the     *
+*   Association Data Origin Descriptor (ADOD) at the point of origin  *
+*   of a distributed transaction that makes use of TCPIP network      *
+*   resources.                                                        *
+*                                                                     *
+*   This exit program performs the following processing:              *
+*    - provides addressability to the Associated Data provided as     *
+*      input                                                          *
+*    - chooses a couple fields from this Associated Data to be placed *
+*      in the output buffer.                                          *
+*    - adds some user defined information, "FRED" to be placed        *
+*      in the output buffer.                                          *
+*                                                                     *
+*   The information that is placed in the output buffer will be       *
+*   included in the Association Data Origin Descriptor (ADOD).        *
+*   It can then be used later as a search string via CPSM or vendor   *
+*   tools.                                                            *
+*                                                                     *
+*   The information that is provided on input (Associated Data)       *
+*   can be used for other purposes, such as auditing. This might      *
+*   take the form of creating and writing a record to a journal.      *
+*   This is for illustrative purposes only, as it is unlikely         *
+*   to be the criterion for selection in a realistic environment.     *
+*                                                                     *
+*   The trace flag passed to the exit is set ON if AP                 *
+*   level 1 tracing is enabled.                                       *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*          DFH$APAD, or an exit program which is based on this        *
+*          sample, must be defined on the CSD as a program            *
+*          (with DATALOCATION(ANY)).                                  *
+*    RESTRICTIONS =                                                   *
+*          This program is designed to run on CICS TS 3.2 or later    *
+*          release.  It requires the DFHMNADS copybook to be          *
+*          available in order to be able to map the ADCB              *
+*          fields for analysis or for inclusion in the                *
+*          user correlation data output.                              *
+*    REGISTER CONVENTIONS = see code                                  *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, AMODE 31, RMODE ANY                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$APAD                                              *
+*                                                                     *
+*     PURPOSE =                                                       *
+*         Described above                                             *
+*                                                                     *
+*     LINKAGE =                                                       *
+*         Called by the user exit handler                             *
+*                                                                     *
+*     INPUT =                                                         *
+*         Standard user exit parameter list DFHUEPAR,                 *
+*          addressed by R1 and containing a pointer to the            *
+*          Associated Data Parameter list                             *
+*                                                                     *
+*     OUTPUT =                                                        *
+*         Return code placed in R15                                   *
+*                                                                     *
+*     EXIT-NORMAL =                                                   *
+*         Return code in R15 can be                                   *
+*         UERCNORM = normal return code                               *
+*          Continue processing                                        *
+*                                                                     *
+*     EXIT-ERROR =                                                    *
+*         None                                                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES :                                               *
+*     ROUTINES = None                                                 *
+*     DATA AREAS = None                                               *
+*     CONTROL BLOCKS =                                                *
+*         User Exit Parameter list for XAPADMGR: DFHUEPAR             *
+*         Associated Data Parameter List:  UEPADPL                    *
+*     GLOBAL VARIABLES = None                                         *
+*                                                                     *
+* TABLES = None                                                       *
+*                                                                     *
+* MACROS =                                                            *
+*         DFHUEXIT to generate the standard user exit parameter list  *
+*                  with the extensions for the XAPADMGR exit point    *
+*         DFHUEXIT to declare the XPI (exit programming interface)    *
+*         DFHTRPTX XPI call to issue a user trace entry               *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION of the program structure:                               *
+*                                                                     *
+*    1) Standard entry code for a global user exit that uses the XPI: *
+*         The program sets up any definitions required, then saves    *
+*         the caller's registers, establishes addressability, and     *
+*         addresses the parameter lists.                              *
+*    2) Initial section of code:                                      *
+*         The program gets the address of the associated data         *
+*         parameter list.                                             *
+*   3a) Choose a field from associated data to be placed in           *
+*         output buffer.                                              *
+*   3b) Choose some user data to be placed in output buffer.          *
+*    4) Standard exit code for a global user exit that uses the XPI:  *
+*         Restore users registers, and return to the address that was *
+*         in R14 when the exit program was called.                    *
+*-------------------------------------------------------------------- *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+**                                                                    *
+*        $MOD(DFH$APAD),COMP(APPLICN),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 827    650 060628 HDITLJG : User exit                       *
+*    $P1= D17620 650 070216 HDITLJG : add xopts                       *
+*    $P2= D17876 650 070307 HDITLJG : Fix exit logic                  *
+*    $P3= D18200 650 070314 HDIUPML : use DFHMNADD                    *
+*                                                                     *
+*-------------------------------------------------------------------- *
+         EJECT ,
+         DFHUEXIT TYPE=EP,ID=XAPADMGR Standard UE parameters for exit
+         DFHUEXIT TYPE=XPIENV       Exit programming interface (XPI)
+         EJECT ,
+         COPY  DFHTRPTY             Trace definitions
+         COPY  DFHMNADD             MNADCB dsect                  @P3A
+APMGRUCD DSECT                      Define User Correlation Data  @P3A
+APMUCD   DS 0CL64                                                 @P3A
+APMID    DS CL4                                                   @P3A
+APMAPLID DS CL8                                                   @P3A
+         DS CL52                    not used .. blank             @P3A
+APMUCDLN EQU *-APMUCD                                             @P3A
+         EJECT ,
+***********************************************************************
+*  REGISTER USAGE :                                                   *
+*  R0 -                                                               *
+*  R1 - address of DFHUEPAR on input, and used by XPI calls           *
+*  R2 - address of standard user exit parameter list, DFHUEPAR        *
+*  R3 -                                                               *
+*  R4 -                                                               *
+*  R5 - address of storage for XPI parameters                         *
+*  R6 - address of associated data parameter list, UEPADPL            *
+*  R7 - address of the trace flag                                     *
+*  R8 - address of ADCB input fields                                  *
+*  R9 - address of length of ADCB input fields                        *
+*  R10- address of output buffer (64 bytes long)                      *
+*  R11- base register                                                 *
+*  R12-                                                               *
+*  R13- address of kernel stack prior to XPI CALLS                    *
+*  R14- used by XPI calls                                             *
+*  R15- return code, and used by XPI calls                            *
+*  (The register equates are declared by the DFHUEXIT call above)     *
+***********************************************************************
+         SPACE 2
+DFH$APAD CSECT
+DFH$APAD AMODE 31
+DFH$APAD RMODE ANY
+         STM   R14,R12,12(R13)     Save callers registers
+         LR    R11,R15             Set up base register
+         USING DFH$APAD,R11
+         LR    R2,R1               Address standard parameters
+         USING DFHUEPAR,R2
+*        L     R6,UEPADPL          User exit parameter list
+***********************************************************************
+* Save some fields from the parameter list that are to be traced or   *
+* used in selecting records                                           *
+***********************************************************************
+         L     R8,UEPADCB          Address of ADCB input
+         L     R9,UEPADCBL         Point to ADCB length
+         L     R9,0(,R9)           Set ADCB length
+         USING MNADCB,R8           ADCB dsect                     @P3A
+         L     R10,UEPUCD          Address of output buffer
+         USING APMGRUCD,R10        exit's UCD dsect               @P3A
+***********************************************************************
+*        Issue trace and select records to be put in output buffer    *
+***********************************************************************
+SDTCFDT  DS    0H
+         L     R7,UEPTRACE         Address of trace flag
+         TM    0(R7),UEPTRON       Is trace on?
+         BZ    CONTIN              No - do not issue trace then
+         L     R5,UEPXSTOR         Prepare for XPI call
+         USING DFHTRPT_ARG,R5
+         L     R13,UEPSTACK
+***********************************************************************
+* Trace ADCB input.                                                   *
+***********************************************************************
+         DFHTRPTX CALL,                                                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(ADTRACE1),                                     *
+               DATA1((R8),(R9)),                                       *
+               OUT,                                                    *
+               RESPONSE(*),                                            *
+               REASON(*)
+***********************************************************************
+*        Register 8 will contain the address of the input             *
+*        associated data control block (ADCB).  You can map           *
+*        the fields in the control block by using copybook            *
+*        DFHMNADD.                                                    *
+***********************************************************************
+CONTIN   DS    0H
+***********************************************************************
+* The UCD in this case will be the string "FRED" followed by          *
+* the application id.                                                 *
+*                                                                     *
+***********************************************************************
+         MVI   APMUCD,C' '                                        @P3A
+         MVC   APMUCD+1(APMUCDLN-1),APMUCD  Init UCD to blanks    @P3A
+         MVC   APMID,APUCD                  "FRED"                @P3C
+         MVC   APMAPLID,MNAD_APPLID         Applid                @P3C
+***********************************************************************
+*        Issue trace for UCB output                               @P2A*
+***********************************************************************
+SDTCFD2  DS    0H
+         L     R7,UEPTRACE         Address of trace flag          @P2A
+         TM    0(R7),UEPTRON       Is trace on?                   @P2A
+         BZ    CONTIN2             No - do not issue trace then   @P2A
+         L     R5,UEPXSTOR         Prepare for XPI call           @P2A
+         USING DFHTRPT_ARG,R5
+         L     R13,UEPSTACK
+***********************************************************************
+* Trace UCD output.                                                   *
+***********************************************************************
+         DFHTRPTX CALL,                                                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(ADTRACE2),                                     *
+               DATA1((R10),64),                                        *
+               OUT,                                                    *
+               RESPONSE(*),                                            *
+               REASON(*)
+CONTIN2  DS    0H
+ACC      LA    R15,UERCNORM        IF YES, SET RC TO ACCEPT
+         B     GLUEND               and end
+         SPACE 3
+GLUEND   DS    0H                  Standard GLUE ending code
+         L     R13,UEPEPSA
+         L     R14,12(R13)
+         LM    R0,R12,20(R13)
+         BR    R14
+         SPACE 2
+***********************************************************************
+*        Constants                                                    *
+***********************************************************************
+         SPACE 1
+APUCD    DC    CL4'FRED'                                          @P3C
+ADTRACE1 DC    XL2'128'
+ADTRACE2 DC    XL2'129'
+         SPACE 2
+         END   DFH$APAD

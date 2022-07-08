@@ -1,0 +1,326 @@
+*ASM XOPTS(CICS,SP,NOEDF,NOPROLOG,NOEPILOG)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$APDT                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Sample task-related user exit program that       *
+*                    sets the adapter data fields                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2011, 2015"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION = This sample task-related user exit illustrates how       *
+*            the adapter data fields may be used to pass tracking     *
+*            information from an adapter into the origin data         *
+*            section of a task's association data as the task         *
+*            is being started. This information can then be used      *
+*            in adapter tracking to track the transactions            *
+*            started by the adapter.                                  *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*    RESTRICTIONS = CICS TS TRUE restrictions.                        *
+*                   TRUEs have certain unique restrictions. These     *
+*                   include, but are not limited to, such things      *
+*                   as use of CICS services and storage protection.   *
+*                   Please refer to the CICS Transaction Server for   *
+*                   z/OS Customization Guide for details.             *
+*    REGISTER CONVENTIONS = On entry, these registers have values:    *
+*                   R1  - address of the user exit parameter list     *
+*                         DFHUEPAR                                    *
+*                   R13 - address of a standard register save area    *
+*                         R13 must have this value when returning to  *
+*                         the caller.                                 *
+*                   R14 - address to which this program must return   *
+*                   R15 - entry address of this program               *
+*                   No other register values are guaranteed on entry  *
+*                   The exit should save and restore any registers    *
+*                   that it modifies, using the save area addressed   *
+*                   by R13.                                           *
+*                                                                     *
+*                   These registers are used in this program:         *
+*                   R2  - Spare                                       *
+*                   R3  - Code base                                   *
+*                   R4  - Spare                                       *
+*                   R5  - DFHUERTR base                               *
+*                   R6  - DFHUEPAR base                               *
+*                   R7  - Work register                               *
+*                   R8  - Work register                               *
+*                   R9  - Work register                               *
+*                   R10 - DFHEISTG base (DFHEIPLR)                    *
+*                   R11 - EIB base (DFHEIBR)                          *
+*                   R12 - Spare                                       *
+*                   R13 - Spare                                       *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, AMODE 31, RMODE ANY                      *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* ENTRY POINT = DFH$APDT                                              *
+*                                                                     *
+*     PURPOSE = All functions                                         *
+*                                                                     *
+*     LINKAGE = Called by CICS as requested in the options of the     *
+*                 EXEC CICS ENABLE PROGRAM                            *
+*               command that enabled it as a TRUE                     *
+*                                                                     *
+*     INPUT = R1 contains the address of DFHUEPAR                     *
+*                                                                     *
+*     OUTPUT = None                                                   *
+*                                                                     *
+*     EXIT-NORMAL = Return to caller                                  *
+*                                                                     *
+*     EXIT-ERROR = None                                               *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+*                                                                     *
+*     ROUTINES = None                                                 *
+*                                                                     *
+*     DATA AREAS = None                                               *
+*                                                                     *
+*     CONTROL BLOCKS = DFHUEPAR                                       *
+*                      DFHUERTR                                       *
+*                      DFHUECON                                       *
+*                                                                     *
+*     GLOBAL VARIABLES = None                                         *
+*                                                                     *
+* TABLES = None                                                       *
+*                                                                     *
+* MACROS = DFHUEXIT TYPE=RM     User exit parameter list              *
+*          DFHREGS              Register equates                      *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* DESCRIPTION                                                         *
+*   The purpose of this sample program is to demonstrate the use of   *
+*   adapter data fields for transaction tracking.                     *
+*                                                                     *
+* * * YOU SHOULD TAILOR IT BEFORE USE IN A PRODUCTION ENVIRONMENT * * *
+*                                                                     *
+*   DFH$APDT can be used in one of 2 ways:                            *
+*                                                                     *
+*     1) If enabled for TASKSTART, e.g.                               *
+*          EXEC CICS ENABLE PROGRAM(DFH$APDT) TASKSTART START         *
+*        this TRUE will be called at the start and end of EVERY       *
+*        task. For every task it will set interest in context         *
+*        management, meaning that for every START issued by any       *
+*        subsequent task, it will be called again.                    *
+*                                                                     *
+*     2) Once enabled and started via the                             *
+*          EXEC CICS ENABLE PROGRAM(DFH$APDT) START                   *
+*        command, this TRUE can be invoked from an application        *
+*        program by a DFHRMCAL request. This will cause the code at   *
+*        label APPLREQ to be executed, which will set interest in     *
+*        context management, meaning that for every START issued      *
+*        by the application program, it will be called again.         *
+*                                                                     *
+*     Once interest in context management has been set for a          *
+*     transaction, then all subsequent START requests it              *
+*     issues cause the TRUE to be called again and the code           *
+*     at label CONTREQ to execute. This is where the adapter          *
+*     fields are set. As this is only a sample, these                 *
+*     fields are set from constants, but for a real adapter           *
+*     their content will be likely based on context.                  *
+*                                                                     *
+*     The adapter fields are intended to be hierarchical, to          *
+*     allow different levels of granularity to be returned            *
+*     when searching the tracking data. Recommendations on            *
+*     the contents of these fields are as follows:                    *
+*      - Adapter ID                                                   *
+*        - Adapter ID is a free format EBCDIC string of max           *
+*          64 characters identifying, for example, the type,          *
+*          identity, or name and version etc of the product to        *
+*          which the adapter belongs                                  *
+*          e.g. it could contain its product identifier.              *
+*      - Adapter Data 1                                               *
+*        - Adapter Data 1 is a free format EBCDIC string of max       *
+*          64 characters giving a high level identifier such as       *
+*          the subsystem instance                                     *
+*          e.g. if the adapter is connected to a database or          *
+*               server, this field could be set to the                *
+*               database or server name.                              *
+*      - Adapter Data 2                                               *
+*        - Adapter Data 2 is a free format EBCDIC string of max       *
+*          64 characters giving a grouping identifier such as the     *
+*          resource within the server                                 *
+*          e.g. it could specify the instance of the adapter that     *
+*               is setting these fields.                              *
+*      - Adapter Data 3                                               *
+*        - Adapter Data 3 is a free format EBCDIC string of max       *
+*          64 characters giving the unique identity such as the       *
+*          client instance or request instance within the             *
+*          grouping                                                   *
+*          e.g. it could identify the reason why the adapter is       *
+*               STARTing this particular task.                        *
+*                                                                     *
+*     Fields should be padded to 64 characters with blanks, and       *
+*     while they can contain any characters, use only of              *
+*     alphanumerics and standard punctuation will aid compatibility   *
+*     with other tools.                                               *
+*                                                                     *
+*     Use of name-value pairs is suggested, or alternatively use      *
+*     of a format that's more closely aligned with the format of      *
+*     the adapter owner's own tracking command parameters might       *
+*     be considered.                                                  *
+*                                                                     *
+*     If all adapters make use of these fields as described above     *
+*     then this will make them most useful in transaction tracking.   *
+*     Adhering to the hierarchy will allow systems programmers to     *
+*     identify and isolate work initiated by adapters in a uniform    *
+*     manner, whichever adapter initiated this work.                  *
+*                                                                     *
+*     Once set, CICS will use the contents of these fields to         *
+*     populate the adapter data fields in the origin data section     *
+*     of the association data of the task that is being started,      *
+*     and also the adapter data fields in the performance class       *
+*     monitoring data that is recorded (if active) for that task.     *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFH$APDT),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= R12973 670 110106 HDIYAJL : Create Sample TRUE              *
+*    $P1= D24848 670 110126 HDIYAJL : Sample TRUE build               *
+*                                                                     *
+***********************************************************************
+*
+***********************************************************************
+* Ensure AMODE(31) and RMODE(ANY)                                     *
+***********************************************************************
+DFH$APDT CSECT
+DFH$APDT AMODE 31
+DFH$APDT RMODE ANY
+         DFHREGS                    Register equates
+***********************************************************************
+* Generate the prolog code with the DFHEIENT macro                    *
+***********************************************************************
+         DFHEIENT CODEREG=3,DATAREG=10,EIBREG=11
+***********************************************************************
+* Include DSECTS needed for:                                          *
+*  - User Exit Parameter List - DFHUEPAR                              *
+***********************************************************************
+         DFHUEXIT TYPE=RM           DFHUEPAR plist
+         EJECT
+         DFHEISTG                        Start working storage
+         DFHEIEND                        End working storage
+         EJECT
+DFH$APDT CSECT
+***********************************************************************
+* Address the DFHUEPAR parameter list and the function definition     *
+***********************************************************************
+         LR    R6,R1                Address DFHUEPAR
+         USING DFHUEPAR,R6          Set parm list addressability
+         MVC   DFHEIBP,UEPEIB       Correct EIB address
+         L     DFHEIBR,UEPEIB       Reload EIB base register
+         MVC   DFHEICAP,=X'80000000'
+         L     R5,UEPEXN            Address function definition
+         USING DFHUERTR,R5          Set function definition            *
+                                    addressability
+***********************************************************************
+* Find what called this exit. If it was not for one of:               *
+* - CICS task manager                                                 *
+* - Application program                                               *
+* - CICS context management                                           *
+* then just exit                                                      *
+***********************************************************************
+START    DS    0H
+         CLI   UERTFID,UERTTASK     Task manager call?
+         BE    TASKREQ              ..Yes, branch
+         CLI   UERTFID,UERTAPPL     Application program call?
+         BE    APPLREQ              ..Yes, branch
+         CLI   UERTFID,UERTFCON     Context management call?
+         BE    CONTREQ              ..Yes, branch
+         B     EXIT                 Else exit
+*
+***********************************************************************
+* Task Manager Processing                                             *
+*  - If this was called for transaction start, set interest in        *
+*    context management calls (STARTs)                                *
+***********************************************************************
+TASKREQ  DS    0H                   TRUE called from task manager
+         L     R7,UEPHMSA           Get pointer to RSA
+         L     R7,24(,R7)           Get R1 Value pointing to plist
+         L     R7,0(,R7)            Pick up first address in plist
+         CLI   0(R7),UERTSOTR       Start of task call?
+         BNE   EXIT                 No, so exit
+         L     R9,UEPFLAGS          Address the schedule flag word
+         OI    UEFDCON(R9),UEFMCON  Set interest in CONTEXT calls
+         B     EXIT                 Finished
+*
+***********************************************************************
+* Application Processing                                              *
+*  - Set interest in context management calls (STARTs)                *
+***********************************************************************
+APPLREQ  DS    0H                   TRUE called from application
+         L     R9,UEPFLAGS          Address the schedule flag word
+         OI    UEFDCON(R9),UEFMCON  Set interest in CONTEXT calls
+         B     EXIT                 Finished
+*
+***********************************************************************
+*   Context Management Processing                                     *
+*    - Check whether the adapter fields set by this exit will be used *
+*    - If they will be used, set the adapter fields                   *
+***********************************************************************
+CONTREQ  DS    0H                           TRUE called from context   *
+                                            management
+         L     R7,UEPHMSA                   Get pointer to caller's RSA
+         L     R7,24(,R7)                   Point to plist
+         USING DFHUECON,R7                  Address context management *
+                                            parms
+         L     R8,UECON_FLAGS               Get addr of flag byte
+         TM    0(R8),UECON_ADAPTER_DATA_ON  Origin already override?
+         BZ    EXIT                         ..YES, just exit then
+         L     R8,UECON_ADAPTER_ID_PTR      Obtain address of ID
+         MVI   0(R8),C' '
+         MVC   1(63,R8),0(R8)               Prefill with blanks
+         MVC   0(L'ADAPTERID,R8),ADAPTERID  Set ID to constant
+         L     R8,UECON_ADAPTER_DATA1_PTR   Obtain address of DATA1
+         MVI   0(R8),C' '
+         MVC   1(63,R8),0(R8)               Prefill with blanks
+         MVC   0(L'ADAPTER1,R8),ADAPTER1    Set DATA1 to constant
+         L     R8,UECON_ADAPTER_DATA2_PTR   Obtain address of DATA2
+         MVI   0(R8),C' '
+         MVC   1(63,R8),0(R8)               Prefill with blanks
+         MVC   0(L'ADAPTER2,R8),ADAPTER2    Set DATA2 to constant
+         L     R8,UECON_ADAPTER_DATA3_PTR   Obtain address of DATA3
+         MVI   0(R8),C' '
+         MVC   1(63,R8),0(R8)               Prefill with blanks
+         MVC   0(L'ADAPTER3,R8),ADAPTER3    Set DATA3 to constant
+         B     EXIT                         Finished
+***********************************************************************
+*   Generate epilog code with the DFHEIRET macro                      *
+***********************************************************************
+EXIT     DS 0H
+         DFHEIRET                   Return
+*
+         DROP  R5,R6,R7             Lose addressability to DSECTs
+         EJECT
+***********************************************************************
+* Constants                                                           *
+***********************************************************************
+ADAPTERID      DC    C'ID=DFH$APDT Sample Product Identifier v1.0.0'
+ADAPTER1       DC    C'SERVER=Server 1'
+ADAPTER2       DC    C'INSTANCE=DFH$APDT Sample True'
+ADAPTER3       DC    C'DETAILS=Details'
+         LTORG
+***********************************************************************
+* End of DFH$APDT                                                     *
+***********************************************************************
+         END DFH$APDT

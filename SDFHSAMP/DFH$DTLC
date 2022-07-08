@@ -1,0 +1,293 @@
+         TITLE 'DFH$DTLC - Sample XDTLC Global User Exit Program'
+***********************************************************************
+*                                                                     *
+*   MODULE NAME = DFH$DTLC                                            *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  Data Tables Sample XDTLC Exit           *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1991, 1997"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*        Sample Global User Exit Program to run at the XDTLC exit     *
+*                                                                     *
+*   The program rejects a data table if its load did not complete OK. *
+*                                                                     *
+* ------------------------------------------------------------------- *
+*   NOTE that this program is only intended to DEMONSTRATE the use    *
+*   of the data tables user exit XDTLC, and to show the sort of       *
+*   information which can be obtained from the exit parameter list.   *
+* IT SHOULD BE TAILORED BEFORE BEING USED IN A PRODUCTION ENVIRONMENT *
+*   If this program is modified to accept a load that has failed      *
+*   or reject a load that has been successful, it is the              *
+*   responsibility of the program to issue a message indicating       *
+*   what has happened. Any message output by CICS File Control will   *
+*   only reflect what happened before modification of return codes    *
+*   by the exit program.                                              *
+* ------------------------------------------------------------------- *
+*                                                                     *
+*   This global user exit program will be invoked, if enabled, when   *
+*   the load of a data table has completed.                           *
+*                                                                     *
+*   The program is intended for use in the following situations :     *
+*                                                                     *
+*   (1) on CICS systems that have only the original data table        *
+*       support (ie.before shared data tables)                        *
+*   (2) on CICS systems that have shared data table support           *
+*   (3) on CICS systems that have shared date table support AND       *
+*       coupling facility data table support                          *
+*                                                                     *
+*   Flags are passed in the data tables parameter list which may      *
+*   be used to determine whether the exit has been invoked from       *
+*   a system which supports shared data tables or coupling facility   *
+*   data tables.                                                      *
+*                                                                     *
+*   The program will issue a user trace entry if tracing is enabled,  *
+*   then check the setting of the load completion indicator.          *
+*   If this shows that loading failed to complete successfully, then  *
+*   the exit program will set a return code that rejects the table    *
+*   by requesting that it be closed.                                  *
+*                                                                     *
+*   The trace flag passed to the exit is set ON if File Control (FC)  *
+*   level 1 tracing is enabled.                                       *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*          DFH$DTLC, or an exit program which is based on this        *
+*          sample, must be defined on the CSD as a program            *
+*          (with DATALOCATION(ANY)).                                  *
+*    RESTRICTIONS =                                                   *
+*          This program is designed to run on CICS/ESA 3.3 or later   *
+*          release.  It requires the DFHXDTDS copybook to be          *
+*          available at assembly time.                                *
+*    REGISTER CONVENTIONS = see code                                  *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, AMODE 31, RMODE ANY                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$DTLC                                              *
+*                                                                     *
+*     PURPOSE =                                                       *
+*         Described above                                             *
+*                                                                     *
+*     LINKAGE =                                                       *
+*         Called by the user exit handler                             *
+*                                                                     *
+*     INPUT =                                                         *
+*         Standard user exit parameter list DFHUEPAR,                 *
+*          addressed by R1 and containing a pointer to the            *
+*          Data Tables parameter list                                 *
+*                                                                     *
+*     OUTPUT =                                                        *
+*         Return code placed in R15                                   *
+*                                                                     *
+*     EXIT-NORMAL =                                                   *
+*         Return code in R15 can be                                   *
+*         UERCDTOK = accept table                                     *
+*         UERCDTCL = reject table (close it)                          *
+*                                                                     *
+*     EXIT-ERROR =                                                    *
+*         None                                                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES :                                               *
+*     ROUTINES = None                                                 *
+*     DATA AREAS = None                                               *
+*     CONTROL BLOCKS =                                                *
+*         User Exit Parameter list for XDTLC: DFHUEPAR                *
+*         Data Tables User Exit Parameter List: DT_UE_PLIST           *
+*     GLOBAL VARIABLES = None                                         *
+*                                                                     *
+* TABLES = None                                                       *
+*                                                                     *
+* MACROS =                                                            *
+*         DFHUEXIT to generate the standard user exit parameter list  *
+*                  with the extensions for the XDTLC exit point       *
+*         DFHUEXIT to declare the XPI (exit programming interface)    *
+*         DFHTRPTX XPI call to issue a user trace entry               *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION of the program structure:                               *
+*                                                                     *
+*    1) Standard entry code for a global user exit that uses the XPI: *
+*         The program sets up any definitions required, then saves    *
+*         the caller's registers, establishes addressability, and     *
+*         addresses the parameter lists.                              *
+*    2) Tracing (only executed if FC level 1 tracing is enabled):     *
+*         The program tests whether it was invoked from shared data   *
+*         table code.  If so, it issues a user trace point X'0126'    *
+*         including fields from the data table parameter list which   *
+*         are only supplied by shared data table support or           *
+*         coupling facility data table support.  If not, it           *
+*         issues a X'0116' trace point, containing parameters which   *
+*         are supplied by any level of data table support.            *
+*    3) Choosing whether to accept the table:                         *
+*         The program tests the return code from the load.  If the    *
+*         load failed to complete, then it sets UERCDTCL in R15,      *
+*         which requests that the table should be closed.  If the     *
+*         load completed successfully, then it sets UERCDTOK in R15   *
+*         to keep the table open.                                     *
+*    4) Standard exit code for a global user exit that uses the XPI:  *
+*         Restore users registers, and return to the address that was *
+*         in R14 when the exit program was called.                    *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$DTLC),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $D0= I05880 330 911218 HDAVCMM : new module for sample user exit *
+*    $D2= I05881 410 920915 HDAVCMM : Incorporate SDT into 410        *
+*    $L1= 725    530 971029 HD4EPEA : LID 725 - Incorporate CFDTs     *
+*    $P1= M94990 510 950728 HDAVCMM : Tidy up comment in prolog       *
+*                                                                     *
+***********************************************************************
+         EJECT ,
+         DFHUEXIT TYPE=EP,ID=XDTLC  standard UE parameters for XDTLC
+         DFHUEXIT TYPE=XPIENV       exit programming interface (XPI)
+         EJECT ,
+         COPY  DFHXDTDS             Additional data table UE params
+         EJECT ,
+         COPY  DFHTRPTY             Trace definitions
+         EJECT ,
+***********************************************************************
+*  Register usage :                                                   *
+*  R0 -                                                               *
+*  R1 - address of DFHUEPAR on input, and used by XPI calls           *
+*  R2 - address of standard user exit plist, DFHUEPAR                 *
+*  R3 -                                                               *
+*  R4 - address of source data set name                               *
+*  R5 - address of storage for XPI parameters                         *
+*  R6 - address of data tables parameter list, DT_UE_PLIST            *
+*  R7 - address of the trace flag, UEPTRACE                           *
+*  R8 - address of data table name                                    *
+*  R9 - address of loading completion indicator, UEPDTORC             *
+*  R10-                                                               *
+*  R11- base register                                                 *
+*  R12- address of data table flags byte, UEPDTFLG                    *
+*  R13- address of kernel stack prior to XPI calls                    *
+*  R14- used by XPI calls                                             *
+*  R15- return code, and used by XPI calls                            *
+*  (The register equates are declared by the DFHUEXIT call above)     *
+***********************************************************************
+         SPACE 2
+DFH$DTLC CSECT
+DFH$DTLC AMODE 31
+DFH$DTLC RMODE ANY
+         STM   R14,R12,12(R13)     Save caller's registers
+         LR    R11,R15             Establish base
+         USING DFH$DTLC,R11
+         LR    R2,R1               Address standard parameters
+         USING DFHUEPAR,R2
+         L     R6,UEPDTPL          Address data table parameters
+         USING DT_UE_PLIST,R6
+         SPACE 1
+         LA    R8,UEPDTNAM         Address data table name
+         LA    R9,UEPDTORC         Address load return code
+***********************************************************************
+*        Issue Trace (if tracing is enabled)                          *
+***********************************************************************
+         L     R7,UEPTRACE         Get trace flag address
+         TM    0(R7),UEPTRON       Is trace on?
+         BZ    CHOOSE              Skip tracing if not
+***********************************************************************
+* Test whether the exit was invoked from shared data tables support   *
+* or coupling facility data table support                             *
+***********************************************************************
+         TM    UEPDTFLG,UEPDTSDT   Were we invoked from SDT?
+         BO    SDTCFDT             Branch if yes
+         TM    UEPDTFLG,UEPDTCFT   or coupling facility data tables?
+         BZ    NOTSDT              Branch to non-SDT and non coupling
+*                                  facility data table code if not
+         EJECT ,
+SDTCFDT  DS    0H
+***********************************************************************
+*        Exit has been invoked from SDT or coupling facility data     *
+*        tables                                                       *
+***********************************************************************
+         L     R5,UEPXSTOR         Set up XPI trace call
+         USING DFHTRPT_ARG,R5
+         L     R13,UEPSTACK
+***********************************************************************
+* Trace data table name, load return code, source dsname, and flags.  *
+* The last two fields are only meaningful for SDT support or          *
+* coupling facility data table support.
+***********************************************************************
+         LA    R4,UEPDTDSN         Get source data set name
+         LA    R12,UEPDTFLG        Get data table flags
+         DFHTRPTX CALL,                                                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(LCTRACE2),                                     *
+               DATA1((R8),8),                                          *
+               DATA2((R9),1),                                          *
+               DATA3((R4),UEPDTDSL),                                   *
+               DATA4((R12),1),                                         *
+               OUT,                                                    *
+               RESPONSE(*),                                            *
+               REASON(*)
+         B     CHOOSE              Go and test if load completed OK
+         EJECT ,
+***********************************************************************
+*        Exit has not been invoked from SDT or coupling facility      *
+*        data tables                                                  *
+***********************************************************************
+NOTSDT   L     R5,UEPXSTOR         Set up XPI trace call
+         USING DFHTRPT_ARG,R5
+         L     R13,UEPSTACK
+***********************************************************************
+* Trace data table name and load return code                          *
+***********************************************************************
+         DFHTRPTX CALL,                                                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(LCTRACE1),                                     *
+               DATA1((R8),8),                                          *
+               DATA2((R9),1),                                          *
+               OUT,                                                    *
+               RESPONSE(*),                                            *
+               REASON(*)
+         EJECT ,
+***********************************************************************
+*        If load completed successfully, then keep table open         *
+*        If not, ask for it to be closed                              *
+***********************************************************************
+CHOOSE   DS    0H
+         CLI   0(R9),UEPDTLFL      Did load fail?
+         BNE   LOADOK
+         LA    R15,UERCDTCL        Set RC for table to be closed
+         B     GLUEND
+LOADOK   LA    R15,UERCDTOK        Set RC to keep table
+         SPACE 3
+GLUEND   DS    0H                  Standard GLUE exit code
+         L     R13,UEPEPSA
+         L     R14,12(R13)
+         LM    R0,R12,20(R13)
+         BR    R14
+         SPACE 2
+***********************************************************************
+* Constant Declarations                                               *
+***********************************************************************
+LCTRACE1 DC    XL2'116'
+LCTRACE2 DC    XL2'126'
+         SPACE 1
+         END   DFH$DTLC

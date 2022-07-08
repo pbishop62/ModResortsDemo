@@ -1,0 +1,143 @@
+#pragma XOPTS(CICS)
+ /********************************************************************/
+ /*                                                                  */
+ /* MODULE NAME = DFH$BRCC                                           */
+ /*                                                                  */
+ /* DESCRIPTIVE NAME = CICS TS  (BR) Sample 3270 Bridge Client       */
+ /*                                                    Program       */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*      Licensed Materials - Property of IBM                        */
+ /*                                                                  */
+ /*      "Restricted Materials of IBM"                               */
+ /*                                                                  */
+ /*      5655-Y04                                                    */
+ /*                                                                  */
+ /*      (C) Copyright IBM Corp. 2001, 2002"                         */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* STATUS = 7.2.0                                                   */
+ /*                                                                  */
+ /* FUNCTION = Sample 3270 Bridge Client Program                     */
+ /*                                                                  */
+ /*   DFH$BRCC is a simple client which calls the bridge client      */
+ /*   program DFH$BRLC. It is calls DFH$BRLC with a commarea         */
+ /*   mapped by DFH$BRSH. The commarea contains the business         */
+ /*   data returned or the error information.                        */
+ /*                                                                  */
+ /*   This program is invoked from the transaction BRCH.             */
+ /*                                                                  */
+ /*   DFH$BRCC performs the following functions.                     */
+ /*   1. Run the search function to get the account number           */
+ /*      from a surname.                                             */
+ /*   2. Run the display function to get account details from        */
+ /*      the account number.                                         */
+ /*   3. Display the information in TS QUEUE BRCH.                   */
+ /*                                                                  */
+ /* NOTES :                                                          */
+ /*  DEPENDENCIES = S/390                                            */
+ /*  RESTRICTIONS = Same as Link3270                                 */
+ /*  REGISTER CONVENTIONS = Normal                                   */
+ /*  MODULE TYPE = Executable                                        */
+ /*  PROCESSOR = C/370                                               */
+ /*  ATTRIBUTES = Read only, Serially Reusable                       */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* ENTRY POINT = DFH$BRCC                                           */
+ /*                                                                  */
+ /*   PURPOSE = All functions                                        */
+ /*                                                                  */
+ /*   LINKAGE = Normal CICS program                                  */
+ /*                                                                  */
+ /*   INPUT = None                                                   */
+ /*                                                                  */
+ /*   OUTPUT = Messages on TS QUEUE BRCH                             */
+ /*                                                                  */
+ /*   EXIT-NORMAL = EXEC CICS RETURN                                 */
+ /*                                                                  */
+ /*   EXIT-ERROR = Abend BRC1 and error writen to TS QUEUE BRCH      */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* CHANGE ACTIVITY :                                                */
+ /*      $MOD(DFH$BRCC),COMP(BRIDGE),PROD(CICS TS ):                 */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXXIII : REMARKS                        */
+ /*  $D1= I07267 630 020325 HDHYJB  : Compile samples                */
+ /*  $L0= 775    620 010814 HDDLCRP : Bridge C Link Sample           */
+ /*  $L2= 775    620 010817 HDDLCRP : Bridge samples review          */
+ /*                                                                  */
+ /********************************************************************/
+
+#include "stdlib.h"
+#include "string.h"
+#include "dfh$brsh.h"
+
+#define CSLEN           18
+#define CFLEN           12
+
+void runNACT();
+
+iodataArea ioArea;
+
+void main(void)
+{
+  /******************************************************************/
+  /* 1. Run the search function to get the account number           */
+  /*    from a surname.                                             */
+  /******************************************************************/
+  char custSurname[CSLEN+1]   = "JONES             ";
+  char custFirstName[CFLEN+1] = "JACOB       ";
+  memset(&ioArea, '\0', sizeof(ioArea));
+  ioArea.inputData.reqType = 'S';
+  memcpy(&ioArea.inputData.search.surname[0],&custSurname[0],CSLEN);
+  memcpy(&ioArea.inputData.search.firstName[0],&custFirstName[0],CFLEN);
+  runNACT();
+
+  /******************************************************************/
+  /* 2. Run the display function to get the account details from    */
+  /*    the account number                                          */
+  /******************************************************************/
+  ioArea.inputData.reqType = 'D';
+  memcpy(&ioArea.inputData.display.acctNo[0],
+         &ioArea.outputData.search.acctNo[0],
+         sizeof(ioArea.outputData.search.acctNo));
+  runNACT();
+
+  /******************************************************************/
+  /* 3. Output the information to TS QUEUE BRCH                     */
+  /******************************************************************/
+  EXEC CICS WRITEQ TS QUEUE("BRCH    ")
+            FROM(&ioArea.outputData.display.line1)
+            LENGTH(sizeof(ioArea.outputData.display.line1));
+  EXEC CICS WRITEQ TS QUEUE("BRCH    ")
+            FROM(&ioArea.outputData.display.line2)
+            LENGTH(sizeof(ioArea.outputData.display.line2));
+  EXEC CICS WRITEQ TS QUEUE("BRCH    ")
+            FROM(&ioArea.outputData.display.line3)
+            LENGTH(sizeof(ioArea.outputData.display.line3));
+  EXEC CICS WRITEQ TS QUEUE("BRCH    ")
+            FROM(&ioArea.outputData.display.line4)
+            LENGTH(sizeof(ioArea.outputData.display.line4));
+  exit(0);
+}
+
+void runNACT()
+{
+  EXEC CICS LINK PROGRAM("DFH$BRLC")
+                 COMMAREA(&ioArea)
+                 LENGTH(sizeof(ioArea))
+                 DATALENGTH(sizeof(ioArea.inputData));
+
+  if(ioArea.errorData.Returncode != 0)
+  {
+    EXEC CICS WRITEQ TS QUEUE("BRCH    ")
+              FROM(&ioArea.errorData)
+              LENGTH(sizeof(ioArea.errorData));
+    EXEC CICS ABEND ABCODE("BRC1");
+  }
+}

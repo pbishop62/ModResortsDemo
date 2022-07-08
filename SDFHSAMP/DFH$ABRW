@@ -1,0 +1,512 @@
+*ASM     XOPTS(NOPROLOG NOEPILOG)
+         SYSSTATE AMODE64=YES,ARCHLVL=2
+*
+         TITLE 'DFH$ABRW - CICS SAMPLE FILEA BROWSE - ASSEMBLER'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$ABRW                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = File Browse for Sample Application               *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1984, 2012"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$ABRW),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 840717 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*         R31410 680 120411 HDFVGMB: Story 30827 - AMODE 64 RMODE 31  *
+*                                                                     *
+***********************************************************************
+         DFHEISTG DSECT
+HEXZERO  DS    X'00'                        CONSTANT FOR CLEARING MAPS
+COMMAREA DS    0CL13
+STATUS   DS    CL1        FILE STATUS - HI OR LO END OR NORMAL (H/L/N)
+KEYS     DS    0CL12
+RIDB     DS    CL6                          TO BUILD PREV BACK PAGE
+RIDF     DS    CL6                          TO BUILD NEXT FWD PAGE
+MESSAGES DS    CL80
+RESPONSE DS    F                            RESPONSES TO CICS COMMANDS
+COMPTR   EQU   4
+R3       EQU   3                            Reserved - used by DFHEIENT
+R5       EQU   5
+*
+         COPY  DFHBMSCA                     STANDARD BMS ATTRIBUTES
+         COPY  DFH$AFIL                     FILEA RECORD DESCRIPTION
+         COPY  DFH$AGA                      'GENERAL MENU' MAP
+         COPY  DFH$AGC                      'BROWSE FILEA' MAP
+         COPY  DFHAID
+         DFHEIEND
+*
+DFH$ABRW CSECT
+DFH$ABRW AMODE 64
+DFH$ABRW RMODE 31
+         DFHEIENT DATAREG=13,EIBREG=11,STATREG=3,STATIC=STATR,CODEREG=0
+*
+*        THE LENGTH OF THE "COMMAREA" IS TESTED. IF NOT ZERO, THEN
+*        THE PROGRAM MUST RECEIVE THE BROWSE MAP (DFH$AGC) WHICH WILL
+*        CONTAIN THE OPERATOR COMMAND, INSTRUCTING THE PROGRAM TO
+*        BROWSE FORWARD, BROWSE BACK OR TO TERMINATE AND DISPLAY THE
+*        OPERATOR INSTRUCTION MAP (DFH$AGA).
+*
+         LH    COMPTR,EIBCALEN               TEST FOR COMMAREA
+         LTR   COMPTR,COMPTR
+         JNZ   RECEIVE                       PRESENT, GET BROWSE MAP
+*
+*        WORK AREAS ARE INITIALIZED TO BEGIN THE BROWSE.
+*
+         MVI   KEYS,X'F0'                             '0' INTO TOP BYTE
+         MVC   KEYS+1(L'KEYS-1),KEYS                  SET KEYS TO ZERO
+         MVI   MESSAGES,X'40'                         ' ' INTO TOP BYTE
+         MVC   MESSAGES+1(L'MESSAGES-1),MESSAGES      CLEAR MESSAGES
+*
+*        THE COMMAND MAPS IN THE ACCOUNT NUMBER FROM THE OPERATOR
+*        INSTRUCTION SCREEN. NOTICE THE USE OF THE "RESP" OPTION ON
+*        THE COMMAND, WHICH RESULTS IN THE RESPONSE TO THE COMMAND
+*        BEING MOVED TO THE BINARY FULLWORD VARIABLE "RESP", DEFINED
+*        AT LINE 11 OF THE PROGRAM. THE PROGRAM MUST THEN EXPLICITLY
+*        CHECK THIS RESPONSE, AND TAKE THE APPROPRIATE ACTION IF THE
+*        RESPONSE WAS NOT "NORMAL". ALSO, NOTICE THAT THE "EIBAID"
+*        FIELD OF THE EXEC INTERFACE BLOCK IS TESTED TO SEE IF THE
+*        "CLEAR" KEY WAS PRESSED BEFORE THE RESPONSE TO THE COMMAND IS
+*        CHECKED. WE CANNOT USE THE "HANDLE AID" COMMAND, AS THE "RESP"
+*        OPTION IMPLIES "NOHANDLE".
+*
+         EXEC CICS RECEIVE MAP('DFH$AGA') RESP(RESPONSE)
+         CLI   EIBAID,DFHCLEAR      WAS CLEAR KEY PRESSED?
+         JE    SMSG                 ... YES, RE-DISPLAY MAP
+         CLC   RESPONSE,DFHRESP(MAPFAIL) WAS MAPFAIL CONDITION RAISED?
+         JE    SMSG                 ... YES, RE-DISPLAY MAP
+         CLC   RESPONSE,DFHRESP(NORMAL) IS THERE AN UNEXPECTED ERROR?
+         JNE   ERRORS               ... YES, TERMINATE TRANSACTION
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1984, 2012"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                      SIMPLE CHECKS OF INPUT DATA    *
+***********************************************************************
+*
+*        IF NO ACCOUNT NUMBER IS ENTERED, BROWSING BEGINS AT THE
+*        START OF THE FILE.
+*
+         CLC   KEYL,=H'0'          WAS ACCOUNT NUMBER OMITTED?
+         JE    NOACCNUM             YES - FRONT OF FILE BY DEFAULT.
+*
+*        IF THE FORMAT OF THE ACCOUNT NUMBER IS VALID, THE NUMBER IS
+*        USED TO SET THE PROGRAM'S BROWSE POINTERS, OTHERWISE AN ERROR
+*        MESSAGE IS DISPLAYED ON THE OPERATOR INSTRUCTION MENU.
+*        ENTERING THE MAXIMUM VALUE (999999) FOR THE ACCOUNT NUMBER
+*        BEGINS A BACKWARD BROWSE FROM THE END OF THE FILE.
+*
+         TRT   KEYI,CHEKTAB        CHECK ACCOUNT NUMBER IS NUMERIC,
+         JNZ   BADCHARS             IT ISN'T - GO DISPLAY MESSAGE.
+         MVC   RIDF,KEYI
+         MVC   RIDB,KEYI
+         CLC   RIDF,=C'999999'      IF ACCOUNT NUMBER IS MAXIMUM
+         JNE   BRWSNOW               SET RECORD KEY HIGH TO
+         MVC   RIDF,=6X'FF'          BROWSE BACKWARD 1ST. TIME
+         J     BRWSNOW
+*
+BADCHARS MVC   MESSAGES,=CL(L'MESSAGES)'ACCOUNT NUMBER MUST BE NUMERIC'
+         J     AMNU
+*
+NOACCNUM MVC   RIDF,=C'000000'                        0 DIGITS ENTERED
+         J     BRWSNOW
+***********************************************************************
+*                                      ESTABLISH START POINT          *
+***********************************************************************
+BRWSNOW  DS    0H
+         MVI   STATUS,C'N'                  SET FILE STATUS NORMAL
+*
+*        THE "STARTBR" COMMAND ESTABLISHES THE BROWSE STARTING POINT
+*
+         EXEC CICS STARTBR FILE('FILEA') RIDFLD(RIDF) RESP(RESPONSE)
+*                                           CHECK RESPONSES
+         CLC   RESPONSE,DFHRESP(NOTFND)      DOES THE RECORD EXIST?
+         JE    NOTFOUND                  ... NO, NOTIFY USER
+         CLC   RESPONSE,DFHRESP(NORMAL)   WAS THERE AN UNEXPECTED ERROR
+         JNE   ERRORS                    ... YES, TERMINATE TRANSACTION
+         CLC   RIDF,=6X'FF'
+         JNE   PAGEF
+*                                  TREAT AS HI-EOF,
+         MVI   STATUS,C'H'               AND
+         J     PAGEB               PAGE BACKWARDS
+***********************************************************************
+*                                      BUILD NEXT FORWARD PAGE        *
+***********************************************************************
+PAGEF    DS    0H
+*                                           CLEAR MAP
+         BRAS  R5,CLEARMAP
+*
+*        THE LENGTH OF THE "COMMAREA" IS TESTED. IF ZERO, THEN THE
+*        ROUTINE "NEXTLINE" GAINS CONTROL TO BUILD THE BROWSE MAP TO
+*        BE DISPLAYED TO THE OPERATOR, IF NON-ZERO, A "STARTBR" COMMAND
+*        IS ISSUED TO RESTART BROWSING AT THE RECORD WHOSE KEY IS
+*        CONTAINED IN "RIDF". NOTE THE NEED FOR AN EXTRA "READNEXT"
+*        WHEN BROWSING FORWARD FROM A POSITION IN THE MIDDLE OF THE
+*        FILE.
+*
+         CLC   EIBCALEN,=H'0'               IF COMMAREA PRESENT, THEN
+         JE    NEXTLINE                     THEN START BROWSE AT POINT
+*                                           WE LEFT OFF LAST TIME
+         EXEC  CICS STARTBR FILE('FILEA')                              *
+               RIDFLD(RIDF)                                            *
+               RESP(RESPONSE)
+*                                          CHECK RESPONSES
+         CLC   RESPONSE,DFHRESP(NOTFND)        DOES THE RECORD EXIST?
+         JE    NOTFOUND                    ... NO, NOTIFY USER
+         CLC   RESPONSE,DFHRESP(NORMAL)   WAS THERE AN UNEXPECTED ERROR
+         JNE   ERRORS                    ... YES, TERMINATE TRANSACTION
+         CLC   RIDF,=C'000000'             READ AND DISCARD REC.
+         JE    NEXTLINE                    POINTED TO BY RIDF ONLY IF
+         BRAS  R5,READNEXT                 THE LO END OF FILE HAS NOT
+*                                          BEEN REACHED.
+NEXTLINE DS    0H
+*
+*        THE ROUTINE "READNEXT" IS GIVEN CONTROL, AND READS THE NEXT
+*        RECORD FROM THE FILE INTO THE FILE AREA.
+*
+         BRAS  R5,READNEXT                  READ NEXT RECORD
+*
+*        THE ACCOUNT NUMBER, NAME, AND AMOUNT ARE MOVED TO THE FIRST
+*        LINE OF THE BROWSE MAP AREA.
+*
+         MVC   NUMBER1O,NUMB                MOVE NUMBER TO MAP
+         MVC   NAME1O,NAME                  MOVE NAME TO MAP
+         MVC   AMOUNT1O,AMOUNT              MOVE AMOUNT TO MAP
+         MVC   RIDB,RIDF                    RIDB ->EXISTING ACCOUNT NO.
+*                                           READ 2ND. RECORD
+*
+*        THE SAME BASIC COMMANDS ARE REPEATED TO READ AND SET UP THE
+*        NEXT THREE LINES. THE SAME FILE AREA IS USED FOR EACH READ.
+*
+         BRAS  R5,READNEXT
+         MVC   NUMBER2O,NUMB               MOVE NUMB,NAME,AMOUNT->MAP
+         MVC   NAME2O,NAME
+         MVC   AMOUNT2O,AMOUNT
+*                                          READ 3RD. RECORD
+         BRAS  R5,READNEXT
+         MVC   NUMBER3O,NUMB               MOVE NUMB,NAME,AMOUNT->MAP
+         MVC   NAME3O,NAME
+         MVC   AMOUNT3O,AMOUNT
+*                                          READ 4TH. RECORD
+         BRAS  R5,READNEXT
+         MVC   NUMBER4O,NUMB               MOVE NUMB,NAME,AMOUNT->MAP
+         MVC   NAME4O,NAME
+         MVC   AMOUNT4O,AMOUNT
+*
+*
+*        THE SCREEN IS ERASED AND THE FULL PAGE IS DISPLAYED AT THE
+*        TERMINAL.
+*
+         EXEC CICS SEND MAP('DFH$AGC') ERASE RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+*                                          RETURN WITH COMMAREA
+*
+*        CONTROL IS RETURNED TO CICS AWAITING A RESPONSE FROM THE
+*        TERMINAL. THE "RETURN" GIVES CICS THE TRANSACTION IDENTIFIER
+*        FOR THE NEXT TRANSACTION AT THIS TERMINAL TOGETHER WITH A
+*        "COMMAREA" CONTAINING ALL THE INFORMATION THAT THE PROGRAM
+*        NEEDS TO BROWSE FORWARD OR BACK FROM THE CURRENT POSITION IN
+*        THE FILE. THE "COMMAREA" IS PASSED TO THE NEXT INVOCATION OF
+*        THIS PROGRAM.
+*
+         EXEC CICS RETURN TRANSID(EIBTRNID)                            *
+               COMMAREA(COMMAREA)                                      *
+               LENGTH(13)
+***********************************************************************
+*                                      BUILD PREVIOUS BACK PAGE       *
+***********************************************************************
+PAGEB    DS    0H
+*                                           CLEAR MAP
+         BRAS  R5,CLEARMAP
+*
+         CLC   EIBCALEN,=H'0'               START BROWSE WHERE WE LEFT
+         JE    TESTSTAT                     OFF, IF COMMAREA PRESENT
+         EXEC  CICS STARTBR FILE('FILEA')                              *
+               RIDFLD(RIDB)                                            *
+               RESP(RESPONSE)
+*                                          CHECK RESPONSES
+         CLC   RESPONSE,DFHRESP(NOTFND)      DOES THE RECORD EXIST?
+         JE    NOTFOUND                  ... NO, NOTIFY USER
+         CLC   RESPONSE,DFHRESP(NORMAL)  WAS THERE AN UNEXPECTED ERROR?
+         JNE   ERRORS                    ... YES, TERMINATE TRANSACTION
+*
+TESTSTAT CLI   STATUS,C'H'                 READ AND DISCARD POINTED TO
+         JNE   PREVXTRA                    BY RIDB, ONLY IF THE HI END
+         MVC   MSG1O,=CL(L'MSG1O)'HI END OF FILE'
+         MVI   MSG1A,DFHBMASB
+         J     PREVLINE
+*                                          OF FILE HAS NOT BEEN REACHED
+PREVXTRA DS    0H
+         BRAS  R5,READPREV
+*                                          READ 4 RECS. IN DESCENDING
+PREVLINE DS    0H                          ORDER
+*
+*        BACKWARDS BROWSING CALLS THE ROUTINE "READPREV" TO READ THE
+*        PREVIOUS RECORD INTO THE FILE AREA. THE RECORD IS THEN STORED
+*        IN THE MAP AREA STARTING AT THE BOTTOM LINE. NOTE THERE IS NO
+*        NEED FOR AN EXTRA "READPREV" WHEN BROWSING BACK FROM THE HIGH
+*        END OF THE FILE. ALSO, IF THE PROGRAM IS PASSED A "COMMAREA",
+*        THEN IT IS NECESSARY TO START BROWSING AT THE POINT THE
+*        PREVIOUS BROWSE ENDED.
+*
+         MVI   STATUS,C'N'
+         BRAS  R5,READPREV
+         MVC   NUMBER4O,NUMB                MOVE NUMBER TO MAP AREA
+         MVC   NAME4O,NAME                  MOVE NAME TO MAP AREA
+         MVC   AMOUNT4O,AMOUNT              MOVE AMOUNT TO MAP AREA
+         MVC   RIDF,RIDB
+*                                           READ PREV. RECORD
+         BRAS  R5,READPREV
+         MVC   NUMBER3O,NUMB                MOVE NUMBER TO MAP AREA
+         MVC   NAME3O,NAME                  MOVE NAME TO MAP AREA
+         MVC   AMOUNT3O,AMOUNT              MOVE AMOUNT TO MAP AREA
+*                                           READ PREV. RECORD
+         BRAS  R5,READPREV
+         MVC   NUMBER2O,NUMB                MOVE NUMBER TO MAP AREA
+         MVC   NAME2O,NAME                  MOVE NAME TO MAP AREA
+         MVC   AMOUNT2O,AMOUNT              MOVE AMOUNT TO MAP AREA
+*                                           READ PREV. RECORD
+         BRAS  R5,READPREV
+         MVC   NUMBER1O,NUMB                MOVE NUMBER TO MAP AREA
+         MVC   NAME1O,NAME                  MOVE NAME TO MAP AREA
+         MVC   AMOUNT1O,AMOUNT              MOVE AMOUNT TO MAP AREA
+*
+*        THE SCREEN IS ERASED AND THE FULL PAGE IS DISPLAYED AT THE
+*        TERMINAL. CONTROL IS RETURNED TO CICS, ALONG WITH A TRANSAC-
+*        TION IDENTIFIER FOR THE NEXT TRANSACTION AT THIS TERMINAL
+*        TOGETHER WITH A "COMMAREA".
+*
+         EXEC CICS SEND MAP('DFH$AGC') ERASE RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+*                                           RETURN CONTROL AND COMMAREA
+         EXEC  CICS RETURN                                             *
+               TRANSID(EIBTRNID)                                       *
+               COMMAREA(COMMAREA) LENGTH(13)
+***********************************************************************
+*                                      RECEIVE NEXT PAGING REQUEST    *
+***********************************************************************
+RECEIVE  DS    0H
+*
+*        THIS CODE GAINS CONTROL WHEN THE PROGRAM IS PASSED A
+*        "COMMAREA". A "RECEIVE" COMMAND IS ISSUED TO RETRIEVE THE
+*        OPERATOR INSTRUCTION. THE PROGRAM EXPLICITLY TESTS TO SEE
+*        IF THE "CLEAR", "PF1", "PF2", "F" OR "B" WAS PRESSED.
+*        ANY OTHER TERMINAL RESPONSE IS IGNORED.
+*
+         LG    COMPTR,DFHEICAP              UPDATE RIDF,RIDB,STATUS
+         MVC   COMMAREA,0(COMPTR)           WITH DATA FROM COMMAREA
+         EXEC CICS RECEIVE MAP('DFH$AGC') RESP(RESPONSE)
+         CLI   EIBAID,DFHCLEAR              WAS CLEAR KEY PRESSED?
+         JE    SMSG                         ... YES, RE-DISPLAY MAP
+         CLI   EIBAID,DFHPF1                WAS PF1 PRESSED?
+         JE    PAGEF                        ... YES, SHOW NEXT 4 RECS.
+         CLI   EIBAID,DFHPF2                WAS PF2 PRESSED?
+         JE    PAGEB                        ... YES, SHOW PREV. 4 RECS.
+         CLC   RESPONSE,DFHRESP(MAPFAIL)        MAPFAIL ERROR?
+         JE    SMSG                         ... YES, REDISPLAY MAP
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         CLI   DIRI,C'F'                    PAGE FORWARD REQUIRED?
+         JE    PAGEF                        ..YES, GO TO PAGEF ROUTINE
+         CLI   DIRI,C'B'                    PAGE BACK REQUIRED?
+         JE    PAGEB                        ..YES, GO TO PAGEB ROUTINE
+*                                           ..NO,IGNORE -RESET KEYBOARD
+         EXEC CICS SEND CONTROL                                        *
+               FREEKB FRSET RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+*                                           RETURN CONTROL AND COMMAREA
+         EXEC CICS RETURN TRANSID(EIBTRNID)                            *
+               COMMAREA(COMMAREA)                                      *
+               LENGTH(13)
+***********************************************************************
+*                 CLEAR MAP USED TO DISPLAY RECORDS, DFH$AGCO         *
+***********************************************************************
+CLEARMAP DS    0H
+*
+*        THIS ROUTINE CLEARS THE MAP USED TO DISPLAY THE BROWSED
+*        RECORDS.
+*
+         LA    6,DFH$AGCO                    R6->START OF MAP DFH$AGC
+         LA    7,(DFH$AGCE-DFH$AGCO)         R7->LENGTH OF DFH$AGC
+         LA    8,HEXZERO                     R8-> X'00'
+         LA    9,L'HEXZERO                   R9-> LENGTH OF HEXZERO
+         ICM   9,B'100',HEXZERO              X'00' INTO TOP BYTE OF R9
+         MVCL  6,8                           MOVE X'00' INTO DFH$AGCO
+         BR    R5                            RETURN TO CALLING ROUTINE
+***********************************************************************
+*                 READ NEXT RECORD                                    *
+***********************************************************************
+READNEXT DS    0H
+*
+*        THE ROUTINE "READNEXT" READS THE NEXT RECORD FROM THE FILE,
+*        WITH RESPECT TO THE KEY CONTAINED IN "RIDF". THE RESPONSE IS
+*        CHECKED AND IF "NORMAL" THEN CONTROL IS PASSED BACK TO THE
+*        CALLING ROUTINE.
+*
+         EXEC CICS READNEXT                                            *
+               INTO(FILEA)                                             *
+               FILE('FILEA')                                           *
+               RIDFLD(RIDF)                                            *
+               RESP(RESPONSE)
+*                                          CHECK RESPONSES TO COMMAND
+         CLC   RESPONSE,DFHRESP(ENDFILE)       END OF FILE?
+         JE    TOOHIGH                      ...YES, NOTIFY USER
+         CLC   RESPONSE,DFHRESP(NOTFND)        DOES THE RECORD EXIST?
+         JE    NOTFOUND                     ...NO, NOTIFY USER
+         CLC   RESPONSE,DFHRESP(NORMAL)        UNEXPECTED ERROR?
+         JNE   ERRORS                       ...YES, TERMINATE TRANS.
+         BR    R5                          OK,RETURN TO CALLING ROUTINE
+***********************************************************************
+*                 READ PREVIOUS RECORD                                *
+***********************************************************************
+READPREV DS    0H
+*
+*        THE ROUTINE "READPREV" READS THE PREV. RECORD FROM THE FILE,
+*        WITH RESPECT TO THE KEY CONTAINED IN "RIDB". THE RESPONSE IS
+*        CHECKED AND IF "NORMAL" THEN CONTROL IS PASSED BACK TO THE
+*        CALLING ROUTINE.
+*
+         EXEC CICS READPREV                                            *
+               INTO(FILEA)                                             *
+               FILE('FILEA')                                           *
+               RIDFLD(RIDB)                                            *
+               RESP(RESPONSE)
+*                                          CHECK RESPONSES TO COMMAND
+         CLC   RESPONSE,DFHRESP(ENDFILE)       END OF FILE?
+         JE    TOOLOW                       ...YES, NOTIFY USER
+         CLC   RESPONSE,DFHRESP(NOTFND)        DOES THE RECORD EXIST?
+         JE    NOTFOUND                     ...NO, NOTIFY USER
+         CLC   RESPONSE,DFHRESP(NORMAL)        UNEXPECTED ERROR?
+         JNE   ERRORS                       ...YES, TERMINATE TRANS.
+         BR    R5                          OK,RETURN TO CALLING ROUTINE
+***********************************************************************
+*                                  HANDLE END OF FILE CONDITIONS      *
+***********************************************************************
+TOOHIGH  DS    0H
+*
+*        IF THE END OF FILE IS REACHED ANY RECORDS READ TO THAT POINT
+*        ARE DISPLAYED TOGETHER WITH A HIGHLIGHTED MESSAGE "HI END OF
+*        FILE".
+*
+         MVI   STATUS,C'H'                  SET STATUS 'HI END'
+         MVC   RIDB,RIDF
+         MVI   DIRO,X'40'
+         MVC   MSG1O,=CL(L'MSG1O)'HI END OF FILE'
+         MVI   MSG1A,DFHBMASB                                   MSG=BRT
+         EXEC CICS SEND MAP('DFH$AGC') ERASE RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+*                                           RETURN WITH COMMAREA
+         EXEC CICS RETURN TRANSID(EIBTRNID)                            *
+               COMMAREA(COMMAREA)                                      *
+               LENGTH(13)
+*                                           RETURN WITH COMMAREA
+TOOLOW   DS    0H
+*
+*        IF THE START OF FILE IS REACHED ON A "READPREV" (BACKWARD
+*        BROWSE) THEN THE "ENDFILE" CONDITION OCCURS AND "TOOLOW"
+*        GETS CONTROL. ANY RECORDS READ UP TO THAT POINT ARE DISPLAYED,
+*        TOGETHER WITH A HIGHLIGHTED MESSAGE "LO END OF FILE".
+*
+         MVI   STATUS,C'L'                  SET STATUS 'LO END'
+         MVC   RIDF,=C'000000'
+         MVC   RIDB,=C'000000'
+         MVI   DIRO,X'40'
+         MVI   MSG2A,DFHBMASB                                   MSG=BRT
+         MVC   MSG2O,=CL(L'MSG2O)'LO END OF FILE'
+         EXEC CICS SEND MAP('DFH$AGC') ERASE RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+*
+         EXEC CICS RETURN TRANSID(EIBTRNID)                            *
+               COMMAREA(COMMAREA)                                      *
+               LENGTH(13)
+***********************************************************************
+*                                  HANDLE GENERAL CONDITIONS          *
+***********************************************************************
+NOTFOUND DS    0H
+*
+*        IF THE "NOTFND" CONDITION OCCURS AT THE START BROWSE, THE
+*        MESSAGE "END OF FILE - PLEASE RESTART" IS MOVED TO "MESSAGES"
+*        FOR DISPLAY ON THE OPERATOR INSTRUCTION SCREEN.
+*
+         MVC   MESSAGES,=CL(L'MESSAGES)'END OF FILE - PLEASE RESTART '
+         J     AMNU
+*
+SMSG     DS    0H
+*
+*        IF THE "CLEAR" KEY IS PRESSED OR WHEN A "MAPFAIL" OCCURS A
+*        MESSAGE "PRESS CLEAR TO EXIT" IS MOVED TO "MESSAGES" FOR
+*        DISPLAY ON THE OPERATOR INSTRUCTION SCREEN.
+*
+         MVC   MESSAGES,=CL(L'MESSAGES)'PRESS CLEAR TO EXIT'
+         J     AMNU
+*
+ERRORS   DS    0H
+*
+*        IN SOME ERROR SITUATIONS A DUMP IS TAKEN AND THE MESSAGE
+*        "TRANSACTION TERMINATED" IS MOVED TO "MESSAGES" FOR DISPLAY
+*        ON THE OPERATOR INSTRUCTION SCREEN.
+*
+         EXEC CICS DUMP DUMPCODE('ERRS')
+         MVC   MESSAGES,=CL(L'MESSAGES)'TRANSACTION TERMINATED'
+***********************************************************************
+*                                  DISPLAY GENERAL MENU THEN EXIT     *
+***********************************************************************
+AMNU     DS    0H
+*
+*        THIS CODE DISPLAYS THE OPERATOR INSTRUCTION MENU WITH A
+*        MESSAGE WHICH HAS BEEN STORED IN "MESSAGES".
+*
+         XC    DFH$AGAO(DFH$AGAE-DFH$AGAO),DFH$AGAO   CLEAR MAP A
+         MVI   MSGA,DFHBMASB                          BRIGHTEN MESSAGE
+         MVC   MSGO,MESSAGES                          MOVE MSGS TO MAP
+         EXEC CICS SEND MAP('DFH$AGA') ERASE RESP(RESPONSE)
+*
+*        THE PROGRAM TERMINATES BY RETURNING TO CICS.
+*
+         EXEC CICS RETURN
+***********************************************************************
+*                                  DEFINE THE 256 BYTE TRANSLATE TABLE*
+***********************************************************************
+*                                  FOR LOCATING NON-NUMERIC DIGITS BY
+*                                  MEANS OF THE "TRT" INSTRUCTION
+STATR   DS    0D
+CHEKTAB DC     256X'FF'
+        ORG    CHEKTAB+X'F0'
+        DC     10X'00'
+        ORG
+        LTORG
+        END

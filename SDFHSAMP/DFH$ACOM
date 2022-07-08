@@ -1,0 +1,199 @@
+*ASM     XOPTS(NOPROLOG NOEPILOG)
+         SYSSTATE AMODE64=YES,ARCHLVL=2
+*
+         TITLE 'DFH$ACOM - CICS SAMPLE FILEA ORDER ENTRY QUEUE PRINT - *
+               ASSEMBLER'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$ACOM                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Order Entry Queue Print for Sample Application   *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1984, 2012"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$ACOM),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 840717 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*    $P2= D03789 630 030622 HDHYJB : Issue error message when error.  *
+*         R31410 680 120411 HDFVGMB: Story 30827 - AMODE 64 RMODE 31  *
+*                                                                     *
+***********************************************************************
+         DFHEISTG DSECT
+         COPY  DFH$AGL             MAP
+         COPY  DFH$AL86            Q RECORD
+         COPY  DFH$AFIL            FILE RECORD
+LOGORD   DS    0CL92               RECORD TO BE WRITTEN ONTO LOGA
+LDATE    DS    PL8
+LTIME    DS    CL8
+LITEM    DS    CL22
+COMMNT   DS    CL11
+FILLER   DS    CL51
+QLENGTH  DS    1H      SIZE OF Q RECORD
+RESPONSE DS    1F      RESPONSES TO CICS COMMANDS
+ATIME    DS    PL8     ABSOLUTE TIME
+R9       EQU   9       Reserved - used by DFHEIENT
+         DFHEIEND
+DFH$ACOM CSECT
+DFH$ACOM AMODE 64
+DFH$ACOM RMODE 31
+         DFHEIENT DATAREG=13,EIBREG=11,STATREG=9,STATIC=STATR,CODEREG=0
+         MVC   COMMNT,=C'ORDER ENTRY'
+         MVI   FILLER,X'40'
+         MVC   FILLER+1(L'FILLER-1),FILLER
+*
+*        THE TERMID IS TESTED TO SEE WHETHER THIS TRANSACTION IS
+*        STARTED FROM A TERMINAL OR AT THE PRINTER.
+*
+         CLC   EIBTRMID(4),=C'L86O'    TERMID='L86O'?
+         JNE   TIME                IF NOT START TRANSACTION LATER
+         XC    DFH$AGLO(DFH$AGLE-DFH$AGLO),DFH$AGLO   CLEAR MAP
+         MVC   QLENGTH,=H'+22' INITIALIZATION
+QREAD    DS    0H
+*
+*        A QUEUE (CUSTOMER ORDER) IS READ INTO THE PROGRAM.
+*
+         EXEC CICS READQ TD INTO(L86O)LENGTH(QLENGTH)QUEUE('L86O')     *
+                   RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(QZERO)
+         JE    ENDA
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+*
+*        THE FILE CONTROL "READ" COMMAND READS THE RECORD INTO A RECORD
+*        AREA SO THAT THE AMOUNT MAY BE CHECKED.
+*
+         EXEC CICS READ FILE('FILEA') INTO(FILEA) RIDFLD(CUSTNO)       *
+                   RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+*
+*        THE AMOUNT (BANK BALANCE) IS TESTED. IF IT IS OVER $100 THEN
+*        THE ORDER IS ACCEPTABLE, OTHERWISE THE ORDER IS REJECTED.
+*        THIS TEST IS ONLY A SUGGESTION; A SUITABLE FORM OF EDITING
+*        SHOULD BE INSERTED HERE TO ENSURE VALID ORDERS ARE SENT TO
+*        THE WAREHOUSE.
+*
+         CLC   AMOUNT(8),=C'$0100.00' IS ORDER VALID?
+         JNH   LWRITE              IF^>100  BRANCH AND WRITE LOG
+*
+*        THE ORDER DETAILS ARE MOVED TO THE MAP AREA FOR "DFH$AGL".
+*
+         MVC   ADDRO,ADDRX         SET UP MAP
+         MVC   NAMO,NAME
+         MVC   PARTO,PARTNO
+         MVC   NUMBO,CUSTNO
+         MVC   LITEM,ITEM
+         MVC   QUANTO,QUANTITY
+*
+*        THE ORDER MAP IS SENT TO THE PRINTER TERMINAL AT THE WAREHOUSE
+*
+         EXEC CICS SEND MAP('DFH$AGL') ERASE PRINT L80 RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         J     QREAD              GET NEXT RECORD
+LWRITE   DS    0H
+*
+*        THE CURRENT DATE AND TIME, AND DETAILS OF THE REJECTED ORDER
+*        ARE MOVED TO A LOG RECORD AREA.
+*
+         EXEC CICS ASKTIME ABSTIME(ATIME)
+         EXEC CICS FORMATTIME ABSTIME(ATIME) DATE(LDATE) TIME(LTIME)   *
+                   DATESEP TIMESEP
+         MVC   LITEM,ITEM
+*
+*        THE "WRITEQ TD" COMMAND WRITES DETAILS OF THE REJECTED ORDER
+*        TO THE "LOGA", A TRANSIENT DATA QUEUE.
+*
+         EXEC CICS WRITEQ TD QUEUE('LOGA') FROM(LOGORD) LENGTH(100)    *
+                   RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         J     QREAD              GET NEXT RECORD
+ERRORS   DS    0H
+*
+*        IF THE PROGRAM DETECTS THAT AN "ERROR" CONDITION HAS OCCURED
+*        ON ANY CICS COMMAND A DUMP IS TAKEN AND THE PROGRAM TERMINATES
+*
+         EXEC CICS DUMP DUMPCODE('ERRS')
+* following line @P2A
+         EXEC CICS SEND TEXT FROM (ERRMSG) ERASE PRINT
+* following line @P2C
+         EXEC CICS RETURN
+ENDA     DS    0H
+         XC    DFH$AGLO(DFH$AGLE-DFH$AGLO),DFH$AGLO   CLEAR MAP
+*
+*        WHEN THE QUEUE IS EMPTY, THE MESSAGE "ORDER QUEUE IS EMPTY"
+*        IS MOVED TO THE MAP AREA WHICH IS THEN SENT TO THE PRINTER
+*        TERMINAL AT THE WAREHOUSE.
+*
+         MVC   TITLEO,=CL(L'TITLEO)'ORDER QUEUE IS EMPTY' SET UP TITLE
+         EXEC CICS SEND MAP('DFH$AGL') DATAONLY ERASE L80 PRINT        *
+                   RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+         J     FIN
+TIME     DS    0H
+*                                 IF THE COMMENT DELIMITER IS REMOVED
+*                                 FROM THE NEXT FIVE ASSEMBLER
+*                                 INSTRUCTIONS, THE APPLICATION WILL
+*                                 BE RESTARTED IN AN HOUR IF THE TIME
+*                                 OF DAY RIGHT NOW IS NOT LATER THAN
+*                                 1400 HRS.
+*                                 IF THE CODE IS LEFT UNCHANGED THE
+*                                 APPLICATION WILL BE RESTARTED
+*                                 UNCONDITIONALLY AFTER AN HOUR HAS
+*                                 ELAPSED
+*        EXEC CICS ASKTIME RESP(RESPONSE)
+*        CLC   RESPONSE,DFHRESP(NORMAL)
+*        JNE   ERRORS
+*        CP    EIBTIME,=P'0140000'  TIME AFTER 2 'O' CLOCK?
+*        BH    FIN                  ..YES, SO STOP
+*
+*        THE "START" COMMAND STARTS THE "AORQ" TRANSACTION (THIS
+*        PROGRAM), AFTER A ONE HOUR DELAY, WITH A TERMINAL IDENTIFIER
+*        L86O. (THE TIME INTERVAL COULD BE CHANGED, FOR DEMONSTRATION
+*        PURPOSES, BY CHANGING THE "INTERVAL" VALUE).
+*
+         EXEC CICS START TRANSID('AORQ') INTERVAL(10000) TERMID('L86O')*
+                   RESP(RESPONSE)
+         CLC   RESPONSE,DFHRESP(NORMAL)
+         JNE   ERRORS
+FIN      DS    0H
+*
+*        THE MESSAGE "PROCESSING COMPLETED" IS SENT TO THE TERMINAL
+*        ASSOCIATED WITH THIS INVOCATION OF "AORQ", EITHER THE PRINTER
+*        AT THE WAREHOUSE OR THE SCREEN ON WHICH "AORQ" WAS ENTERED.
+*        THE PROGRAM TERMINATES BY RETURNING CONTROL TO CICS.
+*
+         CLC   EIBTRMID(4),=C'L86O'    TERMID='L86O'?
+         JNE   FINNOTPR                NO, NO PRINT OPTION NEEDED
+         EXEC CICS SEND TEXT FROM (PRESMSG) ERASE PRINT
+         J     FINFREKB
+FINNOTPR DS    0H
+         EXEC CICS SEND TEXT FROM (PRESMSG) ERASE
+FINFREKB DS    0H
+         EXEC CICS SEND CONTROL FREEKB
+         EXEC CICS RETURN
+STATR    DS    0D
+PRESMSG  DC    CL20'PROCESSING COMPLETED'
+ERRMSG   DC    C'TRANSACTION TERMINATED IN ERROR'               @P2A
+         LTORG
+         END

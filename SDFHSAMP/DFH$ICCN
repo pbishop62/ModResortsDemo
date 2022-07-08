@@ -1,0 +1,279 @@
+*ASM XOPTS(CICS,SP,NOEDF,NOPROLOG,NOEPILOG,CPSM)
+         TITLE 'DFH$ICCN - Sample XICEREQ Exit Program'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$ICCN                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Sample program to cancel a Request Identifier    *
+*                    within a sysplex by calling CPSM to issue the    *
+*                    cancel command.                                  *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1998, 2006"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+* Description                                                         *
+* ============                                                        *
+*                                                                     *
+* This sample shows how to invoke CPSM to cancel an explicit          *
+* request identifier (REQID) within a Sysplex.                        *
+*                                                                     *
+* Usage Notes                                                         *
+* ===========                                                         *
+* 1) Before compiling / executing this module you must :-             *
+*    a) change constant VERSION to match the CPSM release level       *
+*    b) change constant PLEXNAME to match the name of the PLEX        *
+*    c) change constant SCOPE to the desired scope                    *
+*                                                                     *
+* Processing Notes                                                    *
+* ================                                                    *
+*                                                                     *
+* 1) Bypass the call to CPSM if any of these conditions are met :     *
+*    a) the requst is not an EXEC CICS CANCEL REQID                   *
+*    b) the caller has specified a sysid                              *
+*    c) the reqid is a CICS reqid ie the first two characters         *
+*       are "DF"                                                      *
+*    d) the transid begins with the letter "C" which is a CICS        *
+*       transaction. CECI is excluded.                                *
+* 2) Releases of CPSM prior to V2R3 require that the 8 byte REQID     *
+*    be converted to a 16 byte hexadecimal field eg Reqid ABCD0001    *
+*    becomes x'C1C2C3C4F0F0F0F1'.                                     *
+*    For CPSM V2R3 and higher the REQID is left unchanged.            *
+* 3) Set the return code to bypass the request. This will ensure      *
+*    that only one reqid is cancelled per request. If either the      *
+*    connect to CPSM or the perform object fails then reset the       *
+*    return code to normal and let CICS attempt to cancel the reqid   *
+*    in the local system only.                                        *
+* 4) To activate enter :                                              *
+*    EXEC CICS ENABLE PROGRAM(DFH$ICCN) EXIT(XICEREQ) START           *
+* 5) To deactivate enter :                                            *
+*    EXEC CICS DISABLE PROGRAM(DFH$ICCN) EXIT(XICEREQ) STOP           *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*     $MAC(DFH$ICCN),COMP(SAMPLES),PROD(CICS TS ):                    *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $D0= I06742 530 981014 HFVGMB : Created.                         *
+*    $D1= I06742 530 981117 HFVGMB : Correct data passed to CPSM      *
+*    $L1= 868    650 061030 HDJDCH : FLH Operations Views             *
+*    $P1= M30891 530 981208 HDFVGMB : Change DFH$ICCN to use exit XIC *
+*    $P2= M31024 530 981216 HDFVGMB : Prevent deadlocks with CPSM     *
+*    $P3= M31131 530 990104 HDFVGMB : DFH$ICCN - bypass CICS txns     *
+*    $P4= M31179 530 990107 HDFVGMB : Write error message to CSMT     *
+*    $P5= M31443 530 990126 HDFVGMB : Check for recursion             *
+*    $P6= M16636 610 001102 HDFVGMB : Change CPSM Version             *
+*    $P7= M51343 620 001205 HDFVGMB : Change Release in DFH$ICCN      *
+*    $P8= D02772 620 010919 HDFVGMB : Correct field length in DFH$ICC *
+*    $P9= D09274 630 031005 HDFVGMB: DFH$ICCN incorrect CPSM version  *
+*    $PA= D09147 630 031006 HDFVGMB: New processing for CPSM 230      *
+*    $PB= D09315 630 031009 HDFVGMB: Change wording in DFH$ICCN       *
+*                                                                     *
+***********************************************************************
+DFH$ICCN CSECT
+DFH$ICCN AMODE 31
+DFH$ICCN RMODE ANY
+         DFHREGS
+         DFHEIENT CODEREG=3,DATAREG=10,EIBREG=11
+         DFHUEXIT TYPE=EP,ID=XICEREQ   DFHUEPAR plist for XICEREQ
+         COPY     DFHICUED
+         EJECT
+         DFHEISTG
+CRITERIA       DS    0CL24             The criteria field to be passed
+NAME           DS    CL5               to CPSM. The format is :-
+QUOTE1         DS    C                 "NAME='XXXXXXXXXXXXXXXX'." The
+RQSTID         DS    XL16              use of the period is mandatory.
+QUOTE2         DS    C
+PERIOD         DS    C
+RESPONSE       DS    F                 CPSM response code
+REASON         DS    F                 CPSM reason code
+THREAD         DS    F                 CPSM thread
+RESULT         DS    F                 CPSM result
+RETCODE        DS    A                 Saved return code
+WORKFLD        DS    CL9               Work field for translation
+DOUBLE         DS    D                 Work field for response/reason
+MESSAGE        DS    0CL81             Error message
+MESSPREF       DS    CL39
+FUNCTION       DS    CL8
+               DS    C
+MESSRES        DS    CL10
+MESSRESP       DS    XL6
+               DS    C
+MESSREA        DS    CL10
+MESSREAS       DS    XL6
+         DFHEIEND
+         EJECT
+DFH$ICCN CSECT
+         LR    R6,R1                   Use R6 for the parameter list
+         USING DFHUEPAR,R6
+*
+         LA    R15,UERCNORM            Set r/c to normal
+         ST    R15,RETCODE             and save it
+*
+*        Check for recursion and exit if true                     @P5A
+*                                                                 @P5A
+         L     R2,UEPRECUR             Address of recursive count @P5A
+         LH    R2,0(R2)                Fetch count                @P5A
+         LTR   R2,R2                   Been invoked recursively?  @P5A
+         BNZ   RETURN_TO_CICS          no - return to CICS        @P5A
+*                                                                 @P5A
+         L     R2,UEPCLPS              Use R2 for the Command Level
+         USING IC_ADDR_LIST,R2         Plist
+*
+         L     R4,IC_ADDR0             ADDR0 is the EID
+         USING IC_EID,R4
+*
+         CLI   IC_FUNCT,X'0C'          Is this a CANCEL request ?
+         BNE   RETURN_TO_CICS          no - return to CICS
+*
+         TM    IC_BITS1,IC_EXIST1      Is a REQID present ?
+         BZ    RETURN_TO_CICS          no - return to CICS
+*
+         TM    IC_BITS1,IC_EXIST7      Is a SYSID present ?
+         BNZ   RETURN_TO_CICS          yes - return to CICS
+*
+         L     R4,IC_ADDR1             ADDR1 for CANCEL points to REQID
+         USING IC_CANCEL_REQID,R4
+*
+         CLC   0(2,R4),=C'DF'          Is this a CICS type REQID ?
+         BE    RETURN_TO_CICS          yes - return to CICS
+*
+*        Check to see if the transid is CECI. If it is continue
+*        otherwise check the first character for a "C". If it is
+*        then this is a CICS transaction so do not invoke CPSM.
+*
+         EXEC CICS ADDRESS EIB(DFHEIBR)
+*
+         CLC   EIBTRNID,=C'CECI'       Is this CECI?
+         BE    CONTINUE                Yes, continue
+*
+         CLC   EIBTRNID(1),=C'C'       Is this a CICS transaction?
+         BE    RETURN_TO_CICS          Yes - return to CICS
+CONTINUE DS    0H
+         LA    R15,UERCBYP             Set return code to bypass
+         ST    R15,RETCODE             and save it
+*
+         XC    RESULT,RESULT           Clear the result field
+         MVC   NAME,=C'NAME='          Set the NAME= part of CRITERIA
+         MVI   QUOTE1,X'7D'            Set first quote
+         LA    R2,RQSTID               and address of RQSTID
+         CLC   VERSION,=C'0220'
+         BH    CPSM0230
+*
+         LA    R7,WORKFLD              load address of work field
+         UNPK  0(9,R7),0(5,R4)         unpack 1st four bytes of REQID
+         TR    0(9,R7),HEXTABLE-C'0'   translate the result
+         MVC   0(8,R2),0(R7)           and move them to RQSTID (1..8)
+         UNPK  0(9,R7),4(5,R4)         now unpk the 2nd four bytes
+         TR    0(9,R7),HEXTABLE-C'0'   translate the result
+         MVC   8(8,R2),0(R7)           and move them to RQSTID (9..16)
+         MVI   PERIOD,X'4B'
+         MVI   QUOTE2,X'7D'
+         B     CONNECT
+CPSM0230 DS    0H
+         MVC   0(8,R2),0(R4)           the REQID
+         MVI   8(R2),X'7D'             and the second quote
+         MVI   9(R2),X'4B'             the period
+CONNECT  DS    0H
+*
+*                                      Connect to CPSM
+*
+         EXEC CPSM CONNECT VERSION(VERSION)                            *
+                   CONTEXT(PLEXNAME) SCOPE(SCOPE)                      *
+                   THREAD(THREAD)                                      *
+                   RESPONSE(RESPONSE) REASON(REASON)
+*
+         CLC   RESPONSE,EYUVALUE(OK)   check for zero
+         BNE   CONNECT_FAILED          put out an error message
+*
+*                                      Call CPSM to issue the cancel
+*
+         EXEC CPSM PERFORM ACTION('CANCEL')                            *
+                   CRITERIA(CRITERIA) OBJECT('REQID')                  *
+                   THREAD(THREAD)     RESULT(RESULT)                   *
+                   RESPONSE(RESPONSE) REASON(REASON)
+*
+         CLC   RESPONSE,EYUVALUE(NODATA) anything found?
+         BE    NODATA                  set response codes to NOTFND
+*
+         CLC   RESPONSE,EYUVALUE(OK)   check for zero
+         BNE   CANCEL_FAILED           no, issue error message
+*
+         L     R7,UEPRCODE
+         MVC   0(1,R7),=X'00'          Set EIBRCODE to NORMAL
+         L     R7,UEPRESP              do the same for EIBRESP
+         MVC   0(4,R7),=F'0'
+         L     R7,UEPRESP2
+         MVC   0(4,R7),=F'0'           and zeroise EIBRESP2
+         B     DISCONNECT
+NODATA   DS   0H                       No REQIDs were cancelled by
+*                                      CPSM
+         L     R7,UEPRCODE
+         MVC   0(1,R7),=X'81'          Set EIBRCODE to NOTFND
+         L     R7,UEPRESP              do the same for EIBRESP
+         MVC   0(4,R7),=X'0000000D'
+         L     R7,UEPRESP2
+         MVC   0(3,R7),=F'0'           and zeroise EIBRESP2
+         B     DISCONNECT
+CONNECT_FAILED  DS 0H
+         MVC   MESSAGE,BLANKS          initialize to spaces
+         MVC   FUNCTION,=C'CONNECT,'
+         B     SEND_MESSAGE
+CANCEL_FAILED  DS 0H
+         MVC   MESSAGE,BLANKS          initialize to spaces
+         MVC   FUNCTION,=C'CANCEL, '
+SEND_MESSAGE  DS 0H
+         LA    R15,UERCNORM            Set return code to normal
+         ST    R15,RETCODE             and save it
+*
+         MVC   MESSPREF,=C'XICEREQ - CPSM call failed. Function = '
+         MVC   MESSRES,=C'Response ='
+         MVC   MESSREA,=C', reason ='
+         L     R5,RESPONSE             load CPSM response
+         CVD   R5,DOUBLE               convert to decimal
+         MVC   MESSRESP,=XL6'402020202120'
+         ED    MESSRESP,DOUBLE+5       and insert into message
+         L     R5,REASON               load CPSM reason
+         CVD   R5,DOUBLE               convert to decimal
+         MVC   MESSREAS,=XL6'402020202120'
+         ED    MESSREAS,DOUBLE+5       and insert into message
+*
+         EXEC CICS WRITEQ TD QUEUE('CSMT') FROM(MESSAGE) NOHANDLE
+*
+DISCONNECT DS  0H
+*
+*                                      Disconnect from CPSM
+*
+         EXEC CPSM DISCONNECT THREAD(THREAD)                           *
+              RESPONSE(RESPONSE) REASON(REASON)
+*
+RETURN_TO_CICS DS 0H
+         L     R15,RETCODE             Put preset r/c into R15
+         DFHEIRET RCREG=15             and return
+*
+         DROP  R6,DFHEIBR,DFHEIPLR     Lose addressability to DSECTs
+         EJECT
+HEXTABLE       DC    C'0123456789ABCDEF' Translate table
+BLANKS         DC    CL81' '             81 spaces
+VERSION        DC    CL4'0230'           CPSM Release and Version
+PLEXNAME       DC    CL8'PLEXNAME'       PLEX name
+SCOPE          DC    CL8'SCOPE   '       Scope of request
+***********************************************************************
+* End of DFH$ICCN                                                     *
+***********************************************************************
+         DROP
+         END DFH$ICCN

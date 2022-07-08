@@ -1,0 +1,170 @@
+#pragma XOPTS(CICS)
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$DCOM                                           */
+ /*                                                                  */
+ /* Descriptive Name = Order Entry Queue Print for Sample App.       */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1989, 2004"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /*                                                                  */
+ /*  $MOD(DFH$DCOM),COMP(SAMPLES),PROD(CICS TS ):                    */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 210 890825 HDXXUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $P2= D09245 640 041223 HD6KRAH: XC START TERMIDERR              */
+ /*  $D1= I06048 410 930706 HD7OPJW: C++ support                     */
+ /*                                                                  */
+ /********************************************************************/
+#include "dfh$dgl.h"                     /* Logical maps for DFH$DGL */
+#include "dfh$dfil.h"                    /* FILEA definition         */
+#include "dfh$dl86.h"                    /* L860 definition          */
+#include <string.h>                                          /* @D1A */
+ /* Messages                                                         */
+#define  PRESMSG    "PROCESSING COMPLETED"
+#define  ERRMSG     "ERROR - TRANSACTION TERMINATED"
+
+struct logord_struct {
+   unsigned char ldate[8];
+   unsigned char ltime[8];
+   unsigned char litem[22];
+   unsigned char comment[11];
+   unsigned char filler[51];
+};
+struct logord_struct logord;
+int  rcode;
+
+static void Fin(char *message)                                 /*@P2C*/
+{                                                              /*@P2C*/
+   short int msglen;                                           /*@P2C*/
+                                                               /*@P2C*/
+   msglen = strlen(message);                                   /*@P2C*/
+   EXEC CICS SEND TEXT FROM(message) LENGTH(msglen)            /*@P2C*/
+      PRINT ERASE NOHANDLE ;                                   /*@P2C*/
+   EXEC CICS SEND CONTROL FREEKB NOHANDLE; /* Set INPUT-INHIB off@P2C*/
+   EXEC CICS RETURN;
+}                                        /* End Fin() ...      /*@P2C*/
+
+static void Errors()                                         /* @P2C */
+{                                                            /* @P2C */
+   EXEC CICS DUMP TRANSACTION DUMPCODE("ERRS");              /* @P2C */
+   Fin(ERRMSG);                                              /* @P2C */
+}                                        /* End Errors() */  /* @P2C */
+                                                             /* @P2C */
+
+static void Time()                                           /* @D1C */
+{
+ /********************************************************************/
+ /* If the comment delimeters are removed from the next two C        */
+ /* statements, the application will be restarted in an hour if the  */
+ /* time of day right now is not later than 1400Hrs.  If the code is */
+ /* left unchanged the application will be restarted unconditionally */
+ /* after an hour has elapsed.                                       */
+ /********************************************************************/
+   /* EXEC CICS ASKTIME;                                             */
+   /* if (*(long *)(dfheiptr->eibtime)<=140000L)                     */
+      EXEC CICS START TRANSID("DORQ") INTERVAL(10000)
+         TERMID("L86O") RESP(rcode) ;                          /*@P2C*/
+      if (rcode != DFHRESP(NORMAL)) Errors() ;                 /*@P2A*/
+
+      Fin(PRESMSG);
+}                                        /* End Time() ...           */
+
+static void Enda()
+{
+   memcpy(dfhdgl.dfhdglo.titleo,
+   "ORDER QUEUE IS EMPTY                       ",43);
+
+   EXEC CICS SEND MAP("dfhdgl ") MAPSET("DFH$DGL") DATAONLY
+      ERASE PRINT L80 RESP(rcode);
+   if (rcode != DFHRESP(NORMAL))
+      Errors();
+   Fin(PRESMSG);
+}                                        /* End Enda() ...           */
+
+main()
+{
+short int   q_length = 22;
+char        atime[8];
+
+ /********************************************************************/
+ /* Get addressability of the EIB                                    */
+ /********************************************************************/
+   EXEC CICS ADDRESS EIB(dfheiptr);
+
+   if (memcmp(dfheiptr->eibtrmid,"L86O",4)!=0)
+      Time();
+
+ /********************************************************************/
+ /* Read 1st order from queue                                        */
+ /********************************************************************/
+   EXEC CICS READQ TD INTO(&l86o) LENGTH(q_length)
+      QUEUE("L86O") RESP(rcode);
+
+ /********************************************************************/
+ /* Scan queue until we reach the end                                */
+ /********************************************************************/
+   while (rcode == DFHRESP(NORMAL)) {
+
+      EXEC CICS READ FILE("FILEA   ")
+         INTO(&filea) RIDFLD(l86o.custno) RESP(rcode);
+      if (rcode != DFHRESP(NORMAL))
+         Errors();
+
+ /********************************************************************/
+ /*   If the cutomer's balance is sufficient print the order         */
+ /********************************************************************/
+      if (memcmp(filea.amount,"$0100.00",8)>0) {
+         memcpy(dfhdgl.dfhdglo.addro,filea.addrx,20);
+         memcpy(dfhdgl.dfhdglo.parto,l86o.partno,6);
+         memcpy(dfhdgl.dfhdglo.namo,filea.name,20);
+         memcpy(dfhdgl.dfhdglo.numbo,l86o.custno,6);
+         memcpy(dfhdgl.dfhdglo.quanto,l86o.quantity,6);
+
+         EXEC CICS SEND MAP("dfhdgl ") MAPSET("DFH$DGL") ERASE
+            PRINT L80 RESP(rcode);
+         if (rcode != DFHRESP(NORMAL))
+            Errors();
+      }                                  /* End if (...)             */
+
+ /********************************************************************/
+ /*   Otherwise log the rejected order on a TD queue                 */
+ /********************************************************************/
+      else {
+         EXEC CICS ASKTIME ABSTIME(&atime);
+         EXEC CICS FORMATTIME ABSTIME(atime)
+            DATE(&logord.ldate) TIME(&logord.ltime) DATESEP TIMESEP;
+         memcpy(&logord.litem,&l86o,22);
+         EXEC CICS WRITEQ TD QUEUE("LOGA") FROM(logord)
+            LENGTH(100) RESP(rcode);
+         if (rcode != DFHRESP(NORMAL))
+            Errors();
+      }                                  /* End else { ...           */
+
+ /********************************************************************/
+ /*   Read next order from queue                                     */
+ /********************************************************************/
+      EXEC CICS READQ TD INTO(&l86o) LENGTH(q_length)
+         QUEUE("L86O") RESP(rcode);
+   }                                     /* End while(...)           */
+   switch (rcode) {
+      case DFHRESP(QZERO): Enda();
+      default: Errors();
+   }                                     /* End switch(...           */
+}                                        /* End main                 */

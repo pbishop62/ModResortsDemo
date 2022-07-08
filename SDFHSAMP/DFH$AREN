@@ -1,0 +1,309 @@
+*ASM     XOPTS(NOPROLOG NOEPILOG)
+         SYSSTATE AMODE64=YES,ARCHLVL=2
+*
+         TITLE 'DFH$AREN - CICS SAMPLE FILEA ORDER ENTRY - ASSEMBLER'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$AREN                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Order Entry for Sample Application               *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1984, 2012"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $SEG(DFH$AREN),COMP(SAMPLES),PROD(CICS TS ):                        *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 840717 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*    $P2= M81327 410 920616 HDDIJDP: Correct literal length + typos   *
+*         R31410 680 120411 HDFVGMB: Story 30827 - AMODE 64 RMODE 31  *
+*                                                                     *
+***********************************************************************
+        DFHEISTG DSECT
+         COPY  DFH$AGK                        MAP DEFINITION
+         COPY  DFH$AL86                       TD Q REC DESCRIPT
+         COPY  DFH$AFIL                       FILE OF ACCOUNTS
+         COPY  DFHBMSCA                       STD BMS ATTRIBUTE
+         COPY  DFHAID                         ATTENTION ID. COPYBOOK
+*
+FLAGS    DS    1B                             ERROR FLAGS
+RESPONSE DS    1F                             RESPONSE TO CICS COMMAND
+R9       EQU   9                              Reserved - for DFHEIENT
+FLERR    EQU   X'40'                          FLERR-INPUTCHECKS
+COMMAREA DS     C                             DUMMY COMMAREA
+         DFHEIEND
+*
+DFH$AREN CSECT
+DFH$AREN AMODE 64
+DFH$AREN RMODE 31
+         DFHEIENT DATAREG=13,EIBREG=11,STATREG=9,STATIC=STATR,CODEREG=0
+*
+*        THE LENGTH OF "COMMAREA" IS TESTED. IF NOT ZERO THEN THE
+*        OPERATOR'S ORDER MUST BE RECEIVED FROM THE SCREEN AND
+*        VALIDATED. NOTE THAT THE "COMMAREA" DOES NOT CONTAIN ANY
+*        INFORMATION THAT IS USED WITHIN THE PROGRAM, BUT IS USED
+*        TO DETERMINE WHETHER OR NOT THIS IS THE FIRST INVOCATION.
+*
+         CLC   EIBCALEN,=H'0'             IS THIS THE FIRST INVOCATION?
+         JNE   RECEIVE                    ..NO ,READ MAP FROM SCREEN   F
+                                                                   @P2C
+*
+*                                                     CLEAR MAP VARS
+         XC    DFH$AGKO(DFH$AGKE-DFH$AGKO),DFH$AGKO
+*
+*                                                     ERASE+DISPLAY MAP
+*
+*        THE SCREEN IS ERASED AND THE ORDER ENTRY MAP IS DISPLAYED AT
+*        THE TERMINAL. THE PROGRAM THEN RETURNS CONTROL TO CICS WITH
+*        A "COMMAREA" AND TRANSACTION IDENTIFIER OF THE NEXT TRANSAC-
+*        TION TO BE RUN AT THIS TERMINAL. NOTE THE USE OF THE "RESP"
+*        OPTION ON THE "SEND MAP" COMMAND AND THAT THE PROGRAM EXPLI-
+*        CITLY TESTS THE RESPONSE TO THE COMMAND RATHER THAN ISSUE
+*        A HANDLE CONDITION COMMAND.
+*
+         EXEC CICS SEND MAP('DFH$AGK') ERASE RESP(RESPONSE)
+         CLC  RESPONSE,DFHRESP(NORMAL)
+         JNE  ERRORS
+         EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)         *
+                   LENGTH(1)
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1984, 2012"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                      PROCESS THE INPUTTED FIELDS    *
+***********************************************************************
+RECEIVE  DS    0H
+*                                                     RECEIVE INPUTDATA
+*
+*        CONTROL PASSES HERE IF A "COMMAREA" HAS BEEN PASSED TO THE
+*        PROGRAM. IT CAUSES A READ FROM THE TERMINAL AND MAPS IN THE
+*        CUSTOMER NUMBER, PART NUMBER AND QUANTITY. THE PROGRAM EXPLI-
+*        CITLY TESTS TO DETERMINE WHETHER THE "CLEAR" KEY HAS BEEN
+*        PRESSED, AND WHETHER A "MAPFAIL" CONDITION WAS RAISED, MEANING
+*        NO DATA WAS ENTERED AT THE SCREEN.
+*
+*
+         CLI  EIBAID,DFHCLEAR                        WAS CLEAR PRESSED?
+         JE   ENDA                                   ...YES, TERMINATE
+         CLI  EIBAID,DFHENTER                        WAS ENTER PRESSED?
+         JE   RECMAP                                 YES, RECEIVE MAP
+*
+*        ANY OTHER KEY WILL CAUSE AN ERROR MESSAGE AND THE SCREEN
+*        WILL BE REDISPLAYED
+*
+         MVI  MSG2A,DFHBMASB
+         MVC  MSG2O,=CL22'PRESS ENTER OR CLEAR'                    @P2C
+         EXEC CICS SEND MAP('DFH$AGK')
+         EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)         *
+                   LENGTH(1)
+RECMAP   DS    0H
+         EXEC CICS RECEIVE MAP('DFH$AGK') RESP(RESPONSE)
+         CLC  RESPONSE,DFHRESP(MAPFAIL)              NULL MAP?
+         JE   MAPFAIL                                YES,REDISPLAY MAP
+         CLC  RESPONSE,DFHRESP(NORMAL)                UNEXPECTED ERROR?
+         JNE  ERRORS                                 ...YES, TERMINATE
+         NI    FLAGS,X'FF'-FLERR                      SET FLAGS TO 0
+*
+         MVI   CUSTNOA,DFHUNNUM                       SET MDT=1 IN CASE
+         MVI   PARTNOA,DFHUNNUM                       FIELDS NEED TO BE
+         MVI   QUANTA,DFHUNNUM                        RE-ENTERED
+*
+*                                                     CHECK FOR NUMERIC
+*
+*        THE ORDER DETAILS ARE CHECKED, INVALID ORDERS ARE RESDISPLAYED
+*        FOR CORRECTION. THE USER SHOULD ADD FURTHER EDITING STEPS
+*        NECESSARY TO ENSURE ONLY VALID ORDERS ARE ACCEPTED.
+*
+         TRT   CUSTNOI,CHEKTAB
+         JZ    TSTPART
+         MVI   CUSTNOA,DFHUNINT              ATTR=BRI+UNPROT'D+NUMERIC
+         OI    FLAGS,FLERR                            SET FLAGS TO 1
+*
+TSTPART  TRT   PARTNOI,CHEKTAB
+         JZ    TSTQUANT
+         MVI   PARTNOA,DFHUNINT              ATTR=BRI+UNPROT'D+NUMERIC
+         OI    FLAGS,FLERR                            SET FLAGS TO 1
+*
+TSTQUANT TRT   QUANTI,CHEKTAB
+         JZ    CHKFLERR
+         MVI   QUANTA,DFHUNINT              ATTR=BRI+UNPROT'D+NUMERIC
+         OI    FLAGS,FLERR                            SET FLAGS TO 1
+***********************************************************************
+*                                      SIMPLE VALIDATION OF INPUT DATA*
+***********************************************************************
+CHKFLERR TM    FLAGS,FLERR
+         JZ    QBUILD
+*
+*        THE ERROR MESSAGE "DATA ERROR - REENTER" IS A CONSTANT IN THE
+*        MAP LOAD MODULE AND IS SENT TO THE TERMINAL, WITH ANY OTHER
+*        CONSTANT INFORMATION, UNLESS "DATAONLY" IS SPECIFIED ON THE
+*        "SEND MAP". THE MESSAGE IS NORMALLY DARK (NON-DISPLAY).
+*        THIS INSTRUCTION OVERRIDES THE DARK ATTRIBUTE AND THE MESSAGE
+*        APPEARS IN HIGH INTENSITY WHEN THE "SEND MAP" COMMAND IS
+*        EXECUTED.
+*
+         MVI   MSG2A,DFHBMASB
+*                                                     ERASE+DISPLAY MAP
+         EXEC CICS SEND MAP('DFH$AGK') ERASE RESP(RESPONSE)
+         CLC  RESPONSE,DFHRESP(NORMAL)
+         JNE  ERRORS
+*                                                  RETURN WITH COMMAREA
+*
+*        THE PROGRAM RETURNS CONTROL TO CICS ALONG WITH A "COMMAREA"
+*        AND A TRANSACTION IDENTIFIER OF THE NEXT TRANSACTION TO BE RUN
+*        AT THE TERMINAL.
+*
+         EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)         *
+                   LENGTH(1)
+***********************************************************************
+*                                      CHECK CUSTOMER NUMBER EXISTS   *
+***********************************************************************
+*
+*        THE FILE CONTROL "READ" COMMAND ATTEMPTS TO READ THE CUSTOMER
+*        RECORD FROM "FILEA". IF NO RECORD EXISTS FOR THE CUSTOMER,
+*        CICS BRANCHES TO THE "NOTFND" EXIT.
+*
+QBUILD   EXEC CICS READ FILE('FILEA') INTO(FILEA) RIDFLD(CUSTNOI)      *
+              RESP(RESPONSE)
+         CLC  RESPONSE,DFHRESP(NOTFND)
+         JE   NOTFOUND
+         CLC  RESPONSE,DFHRESP(NORMAL)
+         JNE  ERRORS
+*
+*        THE ORDER DETAILS ARE MOVED FROM THE INPUT MAP TO THE QUEUE
+*        AREA.
+*
+         MVC   CUSTNO,CUSTNOI
+         MVC   PARTNO,PARTNOI
+         MVC   QUANTITY,QUANTI
+         MVC   TERMID,EIBTRMID
+***********************************************************************
+*                                      WRITE VALID ORDER TO TD QUEUE  *
+***********************************************************************
+*
+*        THE "WRITEQ TD" COMMAND WRITES THE ORDER RECORD TO A
+*        SEQUENTIAL FILE, A TRANSIENT DATA QUEUE.
+*
+         EXEC CICS WRITEQ TD QUEUE('L86O') FROM(L86O) LENGTH(22)       *
+              RESP(RESPONSE)
+         CLC  RESPONSE,DFHRESP(NORMAL)                UNEXPECTED ERROR?
+         JNE  ERRORS                                  ...YES, TERMINATE
+*
+*        THE ORDER ENTRY MAP IS REDISPLAYED READY FOR THE NEXT ORDER.
+*        ONLY THE MAP LOAD MODULE IS USED TO BUILD THE SCREEN DISPLAY,
+*        "MAPONLY" CAUSES THE DATA IN THE MAP DSECT AREA TO BE IGNORED.
+*        CONTROL IS RETURNED TO CICS ALONG WITH A "COMMAREA" AND A
+*        TRANSACTION IDENTIFIER.
+*
+         EXEC CICS SEND MAP('DFH$AGK') MAPONLY ERASE RESP(RESPONSE)
+         CLC  RESPONSE,DFHRESP(NORMAL)                 UNEXPECTED ERROR
+         JNE  ERRORS                                  ...YES, TERMINATE
+*                                                  RETURN WITH COMMAREA
+         EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)         *
+                   LENGTH(1)
+***********************************************************************
+*                                      HANDLE ERRORS AND RESTART      *
+***********************************************************************
+*
+NOTFOUND DS    0H                      INVALID CUSTOMER ACCOUNT NO.
+*
+*        IF THE PROGRAM DETECTS THAT THERE IS NO RECORD FOR THE
+*        CUSTOMER ON "FILEA", IT BRANCHES TO THIS POINT. THE MODIFIED
+*        DATA TAGS ARE SET ON ALL DATA FIELDS AND AN ERROR MESSAGE
+*        "NUMBER NOT FOUND - REENTER" IS SET TO DISPLAY IN HIGH
+*        INTENSITY. THE ORDER IS REDISPLAYED FOR CORRECTION.
+*
+         MVI   CUSTNOA,DFHUNINT              ATTR=BRI+UNPROT'D+NUMERIC
+         MVI   PARTNOA,DFHUNNUM                       MDT=1 TO PRESERVE
+         MVI   QUANTA,DFHUNNUM                        ....THESE FIELDS
+         MVI   MSG1A,DFHBMASB                         ERROR MSG=BRIGHT
+         EXEC CICS SEND MAP('DFH$AGK') RESP(RESPONSE)
+         CLC  RESPONSE,DFHRESP(NORMAL)
+         JNE  ERRORS
+*                                                  RETURN WITH COMMAREA
+         EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)         *
+               LENGTH(1)
+*
+MAPFAIL  DS    0H                      NO DATA ENTERED IN INPUT FIELDS
+*
+*        IF NO FIELDS ARE ENTERED, THE "MAPFAIL" CONDITION OCCURS.
+*        THE MESSAGE "DATA ERROR-REENTER" IS DISPLAYED IN HIGH
+*        INTENSITY.
+*
+         XC    DFH$AGKO(DFH$AGKE-DFH$AGKO),DFH$AGKO   CLEAR MAP
+         MVI   MSG2A,DFHBMASB                         ERROR MSG=BRIGHT
+         EXEC CICS SEND MAP('DFH$AGK') RESP(RESPONSE)
+         CLC  RESPONSE,DFHRESP(NORMAL)
+         JNE  ERRORS
+*                                                  RETURN WITH COMMAREA
+         EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)         *
+               LENGTH(1)
+***********************************************************************
+*                                      EXIT PROGRAM                   *
+***********************************************************************
+ERRORS   DS    0H                      GENERAL ERROR CONDITIONS
+*
+*        IF AN ERROR OCCURS A DUMP IS TAKEN AND THE MESSAGE "TRANSAC-
+*        TION TERMINATED" IS DISPLAYED IN HIGH INTENSITY IN THE DATA
+*        ERROR MESSAGE AREA. THE PROGRAM TERMINATES LEAVING THE ORDER
+*        ENTRY SCREEN DISPLAYED.
+*
+         MVI   MSG2A,DFHBMASB                         ERROR MSG=BRIGHT
+         MVC   MSG2O,=C'TRANSACTION TERMINATED'
+         EXEC CICS SEND MAP('DFH$AGK')
+         EXEC CICS DUMP DUMPCODE('ERRS')
+         J     EXIT                                   QUIT PROGRAM
+ENDA     DS    0H
+*
+*        WHEN THE "CLEAR" KEY IS PRESSED THE PROGRAM TERMINATES.
+*        THE MESSAGE "PROCESSING COMPLETED" IS DISPLAYED ON A BLANK
+*        SCREEN, THE KEYBOARD IS FREED AND CONTROL IS RETURNED TO CICS.
+*
+         EXEC CICS SEND TEXT FROM (PRESMSG) ERASE RESP(RESPONSE)
+         CLC  RESPONSE,DFHRESP(NORMAL)
+         JNE  ERRORS
+*                                                     SET INPUT INH OFF
+         EXEC CICS SEND CONTROL FREEKB RESP(RESPONSE)
+         CLC  RESPONSE,DFHRESP(NORMAL)
+         JNE  ERRORS
+EXIT     EXEC CICS RETURN
+STATR    DS    0D
+PRESMSG  DC    CL20'PROCESSING COMPLETED'
+***********************************************************************
+*                                 DEFINE THE 256 BYTE TRANSLATE TABLE *
+*                                 FOR LOCATING NON-NUMERIC DIGITS BY  *
+*                                 MEANS OF THE "TRT" INSTRUCTION      *
+***********************************************************************
+CHEKTAB  DC     256X'FF'
+         ORG    CHEKTAB+X'F0'
+         DC     10X'00'
+         ORG
+         LTORG
+         END

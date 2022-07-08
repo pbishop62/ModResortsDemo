@@ -1,0 +1,598 @@
+*ASM XOPTS(CICS,SP,NOEDF,NOPROLOG,NOEPILOG)
+         TITLE 'DFH$FCLD - Sample XFCLDEL Exit Program'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$FCLD                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Sample global user exit program for XFCLDEL      *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*      Licensed Materials - Property of IBM                           *
+*                                                                     *
+*      "Restricted Materials of IBM"                                  *
+*                                                                     *
+*      5655-Y04                                                       *
+*                                                                     *
+*      (C) Copyright IBM Corp. 1994, 2014"                            *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*                                                                     *
+*   This program provides sample processing for the File Control      *
+*   logical delete GLobal User Exit (GLUE) XFCLDEL.                   *
+*   It is called when a WRITE to a VSAM ESDS or BDAM data set is      *
+*   being backed out. Since these access methods do not support DELETE*
+*   special action must be taken to provide a logical delete function.*
+*   Normally this involves flagging the record in a way which the     *
+*   application that uses the data set recognizes as meaning 'this    *
+*   record has been deleted'.                                         *
+*                                                                     *
+*   This GLUE was introduced in CICS for MVS/ESA, version 5 release 1 *
+*   and does not exist in prior versions of CICS for MVS/ESA.         *
+*   It replaces XDBFERR and XRCFCER which exist in versions prior to  *
+*   CICS 5.1.                                                         *
+*                                                                     *
+* NOTES :                                                             *
+*  DEPENDENCIES   = S/390                                             *
+*  RESTRICTIONS   = CICS/ESA GLUE restrictions                        *
+*                   GLUEs have certain unique restrictions. These     *
+*                   include, but are not limited to, such things as   *
+*                   addressing mode, the use of CICS services and the *
+*                   CICS storage protection facility. Please refer to *
+*                   the CICS/ESA Customization Guide for details.     *
+*  REGISTER CONVENTIONS = On entry, these registers have values:      *
+*                   R1 - address of the user exit parameter list      *
+*                        DFHUEPAR                                     *
+*                   R13- address of a standard register save area     *
+*                        R13 must have this value when returning to   *
+*                        the caller.                                  *
+*                   R14- address to which this program must return    *
+*                   R15- entry address of this program                *
+*                   No other register values are guaranteed on entry  *
+*                   The exit should save and restore any registers    *
+*                   that it modifies, using the save area addressed   *
+*                   by R13.                                           *
+*                                                                     *
+*                   These registers are used in this program:         *
+*                   R2 - Work register                                *
+*                   R3 - Code base                                    *
+*                   R4 - Spare                                        *
+*                   R5 - Log record addressing register               *
+*                   R6 - DFHUEPAR base                                *
+*                   R7 - FC request data base                         *
+*                   R8 - Work register                                *
+*                   R9 - FC request data length                       *
+*                   R10- DFHEISTG base (DFHEIPLR)                     *
+*                   R11- EIB base (DFHEIBR)                           *
+*                   R12- Spare                                        *
+*                   R13- Kernel stack base                            *
+*  MODULE TYPE    = Executable                                        *
+*  PROCESSOR      = Assembler                                         *
+*  ATTRIBUTES     = Read only, AMODE 31, RMODE ANY                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$FCLD                                              *
+*                                                                     *
+*   PURPOSE     = All functions                                       *
+*                                                                     *
+*   LINKAGE     = Called by the CICS exit handler                     *
+*                                                                     *
+*   INPUT       = R1 contains the address of DFHUEPAR                 *
+*                 DFHUEPAR contains the following exit-specific       *
+*                 parameters:                                         *
+*                                                                     *
+*                 UEPBLOGR  Address of the File Control portion of    *
+*                           the log record that is to be backed out   *
+*                           and that is being presented for logical   *
+*                           deletion.                                 *
+*                           The FC part of the log record consists of *
+*                                Control-data + Key + Data.           *
+*                           Copybook DFHFCLGD maps the Control-data.  *
+*                           The Data is the record that was written   *
+*                           to the data set.                          *
+*                                                                     *
+*                 UEPTRANS  Address of the Transaction ID under       *
+*                           which the update that is being backed     *
+*                           out was made. This is a 4-byte field      *
+*                           containing the name of the transaction.   *
+*                                                                     *
+*                 UEPTRMNL  Address of the Terminal ID for the        *
+*                           terminal or principal facility from       *
+*                           which the update that is being backed     *
+*                           out was made.  This is a 4-byte field     *
+*                           containing the name of the principal      *
+*                           facility (or blanks if there was none).   *
+*                                                                     *
+*                 UEPTASK   Address of the Task Number for the        *
+*                           task under which the update that is       *
+*                           being backed out was made.  This is a     *
+*                           4-byte field containing the task number   *
+*                           in packed decimal.                        *
+*                                                                     *
+*                 UEPFDATA  Address of a variable-length field that   *
+*                           contains the Data in the File Control     *
+*                           request. This is the record that was      *
+*                           written to the data set, and that is to   *
+*                           be marked for logical deletion.           *
+*                                                                     *
+*                 UEPFLEN   Address of a fullword that contains the   *
+*                           length of the data in the File Control    *
+*                           request.                                  *
+*                                                                     *
+*   OUTPUT      = R15 = Return code (UERCLDEL or UERCFAIL)            *
+*                 Data area addressed by UEPFDATA = updated record    *
+*                                                                     *
+*   EXIT-NORMAL = Return to CICS with R15 = UERCLDEL (perform delete) *
+*                                                                     *
+*   EXIT-ERROR  = Issue a user exception trace, then                  *
+*                 return to CICS with R15 = UERCFAIL (enter backout   *
+*                 failure processing, saving the failed log record so *
+*                 that the backout can be retried.  Backout failure   *
+*                 processing can be bypassed using the XFCBFAIL exit) *
+*                                                                     *
+*   The return code UERCNORM is not intended for use by this exit.    *
+*   Returning UERCNORM would have the same effect as UERCFAIL.        *
+*                                                                     *
+*   If UERCLDEL is returned but the logical delete then fails, this   *
+*   results in backout failure processing.                            *
+*                                                                     *
+*   This program does not check for purged responses from EXEC CICS   *
+*   or XPI calls that it makes because the exit is invoked during     *
+*   backout processing and hence                                      *
+*     (1) purged responses cannot be returned by such calls,          *
+*     (2) UERCPURG is not an allowed return code from the exit.       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+*                                                                     *
+*     CALLS = EXEC CICS ADDRESS EIB                                   *
+*             EXEC CICS INQUIRE FILE                                  *
+*             DFHTRPTX TRACE_PUT                                      *
+*                                                                     *
+*     DATA AREAS = None                                               *
+*                                                                     *
+*     CONTROL BLOCKS = DFHUEPAR                                       *
+*                      DFHFCLGD                                       *
+*                                                                     *
+*     GLOBAL VARIABLES = None                                         *
+*                                                                     *
+* TABLES = None                                                       *
+*                                                                     *
+* MACROS = None                                                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+* ------------------------------------------------------------------- *
+*   The purpose of this sample program is to demonstrate the use of   *
+*   File Control logical delete exit XFCLDEL, and to show the kind    *
+*   of information which can be derived from the exit parameter list. *
+*                                                                     *
+* * * YOU SHOULD TAILOR IT BEFORE USE IN A PRODUCTION ENVIRONMENT * * *
+* ------------------------------------------------------------------- *
+*                                                                     *
+*   The environment in DFH$FCLD is set up to conform to CICS global   *
+*   user exit programming standards, and also to allow both EXEC CICS *
+*   (API) calls and CICS user exit programming interface (XPI) calls  *
+*   to be made. This is achieved by the following:                    *
+*                                                                     *
+*   - NOPROLOG, NOEPILOG, NOEDF specified on the ASM XOPTS statement  *
+*   - DATAREG other than R13 specified on the DFHEIENT macro          *
+*   - EXEC CICS ADDRESS EIB used to obtain EIB address                *
+*   - DFHUEXIT TYPE=XPIENV specified                                  *
+*   - R13 set to address kernel stack entry (UEPSTACK)                *
+*   - RCREG specified on the DFHEIRET macro                           *
+*                                                                     *
+*   Note that the translator preserves R13 across API calls so there  *
+*   is no need to reload it before each XPI call.                     *
+*                                                                     *
+*                                                                     *
+* DFH$FCLD Processing consists of the following steps:                *
+*                                                                     *
+*   -Generate the prolog code with the DFHEIENT macro.                *
+*      Specify CODEREG, DATAREG and EIBREG.                           *
+*      This enables use of EXEC CICS (API) calls.                     *
+*                                                                     *
+*   -Include DSECTS needed for:                                       *
+*      User Exit Parameter List - DFHUEPAR                            *
+*      Log Record format - DFHFCLGD                                   *
+*      XPI Support - XPI macro DFHxxyyX requires copy book DFHxxyyY   *
+*                                                                     *
+*   -Address the DFHUEPAR parameter list.                             *
+*                                                                     *
+*   -Address the EIB and the kernel stack entry.                      *
+*                                                                     *
+*   -Address the File Control portion of the log record.              *
+*    Field name FLJB_FILE_NAME contains the filename of the file to   *
+*    which the log record belongs.                                    *
+*                                                                     *
+*   -Calculate the length of the log record.                          *
+*      A File Control backout log record consists of                  *
+*        General Data part  (length equ FLJB_GENERAL_DATA__LEN)       *
+*        Common Data part   (length equ FLJB_COMMON_DATA__LEN)        *
+*        Key                (length in a field in the common part)    *
+*        Data               (length in a field in the common part)    *
+*      so its length is the sum of these lengths.                     *
+*                                                                     *
+*   -Address the actual data of the record that is to be flagged as   *
+*    logically deleted.                                               *
+*    Also save the length of the data.  UEPFLEN is the address of     *
+*    this length.                                                     *
+*                                                                     *
+*   -Make a user trace entry if tracing is active for File Control.   *
+*    Use the XPI, DFHTRPTX, specifying TRACE_PUT. The trace point id  *
+*    must be in the range X'0100' through X'01FF'.                    *
+*    The following data is traced:                                    *
+*      DATA1: Eyecatcher 'DFH$FCLD ENTRY'                             *
+*      DATA2: Unmarked File Control request data                      *
+*      DATA3: File control portion of log record                      *
+*                                                                     *
+*    If any trace XPI call fails, this is ignored.                    *
+*                                                                     *
+*    Trace entries could alternatively be written using the           *
+*    EXEC CICS ENTER TRACENUM command.  This program uses DFHTRPTX    *
+*    to demonstrate use of an XPI interface.                          *
+*                                                                     *
+*   -Check the access method and type to see if the file is           *
+*    VSAM ESDS or BDAM.  The logical delete exit should only have     *
+*    been invoked if the file is one of these types.                  *
+*      VSAM ESDS processing                                           *
+*        Calculate the position in the record of the logical delete   *
+*        marker according to file conventions.                        *
+*        The convention adopted here is to flag the first byte.       *
+*        Flag the record as logically deleted.                        *
+*        Take the normal exit from the program.                       *
+*                                                                     *
+*      BDAM processing                                                *
+*        Calculate the position in the record of the logical delete   *
+*        marker according to file conventions.                        *
+*        The convention adopted here is to flag the first byte.       *
+*        Flag the record as logically deleted.                        *
+*        Take the normal exit from the program.                       *
+*                                                                     *
+*      OTHERWISE                                                      *
+*        Do not process the request. The record will not be flagged   *
+*        as deleted.                                                  *
+*        Take the error exit from the program.                        *
+*                                                                     *
+*   -Normal exit processing for the program                           *
+*      Make a user trace entry if tracing is active for File Control  *
+*      and there were no errors during processing.                    *
+*      The following data is traced:                                  *
+*        DATA1: Eyecatcher 'DFH$FCLD EXIT OK'                         *
+*        DATA2: Eyecatcher 'RECORD MARKED AS DELETED'                 *
+*        DATA3: Marked File Control request data                      *
+*        DATA4: File Control portion of log record                    *
+*                                                                     *
+*   -Error exit processing for the program                            *
+*      If errors occur during processing or if CICS functions fail,   *
+*      a user exception trace entry is made regardless of the trace   *
+*      setting.                                                       *
+*      In those cases, the following is traced:                       *
+*        DATA1: Eyecatcher 'USEREXC'                                  *
+*        DATA2: Eyecatcher 'DFH$FCLD EXIT FAIL'                       *
+*        DATA3: Unmarked File Control request data                    *
+*        DATA4: File Control portion of log record                    *
+*      Return to CICS with the return code UERCFAIL which instructs   *
+*      CICS to regard the delete as having failed.                    *
+*                                                                     *
+*   -Generate epilog code with the DFHEIRET macro                     *
+*    The DFHEIRET macro frees DFHEISTG working storage,               *
+*    restores caller's registers, and sets R15 before exiting         *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*      $MOD(DFH$FCLD),COMP(FILE),PROD(CICS TS ):                      *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*                                                                     *
+*    $L0= 654    510 940408 HD9ZMRD: Created                          *
+*    $L1= 654    510 941024 HDAVCMM: Sample GLUEs cont.(implicit flag)*
+*    $P1= M94782 510 950705 HDAVCMM : Change CICS name in comments    *
+*                                                                     *
+***********************************************************************
+*
+***********************************************************************
+* Ensure AMODE(31) and RMODE(ANY).                                    *
+***********************************************************************
+DFH$FCLD CSECT
+DFH$FCLD AMODE 31
+DFH$FCLD RMODE ANY
+***********************************************************************
+*   -Generate the prolog code with the DFHEIENT macro.                *
+*      Specify CODEREG, DATAREG and EIBREG.                           *
+*      This enables use of EXEC CICS (API) calls.                     *
+***********************************************************************
+         DFHEIENT CODEREG=3,DATAREG=10,EIBREG=11
+***********************************************************************
+*   -Include DSECTS needed for:                                       *
+*      User Exit Parameter List - DFHUEPAR                            *
+*      Log Record format - DFHFCLGD                                   *
+*      XPI Support - XPI macro DFHxxyyX requires copy book DFHxxyyY   *
+***********************************************************************
+         DFHUEXIT TYPE=EP,ID=XFCLDEL     DFHUEPAR plist for XFCLDEL
+         EJECT
+         COPY  DFHFCLGD                  File Control log record
+         EJECT
+         DFHUEXIT TYPE=XPIENV            XPI environment
+         EJECT
+         COPY  DFHTRPTY                  DFHTRPTX macro parameter list
+         EJECT
+***********************************************************************
+* DFHEISTG working storage.                                           *
+***********************************************************************
+         DFHEISTG                        Start working storage
+ACCMETH        DS    F                   File access method
+FILEORG        DS    F                   File organisation
+CICSRESP       DS    F                   EXEC CICS RESP code
+LOG_LENGTH     DS    F                   Length of FC log record
+               DS    0D                  Doubleword align XPI plist
+XPI_PLIST_STG  DS    CL256               Storage for XPI plists
+         DFHEIEND                        End working storage
+         EJECT
+DFH$FCLD CSECT
+***********************************************************************
+*   -Address the DFHUEPAR parameter list.                             *
+***********************************************************************
+         LR    R6,R1                     Address DFHUEPAR
+         USING DFHUEPAR,R6
+***********************************************************************
+*   -Address the EIB and the kernel stack entry.                      *
+***********************************************************************
+         L     R13,UEPSTACK              Address kernel stack entry
+*
+         EXEC CICS ADDRESS EIB(DFHEIBR)
+*
+***********************************************************************
+*   -Address the File Control portion of the log record.              *
+*    Field name FLJB_FILE_NAME contains the filename of the file to   *
+*    which the log record belongs.                                    *
+***********************************************************************
+         L     R5,UEPBLOGR               Address FC log record
+*
+***********************************************************************
+*   -Calculate the length of the log record.                          *
+*      A File Control backout log record consists of                  *
+*        General Data part  (length equ FLJB_GENERAL_DATA__LEN)       *
+*        Common Data part   (length equ FLJB_COMMON_DATA__LEN)        *
+*        Key                (length in a field in the common part)    *
+*        Data               (length in a field in the common part)    *
+*      so its length is the sum of these lengths.                     *
+***********************************************************************
+         USING FLJB_COMMON_DATA-FLJB_GENERAL_DATA__LEN,R5
+         LA    R8,FLJB_GENERAL_DATA__LEN+FLJB_COMMON_DATA__LEN
+         AH    R8,FLJB_CD_KEY_LENGTH
+         A     R8,FLJB_CD_DATA_LENGTH
+         ST    R8,LOG_LENGTH
+*
+         DROP  R5
+         USING FLJB_GENERAL_DATA,R5      Base FC log record structure
+*
+***********************************************************************
+*   -Address the actual data of the record that is to be flagged as   *
+*    logically deleted.                                               *
+*    Also save the length of the data.  UEPFLEN is the address of     *
+*    this length.                                                     *
+***********************************************************************
+         L     R7,UEPFDATA               Address the FC request data
+         L     R9,UEPFLEN                Address the data length
+         L     R9,0(,R9)                 Save the data length
+*
+***********************************************************************
+*   -Make a user trace entry if tracing is active for File Control.   *
+*    Use the XPI, DFHTRPTX, speciying TRACE_PUT. The trace point id   *
+*    must be in the range X'0100' through X'01FF'.                    *
+*    The following data is traced:                                    *
+*      DATA1: Eyecatcher 'DFH$FCLD ENTRY'                             *
+*      DATA2: Unmarked File Control request data                      *
+*      DATA3: File Control portion of log record                      *
+***********************************************************************
+*
+         L     R2,UEPTRACE               Address the trace flag
+         TM    0(R2),UEPTRON             Is FC level 1 tracing active?
+         BZ    NO_ENTRY_TRACE            No...skip trace
+*
+         LA    R2,XPI_PLIST_STG          Yes..make user trace entry
+         USING DFHTRPT_ARG,R2            Address DFHTRPTX plist
+*
+         DFHTRPTX CALL,                  Trace XPI call                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(ENTRY_TPID),                                   *
+               DATA1(A(ENTRY_EYE),L'ENTRY_EYE),    Eyecatcher          *
+               DATA2((R7),(R9)),                   FC request data     *
+               DATA3((R5),LOG_LENGTH),             FC log record       *
+               OUT,                                                    *
+               RESPONSE(*)
+*
+         DROP  R2                        Lose addressability to plist
+*
+NO_ENTRY_TRACE DS 0H                     Skip to here if no trace
+***********************************************************************
+*   -Check the access method and type to see if the file is           *
+*    VSAM ESDS or BDAM.  The logical delete exit should only have     *
+*    been invoked if the file is one of these types.                  *
+***********************************************************************
+         EXEC CICS INQUIRE FILE(FLJB_FILE_NAME)                        *
+               ACCESSMETHOD(ACCMETH)                                   *
+               TYPE(FILEORG)                                           *
+               RESP(CICSRESP)
+*
+         CLC   CICSRESP,DFHRESP(NORMAL)  Inquire successful?
+         BNE   RETURN_FAILED             No...treat as backout failure
+         CLC   ACCMETH,DFHVALUE(BDAM)    BDAM file?
+         BE    BDAM_FILE                 Yes..go to BDAM processing
+         CLC   ACCMETH,DFHVALUE(VSAM)    VSAM file?
+         BNE   BAD_FILE                  No...must be an error
+         CLC   FILEORG,DFHVALUE(ESDS)    ESDS organisation?
+         BE    ESDS_FILE                 Yes..go to ESDS processing
+         B     BAD_FILE                  No...This should never happen
+         EJECT
+*
+***********************************************************************
+*      VSAM ESDS processing                                           *
+*        Calculate the position in the record of the logical delete   *
+*        marker according to file conventions.                        *
+*        The convention adopted here is to flag the first byte.       *
+*        Flag the record as logically deleted.                        *
+*        Take the normal exit from the program.                       *
+***********************************************************************
+*        The use of R8 to specify position zero is redundant, but     *
+*        this makes it easier to change the program to flag the       *
+*        record in a different position.                              *
+***********************************************************************
+ESDS_FILE DS   0H
+          SR    R8,R8                    Flag first byte (position 0)
+          LA    R2,ESDS_DELETED          Get ESDS logical delete marker
+          STC   R2,0(R8,R7)              Mark the FC request data
+          B     RETURN_DELETE            Return perform delete
+          EJECT
+*
+***********************************************************************
+*      BDAM processing                                                *
+*        Calculate the position in the record of the logical delete   *
+*        marker according to file conventions.                        *
+*        The convention adopted here is to flag the first byte.       *
+*        Flag the record as logically deleted.                        *
+*        Take the normal exit from the program.                       *
+***********************************************************************
+*        The use of R8 to specify position zero is redundant, but     *
+*        this makes it easier to change the program to flag the       *
+*        record in a different position.                              *
+***********************************************************************
+BDAM_FILE DS  0H
+          SR    R8,R8                    Flag first byte (position 0)
+          LA    R2,BDAM_DELETED          Get BDAM logical delete marker
+          STC   R2,0(R8,R7)              Mark the FC request data
+          B     RETURN_DELETE            Return perform delete
+*
+***********************************************************************
+*      OTHERWISE                                                      *
+*        Do not process the request. The record will not be flagged   *
+*        as deleted.                                                  *
+*        Take the error exit from the program.                        *
+***********************************************************************
+BAD_FILE DS   0H
+         B     RETURN_FAILED             Return did NOT perform delete
+         EJECT
+*
+***********************************************************************
+*   -Normal exit processing for the program                           *
+*      Make a user trace entry if tracing is active for File Control  *
+*      and there were no errors during processing.                    *
+*      The following data is traced:                                  *
+*        DATA1: Eyecatcher 'DFH$FCLD EXIT OK'                         *
+*        DATA2: Eyecatcher 'RECORD MARKED AS DELETED'                 *
+*        DATA3: Marked File Control request data                      *
+*        DATA4: File Control portion of log record                    *
+***********************************************************************
+RETURN_DELETE DS 0H
+         L     R2,UEPTRACE               Address the trace flag
+         TM    0(R2),UEPTRON             Is FC level 1 tracing active?
+         BZ    NO_EXIT_TRACE             No...skip trace
+*
+         LA    R2,XPI_PLIST_STG          Yes..make user trace entry
+         USING DFHTRPT_ARG,R2            Address DFHTRPTX plist
+*
+         DFHTRPTX CALL,                  Trace XPI call                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(EXIT_TPID),                                    *
+               DATA1(A(EXIT_EYE),L'EXIT_EYE),      Eyecatcher          *
+               DATA2(A(LDEL_EYE),L'LDEL_EYE),      Eyecatcher          *
+               DATA3((R7),(R9)),                   FC request data     *
+               DATA4((R5),LOG_LENGTH),             FC log record       *
+               OUT,                                                    *
+               RESPONSE(*)
+*
+         DROP  R2                        Lose addressability to plist
+NO_EXIT_TRACE DS 0H                      Skip to here if no trace
+         LA    R15,UERCLDEL              Set perform logical delete rc
+         B     RETURN_TO_CICS            Return to CICS
+*
+***********************************************************************
+*   -Error exit processing for the program                            *
+*      If errors occur during processing or if CICS functions fail,   *
+*      a user exception trace entry is made regardless of the trace   *
+*      setting.                                                       *
+*      In those cases, the following is traced:                       *
+*        DATA1: Eyecatcher 'USEREXC'                                  *
+*        DATA2: Eyecatcher 'DFH$FCLD EXIT FAIL'                       *
+*        DATA3: Unmarked File Control request data                    *
+*        DATA4: File Control portion of log record                    *
+*      Return to CICS with the return code UERCFAIL which instructs   *
+*      CICS to regard the delete as having failed.                    *
+***********************************************************************
+RETURN_FAILED DS 0H
+         LA    R2,XPI_PLIST_STG          Address DFHTRPTX plist
+         USING DFHTRPT_ARG,R2
+*
+         DFHTRPTX CALL,                  Trace XPI call                *
+               CLEAR,                                                  *
+               IN,                                                     *
+               FUNCTION(TRACE_PUT),                                    *
+               POINT_ID(FAIL_TPID),                                    *
+               DATA1(A(UEXC_EYE),L'UEXC_EYE),      Eyecatcher          *
+               DATA2(A(FAIL_EYE),L'FAIL_EYE),      Eyecatcher          *
+               DATA3((R7),(R9)),                   FC request data     *
+               DATA4((R5),LOG_LENGTH),             FC log record       *
+               OUT,                                                    *
+               RESPONSE(*)
+         DROP  R2                        Lose addressability to plist
+*
+         LA    R15,UERCFAIL              Set backout has failed rc
+         B     RETURN_TO_CICS            Return to CICS
+*
+***********************************************************************
+*   -Generate epilog code with the DFHEIRET macro                     *
+*    The DFHEIRET macro frees DFHEISTG working storage,               *
+*    restores caller's registers, and sets R15 before exiting         *
+***********************************************************************
+RETURN_TO_CICS DS 0H
+         DFHEIRET RCREG=15               Return with rc in R15
+*
+         DROP  R5,R6,DFHEIBR,DFHEIPLR    Lose addressability to DSECTs
+         EJECT
+***********************************************************************
+* Trace point ids. User trace entries issued from exit programs       *
+* should have trace point ids in the range X'0100' to X'01FF' for     *
+* CICS to interpret them as such.                                     *
+***********************************************************************
+         DS    0D
+ENTRY_TPID     DC    XL2'01F0'                Entry trace point id
+EXIT_TPID      DC    XL2'01F1'                Exit ok trace point id
+FAIL_TPID      DC    XL2'01F2'                Exit fail trace point id
+*
+***********************************************************************
+* Logical Deletion Marks.                                             *
+* These should be changed to conform to the installation's            *
+* conventions for marking records as logically deleted.               *
+***********************************************************************
+*
+ESDS_DELETED   EQU   X'FF'                    ESDS logical delete mark
+BDAM_DELETED   EQU   X'C0'                    BDAM logical delete mark
+***********************************************************************
+* Other Constants.                                                    *
+***********************************************************************
+ENTRY_EYE      DC    C'DFH$FCLD ENTRY'        Entry eyecatcher
+EXIT_EYE       DC    C'DFH$FCLD EXIT OK'      Exit ok eyecatcher
+LDEL_EYE       DC    C'RECORD MARKED AS DELETED'  Rec marked eyecatcher
+FAIL_EYE       DC    C'DFH$FCLD EXIT FAIL'    Exit fail eyecatcher
+UEXC_EYE       DC    C'USEREXC'               User exc trace eyecatcher
+***********************************************************************
+* End of DFH$FCLD                                                     *
+***********************************************************************
+         DROP
+         END DFH$FCLD

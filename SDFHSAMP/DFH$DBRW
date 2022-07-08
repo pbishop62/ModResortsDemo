@@ -1,0 +1,368 @@
+#pragma XOPTS(CICS)                                     /* @D2A */
+ /********************************************************************/
+ /*                                                                  */
+ /* Module Name = DFH$DBRW                                           */
+ /*                                                                  */
+ /* Descriptive Name = File Browse for Sample Application            */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*     Licensed Materials - Property of IBM                         */
+ /*                                                                  */
+ /*     "Restricted Materials of IBM"                                */
+ /*                                                                  */
+ /*     5655-Y04                                                     */
+ /*                                                                  */
+ /*     (C) Copyright IBM Corp. 1989, 2002"                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* Status = %SP00                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* Change Activity:                                                 */
+ /*                                                                  */
+ /*  $MOD(DFH$DBRW),COMP(SAMPLES),PROD(CICS TS ):                    */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $P0= Mnnnnn 210 890825 HDZZUNK: Created.                        */
+ /*  $P1= M90474 330 910807 HDBWSH : Prologue fixed.                 */
+ /*  $P2= M90671 330 910807 HD4OGB : Check NOTFND after READNEXT     */
+ /*                                  and READPREV                    */
+ /*  $P3= M91284 330 911111 HDBWSAH : Fix Record number field clear. */
+ /*  $D1= I06048 410 930706 HD7OPJW : DCR 6048 - C++ support         */
+ /*  $D2= I07267 630 020328 HDHYJB  : Compile all samples            */
+ /*                                                                  */
+ /********************************************************************/
+#include "dfhbmsca.h"                    /* BMS definitions          */
+#include "dfhaid.h"                      /* Attention identifiers    */
+#include "dfh$dga.h"                     /* Logical maps for DFH$DMA */
+#include "dfh$dgc.h"                     /* Logical maps for DFH$DGC */
+#include "dfh$dfil.h"                    /* Definition of FILEA      */
+#include <string.h>                                          /* @D1A */
+#include <ctype.h>                                           /* @D1A */
+int rcode;
+
+unsigned char rid[6];
+unsigned char ridf[6];
+unsigned char ridb[6];
+
+unsigned char status = ' ';
+unsigned char currop;
+unsigned char lastop;
+         char messages[40];                                  /* @D1C */
+
+static void Dmnu()
+{
+   int i;
+
+   memset(&dfhdga.dfhdgao,'\0',sizeof(dfhdga.dfhdgao));
+   dfhdga.dfhdgao.msga = DFHBMASB;
+   for (i=strlen(messages);i<40;i++)
+      messages[i]=' ';
+   memcpy(dfhdga.dfhdgao.msgo,messages,39);
+   EXEC CICS SEND MAP("dfhdga ") MAPSET("DFH$DGA") ERASE;
+   EXEC CICS RETURN;
+}
+
+static void TooHigh()
+{
+   status = 'H';
+   memcpy(ridf,rid,6);
+   memcpy(ridb,rid,6);
+   dfhdgc.dfhdgco.diro = ' ';
+   memcpy(dfhdgc.dfhdgco.msg1o, \
+      "HI-END OF FILE                         ",39);
+   dfhdgc.dfhdgco.msg1a = DFHBMASB;
+   EXEC CICS SEND MAP("dfhdgc ") MAPSET("DFH$DGC") ERASE;
+   return;
+}
+
+static void TooLow()
+{
+   status = 'L';
+   memcpy(ridf,"000000",6);
+   memcpy(ridb,"000000",6);
+   dfhdgc.dfhdgco.diro = ' ';
+   memcpy(dfhdgc.dfhdgco.msg2o, \
+      "LO-END OF FILE                         ",39);
+   dfhdgc.dfhdgco.msg2a = DFHBMASB;
+   EXEC CICS SEND MAP("dfhdgc ") MAPSET("DFH$DGC") ERASE;
+   return;
+}
+
+static void Notfound()
+{
+
+   strcpy(messages,"END OF FILE - PLEASE RESTART");
+   EXEC CICS ENDBR FILE("FILEA   ");
+   Dmnu();    /* No return from Dmnu */
+}
+
+static void Smsg()
+{
+   strcpy(messages,"PRESS CLEAR TO EXIT");
+   Dmnu();    /* No return from 'Dmnu' */
+}
+
+static void Errors()
+{
+   EXEC CICS DUMP DUMPCODE("ERRS");
+   Dmnu();    /* No return from 'Dmnu' */
+}
+
+
+static int Verify_Name(char *string,int length)
+{
+   for(;length>0;length--,string++)
+      if(strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZ .-'",*string)==0)
+         return(0);
+   return(1);
+}
+
+
+
+static int Verify_Amount(char *string,int length)             /* D1C */
+{
+   for(;length>0;length--,string++)
+      if(strchr("0123456789.›$",*string)==0)
+         return(0);
+   return(1);
+}
+
+static int IsNumeric(char *string,int length)                 /* D1C */
+{
+   for(;length>0;length--,string++)
+      if (!isdigit((int)(*string)))
+         return(0);
+   return(1);
+}
+
+
+
+static int Build_Next()
+{
+   int i;
+   for (i=1;i<=4;i++) {
+      EXEC CICS READNEXT INTO(&filea) LENGTH(filea_size)
+      FILE("FILEA   ") RIDFLD(rid) RESP(rcode);
+      switch(rcode) {
+         case DFHRESP(NORMAL): break;
+         case DFHRESP(NOTFND): Notfound();
+         case DFHRESP(ENDFILE) :
+            TooHigh();
+            return(1);
+         default: Errors();
+      } /* End Switch */
+      switch (i) {
+         case (1):
+         {
+            memcpy(dfhdgc.dfhdgco.number1o,filea.numb,6);
+            memcpy(dfhdgc.dfhdgco.name1o,filea.name,20);
+            memcpy(dfhdgc.dfhdgco.amount1o,filea.amount,8);
+            memcpy(ridb,rid,6);
+            break;
+         }
+         case (2):
+         {
+            memcpy(dfhdgc.dfhdgco.number2o,filea.numb,6);
+            memcpy(dfhdgc.dfhdgco.name2o,filea.name,20);
+            memcpy(dfhdgc.dfhdgco.amount2o,filea.amount,8);
+            break;
+         }
+         case (3):
+         {
+            memcpy(dfhdgc.dfhdgco.number3o,filea.numb,6);
+            memcpy(dfhdgc.dfhdgco.name3o,filea.name,20);
+            memcpy(dfhdgc.dfhdgco.amount3o,filea.amount,8);
+            break;
+         }
+         case (4):
+         {
+            memcpy(dfhdgc.dfhdgco.number4o,filea.numb,6);
+            memcpy(dfhdgc.dfhdgco.name4o,filea.name,20);
+            memcpy(dfhdgc.dfhdgco.amount4o,filea.amount,8);
+            break;
+         }
+      }                                  /* End Switch               */
+   }                                     /* End For                  */
+   return(0);
+}                                        /* End Build_Next()         */
+
+static int Build_Prev()
+{
+   int i;
+
+   for (i=1;i<=4;i++) {
+      EXEC CICS READPREV INTO(&filea) LENGTH(filea_size)
+      FILE("FILEA   ") RIDFLD(rid) RESP(rcode);
+      switch(rcode) {
+         case DFHRESP(NORMAL): break;
+         case DFHRESP(NOTFND): Notfound();
+         case DFHRESP(ENDFILE) :
+            TooLow();
+            return(1);
+         default: Errors();
+      } /* End Switch */
+      switch (i) {
+         case (4):
+         {
+            memcpy(dfhdgc.dfhdgco.number1o,filea.numb,6);
+            memcpy(dfhdgc.dfhdgco.name1o,filea.name,20);
+            memcpy(dfhdgc.dfhdgco.amount1o,filea.amount,8);
+            memcpy(ridb,rid,6);
+            break;
+         }
+         case (3):
+         {
+            memcpy(dfhdgc.dfhdgco.number2o,filea.numb,6);
+            memcpy(dfhdgc.dfhdgco.name2o,filea.name,20);
+            memcpy(dfhdgc.dfhdgco.amount2o,filea.amount,8);
+            memcpy(ridb,rid,6);
+            break;
+         }
+         case (2):
+         {
+            memcpy(dfhdgc.dfhdgco.number3o,filea.numb,6);
+            memcpy(dfhdgc.dfhdgco.name3o,filea.name,20);
+            memcpy(dfhdgc.dfhdgco.amount3o,filea.amount,8);
+            memcpy(ridb,rid,6);
+            break;
+         }
+         case (1):
+         {
+            memcpy(dfhdgc.dfhdgco.number4o,filea.numb,6);
+            memcpy(dfhdgc.dfhdgco.name4o,filea.name,20);
+            memcpy(dfhdgc.dfhdgco.amount4o,filea.amount,8);
+            memcpy(ridb,rid,6);
+            break;
+         }
+      }                                  /* End Switch               */
+   }                                     /* End For                  */
+   return(0);
+}                                        /* End Build_Prev()         */
+
+static void Page_Forward()
+{
+   currop = 'F';
+   /* Code to reset fields + attrb in MAP C;*/
+   memcpy(rid,ridf,6);
+   if (Build_Next()!=0)
+      return;
+   memcpy(ridf,rid,6);
+   EXEC CICS SEND MAP("dfhdgc ") MAPSET("DFH$DGC") ERASE;
+   return;
+}
+
+static void Page_Backward()
+{
+   currop = 'B';
+   memcpy(rid,ridb,6);
+   memcpy(ridf,ridb,6);
+   if (lastop != 'B' && status !='H') {
+      EXEC CICS READPREV INTO(&filea) LENGTH(filea_size)
+      FILE("FILEA   ") RIDFLD(rid) RESP(rcode);
+      switch(rcode) {
+         case DFHRESP(NORMAL): break;
+         case DFHRESP(ENDFILE) :
+            TooLow();
+            return;
+         default: Errors();
+      } /* End Switch */
+   }
+   if (Build_Prev()!=0)
+      return;
+   memcpy(ridb,rid,6);
+   EXEC CICS SEND MAP("dfhdgc ") MAPSET("DFH$DGC") ERASE;
+   return;
+}
+
+static void Receive()
+{
+   int end_condition=1;
+
+   while (end_condition==1) {
+      lastop = currop;
+      EXEC CICS RECEIVE MAP("dfhdgc ") MAPSET("DFH$DGC") RESP(rcode);
+      switch (rcode) {
+         case DFHRESP(NORMAL): break;
+         case DFHRESP(MAPFAIL): break;
+         default: Errors();
+      } /* End Switch */
+
+      switch (dfheiptr->eibaid) {
+      case DFHCLEAR : Smsg();
+      case DFHPF1 :
+         Page_Forward();
+         continue;
+      case DFHPF2 :
+         Page_Backward();
+         continue;
+         default: if (rcode==DFHRESP(MAPFAIL)) Smsg();
+      }                                  /* End Switch               */
+      switch(dfhdgc.dfhdgci.diri) {
+         case 'F':
+         {
+            Page_Forward();
+            break;
+         }
+         case 'B':
+         {
+            Page_Backward();
+            break;
+         }
+         case 'Q':
+         {
+            Errors();
+            end_condition=0; /* The compiler needs an end condition */
+         }
+         default:
+         {
+            EXEC CICS SEND MAP("dfhdgc ") MAPSET("DFH$DGC");
+         }
+      }                                  /* End switch               */
+   }                                     /* End While(1)             */
+}                                        /* End Receive()            */
+
+main()
+{
+   EXEC CICS ADDRESS EIB(dfheiptr);
+   EXEC CICS RECEIVE MAP("dfhdga ") MAPSET("DFH$DGA") RESP(rcode);
+   switch(rcode) {
+      case DFHRESP(NORMAL) : break;
+      case DFHRESP(MAPFAIL) : Smsg();
+      default: Errors();
+   } /* End Switch */
+   if (dfhdga.dfhdgai.keyl == 0) {
+      memcpy(rid,"000000",6);
+      memcpy(ridf,"000000",6);
+   }
+   else {
+      if (IsNumeric(dfhdga.dfhdgai.keyi,6)) {
+         memcpy(rid,dfhdga.dfhdgai.keyi,6);
+         memcpy(ridf,dfhdga.dfhdgai.keyi,6);
+         memcpy(ridb,dfhdga.dfhdgai.keyi,6);
+      }
+      else {
+         strcpy(messages, \
+         "ACCOUNT NUMBER MUST BE NUMERIC");
+         Dmnu();                       /* No return from 'Dmnu' */
+      }
+   }
+   EXEC CICS STARTBR FILE("FILEA   ") RIDFLD(rid) RESP(rcode);
+   switch (rcode) {
+      case DFHRESP(NORMAL) : break;
+      case DFHRESP(NOTFND) : Notfound();
+      default : Errors();
+   } /* End Switch */
+   /* ESTABLISH 'START' */
+   if (memcmp(rid,"999999",6)!=0) {
+      Page_Forward();
+   }
+   else {
+      status = 'H';
+      Page_Backward();
+   }
+   Receive();  /* No return from Receive */
+}

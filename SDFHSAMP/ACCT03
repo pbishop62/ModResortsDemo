@@ -1,0 +1,151 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0S03                                         *
+      *                                                               *
+      * DESCRIPTIVE NAME = Print Customer Record for Sample App       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1985, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION :                                                 *
+      *                                                               *
+      *      THIS PROGRAM IS THE FIRST INVOKED BY TRANSACTIONS        *
+      *      'AC03', 'ACLG', 'AC05', 'ACEL' AND 'AC06'. 'AC03'        *
+      *      COMPLETES A REQUEST FOR PRINTING OF A CUSTOMER           *
+      *      RECORD, WHICH WAS PROCESSED INITIALLY BY TRANSACTION     *
+      *      'AC01'.  'ACLG,' WHICH IS A USER REQUEST TO PRINT THE    *
+      *      LOG MERELY REQUESTS 'AC05' BE STARTED WHEN THE LOG       *
+      *      PRINTER ('L86O') IS AVAILABLE. 'AC05' TRANSFERS THE      *
+      *      LOG DATA FROM TEMPORARY STORAGE TO THE PRINTER.          *
+      *      'ACEL,' WHICH IS A USER REQUEST TO PRINT THE ERROR       *
+      *      LOG MERELY REQUESTS 'AC06' BE STARTED WHEN THE LOG       *
+      *      PRINTER ('L86O') IS AVAILABLE. 'AC06' TRANSFERS THE      *
+      *      ERROR LOG DATA FROM TEMPORARY STORAGE TO THE PRINTER.    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $SEG(DFH0S03),COMP(SAMPLES),PROD(CICS TS ):                   *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $L0= Z30    170 85     HD1XIC : CREATE BASE SOURCE         *
+      *    $L1= SP1    310 8702   HD1CHW : RESTRUCTURE                *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ACCT03.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  MISC.
+           02  RESPONSE                PIC S9(8) COMP.
+       01  COMMAREA-FOR-ACCT04.
+           02  ERR-PGM                 PIC X(8) VALUE 'ACCT03'.
+           02  ERR-FN                  PIC X.
+           02  ERR-RCODE               PIC X.
+           02  ERR-COMMAND             PIC XX.
+           02  ERR-RESP                PIC 99.
+       01  TS-LNG                      PIC S9(4) COMP VALUE +751.
+       01  TS-ELNG                     PIC S9(4) COMP VALUE +156.
+           COPY ACCTSET.
+      *
+       PROCEDURE DIVISION.
+      *
+      *    INITIALIZE.
+       INIT.
+      *    CATER FOR UNEXPECTED ERRORS.
+           EXEC CICS HANDLE CONDITION ERROR(NO-GOOD) END-EXEC.
+      *
+      *    TEST FOR TRANSACTION TYPE.
+           IF EIBTRNID = 'AC03' GO TO AC03.
+           IF EIBTRNID = 'ACLG' GO TO ACLG.
+           IF EIBTRNID = 'AC05' GO TO AC05.
+           IF EIBTRNID = 'ACEL' GO TO ACEL.
+           IF EIBTRNID = 'AC06' GO TO AC06.
+      *
+      *    PROCESS TRANSACTION 'AC03'.
+       AC03.
+           EXEC CICS RETRIEVE INTO(ACCTDTLI) LENGTH(TS-LNG) END-EXEC.
+           EXEC CICS SEND MAP('ACCTDTL') MAPSET('ACCTSET') PRINT
+               ERASE END-EXEC.
+           GO TO RTRN.
+      *
+      *    PROCESS TRANSACTION 'ACLG'.
+       ACLG.
+           EXEC CICS START TRANSID('AC05') TERMID('L86O') END-EXEC.
+           MOVE LOW-VALUES TO ACCTMSGO.
+           MOVE 'PRINTING OF LOG HAS BEEN SCHEDULED' TO MSGO.
+           EXEC CICS SEND MAP('ACCTMSG') MAPSET('ACCTSET')
+               FREEKB END-EXEC.
+           GO TO RTRN.
+      *
+      *    PROCESS TRANSACTION 'AC05'.
+       AC05.
+           EXEC CICS READQ TS QUEUE('ACCTLOG') INTO (ACCTDTLI)
+               LENGTH(TS-LNG) NEXT RESP(RESPONSE) END-EXEC.
+           IF RESPONSE = DFHRESP(QIDERR)
+               GO TO RTRN.
+           IF RESPONSE = DFHRESP(ITEMERR)
+               GO TO LOG-END.
+           IF RESPONSE NOT = DFHRESP(NORMAL)
+               GO TO NO-GOOD.
+           EXEC CICS SEND MAP('ACCTDTL') MAPSET('ACCTSET') PRINT ERASE
+               END-EXEC.
+           GO TO AC05.
+       LOG-END.
+           EXEC CICS DELETEQ TS QUEUE('ACCTLOG') END-EXEC.
+           GO TO RTRN.
+      *
+      *    PROCESS TRANSACTION 'ACEL'.
+       ACEL.
+           EXEC CICS START TRANSID('AC06') TERMID('L86O') END-EXEC.
+           MOVE LOW-VALUES TO ACCTMSGO.
+           MOVE 'PRINTING OF ERROR LOG HAS BEEN SCHEDULED' TO MSGO.
+           EXEC CICS SEND MAP('ACCTMSG') MAPSET('ACCTSET')
+               FREEKB END-EXEC.
+           GO TO RTRN.
+      *
+      *    PROCESS TRANSACTION 'AC06'.
+       AC06.
+           EXEC CICS READQ TS QUEUE('ACERLOG') INTO (ACCTERRI)
+               LENGTH(TS-ELNG) NEXT RESP(RESPONSE) END-EXEC.
+           IF RESPONSE = DFHRESP(QIDERR)
+               GO TO RTRN.
+           IF RESPONSE = DFHRESP(ITEMERR)
+               GO TO ELOG-END.
+           IF RESPONSE NOT = DFHRESP(NORMAL)
+               GO TO NO-GOOD.
+           EXEC CICS SEND MAP('ACCTERR') MAPSET('ACCTSET') PRINT ERASE
+               END-EXEC.
+           GO TO AC06.
+       ELOG-END.
+           EXEC CICS DELETEQ TS QUEUE('ACERLOG') END-EXEC.
+      *
+      *    RETURN TO CICS.
+       RTRN.
+           EXEC CICS RETURN END-EXEC.
+      *
+      *    PROCESS UNRECOVERABLE ERRORS.
+       NO-GOOD.
+           MOVE EIBFN TO ERR-FN, MOVE EIBRCODE TO ERR-RCODE.
+           MOVE EIBFN TO ERR-COMMAND, MOVE EIBRESP TO ERR-RESP.
+           EXEC CICS HANDLE CONDITION ERROR END-EXEC.
+           EXEC CICS LINK PROGRAM('ACCT04')
+               COMMAREA(COMMAREA-FOR-ACCT04) LENGTH(14) END-EXEC.
+           GOBACK.

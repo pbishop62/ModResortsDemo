@@ -1,0 +1,646 @@
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*            Licensed Materials - Property of IBM                     *
+*                                                                     *
+*            "Restricted Materials of IBM"                            *
+*                                                                     *
+*            5655-Y04                                                 *
+*                                                                     *
+*            (C) Copyright IBM Corp. 1990, 2014"                      *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*   MODULE NAME = DFH$CUS1                                            *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (RDO) Sample DFHCSDUP driver program.   *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*        Invoke DFHCSDUP from a TSO environment.                      *
+*                                                                     *
+*        This program demonstrates how the CSD Utility program,       *
+*        DFHCSDUP, can be invoked from a TSO environment. Prior to    *
+*        execution, this program must be added to TSO as a Command    *
+*        Processor.                                                   *
+*        Upon invocation, DFHCSDUP is handed the address of a         *
+*        Parameter List via Register 1. This parameter list contains  *
+*        pointers to the following fields :                           *
+*                                                                     *
+*        OPTIONS -  may be used to specify a list of optional         *
+*        keywords, separated by commas. In this instance the          *
+*        PAGESIZE parameter is used to define the number of lines     *
+*        to be used per page of output listing.                       *
+*                                                                     *
+*        DDNAMES - may be used to specify alternative DDNAMES to      *
+*        replace those usually used internally. Not used in this      *
+*        program.                                                     *
+*                                                                     *
+*        HDING - used to specify the starting page number of the      *
+*        output listing.                                              *
+*                                                                     *
+*        DCBS - used to specify Data Control Blocks to be used in     *
+*        place of those defined within DFHCSDUP. Note that these DCBs *
+*        are OPENed prior to the invocation of DFHCSDUP.              *
+*                                                                     *
+*        EXITS - used to specify up to 5 exit routines to be invoked  *
+*        at various points during DFHCSDUP processing. The routine    *
+*        addresses specified in this instance correspond to           *
+*        subsequent entry points in this program. An EXTRACT Exit     *
+*        routine is not specified in this instance.                   *
+*        The Initialization, Put-Message and Termination Exits merely *
+*        put out messages to inform the user of their invocation.     *
+*        The Put-Message exit (entry point PUTMX) uses the PUTGET     *
+*        macro to solicit utility commands from the terminal user. A  *
+*        null response from the user is interpreted as a signal that  *
+*        no further commands will be entered, and communicated to     *
+*        DFHCSDUP via a Return Code of 4 in the field addressed by    *
+*        UEPCRCA.                                                     *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*          None.                                                      *
+*                                                                     *
+*    RESTRICTIONS =                                                   *
+*          Upon invocation, this program requires that R1 contains    *
+*    the address of a Command Processor Parameter List. This          *
+*    requirement is met when a program is invoked as a Command        *
+*    Processor in the TSO environment.                                *
+*                                                                     *
+*    REGISTER CONVENTIONS =                                           *
+*                                                                     *
+*    Upon Invocation from TSO :                                       *
+*    R1 = CPPL address.                                               *
+*                                                                     *
+*    Upon Invocation of DFHCSDUP :                                    *
+*    R1 = PARMLIST address.                                           *
+*                                                                     *
+*    Upon re-invocation of any exit routine from DFHCSDUP :           *
+*    R1 = User-exit parameter list.                                   *
+*    MODULE TYPE = Executable | Table                                 *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Serially Reusable                                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = INITX                                                 *
+*         Entry Point of Initialization Exit routine.                 *
+*     PURPOSE =                                                       *
+*         Invoked from DFHCSDUP at the commencement of processing.    *
+*     LINKAGE =                                                       *
+*         Invoked via a normal CALL                                   *
+*     INPUT =                                                         *
+*         Standard User Exit Parameter List. No unique parameters.    *
+*     OUTPUT =                                                        *
+*         Message to the terminal user via the PUTLINE macro.         *
+*     EXIT-NORMAL =                                                   *
+*         Upon completion of processing, control is RETURNed to       *
+*         DFHCSDUP with a Return Code = 0.                            *
+*                                                                     *
+*                                                                     *
+* ENTRY POINT = GETCX                                                 *
+*         Entry Point of Get-Command Exit routine.                    *
+*     PURPOSE =                                                       *
+*         Invoked from DFHCSDUP at the point where the utility would  *
+*         otherwise read commands from SYSIN.                         *
+*     LINKAGE =                                                       *
+*         Invoked via a normal CALL                                   *
+*     INPUT =                                                         *
+*         User Exit Parameter List, with the following unique         *
+*         parameters :                                                *
+*         UEPCMDA - Address of utility command text field.            *
+*         UEPCMDL - Address of utility command length field.          *
+*     OUTPUT =                                                        *
+*         Message to the terminal user via the PUTLINE macro.         *
+*         Command text and length in the fields described above.      *
+*                                                                     *
+*         N.B.  DFHCSDUP WILL NOT ACCEPT UTILITY COMMANDS IN MIXED    *
+*         ~~~~  CASE. RESOURCE DEFINITIONS, HOWEVER MAY BE SUPPLIED   *
+*               IN MIXED CASE. COMMANDS MUST THEREFORE BE SUPPLIED    *
+*               IN UPPER CASE.                                        *
+*                                                                     *
+*     EXIT-NORMAL =                                                   *
+*         Upon completion of processing, control is RETURNed to       *
+*         DFHCSDUP with one of the following :                        *
+*         RC=0 - signifying normal return of control, a command has   *
+*         been supplied.                                              *
+*         RC=4 - signifying final return of control, no further       *
+*         commands will be supplied.                                  *
+*                                                                     *
+* ENTRY POINT = PUTMX                                                 *
+*         Entry Point of Put-Message  Exit routine.                   *
+*     PURPOSE =                                                       *
+*         Invoked from DFHCSDUP at the point where message are also   *
+*         written to the output file.                                 *
+*     LINKAGE =                                                       *
+*         Invoked via a normal CALL                                   *
+*     INPUT =                                                         *
+*         Standard User Exit Parameter List. NB Unique parameters are *
+*         supplied to the Put-Message Exit, but are not referenced    *
+*         in this program.                                            *
+*     OUTPUT =                                                        *
+*         Message to the terminal user via the PUTLINE macro.         *
+*     EXIT-NORMAL =                                                   *
+*         Upon completion of processing, control is RETURNed to       *
+*         DFHCSDUP with a Return Code = 0.                            *
+*                                                                     *
+*                                                                     *
+* ENTRY POINT = TERMX                                                 *
+*         Entry Point of Termination Exit routine.                    *
+*     PURPOSE =                                                       *
+*         Invoked from DFHCSDUP at the end of processing.             *
+*     LINKAGE =                                                       *
+*         Invoked via a normal CALL                                   *
+*     INPUT =                                                         *
+*         Standard User Exit Parameter List. NB a unique parameter    *
+*         is supplied to the Termination Exit, but is not referenced  *
+*         in this program.                                            *
+*     OUTPUT =                                                        *
+*         Message to the terminal user via the PUTLINE macro.         *
+*     EXIT-NORMAL =                                                   *
+*         Upon completion of processing, control is RETURNed to       *
+*         DFHCSDUP with a Return Code = 0.                            *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$CUS1),COMP(SAMPLES),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 444    320 900420 HD6OAJH: Creation                         *
+*    $L1= 627    410 930107 HDBLSAB : LID627 PDI7 - CSA/TCA Removal   *
+*    $P4= D07706 630 030606 HD4PALS : Fix DFH$CUS1 sample program     *
+*    $02= A90089 520 961024 HDBGNRB : Migrate PN90089 from SPA R510   *
+*                                                                     *
+***********************************************************************
+***********************************************************************
+* Main Program                                                        *
+***********************************************************************
+         START
+HARNESS  CSECT
+HARNESS  AMODE 24                     AMODE 24 - DFHCSDUP compatible
+         SAVE  (14,12)                Save Regs from TSO TMP
+         BALR  R12,0                  Establish Addressability and
+         USING *,R12                  set Base Register.
+         LR    R11,R13
+         LA    R13,SAVAREA            Provide Save Area
+         ST    R11,4(,R13)
+         ST    R13,8(,R11)
+***********************************************************************
+* Establish Addressability to Command Processor Parameter List (CPPL).*
+* R1 contains the address of the CPPL                                 *
+***********************************************************************
+         ST    1,CPPLPTR              Save the CPPL address for later
+         LR    2,1
+         USING CPPL,2
+         L     3,CPPLUPT              Place the address of the User
+*                                     Profile Table in R3.
+         L     4,CPPLECT              Place the address of the
+*                                     Environment Control Table in R4.
+**********************************************************************
+* Use the PUTLINE macro to put out a message to the terminal user    *
+**********************************************************************
+         PUTLINE PARM=MAINBLK,UPT=(3),ECT=(4),                         *
+               ECB=MAINECB,                                            *
+               OUTPUT=(MAINADS,TERM,SINGLE,DATA),                      *
+               MF=(E,MAINIO)
+***********************************************************************
+* Create alternative ACB for CSD.                                     *
+***********************************************************************
+*
+         GENCB BLK=ACB,                                                *
+               DDNAME=ALTACB,                                          *
+               AM=VSAM,                                                *
+               BUFND=4,                                                *
+               BUFNI=3,                                                *
+               STRNO=3,                                                *
+               MACRF=(KEY,DIR,SEQ,IN,OUT)
+*
+***********************************************************************
+* OPEN ACB/DCBs before invocation of DFHCSDUP                         *
+***********************************************************************
+         LR    R2,R1
+         ST    R2,CSDACB
+         OPEN  ((R2),(OUTPUT))
+         OPEN  (HARNIN,(INPUT))
+         OPEN  (HARNOUT,(OUTPUT))
+***********************************************************************
+* Invoke DFHCSDUP.                                                    *
+***********************************************************************
+         LA    R1,PARMLIST            R1 provides parm list address.
+         LINK  EP=DFHCSDUP            LINK to DFHCSDUP
+***********************************************************************
+* CLOSE ACB/DCBs before returning control to TSO TMP.                 *
+***********************************************************************
+         L     R2,CSDACB
+         CLOSE ((R2))
+         CLOSE (HARNIN)
+         CLOSE (HARNOUT)
+         L       R15,UERCNORM         Return Code = 0
+         L       R13,4(,R13)          Restore value of R13
+         RETURN  (14,12),RC=(15)      Return to TMP
+***********************************************************************
+* Miscellaneous Declarations.                                         *
+***********************************************************************
+*
+PARMLIST DS    0F
+         DC    A(OPTIONS)             Pointer to OPTIONS Parm.
+         DC    A(DDNAMES)             Pointer to DDNAMES Parm
+         DC    A(HDING)               Pointer to HDING Parm
+         DC    A(DCBS)                Pointer to DCBS Parm
+         DC    A(EXITS)               Pointer to EXITS Parm
+***********************************************************************
+* Set up Options Field.                                               *
+***********************************************************************
+         DS    0H                     Half Word Boundary Alignment
+OPTIONS  DC    BL2'0000000000001100'  Binary Length of 'PAGESIZE(40)'
+OPTBUFF  DC    CL12'PAGESIZE(40)'     40 lines per page requested.
+***********************************************************************
+*  DDNAMES data  not used here                                        *
+***********************************************************************
+         DS    0H                     Half-Word Boundary Alignment
+DDNAMES  DC    H'0'                   Length=0 will be ignored.
+DUMDDN   DC    3CL8'0'                6 Unused Full-Words
+ALTCSD   DC    CL8'00000000'          Could be used for alternative
+*                                     Primary CSD DDNAME.
+ALTSSN   DC    CL8'00000000'          Could be used for alternative
+*                                     SYSIN DDNAME.
+ALTSSP   DC    CL8'00000000'          Could be used for alternative
+*                                     SYSPRINT DDNAME.
+***********************************************************************
+* Set up HDING data - In this instance an output listing commencing   *
+* at page 1 is requested. Alternate starting page numbers may be      *
+* requested by modifying HDVAL.                                       *
+***********************************************************************
+         DS    0H                     Half-Word Boundary Alignment
+HDING    DC    BL2'0000000000000100'  Length of HDVAL
+HDVAL    DC    CL4'0001'              Listing to commence at page 1.
+***********************************************************************
+* Set up DCBS data.                                                   *
+***********************************************************************
+DCBS     DS    0F                     Full-Word Boundary Alignment
+DCBLEN   DC    BL4'1100'
+DUMMY    DC    6F'0'                  Unused DCBS Parmlist Entries
+CSDFLAGS DC    F'0000'                Flags
+CSDACB   DS    A                      Addr Alternative CSD ACB
+SSNFLAGS DC    F'0'                   Flags
+SSNDCB   DC    A(HARNIN)              Addr Alternative SYSIN DCB
+SSPFLAGS DC    F'0'                   Flags
+SSPDCB   DC    A(HARNOUT)             Addr Alternative SYSPRINT DCB
+***********************************************************************
+* Set up EXITS data.                                                  *
+***********************************************************************
+EXITS    DS    0F                     Full-Word Boundary Alignment
+EXLEN    DC    BL4'0101'              Length of data in Full-Words.
+         DC    A(INITX)               Addr Initialisation Exit
+         DC    A(TERMX)               Addr Termination Exit
+         DC    F'0'                   Reserved for Extract Exit addr
+         DC    A(GETCX)               Addr Get-Command Exit
+         DC    A(PUTMX)               Addr Put-Message Exit
+***********************************************************************
+* Alternative DCB for SYSIN.
+***********************************************************************
+*
+HARNIN   DCB   DDNAME=SIN,                                             *
+               DSORG=PS,                                               *
+               MACRF=GL,                                               *
+               LRECL=80,                                               *
+               BLKSIZE=80,                                             *
+               RECFM=FB
+*
+***********************************************************************
+* Alternative DCB for SYSPRINT.
+***********************************************************************
+*
+HARNOUT  DCB   DDNAME=SPRINT,                                          *
+               DSORG=PS,                                               *
+               MACRF=PL,                                               *
+               LRECL=125,                                              *
+               BLKSIZE=129,                                            *
+               RECFM=VBA
+*
+SAVAREA  DS    18F
+***********************************************************************
+* PUTLINE control blocks for Main Program Invocation                  *
+***********************************************************************
+MAINBLK  PUTLINE MF=L
+MAINECB  DS      F'0'
+MAINADS  DC      H'39'
+         DC      H'0'
+         DC      CL35' DFH$CUS1 has commenced execution. '
+MAINIO   DC      4F'0'
+*
+***********************************************************************
+* Initialisation Exit.                                                *
+*    This routine is invoked from DFHCSDUP at the start of processing.*
+*    It's function is to put out message to that effect.              *
+***********************************************************************
+*
+INITX    DS   0H
+*
+         DROP  R12                Upon reinvocation R12 unpredictable.
+         SAVE (14,12)             Save Regs in supplied Save Area.
+         LR    R10,R15            R15 contains Entry Point INITX.
+         USING INITX,R10          Use R10 as Base Register.
+         ST    R13,SAVR13         Record Register Save Area Address.
+         ST    R1,CSDUPR1         Save Parameter List Pointer.
+         LA    R13,INITRSA        Insert New RSA into Register 13.
+***********************************************************************
+* Put out a message to say that the Initialization Exit has been      *
+* invoked.                                                            *
+***********************************************************************
+         L     2,CPPLPTR
+         USING CPPL,2             Establish Addressability to CPPL
+         L     3,CPPLUPT          Place the Addr of the User
+*                                 Profile Table in R3 for PUTLINE
+         L     4,CPPLECT          Place the Address of the Envt
+*                                 Control table in R4 for PUTLINE
+         PUTLINE PARM=INITBLK,UPT=(3),ECT=(4),                         *
+               ECB=INITECB,                                            *
+               OUTPUT=(INITADS,TERM,SINGLE,DATA),                      *
+               MF=(E,INITIO)
+***********************************************************************
+* Restore Registers and Return to DFHCSDUP                            *
+***********************************************************************
+         L      R1,CSDUPR1            Address User Exit Parameter List
+         USING  DFHUEPAR,R1
+         LA     6,UERCNORM            Load Addr (RC=0)
+         ST     6,UEPCRCA             Save Addr(RC=0) in DFHUEPAR
+         L      R13,SAVR13            Restore R13
+         RETURN (14,12)               Restore Regs and Return
+***********************************************************************
+* Control Block for Initialization Exit PUTLINE macro.                *
+***********************************************************************
+INITBLK  PUTLINE MF=L
+INITECB  DS      F'0'
+INITADS  DC      H'42'
+         DC      H'0'
+         DC      CL38' Initialisation Exit has been Invoked '
+INITIO   DC      4F'0'
+**********************************************************************
+* Get-Command Exit                                                   *
+*    This Exit is invoked from DFHCSDUP at the point where Utility   *
+* Commands would otherwise be read from SYSIN. The Exit solicits     *
+* commands from the terminal user using the PUTGET macro, and        *
+* propagates the supplied commands to DFHCSDUP. A null response from *
+* the terminal is interpreted as a signal that there are no more     *
+* commands.                                                          *
+**********************************************************************
+GETCX    DS    0H
+         DROP  R10                Upon reinvocation, R10 unpredictable
+         SAVE  (14,12)            Store Registers
+         LR    R10,R15            R15 contains address of GETCX
+         USING GETCX,R10          R10 is Base Register
+         ST    R13,SAVR13         Record Register Save Area Address
+         LA    R13,INITRSA        Insert New RSA into Register 13
+         ST    R1,CSDUPR1         Record R1 from DFHCSDUP
+**********************************************************************
+* Invoke PUTGET macro to solicit Utility Commands from user          *
+**********************************************************************
+         L     2,CPPLPTR
+         USING CPPL,2                 Addressability to CPPL
+*
+         L     3,CPPLUPT              Place the Address of the User
+*                                     Profile Table in R3
+         L     4,CPPLECT              Place the Address of the Envt
+*                                     Control table in R4
+*
+         PUTGET PARM=APGPB,UPT=(3),ECT=(4),ECB=ECBADS,                 *
+               OUTPUT=(OLD,SINGLE,PROMPT),                             *
+               MF=(E,IOPLADS)
+***********************************************************************
+* Address user-exit parameter list using contents of R1 at invocation *
+* of GETCX.                                                           *
+***********************************************************************
+         L     R1,CSDUPR1             Address User Exit Parameter List
+         USING DFHUEPAR,R1
+***********************************************************************
+* Address PUTGET parameter block.                                     *
+***********************************************************************
+         LA    5,APGPB
+         USING PGPB,5
+         L     7,PGPBIBUF                 Address of the line returned
+*                                         from the terminal.
+         USING TEXTIN,7
+         LH    6,TEXTINL                  Subtract Header Length before
+         LH    8,PGHDLEN                  handing to DFHCSDUP
+         SR    6,8
+         STH   6,TEXTINL                  Record Command Length
+         LA    6,TEXT
+         ST    6,UEPCMDA                  Move Cmd Txt Addr to DFHUEPAR
+         LA    6,TEXTINL
+         ST    6,UEPCMDL                  Move Cmd Len Addr to DFHUEPAR
+***********************************************************************
+* Test Input Text for 'Null' response - If specified set RC to 4;     *
+* Otherwise RC is 0.                                                  *
+***********************************************************************
+         LA    6,UERCNORM                 Load Addr of RC=0
+         ST    6,UEPCRCA                  Save Addr(RC=0) in DFHUEPAR
+         L     6,TEXT                     Check Keyboard Input
+         L     8,NULLSTRG                 Check Keyboard Input
+         CR    6,8                        For Null String
+         BNE   NULL
+         LA    6,UERCDONE                 Load Addr(RC=4)
+         ST    6,UEPCRCA                  Save Addr(RC=4) in DFHUEPAR
+NULL     DS    0H
+***********************************************************************
+* Restore Registers and RETURN to DFHCSDUP                            *
+***********************************************************************
+         L      R13,SAVR13                Load RSA Ptr into R13
+         RETURN (14,12)                   Return to DFHCSDUP
+***********************************************************************
+* Storage declarations for PUTGET Macro.                              *
+***********************************************************************
+APGPB    PUTGET  MF=L
+OLD      DC    F'1'                       1 segment in this message.
+         DC    A(OUTTEXT)                 Output text.
+OUTTEXT  DC    H'47'                      Length of output text
+*                                         including 4 byte header.
+         DC    H'0'                       Offset field always zero in
+*                                         first message segment.
+         DC    CL43' Enter the Utility Command or Null to Quit '
+*
+ECBADS   DC    F'0'                       Full word of storage for CP
+*                                         Event Control Block.
+IOPLADS  DC    4F'0'                      4 Fullwords for IO Parmlist
+TEXTIN   DSECT
+TEXTINL  DS    2X                         Input Len incl 4 byte header
+TEXTOFF  DS    2X
+TEXT     DS    CL1536
+HARNESS  CSECT
+PGHDLEN  DC    H'4'                   Header Length of PUTGET Output
+**********************************************************************
+* Put-Message Exit                                                   *
+*    Output DFHCSDUP message to TERMINAL/SYSPRINT                    *
+**********************************************************************
+PUTMX    DS    0H
+         DROP  R10                    R10 unpredictable
+         SAVE (14,12)                 Save Regs 14-12 In Save Area
+*                                     Pointed to by R13.
+         LR    R10,R15                Copy R15 to R10
+         USING PUTMX,R10              Use R10 as Base Register
+         ST    R13,SAVR13             Record R13
+         ST    R1,CSDUPR1             Record Parameter List Address.
+         LA    R13,INITRSA            Load R13 with save area address.
+***********************************************************************
+* Write a General message to the Terminal to say that DFHCSDUP has    *
+* issued a message, and that the message inserts follow.              *
+***********************************************************************
+         L     2,CPPLPTR
+         USING CPPL,2                 Addressability to CPPL
+*
+         L     3,CPPLUPT              Place the address of the User
+*                                     Profile Table in R3
+         L     4,CPPLECT              Place the Address of the Envt
+*                                     Control table in R4
+         LA    5,PMECBADS             Envt Control Block
+***********************************************************************
+* Set up Addressability to I/O Parmlist Dsect and then insert         *
+* required addresses.                                                 *
+***********************************************************************
+         LA    7,PUTMIO
+         USING IOPL,7
+         ST    3,IOPLUPT
+         ST    4,IOPLECT
+         ST    5,PMECBADS
+*
+         PUTLINE PARM=PUTMBLK,UPT=(3),ECT=(4),                         *
+               ECB=PMECBADS,                                           *
+               OUTPUT=(PTMTXT1,TERM,SINGLE,DATA),                      *
+               MF=(E,PUTMIO)
+*
+***********************************************************************
+* Restore Registers and Return to DFHCSDUP                            *
+***********************************************************************
+         L     R1,CSDUPR1             Address User Exit Parameter List
+         USING DFHUEPAR,R1
+         LA    6,UERCNORM             Load Addr(RC=0)into R6
+         ST    6,UEPCRCA              Save Addr(RC=0) in DFHUEPAR
+         L     R13,SAVR13             Restore R13 to value on entry
+         RETURN (14,12)               Return to DFHCSDUP
+*
+*
+* Write the message inserts to the terminal
+*
+*
+**********************************************************************
+* Storage Declarations for the PUTLINE Macro                         *
+**********************************************************************
+PTMTXT1  DC   H'46'                   Msg Segment Length +4
+         DC   H'0'                    Reserved
+         DC   CL42' A message has been issued from DFHCSDUP. '
+PUTMBLK  PUTLINE MF=L                 PUTLINE Parameter List.
+*
+PMECBADS DC    F'0'                   Full Word of storage for CP
+*                                     Event Control Block.
+*                                     Parameter List.
+PUTMIO   DC    4F'0'                  4 Fullwords for IO Parmlist
+*
+         IKJIOPL                      I/O Parmlist DSECT
+HARNESS  CSECT
+***********************************************************************
+* Termination Exit                                                    *
+*     Invoked from DFHCSDUP prior to termination. This routine puts   *
+* out a message to say that DFHCSDUP is about to terminate.           *
+***********************************************************************
+TERMX    DS    0H
+         DROP  R10                    R10 unknown upon Entry
+         SAVE (14,12)                 Save Regs 14-12 In Save Area
+*                                     Pointed to by R13.
+         LR    R10,R15                Copy R15 to R10
+         USING TERMX,R10              Use R10 as Base Register
+         ST    R1,CSDUPR1             Record Parameter List address
+         ST    R13,SAVR13             Record Reg Save Area Address
+         LA    R13,INITRSA            Insert New RSA into Reg 13
+         L     2,CPPLPTR
+         USING CPPL,2                 Addressability to CPPL
+         L     3,CPPLUPT              Place the Address of the User
+*                                     Profile Table in R3
+         L     4,CPPLECT              Place the Address of the Envt
+*                                     Control Table in R4
+***********************************************************************
+* Put Out a message to say that DFHCSDUP is about to end.             *
+***********************************************************************
+         PUTLINE PARM=TERMBLK,UPT=(3),ECT=(4),ECB=TMECBA,              *
+               OUTPUT=(TERMTXT,TERM,SINGLE,DATA),                      *
+               MF=(E,TERMIO)
+***********************************************************************
+* Restore Registers and Return to DFHCSDUP                            *
+***********************************************************************
+         L      R1,CSDUPR1             Address User Exit Parameter List
+         USING  DFHUEPAR,R1
+         LA     6,UERCNORM             Load Addr(RC=0)
+         ST     6,UEPCRCA              Save Addr(RC=0) in DFHUEPAR
+         L      R13,SAVR13
+         RETURN (14,12)
+***********************************************************************
+* Parameter List for Termination Exit PUTLINE macro                   *
+***********************************************************************
+TERMBLK  PUTLINE  MF=L
+*
+TERMTXT  DC    H'37'                   Length of Output line
+         DC    H'0'                    Reserved
+         DC    CL33' DFHCSDUP is about to terminate. '
+TMECBA   DS    F
+TERMIO   DC    4F'0'                   4 Fullwords for I/O Parmlist.
+***********************************************************************
+* Standard Equates                                                    *
+***********************************************************************
+R0       EQU 0
+R1       EQU 1
+R2       EQU 2
+R3       EQU 3
+R4       EQU 4
+R5       EQU 5
+R6       EQU 6
+R7       EQU 7
+R8       EQU 8
+R9       EQU 9
+R10      EQU 10
+R11      EQU 11
+R12      EQU 12
+R13      EQU 13
+R14      EQU 14
+R15      EQU 15
+*
+**********************************************************************
+* DEFINE PARAMETER LIST POINTERS                                     *
+**********************************************************************
+UERCDONE DC    F'4'               RC=4 to specify no more commands.
+UERCNORM DC    F'0'               RC=0 Normal Response.
+NULLSTRG DC    X'40404040'        Nulls
+CPPLPTR  DS    A                  Command Processor Parm List address
+CSDUPR1  DS    A                  R1 on entry
+SAVR13   DS    A                  Pointer to RSA supplied by DFHCSDUP
+INITRSA  DS    18F                Register Save Area supplied by Exits
+*
+*
+         IKJPGPB                  DSECT for PUTGET Parameter Block
+*
+         IKJCPPL                  DSECT for Command Processor Parmlist
+*
+***********************************************************************
+* DSECT to map Exit parameter list. The extra parameters UEPCMDA and  *
+* UEPCMDL are specific to GETCX.                                      *
+***********************************************************************
+DFHUEPAR DSECT
+UEPEXN   DS    A                  Addr of Exit Number
+UEPGAA   DS    A                  Addr of global area
+UEPGAL   DS    A                  Addr of global area length
+UEPCRCA  DS    A                  Addr of current return-code
+UEPTCA   DS    A                  (reserved)                       @L1C
+UEPCSA   DS    A                  (reserved)                       @L1C
+UEPEPSA  DS    A                  Addr of save area for use by exit
+UEPHMSA  DS    A                  Addr of save area used by host
+UEPGIND  DS    A                  Addr of task data key & data     @02A*
+                                  location flags                   @02A
+UEPSTACK DS    A                  Addr of kernel stack entry
+UEPXSTOR DS    A                  Addr of storage of XPI Parms
+UEPTRACE DS    A                  Addr of trace flag
+UEPCMDA  DS    A                  Addr of Utility Command
+UEPCMDL  DS    A                  Addr of length of Utility Command
+*
+         END   HARNESS

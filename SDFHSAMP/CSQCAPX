@@ -1,0 +1,755 @@
+CSQCAPX  TITLE 'CICS MQ ADAPTER - SAMPLE API CROSSING EXIT'
+********************************************************************
+*                                                                  *
+* File Name:    CSQCAPX (Must be called this)                      *
+*                                                                  *
+********************************************************************
+*                                                                  *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2006"                                *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                  *
+********************************************************************
+*                                                                  *
+* Environment:  CICS                                               *
+*                                                                  *
+* Function:     The CICS implementation of the API                 *
+*               crossing EXIT                                      *
+*                                                                  *
+* Description:  Sample program to show the use of the API crossing *
+*               exit                                               *
+*                                                                  *
+* Function:     To show the operation of the exit this sample      *
+*               writes messages to CICS temporary queue CSQ1EXIT.  *
+*               The message identifies whether the exit is being   *
+*               invoked before or after the MQ API call. If after  *
+*               the message contains the completion code and       *
+*               reason returned by the call.                       *
+*               No MQ API calls are made from within the sample    *
+*               exit though most are allowed.                      *
+*                                                                  *
+* Performance Note:                                                *
+*               This exit issues 6 EXEC CICS calls for each MQ API *
+*               call invoked - if this is in use performance       *
+*               will be impacted                                   *
+*                                                                  *
+* Restrictions: AMODE(31),RMODE(ANY)                               *
+*               EXECKEY(CICS)                                      *
+*               If problems occur writing to the CICS TS queue the *
+*               sample exit may abend.                             *
+*                                                                  *
+**********************************************************************
+         EJECT
+********************************************************************
+*                                                                  *
+* ENTRY POINT =  CSQCAPX                                           *
+*                                                                  *
+*    INPUT  = PARAMETERS EXPLICITLY PASSED TO THIS FUNCTION:       *
+*             = Address of the exit parameter block (MQXP)         *
+*             = Address of each parameter of the call which caused *
+*               the exit to be invoked                             *
+*                                                                  *
+*    OUTPUT  = PARAMETERS EXPLICITLY RETURNED:                     *
+*             = Address of the exit parameter block (MQXP)         *
+*             = Address of each paramter of the call which caused  *
+*               the exit to be invoked                             *
+*                                                                  *
+********************************************************************
+*                                                                  *
+* REGISTER USAGE :                                                 *
+*         REGISTER R0  is work register                            *
+*         REGISTER R1  is not used                                 *
+*         REGISTER R2  is work register                            *
+*         REGISTER R3  is work register                            *
+*         REGISTER R4  is work register                            *
+*         REGISTER R5  is BEFORE, AFTER return address             *
+*         REGISTER R6  is HEADER, OPERATE, TOXQUE, CODES return    *
+*                         address                                  *
+*         REGISTER R7  is BAFTA return address                     *
+*         REGISTER R8  is not used                                 *
+*         REGISTER R9  is not used                                 *
+*         REGISTER R10 is MQXP address register                    *
+*         REGISTER R11 is not used                                 *
+*         REGISTER R12 is base address register                    *
+*         REGISTER R13 is automatic storage address register       *
+*         REGISTER R14 is return address                           *
+*         REGISTER R15 is work register                            *
+*                                                                  *
+********************************************************************
+*                                                                  *
+* EXECUTABLE MACROS                                                *
+*                                                                  *
+*    DFHEIENT  -  To obtain dynamic storage                        *
+*                                                                  *
+********************************************************************
+*                                                                  *
+* EXEC CICS CALLS                                                  *
+*                                                                  *
+*    WRITEQ TS  - To put a message on a temporary storage queue    *
+*                                                                  *
+*    ASKTIME    - To get the current time                          *
+*                                                                  *
+*    FORMATTIME - To format the time for display in the message    *
+*                                                                  *
+*----------------------------------------------------------------- *
+*                                                                  *
+* CHANGE ACTIVITY :                                                *
+**                                                                 *
+*        $MOD(CSQCAPX),COMP(CICSMQ),PROD(CICS TS ):                *
+*                                                                  *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+*    $01= A89844 670 091208 HDBGSLS : Migrate PK89844 from SPA R660*
+*    $02= A15381 670 100826 HDBGSLS : Migrate PM15381 from SPA R660*
+*    $D0= I07766 650 060901 HD2GJST : Create module                *
+*                                                                  *
+***********************************************************************
+********************************************************************
+         EJECT
+********************************************************************
+*
+*                         Program logic
+*                         -------------
+*        MAIN
+*        ----
+*           Initialize
+*
+*           If no commarea passed
+*             perform ERRCLEN (and exit from the program)
+*           End-If
+*
+*           Establish addressability of parameter list
+*
+*           Perform BAFTA
+*
+*           EndProg
+*            Return to CICS
+*
+*        BAFTA
+*        -----
+*           If exit invocation is before MQ call
+*              perform BEFORE
+*           Else if exit invocation is after MQ call
+*              perform AFTER
+*           Else
+*              perform HEADER
+*              Move error message to message field
+*              Put invalid exitreason in message field
+*              Perform TOXQUE to write message to temporary queue
+*           End-If
+*           Return to caller
+*
+*        BEFORE
+*        ------
+*           Perform HEADER to build message header
+*           Move before message to message field
+*           Perform OPERATE to add MQ operation to message
+*           Perform TOXQUE to write message to temporary queue
+*           Return to caller
+*
+*        AFTER
+*        -----
+*           Perform HEADER to build message header
+*           Move after message to message field
+*           Perform OPERATE to add MQ operation to message
+*           Perform CODES to add completion code and reason to message
+*           Perform TOXQUE to write message to temporary queue
+*           Return to caller
+*
+*        OPERATE
+*        -------
+*           If exitcommand is MQOPEN
+*              put command name in message
+*           Else if exitcommand is MQCLOSE
+*              put command name in message
+*           Else if exitcommand is MQGET
+*              put command name in message
+*           Else if exitcommand is MQPUT
+*              put command name in message
+*           Else if exitcommand is MQPUT1
+*              put command name in message
+*           Else if exitcommand is MQINQ
+*              put command name in message
+*           Else if exitcommand is MQSET
+*              put command name in message
+*           Else
+*              perform HEADER
+*              Move error message to message field
+*              Put invalid exitcommand in message field
+*              Perform TOXQUE to write message to temporary queue
+*              Return to BAFTA
+*           End-If
+*           Return to caller
+*
+*        CODES
+*        -----
+*           Get compcode from parameter list
+*           Make it displayable and put it in message
+*           Get reason from parameter list
+*           Make it displayable and put it in message
+*
+*        TOXQUE
+*        ------
+*           Write message to CICS Temporary Storage queue
+*
+*        HEADER
+*        ------
+*           Move transaction name to header
+*           Move task number to header
+*           Get current time from CICS and put it in the header
+*           Return to caller
+*
+*        ERRCLEN
+*        -------
+*           Perform HEADER to build message header
+*           Move error message to message field
+*           Perform TOXQUE to write message to temporary queue
+*           Return to caller
+* *************************************************************
+*
+         EJECT
+*
+         DFHREGS                        Register equates
+*
+*QXP     CMQXPA LIST=YES                                          @02D
+MQXP                    DSECT                                     @02A
+                        DS   0D    Force doubleword alignment     @02A
+MQXP_STRUCID            DS   CL4   Control block id = XP          @02A
+MQXP_VERSION            DS   F     Control block Version          @02A
+MQXP_EXITID             DS   F     Identifier of the exit         @02A
+*                                   being invoked                 @02A
+MQXP_EXITREASON         DS   F     Reason for this invocation     @02A
+*                                   of the exit                   @02A
+MQXP_EXITRESPONSE       DS   F     Response from this             @02A
+*                                   invocation of the exit        @02A
+MQXP_EXITCOMMAND        DS   F     Callers API command            @02A
+MQXP_EXITPARMCOUNT      DS   F     Number of parameters to        @02A
+*                                   API call                      @02A
+MQXP_RESERVE1           DS   F     Reserved                       @02A
+*                                                                 @02A
+MQXP_EXITUSERAREA       DS   CL16  User work area, passed         @02A
+*                                   not used by MQM               @02A
+MQXP_EXITCALLPROG       DS   CL8   Name of program invoking       @02A
+*                                   exit                          @02A
+*                                                                 @02A
+MQXP_LENGTH             EQU  *-MQXP_STRUCID                       @02A
+                        ORG  MQXP_STRUCID                         @02A
+MQXP_AREA               DS   CL(MQXP_LENGTH) Area for             @02A
+*                                             structure           @02A
+*************************************************************     @02A
+*                                                                 @02A
+*                                                                 @02A
+MQXP_COPYPLIST          DSECT                                     @02A
+                        DS  0D     Force doubleword alignment     @02A
+MQXP_PXPB               DS   AL4   Ptr to exit parm block         @02A
+MQXP_PCOPYPARM          DS 11AL4   Copy of original plist         @02A
+*                                                                 @02A
+                        ORG  MQXP_PCOPYPARM                       @02A
+MQXP_PCOPYPARM1         DS   AL4   Copy of 1st parameter          @02A
+MQXP_PCOPYPARM2         DS   AL4   Copy of 2nd parameter          @02A
+MQXP_PCOPYPARM3         DS   AL4   Copy of 3rd parameter          @02A
+MQXP_PCOPYPARM4         DS   AL4   Copy of 4th parameter          @02A
+MQXP_PCOPYPARM5         DS   AL4   Copy of 5th parameter          @02A
+MQXP_PCOPYPARM6         DS   AL4   Copy of 6th parameter          @02A
+MQXP_PCOPYPARM7         DS   AL4   Copy of 7th parameter          @02A
+MQXP_PCOPYPARM8         DS   AL4   Copy of 8th parameter          @02A
+MQXP_PCOPYPARM9         DS   AL4   Copy of 9th parameter          @02A
+MQXP_PCOPYPARM10        DS   AL4   Copy of 10th parameter         @02A
+MQXP_PCOPYPARM11        DS   AL4   Copy of 11th parameter         @02A
+*                                                                 @02A
+MQXP_COPYPLIST_LENGTH     EQU  *-MQXP_PXPB                        @02A
+                          ORG  MQXP_PXPB                          @02A
+MQXP_COPYPLIST_AREA       DS   CL(MQXP_COPYPLIST_LENGTH)          @02A
+MQXA     CMQXA LIST=YES                                           @02A
+*
+DFHEISTG DSECT
+*
+WRITEMSG DS    0CL74                    Message area
+MSGHDR   DS    CL23                     Header of output messages
+MSGTEXT  DS    CL51                     Body of output messages
+*
+CURTIME  DS    PL08                     Target for absolute time
+WRKDWORD DS    D                        Work double word
+WORKBYTE DS    CL1                      Work byte
+WORKSTOR DS    CL1                      Work storage byte
+WORKHALF DS    H                        Work half word
+WORKFLD1 DS    CL8                      Used for data conversion
+*
+COMPTR   DS    F                        Save commarea address
+COMLEN   DS    H                        Store commarea length
+*
+COMPCODE DS    F                        Completion code
+REASON   DS    F                        Reason
+*
+         EJECT
+********************************************************************
+*  Code start                                                      *
+********************************************************************
+*                                                                  *
+*  Macro DFHEIENT is used to obtain working storage.               *
+*  In our example a single register for code (R12) and             *
+*   storage (R13) is sufficient                                    *
+*                                                                  *
+********************************************************************
+CSQCAPX  RMODE  ANY
+CSQCAPX  AMODE  31
+CSQCAPX  DFHEIENT CODEREG=(R12),DATAREG=(R13)
+         B     MAIN
+         DC    C'CICS MQ SAMPLE API EXIT PROGRAM '
+         DC    C'NAME : '
+         DC    C'CSQCAPX'
+         DC    C' DATE AND TIME ASSEMBLED : '
+         DC    C'&SYSDATC',C','
+         DC    C'&SYSTIME '
+         DC    C'&SYSPARM '
+*
+         SPACE 4
+********************************************************************
+*  SECTION NAME : MAIN                                             *
+*                                                                  *
+*  FUNCTION     : Controls flow of program                         *
+*                                                                  *
+*  CALLED BY    : CICS MQ adapter                                  *
+*                                                                  *
+*  CALLS        : BAFTA, ERRCLEN                                   *
+*                                                                  *
+*  RETURN       : EXEC CICS RETURN                                 *
+*                                                                  *
+********************************************************************
+MAIN     DS    0H
+*
+* Check that the paramters have been passed
+*
+         CLC   EIBCALEN,FZERO           Check commarea length
+         BE    ERRCLEN                  Is not zero
+*
+* Establish addressability
+*
+         L     R10,DFHEICAP             Load address of commarea
+         ST    R10,COMPTR               Save commarea pointer
+         MVC   COMLEN,EIBCALEN          Save commarea length
+         USING MQXP_COPYPLIST,R10       Address the parameter list
+         L     R10,MQXP_PXPB            Address of XPB from parmlist
+         USING MQXP,R10                 and address it
+*
+********************************************************************
+*
+* Your exit code, for example....
+*
+*
+         BAL   R7,BAFTA                 Do the exit processing
+*
+********************************************************************
+*
+* Exit from the program
+*
+ENDPROG  DS    0H
+         EXEC  CICS RETURN
+*
+         EJECT
+********************************************************************
+*  SECTION NAME : BAFTA                                            *
+*                                                                  *
+*  FUNCTION     : Determines whether exit invocation is before or  *
+*                 after the API call                               *
+*                                                                  *
+*  CALLED BY    : MAIN                                             *
+*                                                                  *
+*  CALLS        : BEFORE, AFTER, HEADER, TOXQUE                    *
+*                                                                  *
+*  RETURN       : To Register 7                                    *
+*                                                                  *
+********************************************************************
+*
+BAFTA    DS    0H
+         LA    R0,MQXR_BEFORE              Load
+         C     R0,MQXP_EXITREASON          Is it before?
+         BNE   TSTBEFCON                   No .. try another
+         BAL   R5,BEFORE                   Yes
+         B     BAFTA_END                   Go to end
+*
+TSTBEFCON  DS  0H
+         LA    R0,MQXR_BEFORE_CONVERT      Load
+         C     R0,MQXP_EXITREASON          Is it before convert ?
+         BNE   TSTAFTER                    No .. try another
+         BAL   R5,BEFORE                   Yes
+         B     BAFTA_END                   Go to end
+*
+TSTAFTER DS    0H
+         LA    R0,MQXR_AFTER               Load
+         C     R0,MQXP_EXITREASON          Is it after?
+         BNE   XR_UNKWN                    No .. go to error
+         BAL   R5,AFTER                    Yes
+         B     BAFTA_END                   Go to end
+*
+XR_UNKWN DS    0H
+         BAL   R6,HEADER                   Construct header
+         MVC   MSGTEXT,M_INVO              Move in error message
+         L     R0,MQXP_EXITREASON          Load incokation reason
+         CVD   R0,WRKDWORD                 Convert to packed decimal
+         UNPK  MSGTEXT+40(8),WRKDWORD+4(4) Convert to zoned decimal
+         MVZ   MSGTEXT+47(1),MSGTEXT+46    Make it display
+         BAL   R6,TOXQUE                   Write to exit TS queue
+*
+BAFTA_END  DS    0H
+           BR    R7                        Return to caller
+*
+         EJECT
+********************************************************************
+*  SECTION NAME : BEFORE                                           *
+*                                                                  *
+*  FUNCTION     : Build and write message to TS queue              *
+*                                                                  *
+*  CALLED BY    : BAFTA                                            *
+*                                                                  *
+*  CALLS        : HEADER, OPERATE, TOXQUE                          *
+*                                                                  *
+*  RETURN       : To Register 5                                    *
+*                                                                  *
+********************************************************************
+BEFORE   DS    0H
+         BAL   R6,HEADER                Construct header
+         MVC   MSGTEXT,M_BEFORE         Move in before message
+         BAL   R6,OPERATE               Put operation into message
+         BAL   R6,TOXQUE                Write to exit TS queue
+         BR    R5                       Return to caller
+*
+         EJECT
+********************************************************************
+*  SECTION NAME : AFTER                                            *
+*                                                                  *
+*  FUNCTION     : Build and write message to TS queue              *
+*                                                                  *
+*  CALLED BY    : BAFTA                                            *
+*                                                                  *
+*  CALLS        : HEADER, OPERATE, CODES, TOXQUE                   *
+*                                                                  *
+*  RETURN       : To Register 5                                    *
+*                                                                  *
+********************************************************************
+AFTER    DS    0H
+         BAL   R6,HEADER                Construct header
+         MVC   MSGTEXT,M_AFTER          Move in after message
+         LA    R0,MQXC_CALLBACK
+         C     R0,MQXP_EXITCOMMAND      Is it callback?
+         BNE   NOT_CALLB                No, branch
+         MVC   MSGTEXT,M_AFTER_CALLB    Move in after message
+NOT_CALLB DS   0H
+         BAL   R6,OPERATE               Put operation into message
+         BAL   R6,CODES                 Put in compcode and reason
+         BAL   R6,TOXQUE                Write to exit TS queue
+         BR    R5                       Return to caller
+*
+         EJECT
+********************************************************************
+*  SECTION NAME : OPERATE                                          *
+*                                                                  *
+*  FUNCTION     : Put MQ API operation in to message               *
+*                                                                  *
+*  CALLED BY    : AFTER, BEFORE                                    *
+*                                                                  *
+*  CALLS        : CODES, TOXQUE                                    *
+*                                                                  *
+*  RETURN       : Normal to Register 6                             *
+*                 Error  to Register 5                             *
+*                                                                  *
+********************************************************************
+OPERATE  DS    0H
+*
+ISOPEN   DS    0H
+         LA    R0,MQXC_MQOPEN           Load
+         C     R0,MQXP_EXITCOMMAND      Is it open?
+         BNE   ISCLOSE                  No .. try another
+         MVC   MSGTEXT+16(7),OP_OPEN    Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISCLOSE  DS    0H
+         LA    R0,MQXC_MQCLOSE          Load
+         C     R0,MQXP_EXITCOMMAND      Is it close?
+         BNE   ISGET                    No .. try another
+         MVC   MSGTEXT+16(7),OP_CLOSE   Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISGET    DS    0H
+         LA    R0,MQXC_MQGET            Load
+         C     R0,MQXP_EXITCOMMAND      Is it get?
+         BNE   ISPUT                    No .. try another
+         MVC   MSGTEXT+16(7),OP_GET     Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISPUT    DS    0H
+         LA    R0,MQXC_MQPUT            Load
+         C     R0,MQXP_EXITCOMMAND      Is it put?
+         BNE   ISPUT1                   No .. try another
+         MVC   MSGTEXT+16(7),OP_PUT     Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISPUT1   DS    0H
+         LA    R0,MQXC_MQPUT1           Load
+         C     R0,MQXP_EXITCOMMAND      Is it put1?
+         BNE   ISINQ                    No .. try another
+         MVC   MSGTEXT+16(7),OP_PUT1    Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISINQ    DS    0H
+         LA    R0,MQXC_MQINQ            Load
+         C     R0,MQXP_EXITCOMMAND      Is it inquire?
+         BNE   ISSET                    No .. try another
+         MVC   MSGTEXT+16(7),OP_INQ     Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISSET    DS    0H
+         LA    R0,MQXC_MQSET            Load
+         C     R0,MQXP_EXITCOMMAND      Is it set?
+         BNE   ISSUB                    No .. try another
+         MVC   MSGTEXT+16(7),OP_SET     Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISSUB    DS    0H
+         LA    R0,MQXC_MQSUB            Load
+         C     R0,MQXP_EXITCOMMAND      Is it sub?
+         BNE   ISSUBRQ                  No .. try another
+         MVC   MSGTEXT+16(7),OP_SUB     Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISSUBRQ  DS    0H
+         LA    R0,MQXC_MQSUBRQ          Load
+         C     R0,MQXP_EXITCOMMAND      Is it subrq?
+         BNE   ISCB                     No .. try another
+         MVC   MSGTEXT+16(7),OP_SUBRQ   Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISCB     DS    0H
+         LA    R0,MQXC_MQCB             Load
+         C     R0,MQXP_EXITCOMMAND      Is it cb?
+         BNE   ISCTL                    No .. try another
+         MVC   MSGTEXT+16(7),OP_CB      Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISCTL    DS    0H
+         LA    R0,MQXC_MQCTL            Load
+         C     R0,MQXP_EXITCOMMAND      Is it ctl?
+         BNE   ISSTAT                   No .. try another
+         MVC   MSGTEXT+16(7),OP_CTL     Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISSTAT   DS    0H
+         LA    R0,MQXC_MQSTAT           Load
+         C     R0,MQXP_EXITCOMMAND      Is it stat?
+         BNE   ISCALLB                  No .. try another
+         MVC   MSGTEXT+16(7),OP_STAT    Yes, put operation in message
+         B     OPERATE_END              Go to end
+*
+ISCALLB  DS    0H
+         LA    R0,MQXC_CALLBACK         Load
+         C     R0,MQXP_EXITCOMMAND      Is it callback?
+         BNE   OP_UNKWN                 No .. try another
+         LA    R0,MQXR_BEFORE_CONVERT   Load
+         C     R0,MQXP_EXITREASON       Is it convert as part of callb?
+         BNE   ISCALLB1                 No  put CALLB in message
+         MVC   MSGTEXT+16(7),OP_CONV    Yes, put convert in message
+         B     OPERATE_END              Go to end
+ISCALLB1 DS    0H
+         MVC   MSGTEXT+16(7),OP_CALLB   Yes, put operation in  message
+         B     OPERATE_END              Go to end
+*
+OP_UNKWN DS    0H
+         MVC   MSGTEXT,M_OPER              Move in error message
+         L     R0,MQXP_EXITCOMMAND         Load exit command
+         CVD   R0,WRKDWORD                 Convert to packed decimal
+         UNPK  MSGTEXT+41(8),WRKDWORD+4(4) Convert to zoned decimal
+         MVZ   MSGTEXT+48(1),MSGTEXT+47    Make it display
+         BAL   R6,TOXQUE                   Write to exit TS queue
+         BR    R5                          Abnormal return to BAFTA
+*
+OPERATE_END  DS    0H
+             BR    R6                   Return to caller
+*
+         EJECT
+********************************************************************
+*  SECTION NAME : CODES                                            *
+*                                                                  *
+*  FUNCTION     : Gets compcode and reason from parameter list and *
+*                 puts them in the output message                  *
+*                                                                  *
+*  CALLED BY    : AFTER                                            *
+*                                                                  *
+*  CALLS        : Nothing                                          *
+*                                                                  *
+*  RETURN       : To Register 6                                    *
+*                                                                  *
+********************************************************************
+CODES    DS    0H
+         LA    R0,MQXC_CALLBACK
+         C     R0,MQXP_EXITCOMMAND      Is it callback?
+         BE    CODES_END                Yes, return. No comp & reason
+*
+* Get compcode from parameter list
+*
+         L     R2,MQXP_EXITPARMCOUNT    Load number of parameters
+         BCTR  R2,0                     Reduce count by 1
+         L     R3,COMPTR                Load start of call parmlist
+         SLL   R2,2                     Multiply parms-1 by 4
+         L     R4,0(R2,R3)              to get offset of compcode
+         L     R0,0(0,R4)               Load compcode
+         ST    R0,COMPCODE              Store
+*
+* Make it displayable
+*
+         L     R0,COMPCODE              Load compcode
+         CVD   R0,WRKDWORD              Convert to packed decimal
+         UNPK  WORKFLD1,WRKDWORD+4(4)   Convert to zoned decimal
+         MVZ   WORKFLD1+7(1),WORKFLD1+6 Make it display
+         MVC   MSGTEXT+34(4),WORKFLD1+4 Move value to message
+*
+* Get reason from parameter list
+*
+         L     R2,MQXP_EXITPARMCOUNT    Load number of parameters
+         L     R3,COMPTR                Load start of call parmlist
+         SLL   R2,2                     Multiply parms by 4
+         L     R4,0(R2,R3)              to get offset of reason
+         L     R0,0(0,R4)               Load reason
+         ST    R0,REASON                Store
+*
+* Make it displayable
+*
+         L     R0,REASON                Load reason
+         CVD   R0,WRKDWORD              Convert to packed decimal
+         UNPK  WORKFLD1,WRKDWORD+4(4)   Convert to zoned decimal
+         MVZ   WORKFLD1+7(1),WORKFLD1+6 Make it display
+         MVC   MSGTEXT+46(4),WORKFLD1+4 Move value to message
+CODES_END  DS    0H
+         BR    R6
+*
+         EJECT
+********************************************************************
+*  SECTION NAME : TOXQUE                                           *
+*                                                                  *
+*  FUNCTION     : Writes message to TS queue                       *
+*                                                                  *
+*  CALLED BY    : ERRCLEN, BAFTA, OPERATE, BEFORE, AFTER           *
+*                                                                  *
+*  CALLS        : Nothing                                          *
+*                                                                  *
+*  RETURN       : To Register 6                                    *
+*                                                                  *
+********************************************************************
+TOXQUE   DS    0H
+*
+         EXEC  CICS WRITEQ TS QUEUE(CSQ1TS) FROM(WRITEMSG)             X
+               LENGTH(WMSGLEN)
+*
+         BR    R6
+*
+         EJECT
+********************************************************************
+*  SECTION NAME : HEADER                                           *
+*                                                                  *
+*  FUNCTION     : Constructs the 22 byte message header            *
+*                                                                  *
+*  CALLED BY    : ERRCLEN, BAFTA, BEFORE, AFTER                    *
+*                                                                  *
+*  CALLS        : Nothing                                          *
+*                                                                  *
+*  RETURN       : To Register 6                                    *
+*                                                                  *
+********************************************************************
+HEADER   DS    0H
+         MVC   MSGHDR,M_HDR             Move in skeleton
+         MVC   MSGHDR(4),EIBTRNID       Move in transaction name
+         UNPK  MSGHDR+5(8),EIBTASKN     Unpack task number
+         MVZ   MSGHDR+12(1),MSGHDR+11   Make it display
+*
+         EXEC  CICS ASKTIME ABSTIME(CURTIME)
+*
+         EXEC  CICS FORMATTIME ABSTIME(CURTIME) TIME(MSGHDR+14)        X
+               TIMESEP(':')
+*
+         BR    R6
+*
+         EJECT
+********************************************************************
+*  SECTION NAME : ERRCLEN                                          *
+*                                                                  *
+*  FUNCTION     : Build and writes error message if commarea       *
+*                 length passed was zero                           *
+*                                                                  *
+*  CALLED BY    : MAIN                                             *
+*                                                                  *
+*  CALLS        : HEADER, TOXQUE                                   *
+*                                                                  *
+*  RETURN       : To ENDPROG in MAIN                               *
+*                                                                  *
+********************************************************************
+ERRCLEN  DS    0H
+         BAL   R6,HEADER                Construct message header
+         MVC   MSGTEXT,M_CZERO          move in error message
+         BAL   R6,TOXQUE                Write to exit TS queue
+         B     ENDPROG                  Abnormal return to program end
+*
+         EJECT
+*-------------------------------------------------------------*
+* CONSTANTS, EQUATES & MESSAGES                               *
+*-------------------------------------------------------------*
+FZERO    DC    F'0'                     A fullword
+CSQ1TS   DC    CL8'CSQ1EXIT'            API Exit TS queue name
+*
+*
+OP_OPEN  DC   CL08'MQOPEN '             MQI call
+OP_CLOSE DC   CL08'MQCLOSE'             MQI call
+OP_GET   DC   CL08'MQGET  '             MQI call
+OP_PUT   DC   CL08'MQPUT  '             MQI call
+OP_PUT1  DC   CL08'MQPUT1 '             MQI call
+OP_INQ   DC   CL08'MQINQ  '             MQI call
+OP_SET   DC   CL08'MQSET  '             MQI call
+OP_SUB   DC   CL08'MQSUB  '             MQI call
+OP_SUBRQ DC   CL08'MQSUBRQ'             MQI call
+OP_CB    DC   CL08'MQCB   '             MQI call
+OP_CTL   DC   CL08'MQCTL  '             MQI call
+OP_STAT  DC   CL08'MQSTAT '             MQI call
+OP_CALLB DC   CL08'MQCALLB'             MQI call
+OP_CONV  DC   CL08'CONVERT'             MQI call
+*
+WMSGLEN  DC    AL2(L'WRITEMSG)
+*
+M_CZERO  DS    0CL51
+         DC    C'CSQCAPX: NO COMMAREA PASSED TO EXIT                '
+*
+M_INVO   DS    0CL51
+         DC    C'CSQCAPX: EXITREASON IS INVALID VALUE IS XXXXXXXX   '
+*
+M_OPER   DS    0CL51
+         DC    C'CSQCAPX: EXITCOMMAND IS INVALID VALUE IS XXXXXXXX  '
+*
+M_BEFORE DS    0CL51
+         DC    C'CSQCAPX: BEFORE XXXXXXX                            '
+*
+M_AFTER  DS    0CL51
+         DC    C'CSQCAPX:  AFTER XXXXXXX. COMPCODE=CCCC REASON=RRRR '
+*
+M_AFTER_CALLB DS 0CL51
+         DC    C'CSQCAPX:  AFTER XXXXXXX                            '
+*
+M_HDR    DS    0CL23
+         DS    CL04                         Transaction name
+         DC    CL01' '                      Space
+         DS    CL08                         Taskid
+         DC    CL01' '                      Space
+         DS    CL08                         Time
+         DC    CL01' '                      Space
+****************************
+* MQI CONSTANTS            *
+****************************
+         CMQA  LIST=NO
+*
+         LTORG
+*
+         END  CSQCAPX
