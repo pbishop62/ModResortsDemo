@@ -1,0 +1,172 @@
+//*******************************************************************
+//
+// Module Name: ICC$RES1
+//
+// Description:
+//    This sample program demonstrates how to write your own
+//    handleEvent() method and how to customize your resource objects
+//    (files, temporary storage, etc.) so this method gets called
+//    automatically.
+//
+//    To execute this sample you must install group DFH$CFCS and
+//    also an intra-partition TDQ called ICCQ. The sample transaction
+//    for this program is IRS1.
+//
+//
+//
+//
+//
+//     Licensed Materials - Property of IBM
+//
+//     "Restricted Materials of IBM"
+//
+//     5655-Y04
+//
+//     (C) Copyright IBM Corp. 1998, 2004"
+//
+//
+//
+//
+// Status = %SP00
+//
+//-------------------------------------------------------------------
+//
+// Change Activity:
+//
+//   $MOD(ICC$RES1),COMP(CEZANNE),PROD(CICS TS ):
+//
+//   PN= REASON REL YYMMDD HDXIII : REMARKS
+//  $P0= M30492 530 981109 HDGYBS : Creation
+//  $P1= M30696 530 981218 HDGYBS : Fix sample c++ programs
+//  $P2= M12734 640 041224 HD6KRAH: Language update
+//
+//*******************************************************************
+#include "icceh.hpp"  //CICS C++ Foundation Classes header files
+#include "iccmain.hpp"  //CICS C++ Foundation Classes main() stub
+
+char* bufferItems[] =
+{
+  "Hello World - item 1",
+  "Hello World - item 2",
+  "Hello World - item 3"
+};
+
+//First inherit from IccDataQueue so we can create own custom objects
+class CustomDataQueue : public IccDataQueue {
+public:
+//Constructor..
+                 CustomDataQueue( IccDataQueueId& id );
+
+//need to implement this virtual function
+ virtual HandleEventReturnOpt
+                 handleEvent(
+                   IccEvent& event );
+
+//Add a new method...
+ Icc::Bool       customTest() const;
+
+private:
+//Add new buffer member
+ Icc::Bool       customBool;
+};
+
+//Implement the constructor...
+CustomDataQueue::CustomDataQueue( IccDataQueueId& id )
+  : IccDataQueue( id )
+{
+  setClassName("CustomDataQueue");
+  customBool = Icc::no ;                                         //@P2C
+
+  //The following method, setActionOnCondition, allows objects to be
+  //customized: in this instance we are requesting that the
+  //Foundation Classes automatically call the handleEvent()
+  //method if we encounter the QZERO condition ( this is the
+  //condition CICS returns if there are no more items on the queue ).
+  setActionOnCondition( IccResource::callHandleEvent,
+                        IccCondition::QZERO );
+}
+
+//Implement the handleEvent method...
+IccResource::HandleEventReturnOpt
+CustomDataQueue::handleEvent( IccEvent& event )
+{
+  //Gain access to terminal object...
+  IccTerminal* term = IccTerminal::instance();
+
+  //save current cursor position...
+  short savedCursorPos = term->cursor();
+
+  //change state...
+  customBool = Icc::yes;                                         //@P2C
+
+  //Write out some info...
+  term->send( 21,1, "> In handleEvent(). Summary=%s", event.summary() );
+
+  //Restore cursor position...
+  term->setCursor( savedCursorPos );
+
+  //handleCondition returns a type HandleEventReturnOpt.
+  //Valid enumerators are as follows:-
+  //
+  //    -  rContinue            (condition handled; resume normal
+  //                             program execution).
+  //    -  rThrowException      (request Foundation Classes throw
+  //                             an exception (perhaps if CICS
+  //                             condition could not be handled)).
+  //    -  rAbendTask           (request Foundation Classes cause
+  //                             an abnormal terminal of this CICS
+  //                             task).
+  return rContinue;
+}
+
+//Implement customTestMethod()...
+Icc::Bool CustomDataQueue::customTest() const
+{
+  return customBool;
+}
+
+void IccUserControl::run()
+{
+  IccTerminal* term = terminal();  //Access terminal
+  term->erase();  //Clear terminal
+  term->sendLine( "This is program 'icc$res1'..." );
+
+  //Construct objects...
+  IccBuf buffer( 50 );
+  IccDataQueueId id("ICCQ");
+  CustomDataQueue queue( id );  //customized IccDataQueue
+
+  //Make sure there are no buffer items in queue...
+  queue.empty();
+
+  //First put 3 items in the DataQueue...
+  term->sendLine( "Writing items to %s '%s' ...",
+                   queue.className(), queue.name() );
+  for (short j=0 ; j<3 ; j++)
+  {
+    buffer = bufferItems[j];
+    term->sendLine( " - writing item #%d: '%s'",
+                    j+1, (const char*)buffer );
+    queue.writeItem( buffer );
+    term->sendLine( 45, "<%s>", queue.conditionText() );
+  }
+
+  term->sendLine( "Reading items from %s '%s' ...",
+                   queue.className(), queue.name() );
+  buffer = queue.readItem();  //Read first item in queue.
+
+  //Loop round reading queue until customTest returns yes.
+  while ( queue.customTest() == Icc::no)                         //@P2C
+  {
+    term->sendLine( " - item = '%s'", (const char*)buffer );
+    buffer = queue.readItem();  //Read next item in queue
+  }
+  term->sendLine( "Reading loop complete.");
+
+  term->send( 24,1,"Program 'icc$res1' complete: Hit PF12 to End" );
+  term->waitForAID( IccTerminal::PF12 );
+  term->erase();
+  term->freeKeyboard();
+
+  return;
+}

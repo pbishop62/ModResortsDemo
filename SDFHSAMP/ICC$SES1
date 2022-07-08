@@ -1,0 +1,131 @@
+//*******************************************************************
+//
+// Module Name: ICC$SES1
+//
+// Description:
+//    This sample program demonstrates how to use the IccSession
+//    class. This is the front end part of the DTP program pair.
+//
+// Instructions:
+//    Start this program under a transaction definition in 2 CICS
+//    systems that have communication channels to each other:-
+//
+//       SYSIDNT=ICC1 <-------------> SYSIDNT=ICC2
+//       TXN=ISE1                     TXN=ISE2
+//
+//
+//
+//     Licensed Materials - Property of IBM
+//
+//     "Restricted Materials of IBM"
+//
+//     5655-Y04
+//
+//     (C) Copyright IBM Corp. 1998"
+//
+//
+//
+//
+// Status = %SP00
+//
+//-------------------------------------------------------------------
+//
+// Change Activity:
+//
+//   $MOD(ICC$SES1),COMP(CEZANNE),PROD(CICS TS ):
+//
+//   PN= REASON REL YYMMDD HDXIII : REMARKS
+//  $P0= M30492 530 981109 HDGYBS : Creation
+//  $P1= M30696 530 981211 HDGYBS : Fix sample c++ programs
+//
+//*******************************************************************
+#include "icceh.hpp"  //CICS C++ Foundation Classes header files
+#include "iccmain.hpp"  //CICS C++ Foundation Classes main() stub
+#include <string.h>
+
+const char* PIPData = "Hello World";
+
+struct Pip
+{
+  short LL;
+  short RR;
+  char  data[33];
+} PIPList;
+
+void IccUserControl::run()
+{
+  IccTerminal* term = terminal();  //Access terminal object
+  term->erase();  //Clear terminal
+  term->sendLine("This is program 'icc$ses1'...");
+
+  IccClock clock;
+  IccSysId backEnd("ICC2");  //IccSysId for back end system
+  IccSession session( backEnd );  //IccSession object
+  IccTransId remoteTransId("ISE2");  //back end transaction to start
+  IccBuf PIP( sizeof(PIPList),  //buffer object for PIP
+                     &PIPList );
+  IccBuf buffer(55);  //55 byte buffer object
+
+  term->sendLine( "allocate session...");
+  session.allocate();
+  term->sendLine( 30, "<%s> STATE=%ld %s ERR=%d",
+  session.conditionText(),
+                  session.state(),
+                  session.stateText(), session.isErrorSet());
+
+  strcpy(PIPList.data, PIPData);  //Build PIP list buffer
+  PIPList.LL = (short)(strlen(PIPData) + 5);  //LL+RR+NULL
+  PIP.setDataLength( strlen(PIPData) + 5 );
+
+  term->sendLine( "connectProcess...");
+
+  if ( Icc::ClassInfo().platform == Icc::OS2 )
+     session.connectProcess( IccSession::level1, remoteTransId );
+  else
+     session.connectProcess( IccSession::level1, remoteTransId, &PIP );
+
+  term->sendLine( 30, "<%s> STATE=%ld %s ERR=%d",
+                  session.conditionText(),
+                  session.state(), session.stateText(),
+                  session.isErrorSet());
+
+
+  //Build send information in data buffer object...
+  buffer = "Hi there this is from frontEnd TIME=";
+  buffer += clock.time( ':' );
+  buffer += " on ";
+  buffer += clock.date( IccClock::DDMMYY, '/' );
+
+  //Now send data buffer information...
+  term->sendLine( "sendInvite ...");
+  session.sendInvite( buffer );
+  term->sendLine( 30, "<%s> STATE=%ld %s ERR=%d",
+  session.conditionText(),
+                  session.state(), session.stateText(),
+                  session.isErrorSet());
+
+  //Receive data sent from back end...
+  term->sendLine( "receive ...");
+  buffer = session.receive();
+  term->sendLine( 30, "<%s> STATE=%ld %s ERR=%d",
+  session.conditionText(),
+                  session.state(), session.stateText(),
+                  session.isErrorSet());
+
+  term->sendLine( " - data from back end=[%s]", (const char*)buffer );
+
+  //Communication is complete so free session
+  term->sendLine( "free...");
+  session.free();
+  term->sendLine( 30, "<%s> STATE=%ld %s ERR=%d",
+  session.conditionText(),
+                  session.state(), session.stateText(),
+                  session.isErrorSet());
+
+  terminal()->send(24,1,"Program 'icc$ses1' complete: Hit PF12 to End");
+  terminal()->waitForAID(IccTerminal::PF12);
+  terminal()->erase();
+  terminal()->freeKeyboard();
+
+  return;  //Return control to CICS
+}

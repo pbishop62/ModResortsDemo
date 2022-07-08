@@ -1,0 +1,498 @@
+*ASM XOPTS(NOPROLOG NOEPILOG)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFHWBERX                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (WB) Web error transaction program      *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*      Licensed Materials - Property of IBM                           *
+*                                                                     *
+*      "Restricted Materials of IBM"                                  *
+*                                                                     *
+*      5655-Y04                                                       *
+*                                                                     *
+*      (C) Copyright IBM Corp. 2005, 2008"                            *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION = Default and Sample Web Error Application program.        *
+*                                                                     *
+* NOTES:                                                              *
+*                                                                     *
+*    DEPENDENCIES = S/390                                             *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFHWBERX                                              *
+*                                                                     *
+*     PURPOSE = Sample Web application program to deliver             *
+*               an error web page.
+*                                                                     *
+*     LINKAGE =                                                       *
+*         Linked from the Web Business Logic Interface DFHWBBLI       *
+*         when specified as the target web application program        *
+*         in a URIMAP, or by a Web Analyzer or Converter program.     *
+*                                                                     *
+*     INPUT = N/A                                                     *
+*                                                                     *
+*     OUTPUT =                                                        *
+*         Output is returned to the web client by means of            *
+*         an EXEC CICS WEB SEND command.                              *
+*                                                                     *
+*     EXIT-NORMAL = Exit is via the DFHEIENT macro.                   *
+*         A return code of zero is set on return.                     *
+*                                                                     *
+*     EXIT-ERROR = None.                                              *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+*      This program is used to return a notification to the CICS      *
+*      Web client that an error has occurred which prevents the       *
+*      normal or expected response from being returned.               *
+*      This program differs from the Web Error Program (DFHWBEP)      *
+*      because it is specifically invoked as an regular web-aware     *
+*      application program when an installation-detected error        *
+*      occurs, whereas DFHWBEP is executed as a CICS User-replaceable *
+*      module (with a commarea interface) when CICS itself detects    *
+*      an error.                                                      *
+*                                                                     *
+*      This sample version uses EXEC CICS WEB EXTRACT to get the      *
+*      components of the failing inbound URL and uses them to         *
+*      reconstruct the URL. It builds a response document using       *
+*      the EXEC DOCUMENT API and sends it as an error response        *
+*      using the EXEC WEB SEND command.                               *
+*                                                                     *
+*      The program attempts to discover whether the client is         *
+*      expecting an HTML document to display on a browser or          *
+*      an XML SOAP document. If the latter, then a SOAP fault         *
+*      document is returned.                                          *
+*                                                                     *
+*      o If the incoming request is a POST with mediatype             *
+*        text/xml, a SOAP 1.1 fault message is returned.              *
+*      o If the incoming request is a POST with mediatype             *
+*        application/soap+xml, a SOAP 1.2 fault message is returned.  *
+*      o Otherwise an HTML error page is returned with an             *
+*        HTTP 404 response code.                                      *
+*                                                                     *
+* CHANGE ACTIVITY:                                                    *
+*        $MOD(DFHWBERX),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*  PN= REASON REL YYMMDD HDXXIII : REMARKS                            *
+* $01= A03633 650 050414 HDBGNRB : Migrate PK03633 from SPA R640      *
+* $02= A23006 650 060628 HDBGNRB : Migrate PK23006 from SPA R640      *
+* $03= A35183 670 110418 HDBGSLS : Migrate PM35183 from SPA R660      *
+* $P0= D10527 640 050121 HD2JPEH : Web error transaction program      *
+* $P1= D13629 640 050216 HD4EPEA : Mediatype instead of content type  *
+* $P2= D13855 640 050228 HD2JPEH : Improve method & mediatype checks  *
+* $P4= D20396 660 080130 HDJBAC  : Add the </head> for http errors    *
+*                                                                     *
+***********************************************************************
+         TITLE 'DFHWBERX - CICS Web Support Error transaction program'
+*---------------------------------------------------------------------*
+*    Standard CWS definitions required                                *
+*---------------------------------------------------------------------*
+         COPY  DFHKEBRC           Relative branch definitions
+         DFHREGS ,                CICS Register definition
+CRLF     EQU   X'0D25'            Carriage Return Line Feed
+*---------------------------------------------------------------------*
+*    Start of program code                                            *
+*---------------------------------------------------------------------*
+DFHWBERX CSECT
+DFHWBERX AMODE 31
+DFHWBERX RMODE ANY
+         DFHEIENT CODEREG=0,                Use relative addressing    *
+               STATREG=R10,STATIC=ERSTATIC, Specify static addressing  *
+               EIBREG=R11                   Specify EIB addressing
+*
+*  Reconstruct the failing URL from its constituent parts
+*
+         MVC   HOSTLEN,=A(L'HOSTNAME)       Initialize host length
+         MVC   PATHLEN,=A(L'PATHNAME)       Initialize path length
+         MVC   QSTRLEN,=A(L'QSTRING)        Initialize query length
+         MVC   METHLEN,=A(L'METHOD)         Initialize method length
+         MVC   DBUFLEN,=A(L'DOCSPACE)       Initialize docbuff len @P2A
+         MVC   METHOD,SPACES                Initialize method
+         EXEC  CICS WEB EXTRACT                                        *
+               HTTPMETHOD(METHOD) METHODLENGTH(METHLEN)                *
+               SCHEME(SCHEMECV) PORTNUMBER(PORTNUM)                    *
+               HOST(HOSTNAME) HOSTLENGTH(HOSTLEN)                      *
+               PATH(PATHNAME) PATHLENGTH(PATHLEN)                      *
+               QUERYSTRING(QSTRING) QUERYSTRLEN(QSTRLEN)               *
+               NOHANDLE.                                      @PH11233A
+*
+*  Copy scheme into URL
+*
+         MVC   FAILURL(7),=C'http://'  Initialize scheme to HTTP
+         LA    R6,FAILURL+7            Address end of scheme
+         CLC   SCHEMECV,DFHVALUE(HTTPS) Is it an HTTPS scheme?
+         BNE   SCHEMEOK                No, it's done
+         MVC   FAILURL(8),=C'https://' Yes, change to HTTPS
+         LA    R6,FAILURL+8            Address new end of scheme
+SCHEMEOK DS    0H                      Scheme done
+*
+*  Copy hostname into URL
+*
+         ICM   R15,15,HOSTLEN          Get length of HOST
+         AHI   R15,-1                  Decrement for EXECUTE
+         EX    R15,COPYHOST            Copy the hostname
+         LA    R6,1(R15,R6)            Bump over hostname
+*
+*  Copy portnumber into URL
+*
+         L     R0,PORTNUM              Get the port number
+         CVD   R0,PWORK                Convert port to decimal
+         MVC   EWORK,=X'7A2020202120'  Edit mask with colon
+         LA    R1,EWORK+5              Address significance
+         EDMK  EWORK,PWORK+5           Convert port & get start
+         BCTR  R1,0                    Point to preceding colon
+         LA    R15,EWORK+5             Address end
+         SLR   R15,R1                  Calculate machine length of port
+         EX    R15,COPYPORT            Copy colon and portnumber
+         LA    R6,1(R15,R6)            Bump over colon and portnumber
+*
+*  Copy pathname into URL
+*
+         MVI   0(R6),C'/'              Initialize path to slash
+         ICM   R15,15,PATHLEN          Does pathname exist?
+         BZ    STEPPATH                No, skip
+         AHI   R15,-1                  Yes, decrement for execute
+         EX    R15,COPYPATH            Copy pathname into URL
+STEPPATH LA    R6,1(R15,R6)            Bump over pathname
+*
+*  Copy querystring into URL
+*
+         ICM   R15,15,QSTRLEN          Is there a query string?
+         BZ    GETURLEN                No, all done
+         MVI   0(R6),C'?'              Yes, set querystring delimiter
+         CL    R15,=F'256'             <= 256 bytes of data?  @PH11233A
+         BL    STEPQSTR                Yes, continue          @PH11233A
+         LA    R15,256                 Cut off Qsyring to 256 @PH11233A
+STEPQSTR AHI   R15,-1                  Decrement len for exec @PH11233C
+         EX    R15,COPYQSTR            Copy the querystring
+         LA    R6,2(R15,R6)            Bump over query string
+*
+*  Calculate length of whole URL
+*
+GETURLEN DS    0H
+         LA    R0,FAILURL              Address URL start
+         SLR   R6,R0                   Subtract final end address
+         ST    R6,URLLEN               Save the URL length
+*                                                                  @02A
+*  Scan URL for angle brackets and replace with HTML symbolic      @02A
+*  reference (i.e. &lt; and &gt;).                                 @02A
+*  A browser may send the brackets within an URI in an             @02A
+*  unescaped form so we need to check for those as well.           @02A
+*                                                                  @02A
+         LA    R8,FAILURL              Address failing URL         @02A
+         LR    R2,R8                        .. and save in R2      @02A
+         SR    R9,R9                   Clear R9 (copied len.)      @02A
+         LA    R4,1                    Increment for BXH scan      @02A
+         LA    R5,0(R6,R8)             Address past end of URL     @02A
+         AHI   R5,-1                   .. and then point to end    @02A
+         LA    R6,WORKAREA             Address work area           @02A
+SCAN00   BXH   R8,R4,SCANEND           Scan URL                    @02A
+         LR    R3,R5                   Get address of last char    @02A
+         SR    R3,R8                   ..subtract start point      @02A
+         AHI   R3,1                    ..add one to get length     @02A
+         CLM   R3,1,=X'3'              Less than 3 chars left?     @02A
+         BL    SCAN02                  ..yes, check for < or >     @02A
+         CLC   0(3,R8),=C'%3C'         Escaped less than ?         @02A
+         BE    INSERTLT                ..yes, insert LT sign       @03C
+         CLC   0(3,R8),=C'%3c'         Escaped less than ?         @03A
+         BNE   SCAN01                  ..no, check for '%3E'       @03A
+INSERTLT DS    0H                                                  @03A
+         LR    R3,R8                   Save current scan ptr       @02A
+         SR    R3,R2                   Get length of chunk         @02A
+         LR    R7,R3                   ..and save for move         @02A
+         AR    R9,R3                   Increment copied length     @02A
+         AHI   R9,4                      ..plus inserted length    @02A
+         MVCL  R6,R2                   Copy portion of URL         @02A
+         MVC   0(4,R6),LTSIGN          Substitute                  @02A
+         AHI   R8,2                    Bump pointer into source    @02A
+         AHI   R6,4                    ..and into workarea         @02A
+         LA    R2,1(,R8)               Next source byte            @02A
+         B     SCAN00                  Continue scan               @02A
+SCAN01   DS    0H                                                  @02A
+         CLC   0(3,R8),=C'%3E'         Greater than ?              @02A
+         BE    INSERTGT                ..yes, insert GT sign       @03C
+         CLC   0(3,R8),=C'%3e'         Greater than ?              @03A
+         BNE   SCAN02                  ..no, continue              @03A
+INSERTGT DS    0H                                                  @03A
+         LR    R3,R8                   Save current scan ptr       @02A
+         SR    R3,R2                   Get length of chunk         @02A
+         LR    R7,R3                   ..and save for move         @02A
+         AR    R9,R3                   Increment copied length     @02A
+         AHI   R9,4                      ..plus inserted length    @02A
+         MVCL  R6,R2                   Copy portion of URL         @02A
+         MVC   0(4,R6),GTSIGN          Substitute                  @02A
+         AHI   R8,2                    Bump pointer into source    @02A
+         AHI   R6,4                    ..and into workarea         @02A
+         LA    R2,1(,R8)               Next source byte            @02A
+         B     SCAN00                  Continue scan               @02A
+SCAN02   DS    0H                                                  @02A
+         CLI   0(R8),C'<'              Unescaped '<'               @02A
+         BNE   SCAN03                  ..no, check for '>'         @02A
+         LR    R3,R8                   Save current scan ptr       @02A
+         SR    R3,R2                   Get length of chunk         @02A
+         LR    R7,R3                   ..and save for move         @02A
+         AR    R9,R3                   Increment copied length     @02A
+         AHI   R9,4                      ..plus inserted length    @02A
+         MVCL  R6,R2                   Copy portion of URL         @02A
+         MVC   0(4,R6),LTSIGN          Substitute                  @02A
+         AHI   R6,4                    Bump ptr into workarea      @02A
+         LR    R2,R8                   Save current ptr and ..     @02A
+         AHI   R2,1                      ..bump one                @02A
+         B     SCAN00                  Continue scan               @02A
+SCAN03   DS    0H                                                  @02A
+         CLI   0(R8),C'>'              Unescaped '>'               @02A
+         BNE   SCAN00                  ..no, check for escaped     @02A
+         LR    R3,R8                   Save current scan ptr       @02A
+         SR    R3,R2                   Get length of chunk         @02A
+         LR    R7,R3                   ..and save for move         @02A
+         AR    R9,R3                   Increment copied length     @02A
+         AHI   R9,4                      ..plus inserted length    @02A
+         MVCL  R6,R2                   Copy portion of URL         @02A
+         MVC   0(4,R6),GTSIGN          Substitute                  @02A
+         AHI   R6,4                    Bump ptr into workarea      @02A
+         LR    R2,R8                   Save current ptr and ..     @02A
+         AHI   R2,1                      ..bump one                @02A
+         B     SCAN00                  Continue scan               @02A
+SCANEND  DS    0H                                                  @02A
+         LTR   R9,R9                   Any brackets found ?        @02A
+         BZ    SKIPMOVE                ..no, skip move             @02A
+         CR    R2,R8                   At end ?                    @02A
+         BE    DOMOVE                  ..yes, copy URL for send    @02A
+         LR    R3,R8                   Save current scan ptr       @02A
+         SR    R3,R2                   Get length of chunk         @02A
+         LR    R7,R3                   ...and save for move        @02A
+         AR    R9,R3                   Increment copied length     @02A
+         MVCL  R6,R2                   Copy portion of URL         @02A
+DOMOVE   DS    0H                                                  @02A
+         LA    R6,FAILURL              Load target address         @02A
+         LR    R7,R9                   Load length for move        @02A
+         LA    R2,WORKAREA             Load source address         @02A
+         LR    R3,R9                   Load length for move        @02A
+         MVCL  R6,R2                   Copy modified URL           @02A
+         ST    R9,URLLEN               Save new length             @02A
+SKIPMOVE DS    0H                                                  @02A
+*
+*  Create an empty document to return to the client
+*
+         EXEC  CICS DOCUMENT CREATE DOCTOKEN(DTOKEN)
+         EXEC  CICS DOCUMENT SET DOCTOKEN(DTOKEN)                      *
+               SYMBOL(URLSYMB) VALUE(FAILURL) LENGTH(URLLEN)
+*
+*  Check for possible SOAP request
+*
+         CLC   METHLEN,=A(4)           Is method length four?      @P2A
+         BNE   REPLY404                No, cannot be POST          @P2A
+         CLC   METHOD(4),=CL4'POST'    Is this a POST request?     @P2C
+         BNE   REPLY404                No, reply with HTML 404
+         MVC   HDRLEN,=A(L'HDRVALUE)   Set header length
+         EXEC  CICS WEB READ HTTPHEADER(CONTTYPE)                      *
+               VALUE(HDRVALUE) VALUELENGTH(HDRLEN) NOHANDLE
+         ICM   R15,15,EIBRESP          Check response
+         BNZ   REPLY404                If no Content-Type, return 404
+         TR    HDRVALUE,LOWERCASE      Ensure monocased Content-Type
+         CLC   HDRVALUE(8),S11MEDIA    Is this a SOAP 1.1 request? @P2C
+         BE    SOAP1ERR                Yes, return SOAP fault
+         CLC   HDRVALUE(20),S12MEDIA   Is it SOAP 1.2?             @P2C
+         BE    SOAP2ERR                Yes, return SOAP fault
+         EJECT
+*
+*  Insert the HTML error page and return 404 to the client
+*
+REPLY404 DS    0H
+         EXEC  CICS DOCUMENT INSERT DOCTOKEN(DTOKEN)                   *
+               FROM(ERRPAGE) LENGTH(ERRPSIZE)
+         EXEC  CICS WEB SEND DOCTOKEN(DTOKEN) MEDIATYPE(HMEDIA)        *
+               SRVCONVERT STATUSCODE(404) STATUSTEXT(NOTFOUND)
+         J     EXITWBER
+         SPACE 2
+*
+*  Create a SOAP 1.1 Fault document and return 500 to the client.
+*  SOAP 1.1 requires a SOAPaction header to be supplied as well.
+*
+SOAP1ERR DS    0H
+         EXEC  CICS DOCUMENT INSERT DOCTOKEN(DTOKEN)                   *
+               FROM(S11FAULT) LENGTH(S11SIZE)
+         EXEC  CICS DOCUMENT RETRIEVE DOCTOKEN(DTOKEN)                 *
+               MAXLENGTH(DBUFLEN) LENGTH(BODYLEN)                      *
+               INTO(DOCSPACE) DATAONLY
+         EXEC  CICS WEB WRITE                                          *
+               HTTPHEADER(SOAPACTN) VALUE(SPACES) VALUELENGTH(0)
+         EXEC  CICS WEB SEND FROM(DOCSPACE) FROMLENGTH(BODYLEN)        *
+               SRVCONVERT CHARACTERSET(UTF8) MEDIATYPE(S11MEDIA)       *
+               STATUSCODE(500) STATUSTEXT(NOTFOUND)
+         J     EXITWBER
+         SPACE 2
+*
+*  Create a SOAP 1.2 Fault document and return 500 to the client
+*  A SOAPaction header is not required for SOAP 1.2.
+*
+SOAP2ERR DS    0H
+         EXEC  CICS DOCUMENT INSERT DOCTOKEN(DTOKEN)                   *
+               FROM(S12FAULT) LENGTH(S12SIZE)
+         EXEC  CICS DOCUMENT RETRIEVE DOCTOKEN(DTOKEN)                 *
+               MAXLENGTH(DBUFLEN) LENGTH(BODYLEN)                      *
+               INTO(DOCSPACE) DATAONLY
+         EXEC  CICS WEB SEND FROM(DOCSPACE) FROMLENGTH(BODYLEN)        *
+               SRVCONVERT CHARACTERSET(UTF8) MEDIATYPE(S12MEDIA)       *
+               STATUSCODE(500) STATUSTEXT(NOTFOUND)
+         SPACE 2
+EXITWBER SR    R15,R15                 Zero return code
+         DFHEIRET LITERALS=NO,RCREG=15 Return to caller
+*---------------------------------------------------------------------*
+*  Static data for program                                            *
+*---------------------------------------------------------------------*
+ERSTATIC DC    0AD(0)
+         LTORG ,
+ERRPSIZE DC    A(ERRPAGEL)
+S11SIZE  DC    A(S11FAULN)
+S12SIZE  DC    A(S12FAULN)
+URLSYMB  DC    CL32'FailingURL'            Document symbol for URL
+NOTFOUND DC    C'Not Found'                HTTP status text
+CONTTYPE DC    C'Content-Type'             Content-type header name
+SOAPACTN DC    C'SOAPaction'               SOAP action header name
+HMEDIA   DC    CL56'text/html'             HTTP HTML mediatype
+S11MEDIA DC    CL56'text/xml'              SOAP1.1 mediatype
+S12MEDIA DC    CL56'application/soap+xml'  SOAP1.2 mediatype
+UTF8     DC    CL40'utf-8'                 UTF-8 characterset id
+SPACES   DC    CL16' '                     Blank string
+LTSIGN   DC    CL4'&&lt;'                  HTML symbolic ref <     @02A
+GTSIGN   DC    CL4'&&gt;'                  HTML symbolic ref >     @02A
+COPYHOST MVC   0(0,R6),HOSTNAME            Copy the hostname
+COPYPORT MVC   0(0,R6),0(R1)               Copy colon + portnumber
+COPYPATH MVC   0(0,R6),PATHNAME            Copy pathname into URL
+COPYQSTR MVC   1(0,R6),QSTRING             Copy the querystring
+         EJECT
+*
+*  Error page to return to HTML clients
+*
+ERRPAGE  DC    0AD(0)
+         DC    C'<!doctype html public'
+         DC    C' "-//W3C//DTD HTML 4.0 Transitional//EN"'
+         DC    C' "http://www.w3.org/TR/REC-html40/loose.dtd">'
+         DC    AL2(CRLF),C'<html>'
+         DC    AL2(CRLF),C'<head>'
+         DC    AL2(CRLF),C'<title>'
+         DC    AL2(CRLF),C'404 CICS Web Support Error'
+         DC    AL2(CRLF),C'</title>'
+         DC    AL2(CRLF),C'</head>'                                @P4A
+         DC    AL2(CRLF),C'<body>'
+         DC    AL2(CRLF),C'<h1>404 CICS URL not found</h1>'
+         DC    AL2(CRLF),C'<p>'
+         DC    AL2(CRLF),C'An error has occurred in CICS Web Support.'
+         DC    AL2(CRLF)
+         DC    C'CICS cannot locate a resource corresponding to'
+         DC    C' the URL you have specified.'
+         DC    AL2(CRLF),C'</p>'
+         DC    AL2(CRLF),C'<p><strong>Probable cause:</strong>'
+         DC    AL2(CRLF)
+         DC    C'Either no URIMAP definition is installed'         @01C
+         DC    C' which matches the URL'
+         DC    AL2(CRLF),C'<tt>&&lt;&&FailingURL;&&gt;</tt>,'      @01C
+         DC    AL2(CRLF),C'<br />or an incorrect analyzer'         @P4C
+         DC    C' program is specified in the TCPIPSERVICE'        @01A
+         DC    C' definition.'                                     @01A
+         DC    AL2(CRLF),C'</p>'
+         DC    AL2(CRLF),C'</body>'
+         DC    AL2(CRLF),C'</html>'
+ERRPAGEL EQU   *-ERRPAGE
+         EJECT
+*
+*  SOAP Version 1.1 Fault message
+*
+S11FAULT DC    0AD(0)
+         DC    C'<?xml version="1.0" encoding="UTF-8"?>'
+         DC    AL2(CRLF)
+         DC    C'<s:Envelope xmlns:s='
+         DC    C'"http://schemas.xmlsoap.org/soap/envelope/">'
+         DC    AL2(CRLF),C'<s:Body>'
+         DC    AL2(CRLF),C'<s:Fault>'
+         DC    AL2(CRLF),C'<faultcode>s:Server</faultcode>'
+         DC    AL2(CRLF),C'<faultstring>'
+         DC    C'Resource &&FailingURL; not found'
+         DC    AL2(CRLF),C'</faultstring>'
+         DC    AL2(CRLF),C'</s:Fault>'
+         DC    AL2(CRLF),C'</s:Body>'
+         DC    AL2(CRLF),C'</s:Envelope>'
+S11FAULN EQU   *-S11FAULT
+         SPACE 2
+*
+*  SOAP Version 1.2 Fault message
+*
+S12FAULT DC    0AD(0)
+         DC    C'<s:Envelope'
+         DC    AL2(CRLF)
+         DC    C'   xmlns:s='
+         DC    C'"http://www.w3.org/2003/05/soap-envelope"'
+         DC    AL2(CRLF)
+         DC    C'   xmlns:xml='
+         DC    C'"http://www.w3.org/XML/1998/namespace">'
+         DC    AL2(CRLF),C' <s:Body>'
+         DC    AL2(CRLF),C'  <s:Fault>'
+         DC    AL2(CRLF),C'   <s:Code>'
+         DC    AL2(CRLF),C'     <s:Value>s:Receiver</s:Value>'
+         DC    AL2(CRLF),C'   </s:Code>'
+         DC    AL2(CRLF),C'   <s:Reason>'
+         DC    AL2(CRLF),C'     <s:Text xml:lang="en">'
+         DC    C'Resource &&FailingURL; not found</s:Text>'
+         DC    AL2(CRLF),C'   </s:Reason>'
+         DC    AL2(CRLF),C'  </s:Fault>'
+         DC    AL2(CRLF),C' </s:Body>'
+         DC    AL2(CRLF),C'</s:Envelope>'
+S12FAULN EQU   *-S12FAULT
+         EJECT
+*
+*  Translate table for translating to lower case
+*
+LOWERCASE DC   0AD(0),256AL1(*-LOWERCASE)
+         ORG   LOWERCASE+C'A'
+         DC    C'abcdefghi'
+         ORG   LOWERCASE+C'J'
+         DC    C'jklmnopqr'
+         ORG   LOWERCASE+C'S'
+         DC    C'stuvwxyz'
+         ORG   LOWERCASE+256
+*---------------------------------------------------------------------*
+*    Working storage definitions                                      *
+*---------------------------------------------------------------------*
+         DFHEISTG ,
+DTOKEN   DS    XL16
+PWORK    DS    PL8
+EWORK    DS    CL6
+         DS    H
+SCHEMECV DS    F
+PORTNUM  DS    F
+HOSTLEN  DS    F
+PATHLEN  DS    F
+QSTRLEN  DS    F
+URLLEN   DS    F
+METHLEN  DS    F
+HDRLEN   DS    F
+DBUFLEN  DS    F                       Length of document buffer   @P2A
+BODYLEN  DS    F                       Len of retrieved document   @P2A
+         DS    0AD(0)
+METHOD   DS    CL8
+DOCSPACE DS    CL3072                  Space to contain final      @P2A
+WORKAREA DS    CL2048                                              @02A
+         ORG   DOCSPACE                SOAP document               @P2A
+HOSTNAME DS    CL256
+PATHNAME DS    CL256
+QSTRING  DS    CL256
+HDRVALUE DS    CL128
+FAILURL  DS    CL2048                                              @02C
+         ORG   ,
+         DFHEIEND ,
+         END

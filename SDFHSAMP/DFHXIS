@@ -1,0 +1,163 @@
+         TITLE 'CUSTOMER INFORMATION CONTROL - SAMPLE XISCONA          *
+                GLOBAL USER EXIT PROGRAM'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFHXIS                                                *
+*                                                                     *
+* DESCRIPTIVE NAME = C.I.C.S./VS Sample XISCONA global exit.          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1991"                                   *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*        DFHXIS acts as an exit program for the XISCONA exit.         *
+*        The exit deals with the problems encountered when            *
+*        function shipping due to allocate problems.The system        *
+*        may be overloaded and the allocate queue has become          *
+*        too large.                                                   *
+*        The exit allows the allocate to be either queued,return      *
+*        code 0,or purged,return code 4.                              *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*        DFHXIS   must be defined on the CSD as a PROGRAM.            *
+*    RESTRICTIONS =                                                   *
+*        None                                                         *
+*    REGISTER CONVENTIONS =                                           *
+*        See the code                                                 *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Re-entrant                               *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* ENTRY POINT = DFHXIS                                                *
+*                                                                     *
+*     PURPOSE = see above                                             *
+*                                                                     *
+*     LINKAGE =                                                       *
+*        Called by the User Exit Handler.                             *
+*                                                                     *
+*     INPUT =                                                         *
+*        On entry register 1 addresses a parameter list described     *
+*        by the DFHUEPAR DSECT.                                       *
+*                                                                     *
+*     OUTPUT =                                                        *
+*        A return code is placed in register 15. If the return code   *
+*        is 0 the allocate is queued.If the return code is 4 the      *
+*        allocate is purged.                                          *
+*                                                                     *
+*     EXIT-NORMAL =                                                   *
+*        DFHXIS   returns to the address that was in register 14      *
+*        when it was called. Possible return codes in register 15     *
+*        are:-                                                        *
+*          0 - queue the allocate                                     *
+*          4 - purge the allocate                                     *
+*                                                                     *
+*     EXIT-ERROR = none                                               *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* EXTERNAL REFERENCES = none                                          *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* DESCRIPTION - see above                                             *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*     $MOD(DFHXIS),COMP(USEREXIT),PROD(CICS TS ):                     *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= M90842 330 911011 HD6NPW : Created.                         *
+*                                                                     *
+***********************************************************************
+*
+* Dsect for parameters passed to exit
+*
+         COPY  DFHXISDS
+*
+* Dsect for connection statistics record
+*
+         COPY DFHA14DS
+*
+* Dsect for mode entry statistics record
+*
+         COPY DFHA20DS
+*
+         DFHUEXIT TYPE=EP,ID=XISCONA
+R1              EQU  1        Parameter list address
+R2              EQU  2        Not used
+R3              EQU  3        Program base register
+R4              EQU  4        Address XISCONA parameter list
+R5              EQU  5        Address connection stats record
+R6              EQU  6        Work
+R7              EQU  7        Not used
+R8              EQU  8        Not used
+R9              EQU  9        Not used
+R10             EQU  10       Not used
+R11             EQU  11       Not used
+R12             EQU  12       Not used
+R13             EQU  13       Address gue parameter list
+R14             EQU  14       Return address
+R15             EQU  15       Entry point address,return code
+*
+DFHXIS   CSECT
+DFHXIS   AMODE 31
+DFHXIS   RMODE ANY
+         SAVE (14,12)                  Save current registers
+         LR    R3,R15                  Set-up base register
+         USING DFHXIS,R3
+         B     *+12                    Branch around module ID
+         DC    CL8'DFHXIS  '
+*
+         LR    R13,R1                  Set up addressability to
+         USING DFHUEPAR,R13            gue plist
+*
+         L     R4,UEPISPCA             Set up addressability to
+         USING DFHXISDS,R4             XISCONA plist
+*
+         ICM   R5,B'1111',UEPMODST     Set up addressability to
+         BZ    NOMODE                  mode entry statistics record.
+         USING DFHA20DS,R5             If no record, use conn stats.
+         L     R6,A20ESTAQ             Number in queue
+         B     CHKQUEUE                Check queue limit
+*
+NOMODE   ICM   R5,B'1111',UEPCONST     Set up addressability to
+         BZ    NOCONN                  connection statistics record.
+         USING DFHA14DS,R5             If no record, WTO and ABEND X'N.
+         L     R6,A14ESTAQ
+*
+CHKQUEUE LA    R7,10                   Put queue limit in R7
+         CLR   R7,R6                   Compare against current queue
+         BH    QUEUE                   < 10 in queue, queue request
+*
+NOQUEUE  LA    R15,UERCAPUR            > 9  in queue, purge request
+         B     EXIT
+*
+QUEUE    LA    R15,UERCAQUE            Queue the request
+         B     EXIT                    return
+*
+NOCONN   WTO   ('DFHXIS - NO CONNECTION STATS RECORD RECEIVED')
+         LA    R15,UERCAPUR            No connection stats record
+         B     EXIT                    Purge transaction
+*
+EXIT     L     R13,UEPEPSA
+         RETURN (14,12),RC=(15)        Return
+         LTORG
+*
+         END   DFHXIS

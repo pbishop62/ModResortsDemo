@@ -1,0 +1,1023 @@
+CBL CICS('COBOL3')
+CBL MAP,OBJ,RENT,NODYNAM,OPT,LIB,DATA(31),LIST,APOST,TRUNC(OPT)
+      ******************************************************************
+      *                                                                *
+      * MODULE NAME = DFHZCTDX                                         *
+      *                                                                *
+      * DESCRIPTIVE NAME = CICS/ESA(SAMPLE)   Terminal Autoinstall     *
+      *                                       User Program (COBOL) @P2A*
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *     Licensed Materials - Property of IBM                       *
+      *                                                                *
+      *     "Restricted Materials of IBM"                              *
+      *                                                                *
+      *     5655-Y04                                                   *
+      *                                                                *
+      *     (C) Copyright IBM Corp. 1985, 2012"                        *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      * STATUS = 7.2.0                                                 *
+      *                                                                *
+      * FUNCTION = Provide user input to Terminal Autoinstall          *
+      *            processing.                                     @P2A*
+      *                                                                *
+      *            This module is a component of ZCP.                  *
+      *                                                                *
+      *            It is called via an DFHPC CTYPE=LINK-URM, from      *
+      *            DFHZATA (INSTALL), DFHZATD(DELETE).             @P5C*
+      *            For shipped definitions it is called from       @P5C
+      *            DFHZATS and DFHZATMD.                           @P5C
+      *            For Bridge facilities it is called from DFHBRAI.@P5A
+      *                                                                *
+      *            Input to the module is a parameter list addressed   *
+      *            by DFHEICAP.                                        *
+      *                                                                *
+      *            The program is invoked when:                        *
+      *            1) An autoinstall INSTALL is in progress            *
+      *            2) An autoinstall DELETE has just completed         *
+      *                                                                *
+      *            The function to be performed is indicated via the   *
+      *            passed parameter list. This is evaluated during     *
+      *            common initialization processing, and control       *
+      *            passed to the appropriate routine.                  *
+      *                                                                *
+      *  Function 1 - INSTALL                                          *
+      *  --------------------                                          *
+      *  The primary purpose of this function is to complete the       *
+      *  SELECTED-PARMS fields.  They are used as input to an auto-    *
+      *  install resource 'builder' request.                           *
+      *                                                                *
+      *  The following fields may already have been supplied by MTS:   *
+      *     SELECTED-MODELNAME                                         *
+      *     SELECTED-PRINTER-NETNAME                                   *
+      *     SELECTED-ALTPRINTER-NETNAME                                *
+      *  The following fields should be set (if not supplied by MTS):  *
+      *     SELECTED-MODELNAME                                         *
+      *  The following fields should be set:                           *
+      *     SELECTED-TERM-ID                                           *
+      *     SELECTED-RETURN-CODE                                       *
+      *  The following fields may be set.                              *
+      *     SELECTED-PRINTER-ID                                        *
+      *     SELECTED-ALTPRINTER-ID                                     *
+      *                                                                *
+      *  The default action of this program is:                        *
+      *                                                                *
+      *  - If the modelname list contains no elements, then return     *
+      *  - If the first character of SELECTED-MODELNAME is blank       *
+      *    (Not supplied by MTS), then copy the first modelname in     *
+      *    MODELNAME-LIST into SELECTED-MODELNAME.                     *
+      *  - Copy the last 4 non-blank characters of the passed Netname t*
+      *    SELECTED-TERM-ID.                                           *
+      *                                                            @D3A*
+      *    There is commented out code which allows the TERMID     @D3A*
+      *    to be generated from the NETID and NETNAME for CICS     @D3A*
+      *    systems which use DYNAMIC LUALIAS netnames.             @D3A*
+      *    It takes the last non blank character from the CINIT    @D3A*
+      *    NETID and the last 3 non blank characters from the      @D3A*
+      *    CINIT NETNAME.  The NETID and NETNAME are found in the  @D3A*
+      *    CINIT X'0E' Control Vector (CV).  If the code fails to  @P4A*
+      *    derive the TERMID from the NETNAME it uses the last 4   @P4A*
+      *    characters of the supplied NETNAME instead.             @P4A*
+      *                                                               A*
+      *    An uncalled subroutine called EXTRACT-TNADDR-FROM-CINIT @D4A*
+      *    shows how to extract the Telnet 3270 IP address from    @D4A*
+      *    the CINIT.  CICS call this information the TNADDR.      @D4A*
+      *    This routine extracts the fields                        @D4A*
+      *    from Control Vector 64 unconverted (see                 @D4A*
+      *    IP-ADDRESS, IP-PORT and IP-HOSTNAME).  The fields       @D4A*
+      *    are available in the 'string' format in the NEP         @D4A*
+      *    when the DFHZC3461 session started message is written.  @D4A*
+      *    The CV64 only exists for Telnet 3270 terminals.         @D4A*
+      *                                                            @D4A*
+      *  - Set the SELECTED-RETURN-CODE to RETURN-OK to indicate that  *
+      *    a selection has been made.                                  *
+      *  - Return to the calling program.                              *
+      *                                                                *
+      *  EXIT-NORMAL =                                                 *
+      *       Exit is via an EXEC CICS RETURN command.                 *
+      *       Status is set to zero if all processing completes        *
+      *       normally.                                                *
+      *  EXIT-ERROR =                                                  *
+      *       Exit is via an EXEC CICS RETURN command.                 *
+      *       RETURN-CODE is non-zero on entry to this module and is   *
+      *       untouched if any error occurs, hence, a non-zero return  *
+      *       code is passed back to the calling program.              *
+      *                                                                *
+      *  Function 2 - autoinstall DELETE                               *
+      *  -------------------------------                               *
+      *                                                                *
+      *  This function gives the user the opportunity to perform       *
+      *  processing when an autoinstalled terminal has been deleted.   *
+      *                                                                *
+      *  The default action of this program is to establish            *
+      *  addressability to the parameter list, and RETURN.             *
+      *                                                                *
+      *                                                                *
+      *    EXIT-NORMAL =                                               *
+      *         Exit is via an EXEC CICS RETURN command.               *
+      *                                                                *
+      *  Function 7, 8 & 9 - INSTALL                               @L1C*
+      *  ---------------------------                               @L1C*
+      *  Install of a shipped terminal, connection or virtual      @L1A*
+      *  terminal.                                                 @L1A*
+      *                                                                *
+      *  The primary purpose of this function is to validate the       *
+      *  SELECTED_TERMID field.  This is used as input to an auto-     *
+      *  install resource 'builder' request.                           *
+      *                                                                *
+      *  The fields are described in more detail in DFHTCUDS.          *
+      *                                                                *
+      *  The following input fields are supplied:                      *
+      *     INSTALL_SHIPPED_CLASH       -> Y/N                         *
+      *     INSTALL_SHIPPED_NETNAME_PTR -> NETNAME_FIELD               *
+      *     INSTALL_SHIPPED_TERMID_PTR  -> incoming TERMID             *
+      *     INSTALL_SHIPPED_APPLID_PTR  -> APPLID of TOR               *
+      *     INSTALL_SHIPPED_SYSID_PTR   -> SYSID of incoming request   *
+      *     INSTALL_SHIPPED_CORRID_PTR  -> Correlation token           *
+      *                                                                *
+      *  The following fields should be set on exit:                   *
+      *     SELECTED_TERM_ID                                           *
+      *     SELECTED_RETURN_CODE                                       *
+      *  EXIT-NORMAL =                                                 *
+      *     Exit is via an EXEC CICS RETURN command.                   *
+      *     Status is set to zero if all processing completes normally.*
+      *                                                                *
+      *  EXIT-ERROR =                                                  *
+      *     Exit is via an EXEC CICS RETURN command.                   *
+      *     RETURN_CODE is non-zero on entry to this module and is     *
+      *     untouched if any error occurs, hence, a non-zero return    *
+      *     code is passed back to the calling program.                *
+      *                                                                *
+      *  Function 10 & 11 - DELETE                                     *
+      *  -------------------------                                     *
+      *  Delete of a shipped terminal, connection or virtual       @L1A*
+      *  terminal.                                                 @L1A*
+      *                                                                *
+      *  This function gives the user the opportunity to perform       *
+      *  processing when one of the above has been deleted.        @L1C*
+      *                                                                *
+      *  The default action of this program is to establish            *
+      *  addressability to the parameter list, and RETURN.             *
+      *                                                                *
+      *                                                                *
+      *    EXIT-NORMAL =                                               *
+      *         Exit is via an EXEC CICS RETURN command.               *
+      *  - Copy the last 4 non-blank characters of the passed Netname  *
+      *    to SELECTED-TERM-ID.                                        *
+      *  FUNCTION 13 - INSTALL CONSOLES                            @D2A*
+      *  ------------------------------                            @D2A*
+      *  The primary purpose of this function is to complete       @D2A*
+      *  SELECTED-PARMS fields.  They are used as input to an      @D2A*
+      *  auto-install resource 'builder' request.                  @D2A*
+      *                                                            @D2A*
+      *  The following fields should be set:                       @D2A*
+      *     SELECTED-MODELNAME                                     @D2A*
+      *     SELECTED-TERM-ID                                       @D2A*
+      *     SELECTED-RETURN-CODE                                   @D2A*
+      *  The following field may be set:                           @D2A*
+      *     SELECTED-CONSOLE-DEL-DELAY  (Number of minutes)        @D2A*
+      *                                                            @D2A*
+      *  The default action of this program is:                    @D2A*
+      *                                                            @D2A*
+      *  - If the modelname list contains no elements, return      @D2A*
+      *  - Copy the first MODELNAME in                             @D2A*
+      *    MODELNAME-LIST into SELECTED-MODELNAME.                 @D2A*
+      *  - Copy the last 4 non-blank characters of the passed      @D2A*
+      *    or Consolename to SELECTED-TERM-ID.                     @D2A*
+      *  - Set the SELECTED-RETURN-CODE to RETURN-OK to show       @D2A*
+      *    a selection has been made.                              @D2A*
+      *  - Return to the calling program.                          @D2A*
+      *                                                            @D2A*
+      *  EXIT-NORMAL =                                             @D2A*
+      *       Exit is via an EXEC CICS RETURN command.             @D2A*
+      *       Status is set to zero if all processing normal       @D2A*
+      *                                                            @D2A*
+      *  EXIT-ERROR =                                              @D2A*
+      *       Exit is via an EXEC CICS RETURN command.             @D2A*
+      *       RETURN-CODE is non-zero on entry to this module      @D2A*
+      *       untouched if any error occurs, hence, a non-zero     @D2A*
+      *       code is passed back to the calling program.          @D2A*
+      *                                                            @D2A*
+      *  Function 14 - DELETE Consoles                             @D2A*
+      *  -----------------------------                             @D2A*
+      *                                                            @D2A*
+      *  This function gives the user the opportunity to           @D2A*
+      *  process when an autoinstalled console is deleted.         @D2A*
+      *                                                            @D2A*
+      *  The default action of this program is to establish        @D2A*
+      *  addressability to the parameter list, and RETURN.         @D2A*
+      *                                                            @D2A*
+      *                                                            @D2A*
+      *    EXIT-NORMAL =                                           @D2A*
+      *         Exit is via an EXEC CICS RETURN command.           @D2A*
+      *                                                                *
+      *  Function 15 & 17 - Bridge Facility INSTALL                @P6C
+      *  ------------------------------------------                @P6C
+      *                                                            @P5A
+      *  This function gives the user the opportunity to perform   @P5A
+      *  processing when an autoinstalled bridge facility is       @P5A
+      *  installed.                                                @P5A
+      *  Main options are:                                         @P5A
+      *   1) Verify whether the input termid and/or netname are    @P5A
+      *      valid.                                                @P5A
+      *      If not then set the SELECTED_BRFAC_RETURN_CODE        @P5A
+      *      to REJECT.                                            @P5A
+      *   2) Override the input termid and/or netname by setting   @P5A
+      *      the following output fields                           @P5A
+      *      SELECTED_BRFAC_TERMID                                 @P5A
+      *      SELECTED_BRFAC_NETNAME                                @P5A
+      *                                                            @P5A
+      *  The default action of this program is:                    @P5A
+      *                                                            @P5A
+      *  - Accept the terminal id by copying the terminal id       @P5A
+      *    addressed by INSTALL_BRFAC_TERMID_PTR into              @P5A
+      *    SELECTED_BRFAC_TERMID.                                  @P5A
+      *  - Accept the netname by copying the netname addressed by  @P5A
+      *    INSTALL_BRFAC_NETNAME_PTR into                          @P5A
+      *    SELECTED_BRFAC_NETNAME.                                 @P5A
+      *  - Set the SELECTED_BRFAC_RETURN_CODE to RETURN_OK to      @P5A
+      *    indicate that a selection has been made.                @P5A
+      *  - Return to the calling program.                          @P5A
+      *                                                            @P5A
+      *  EXIT-NORMAL =                                             @P5A
+      *       Exit is via an EXEC CICS RETURN command.             @P5A
+      *       Status is set to zero if all processing completes    @P5A
+      *       normally                                             @P5A
+      *                                                            @P5A
+      *  EXIT-ERROR =                                              @P5A
+      *       Exit is via an EXEC CICS RETURN command.             @P5A
+      *       RETURN_CODE is non-zero on entry to this module and  @P5A
+      *       is untouched if any error occurs, hence, a non-zero  @P5A
+      *       return code is passed back to the calling program.   @P5A
+      *                                                            @P5A
+      *  Function 16 & 18 - Bridge Facility DELETE                 @P6C
+      *  -----------------------------------------                 @P6C
+      *                                                            @P5A
+      *  This function gives the user the opportunity to perform   @P5A
+      *  processing when an autoinstalled bridge facility is       @P5A
+      *  deleted.                                                  @P5A
+      *                                                            @P5A
+      *  The default action of this program is to establish        @P5A
+      *  addressability to the parameter list, and RETURN.         @P5A
+      *                                                            @P5A
+      *  EXIT-NORMAL =                                             @P5A
+      *       Exit is via an EXEC CICS RETURN command.             @P5A
+      *                                                            @P5A
+      *----------------------------------------------------------------*
+      *                                                                *
+      * ENTRY POINT = DFHZCTDX                                         *
+      *                                                                *
+      *     PURPOSE = All Functions                                    *
+      *                                                                *
+      *     The request type is analyzed, and control passed to the    *
+      *     appropriate routine.                                       *
+      *                                                                *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *                                                                *
+      * EXTERNAL REFERENCES = None                                     *
+      *                                                                *
+      *     ROUTINES =                                                 *
+      *         EXEC CICS RETURN - return to calling program           *
+      *                                                                *
+      *                                                                *
+      *     CONTROL BLOCKS =                                           *
+      *         See FUNCTION section for description of input          *
+      *         parameters                                             *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *                                                                *
+      * DESCRIPTION                                                    *
+      *                                                                *
+      * A check is made to ensure the presence of the input parameters *
+      * (passed via COMMAREA). If these do not exist, then return is   *
+      * made to the calling program.                                   *
+      *                                                                *
+      * The type of request(INSTALL|DELETE) is then determined, and a  *
+      * branch taken to the appropriate function routine(see 'FUNCTION'*
+      * above for details).                                            *
+      *                                                                *
+      *--------------------------------------------------------------- *
+      *                                                                *
+      * CHANGE ACTIVITY :                                              *
+      *    $MOD(DFHZCTDX),COMP(SAMPLES),PROD(CICS TS ):                *
+      *                                                                *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                     *
+      *    $D1= I06615 510 950614 HD6NPRW: Shipped URM                 *
+      *    $D2= I06688 530 971112 HD2WPGK: Autoinstall for consoles    *
+      *    $D3= I06709 610 990416 HD2WPGK: Dynamic LUALIAS             *
+      *    $D4= I06890 630 020108 HD2WPGK: IP ADDR for VTAM terminals  *
+      *    $D5= I07991 670 100820 HDIGPG : Translate unprintable char
+      *    $L1= 704    510 950627 HD2WPGK: Virtual Terminal            *
+      *    $P0= U8D    170 850514        : Created.                    *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.             *
+      *    $P2= M83127 410 930709 HDAFDRB: Correct prologue comments.  *
+      *    $P3= M96517 510 960229 HDAFDRB: Correct compile errors.     *
+      *    $P4= M14649 610 991006 HDHIMI : Make sample autoinstall URM *
+      *    $P5= D02199 620 010703 HDFXAB : Add Bridge code to samples  *
+      *    $P5= D02717 620 010914 HDFXAB : Bridge function codes       *
+      *    $P7= D03191 620 011017 HD2WPGK: Correct modelname-count comm*
+      *    $P8= D03868 630 020128 HD2WPGK: DFHZ*TDX spelling correction*
+      *    $P9= D20824 660 080508 HDAFDRB: Define x'0E' properly       *
+      *    $PA= D20947 660 080513 HDAFDRB: Fix compile error.          *
+      *    $PB= D23479 660 081229 HDJSCAG: TN3270 exits update         *
+      *    $PC= D23864 660 090113 HDJSCAG: Compile error               *
+      *    $PD= D16164 670 100707 HDAFDRB: Correct netname definition  *
+      *    $PE= D17160 670 100716 HD4EPEA: Add CICS('COBOL3')          *
+      *        D147628 720 180307 HD2GJST: Remove Cobol II comment     *
+      *                                                                *
+      ******************************************************************
+        IDENTIFICATION DIVISION.
+        PROGRAM-ID. DFHZCTDX.
+
+        ENVIRONMENT DIVISION.
+
+        DATA DIVISION.
+        WORKING-STORAGE SECTION.
+      *
+      * CODES SUPPLIED BY COMMAREA:
+      *
+        77  install-code        PIC X(1) VALUE IS '0'.
+        77  delete-code         PIC X(1) VALUE IS '1'.
+        77  install-sterm       PIC X(1) VALUE IS '7'.
+        77  install-srse        PIC X(1) VALUE IS '8'.
+        77  install-vt          PIC X(1) VALUE IS '9'.
+        77  delete-sterm        PIC X(1) VALUE IS x'FA'.
+        77  delete-srse         PIC X(1) VALUE IS x'FB'.
+        77  delete-vt           PIC X(1) VALUE IS x'FC'.
+        77  install-console     PIC X(1) VALUE IS X'FD'.
+        77  delete-console      PIC X(1) VALUE IS X'FE'.
+        77  install-link-brfac  PIC X(1) VALUE IS X'0F'.
+        77  delete-link-brfac   PIC X(1) VALUE IS X'10'.
+        77  install-start-brfac PIC X(1) VALUE IS X'11'.
+        77  delete-start-brfac  PIC X(1) VALUE IS X'12'.
+      *
+      * RETURN CODES:
+      *
+        77  return-ok           PIC X(1) VALUE IS LOW-VALUES.
+        77  reject              PIC X(1) VALUE IS x'01'.
+      *
+      * STRUCTURE TO ALLOW THE LAST FOUR CHARACTERS TO BE USED AS
+      * THE NETNAME OR CONSOLENAME.                                @PDC
+        01  net-sub1              pic s9(2) comp value 8.
+        01  net-sub2              pic s9(2) comp value 0.
+        01  name-length           pic s9(2) comp value 0.
+        01  netname-bits.
+            02  net-chr           pic x(1) occurs 17.
+      *                                                            @D3A
+      * Structure to define NETID and REAL-NETNAME and fields      @D3A
+      * to manipulate them.                                        @D3A
+      *                                                            @D3A
+        01  netid-bits.
+            02  netid             pic x(1) occurs 8.
+        01  real-netname-bits.
+            02  real-netname      pic x(1) occurs 8.
+        01  i                     pic s9(4) binary.
+        01  j                     pic s9(4) binary.
+        01  k                     pic s9(4) binary.
+        01  len                   pic s9(4) binary.
+        01  half-word             pic s9(4) comp value +0.
+      * The following structure allows a one byte length field     @D3A
+      * in the CINIT to be added into cv-ptr.                      @D3A
+      * This is the tricky bit that requires the TRUNC(OPT)        @P4A
+      * compiler option.                                           @P4A
+        01  fred redefines half-word.
+           03 filler pic x.
+           03 half   pic x.
+        77  first-0e              pic x value 'N'.
+      * The following value contains x'0E'                         @PAC
+        77  cv-0e                 pic x value X'0E'.
+      * The following 4 fields allow pointers to be incremented.   @D3A
+        01 cv-ptr usage is pointer.
+        01 cv-fld redefines cv-ptr pic s9(8) binary.
+        01 end-cinit-ru-ptr usage is pointer.
+        01 end-cinit-fld redefines end-cinit-ru-ptr pic s9(8) binary.
+      * The following 4 fields allow pointers to be incremented.   @D4A
+        01 sv-ptr usage is pointer.
+        01 sv-fld redefines sv-ptr pic s9(8) binary.
+        01 end-sv-ptr usage is pointer.
+        01 end-sv-fld redefines end-sv-ptr pic s9(8) binary.
+      *
+      *
+      * TERMINAL IDENTIFIER IS BUILT HERE BEFORE BEING PLACED IN THE
+      * RETURN FIELD.
+      *
+        01  term-idnt.
+            02 term-chr           pic x(1) occurs 4.
+      * TNADDR fields extracted from                               @D4A
+      * Telnet 3270 control vector 64 subvector fields             @D4A
+        01  tnaddr.
+            02  ip-address         pic s9(8) binary.
+            02  ip-address-x redefines  ip-address pic x(4).
+      *                                                            @PBA
+            02  ip-v6-address      pic x(16).
+            02  ip-port            pic s9(4) binary.
+            02  ip-filler          pic s9(4) binary.
+            02  ip-hostname-length pic s9(8) binary.
+            02  ip-hostname        pic x(256).
+
+        linkage section.
+
+        01  dfhcommarea.
+            copy dfhtcuds.
+        01  sterm-idnt.
+            02 sterm-chr          pic x(1) occurs 4.
+        01  bterm-idnt            pic x(4).
+        01  bnet-idnt             pic x(4).
+
+      *
+      * The IBM supplied structure for MODELNAME-LIST is for a single
+      * modelname.  If you need to select the 2nd or subsequent
+      * modelname you can use a structure similar to the following:
+      *
+      * 01  modelname-list.                                        @P7C
+      *     02  modelname-count           PIC S9(2) binary.
+      *     02  modelname                 PIC X(8) occurs 1 to 999
+      *                                   depending on modelname-count.
+      *
+      * The following describes the CINIT to allow access to the   @D3A
+      * Network Qualified NETNAME held in the 2nd 0E control       @D3A
+      * vector. CINIT is an SNA control block, and consists of     @P4A
+      * base fields each prefixed by 1 or 2 byte length fields     @P4A
+      * (defined below) followed by Control Vectors with 1 byte    @P4A
+      * identifiers.  We require the second one which has a flag   @P4A
+      * of x'0E' should contain the name we want.                  @P4A
+      *                                                            @D3A
+        01  cinitru.
+            02  cinit-len         pic s9(4) binary.
+            02  cinitchar pic x(10).
+            02  bindimgl          pic s9(4) binary.
+            02  bindimgd          pic x.
+        01  sluname-f.
+            02  slutype           pic x.
+            02  sluname-len       pic x.
+            02  sluname           pic x.
+        01  rqstrid-f.
+            02  rqstrid-len       pic x.
+            02  rqstrid           pic x.
+        01  password-f.
+            02  password-len      pic x.
+            02  passwrd           pic x.
+        01  userdata-f.
+            02  userdata-len      pic x.
+            02  userdt            pic x.
+        01  luchr-f.
+            02  luchr-len         pic s9(4) binary.
+            02  luchr             pic x.
+        01  scrypt-f.
+            02  scrypt-len        pic x.
+            02  scrypt            pic x.
+      * This is the end of the base fields. CVs, if any, start     @P4A
+      * here.                                                      @P4A
+      * CVs are optional and appear in any order on the end of
+      * the base fields.                                           @P4A
+      * They are all preceded by a one byte key which identifies
+      * type of vector and a one byte length field.
+        01  kl-struc.
+            02  kl-hdr.
+                03  kl-key        pic x.
+                  88  cv-64     value x'64'.
+                03  kl-data-len   pic x.
+            02  kl-data.
+                03  f3            pic x.
+                03  nqname        pic x(1) occurs 17.
+      * Telnet 3270 control vector 64 subvector fields             @D4A
+        01  cv64-sv.
+          02  sv-key        pic x.
+          02  sv-len        pic x.
+          02  sv-data       pic x.
+        01  sv81.
+          02  key-81        pic x.
+            88  sv-81     value x'81'.
+          02  len-81        pic x.
+          02  tp-version    pic x.
+            88 tp-04 value x'04'.
+      *                                                            @PBA
+            88 tp-06 value x'06'.
+          02  filler        pic x.
+      *                                                            @PBC
+          02  tp-v6-address pic x(16).
+        01  sv82.
+          02  key-82        pic x.
+            88  sv-82     value x'82'.
+          02  len-82        pic x.
+          02  tp-port       pic s9(4) binary.
+        01  sv85.
+          02  key-85        pic x.
+            88  sv-85     value x'85'.
+          02  len-85        pic x.
+          02  tp-hostname-f pic x.
+          02  tp-hostname   pic x(256).
+       procedure division.
+      *
+      * CHECK THAT WE HAVE A COMMAREA, IF NOT THEN EXIT
+      *
+           if eibcalen not equal 0
+      *
+      * EXECUTE THE APPROPRIATE PARAGRAPH FOR INSTALL OR DELETE:
+      *
+              if install-exit-function equal install-code then
+                 perform install-paragraph
+              end-if
+      *
+      * IF THE REQUEST WAS AN INSTALL REQUEST THEN THE NEXT TEST
+      * WILL FAIL ANYWAY, IE. FANCY LOGIC NOT REQUIRED!
+      *
+              if delete-exit-function equal delete-code then
+                 perform delete-paragraph
+              end-if
+      *
+             if install-shipped-exit-function equal install-sterm then
+                perform install-shipped-paragraph
+              end-if
+      *
+             if install-shipped-exit-function equal install-srse then
+                perform install-shipped-paragraph
+              end-if
+      *
+             if install-shipped-exit-function equal install-vt   then
+                perform install-shipped-paragraph
+              end-if
+      *
+              if delete-exit-function equal delete-sterm then
+                 perform delete-paragraph
+              end-if
+      *
+              if delete-exit-function equal delete-srse then
+                 perform delete-paragraph
+              end-if
+      *
+              if delete-exit-function equal delete-vt   then
+                 perform delete-paragraph
+              end-if
+      *                                                            @D2A
+              if install-exit-function equal install-console then
+                 perform install-paragraph
+              end-if
+      *                                                            @D2A
+              if install-exit-function equal delete-console then
+                 perform delete-paragraph
+              end-if
+      *                                                            @P6C
+              if install-exit-function equal
+                 install-link-brfac then
+                 perform install-bridge-fac-paragraph
+              end-if
+      *                                                            @P6C
+              if install-exit-function equal
+                 delete-link-brfac then
+                 perform delete-bridge-fac-paragraph
+              end-if
+      *                                                            @P6A
+              if install-exit-function equal
+                 install-start-brfac then
+                 perform install-bridge-fac-paragraph
+              end-if
+      *                                                            @P6A
+              if install-exit-function equal
+                 delete-start-brfac then
+                 perform delete-bridge-fac-paragraph
+              end-if
+      * RETURN TO CICS.
+      *
+           end-if.
+       return-line.
+           exec cics return end-exec.
+           goback.
+      *
+      *
+       install-paragraph.
+      *
+      * SET UP ADDRESSABILITY TO THE COMMAREA.
+      *
+      *
+           set address of modelname-list to install-modelname-ptr.
+      *
+           set address of selected-parms to install-selected-ptr.
+      *
+      * CHECK IF WE HAVE MODELS TO USE, IF NOT THEN EXIT.
+      *
+           if modelname-count not equal 0
+      *
+      * Move the Netname or Consolename so that it can be          @D2C
+      * dealt with character by character.                         @D2C
+      *
+             if install-exit-function equal install-console
+              set address of consolename-field
+                          to install-consolename-ptr
+              move consolename to netname-bits
+              move consolename-length to name-length
+             else
+              set address of netname-field to install-netname-ptr
+              move netname to netname-bits
+              move netname-length to name-length
+             end-if
+      *                                                            @D3A
+      *    Code identified by *** below is commented out.  If      @D3A
+      *    this CICS uses LUAPFX then remove the *** to enable     @D3A
+      *    the code (don't forget the 'else' statements too).      @D3A
+      *                                                            @D3A
+      *    Note - This code MUST be compiled with TRUNC(OPT).      @D3A
+      *    This permits the use of overlays to convert 1 byte      @P4A
+      *    length fields to half-words for stepping through CINIT. @P4A
+      *    This option is already set at the top of this code.     @P4A
+      *    Code to derive the TERMID from the NETID and NETNAME    @D3A
+      *    present in the CINIT.  Code of this sort is needed if   @D3A
+      *    this CICS system uses the VTAM parameter LUAPFX=xx      @D3A
+      *    which causes VTAM to send dynamic LUALIAS netnames. It  @D3A
+      *    creates TERMIDs which are reproducible because they are @D3A
+      *    taken from the last non blank character of the NETID and@D3A
+      *    the last 3 non blank characters of the REAL-NETNAME.    @D3A
+      *    You will need to modify this code if the last           @D3A
+      *    character of the NETID is not different for each        @D3A
+      *    network which sends CINITs to this CICS.                @D3A
+      *                                                            @D3A
+      *    If this code is NOT used, OR if the code FAILS          @D3A
+      *    (for instance a VTAM control vector is missing or the   @D3A
+      *    NETID is not available) then the original TERMID code   @D3A
+      *    creates the TERMID from the NETNAME that CICS knows the @D3A
+      *    resource by. If the netname is a dynamic LUALIAS, the   @D3A
+      *    TERMID will be 0001 or 0002 etc and will be different   @D3A
+      *    at the next logon if the CDRSCTI interval has expired.  @D3A
+      *                                                            @D3A
+      ***    if install-exit-function not equal install-console then
+      ***      perform extract-nqname-from-cinit
+      ***    end-if
+      ***    if (install-exit-function equal install-console) or
+      ***       (real-netname-bits = spaces) or
+      ***       (netid-bits = spaces) then
+      *
+      * RESET NETNAME LENGTH IF THERE ARE TRAILING SPACES.
+      *
+              perform with test before
+                      varying net-sub1 from name-length by -1
+                      until (net-chr(net-sub1) not = space)
+                            or (net-sub1 = 4)
+              end-perform
+
+              subtract 3 from net-sub1
+
+              perform with test after
+                      varying net-sub2 from 1 by 1
+                      until net-sub2 = 4
+                   move net-chr(net-sub1) to term-chr(net-sub2)
+                   add 1 to net-sub1
+              end-perform
+      ***    else
+      ***      perform set-alias-termid
+      ***    end-if
+      *
+      * PLACE TERM-IDNT INTO SELECTED Parameter
+      *
+              move term-idnt to selected-term-id
+      *
+      * SELECT THE MODEL FROM THE LIST SUPPLIED (THE FIRST MODEL IS
+      * SELECTED).
+      *
+      *
+              if selected-modelname = spaces
+                  move modelname to selected-modelname
+              end-if
+      *
+      * SET RETURN CODE 0
+      *
+              move return-ok to selected-return-code
+      *
+           end-if.
+      *
+       install-shipped-paragraph.
+      *
+      * INSTALL CODE HERE.
+      *   This sample accepts the selected termid value.If however
+      *   a termid clash has occurred then this value has been
+      *   selected by the caller module DFHZATS.
+      *   There is no guarantee that this value will be the same
+      *   once a restart has occurred.
+      *   Special consideration MUST be given to how this termid
+      *   will be used.
+      *   This sample will update the selected termid value to
+      *   the original incoming value.If a clash has occurred and
+      *   the definition is not busy then it will be replaced.
+      *
+           set address of install-shipped-selected-parms to
+                    install-shipped-selected-ptr.
+           set address of sterm-idnt to install-shipped-termid-ptr.
+           move sterm-idnt to selected-shipped-termid.
+           move return-ok to selected-shipped-return-code.
+      *
+       delete-paragraph.
+      *
+      * DELETE CODE IS PLACED HERE.
+      *
+      *
+              exit.
+
+       install-bridge-fac-paragraph.
+      * PUT INSTALL CODE HERE                                      @P5A
+      *                                                            @P5A
+      *     This sample accepts the selected termid/netname.       @P5A
+      *     Special consideration MUST be given to how this termid @P5A
+      *     will be used.                                          @P5A
+      *     In particular it must not conflict with the namespace  @P5A
+      *     of real terminals.                                     @P5A
+      *
+             set address of install-brfac-selected-parms to
+                       install-brfac-selected-ptr.
+             set address of bterm-idnt to
+                       install-brfac-termid-ptr.
+             move bterm-idnt to selected-brfac-termid.
+             set address of bnet-idnt to
+                       install-brfac-netname-ptr.
+             move bnet-idnt to
+                       selected-brfac-netname.
+             move return-ok to selected-brfac-return-code.
+
+       delete-bridge-fac-paragraph.
+      *                                                            @P5A
+      * DELETE CODE IS PLACED HERE.                                @P5A
+      *                                                            @P5A
+      *                                                            @P5A
+              exit.
+      * Following code all commented out so that we can still
+      * compile (as it is unreachable).
+      *extract-nqname-from-cinit.
+      *************************************************************@D3A
+      * Scan up the CINIT using SNA rules until the CVs are found. @D3A
+      * Scan the CVs for the 2nd '0E'X  CV.                        @D3A
+      * Extract the NETID and REAL-NETNAME from the CV.            @D3A
+      * If anything is not as expected return with netid and       @D3A
+      * real-netname as blank showing we are unable to extract the @D3A
+      * NQNAME.                                                    @D3A
+      *                                                            @D3A
+      * Note - COBOL is NOT the ideal language to do a system      @D3A
+      * programming task of scanning a VTAM CINIT.  The code       @D3A
+      * below is not normally to be recommended!                   @D3A
+      * Note also - This code MUST be compiled with TRUNC(OPT).    @D3A
+      * Note also that this code is only needed if you uncomment   @D3A
+      * the perform extract-nqname-from-cinit above.               @D3A
+      *************************************************************@D3A
+      * Initialize fields                                          @D3A
+      *    move spaces to netid-bits.
+      *    move spaces to real-netname-bits.
+      *
+      * Point to the end of the Control Vectors  in the CINIT-RU   @D3A
+      *
+      *    set cv-ptr to install-cinit-ptr.
+      *    set address of cinitru to cv-ptr.
+      *    -> start of data in field and add length of field       @P4A
+      *    set cv-ptr to address of bindimgd.
+      *    add bindimgl to cv-fld.
+      *                                                            @D3A
+      *    set address of sluname-f to cv-ptr.
+      *    -> start of data in field and add length of field       @P4A
+      *    set cv-ptr to address of sluname.
+      *    move sluname-len to half.
+      *    add half-word to cv-fld.
+      *                                                            @D3A
+      *    set address of rqstrid-f to cv-ptr.
+      *    -> start of data in field and add length of field       @P4A
+      *    set cv-ptr to address of rqstrid.
+      *    move rqstrid-len to half.
+      *    add half-word to cv-fld.
+      *                                                            @D3A
+      *    set address of password-f to cv-ptr.
+      *    -> start of data in field and add length of field       @P4A
+      *    set cv-ptr to address of passwrd.
+      *    move password-len to half.
+      *    add half-word to cv-fld.
+      *                                                            @D3A
+      *    set address of userdata-f to cv-ptr.
+      *    -> start of data in field and add length of field       @P4A
+      *    set cv-ptr to address of userdt.
+      *    move userdata-len to half.
+      *    add half-word to cv-fld.
+      *                                                            @D3A
+      *    set address of luchr-f to cv-ptr.
+      *    -> start of data in field and add length of field       @P4A
+      *    set cv-ptr to address of luchr.
+      *    add luchr-len to cv-fld.
+      *                                                            @D3A
+      *    set address of scrypt-f to cv-ptr.
+      *    -> start of data in field and add length of field       @P4A
+      *    set cv-ptr to address of scrypt.
+      *    move scrypt-len to half.
+      *    add half-word to cv-fld.
+      *
+      * Point to the last byte in the CINIT-RU                     @D3A
+      *
+      *    set end-cinit-ru-ptr to install-cinit-ptr.
+      *    compute end-cinit-fld = end-cinit-fld + cinit-len - 1.
+      *
+      * If the CINIT-RU contains control vectors then...           @D3A
+      *
+      *    move 'N' to first-0e.
+      *    if cv-fld < end-cinit-fld
+      *      perform with test before
+      *              until (cv-fld > end-cinit-fld)
+      *
+      * Scan through the CV until the 2nd 0E is found.             @D3A
+      *
+      *        set address of kl-struc  to cv-ptr
+      *        if kl-key = cv-0e
+      *          if first-0E = 'N'
+      *            move 'Y' to first-0e
+      *          else
+      *
+      * The 0E vector contains X'0EllF3' followed by
+      * C'netid.netname' = desired SLU name.
+      *
+      * Move the netid from the CV into NETID
+      *            move kl-data-len to half
+      *            compute len = half-word - 1
+      *            perform with test before
+      *                    varying i from 1 by 1
+      *                    until (nqname(i) = '.' or i = 10)
+      *              move nqname(i) to netid(i)
+      *            end-perform
+      * If no . (end of netid) was found then set NETID to spaces
+      * and no netid and real_netname will be returned.  However,
+      * if it was found then now move netname to REAL-NETNAME.
+      *            if i > 9 or i > len
+      *              move spaces to netid-bits
+      *            else
+      *              subtract 1 from len
+      *              perform with test after
+      *                      varying j from 1 by 1 until ( j = len )
+      *                compute k = j + i
+      *                move nqname(k) to real-netname(j)
+      *              end-perform
+      *            end-if
+      *          end-if
+      *        end-if
+      *        move kl-data-len to half
+      *        -> start of data in field and add length of field   @P4A
+      *        set cv-ptr to address of kl-data
+      *        add half-word to cv-fld
+      *      end-perform
+      *    end-if.
+      *set-alias-termid.
+      *************************************************************@D3A
+      * SET-ALIAS-TERMID                                           @D3A
+      * Set TERM-IDNT from the last non blank char of NETID and    @D3A
+      * the last 3 non blank chars of REAL-NETNAME.                @D3A
+      *************************************************************@D3A
+      * Move last non blank character of NETID to 1st of TERM-IDNT.
+      *                                                            @D3A
+      *       perform with test before
+      *               varying net-sub1 from 8 by -1
+      *               until (netid(net-sub1) not = space)
+      *       end-perform.
+      *
+      *       move netid(net-sub1) to term-chr(1).
+      *
+      *                                                            @D3A
+      * Move last 3 non blank character of REAL-NETNAME to TERM-IDNT.
+      *                                                            @D3A
+      *       perform with test before
+      *               varying net-sub1 from 8 by -1
+      *               until (real-netname(net-sub1) not = space)
+      *                     or (net-sub1 = 3)
+      *       end-perform.
+      *
+      *       subtract 2 from net-sub1.
+      *
+      *       perform with test after
+      *               varying net-sub2 from 2 by 1
+      *               until net-sub2 = 4
+      *         move real-netname(net-sub1) to term-chr(net-sub2)
+      *         add 1 to net-sub1
+      *       end-perform.
+      *       exit.
+      *extract-tnaddr-from-cinit.
+      *************************************************************@D4A
+      * Scan up the CINIT using SNA rules until the CVs are found. @D4A
+      * Scan the CVs for the '64' CV.                              @D4A
+      * Extract the TNADDR fields from the CV.                     @D4A
+      *                                                            @D4A
+      * Output = IP-ADDRESS or IP-V6-ADDRESS                       @PBC
+      *          IP-PORT                                           @D4A
+      *          IP-HOSTNAME-LENGTH                                @D4A
+      *          IP-HOSTNAME                                       @D4A
+      * Notes:                                                     @D4A
+      * 1. COBOL is NOT the ideal language to do a system          @D4A
+      *    programming task of scanning a VTAM CINIT.  The code    @D4A
+      *    below is not normally to be recommended!                @D4A
+      * 2. This code MUST be compiled with TRUNC(OPT).             @D4A
+      * 3. There is no PERFORM for this code - it can be added     @D4A
+      *    anywhere appropriate in the install-terminal code.      @D4A
+      *************************************************************@D4A
+      * Initialize fields                                          @D4A
+      *    move spaces to ip-hostname(1:256).
+      *    move 0      to ip-address.
+      *                                                            @PBA
+      *    move 0      to ip-v6-address(1:16).
+      *    move 0      to ip-port.
+      *    move 0      to ip-filler.
+      *    move 0      to ip-hostname-length.
+      * Point to the end of the Control Vectors  in the CINIT-RU   @D4A
+      *    set cv-ptr to install-cinit-ptr.
+      *    set address of cinitru to cv-ptr.
+      * -> start of data in field and add length of field          @D4A
+      *    set cv-ptr to address of bindimgd.
+      *    add bindimgl to cv-fld.
+      *                                                            @D4A
+      *    set address of sluname-f to cv-ptr.
+      * -> start of data in field and add length of field          @D4A
+      *    set cv-ptr to address of sluname.
+      *    move sluname-len to half.
+      *    add half-word to cv-fld.
+      *                                                            @D4A
+      *    set address of rqstrid-f to cv-ptr.
+      * -> start of data in field and add length of field          @D4A
+      *    set cv-ptr to address of rqstrid.
+      *    move rqstrid-len to half.
+      *    add half-word to cv-fld.
+      *                                                            @D4A
+      *    set address of password-f to cv-ptr.
+      * -> start of data in field and add length of field          @D4A
+      *    set cv-ptr to address of passwrd.
+      *    move password-len to half.
+      *    add half-word to cv-fld.
+      *                                                            @D4A
+      *    set address of userdata-f to cv-ptr.
+      * -> start of data in field and add length of field          @D4A
+      *    set cv-ptr to address of userdt.
+      *    move userdata-len to half.
+      *    add half-word to cv-fld.
+      *                                                            @D4A
+      *    set address of luchr-f to cv-ptr.
+      * -> start of data in field and add length of field          @D4A
+      *    set cv-ptr to address of luchr.
+      *    add luchr-len to cv-fld.
+      *                                                            @D4A
+      *    set address of scrypt-f to cv-ptr.
+      * -> start of data in field and add length of field          @D4A
+      *    set cv-ptr to address of scrypt.
+      *    move scrypt-len to half.
+      *    add half-word to cv-fld.
+      * -> last byte in the CINIT-RU                               @D4A
+      *    set end-cinit-ru-ptr to install-cinit-ptr.
+      *    compute end-cinit-fld = end-cinit-fld + cinit-len - 1.
+      * If the CINIT-RU contains control vectors then...           @D4A
+      *    if cv-fld < end-cinit-fld
+      *      perform with test before
+      *              until (cv-fld > end-cinit-fld)
+      * Scan through the CV until V 64 is found.                   @D4A
+      *        set address of kl-struc  to cv-ptr
+      *        if cv-64
+      * The 64 vector has been found.                              @D4A
+      * Extract the fields from the x'81',x'82' and x'85'          @D4A
+      * subvectors if the x'81' SV is for IP version 4.            @D4A
+      * The subvectors can appear in any order.                    @D4A
+      * Subvector X'85' is optional.                               @D4A
+      *          compute sv-fld = cv-fld + 2
+      *          set address of cv64-sv
+      *              address of sv81
+      *              address of sv82
+      *              address of sv85 to sv-ptr
+      *          move kl-data-len to half
+      *          compute end-sv-fld = sv-fld + half-word
+      *          if sv-fld < end-sv-fld
+      *            perform with test before
+      *                  until (sv-fld > end-sv-fld)
+      *              evaluate true
+      *                when sv-81
+      *                  if tp-04 then
+      *                                                            @PBC
+      *                    move tp-v6-address(1:4) to ip-address-x
+      *                  end-if
+      *                                                            @PBA
+      *                  if tp-06 then
+      *                    move tp-v6-address to ip-v6-address
+      *                  end-if
+      *                when sv-82
+      *                  move tp-port to ip-port
+      *                when sv-85
+      *                  move sv-len to half
+      *                  compute ip-hostname-length = half-word - 1
+      *                  move tp-hostname(1:ip-hostname-length) to
+      *                       ip-hostname(1:ip-hostname-length)
+      *                when other
+      *                  move sv-len to half
+      *              end-evaluate
+      * point to next subvector                                    @D4A
+      *              move sv-len to half
+      *              set sv-ptr to address of sv-data
+      *              add half-word to sv-fld
+      *              set address of cv64-sv
+      *                  address of sv81
+      *                  address of sv82
+      *                  address of sv85 to sv-ptr
+      *            end-perform
+      *          end-if
+      *        end-if
+      *        move kl-data-len to half
+      * -> start of data in field and add length of field          @D4A
+      *        set cv-ptr to address of kl-data
+      *        add half-word to cv-fld
+      *      end-perform
+      *    end-if.

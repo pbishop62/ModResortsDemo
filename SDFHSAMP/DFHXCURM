@@ -1,0 +1,462 @@
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFHXCURM (External CICS Interface User replaceable    *
+*                                                      module).       *
+* DESCRIPTIVE NAME = CICS TS  (EXCI)                                  *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1992, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+*                                                                     *
+* FUNCTION = This module will be invoked on every EXCI allocate pipe  *
+*        request, and after every retryable response is detected.     *
+*                                                                     *
+*        Retryable responses are: Target CICS not available           *
+*                                 No pipes available on target CICS   *
+*                                 No IRC activity since MVS IPL       *
+*                                 RRMS not available               @P4A
+*                                 Wrong MVS for RRMS               @P4A
+*                                                                     *
+*        The purpose of this URM is to solve problems of availability.*
+*        On allocate pipe calls, this URM has the ability to change   *
+*        the target CICS system name. This may be because we know     *
+*        that a particular CICS system is not available, or has no    *
+*        pipes available at the moment, or it may be to map a logical *
+*        CICS name into a specific one. It also has the ability to    *
+*        change the XCFGROUP name to be used when communicating with  *
+*        CICS via IRC. See CICS Infocenter.                           *
+*                                                                     *
+*        How would this URM know if a CICS was unavailable ?          *
+*        This is why, for retryable conditions, the URM is invoked.   *
+*                                                                     *
+*        How would this URM remember such information ?               *
+*        One of the parameters passed to this URM is the address      *
+*        of a global anchor point. This is a one word area            *
+*        that is passed on every invocation and is the property       *
+*        of this URM. It is intended that if we need to remember      *
+*        information between invocations, then we should getmain      *
+*        some global area and store it's address at the global        *
+*        anchor point.                                                *
+*                                                                     *
+*        The sample code in this URM provides an example of how some  *
+*        simple routing can be accomplished.  It is only included     *
+*        as a sample, and is in fact branched around. To activate     *
+*        this simple routing, remove the highlighted branch           *
+*        instruction.                                                 *
+*                                                                     *
+*        The sample, when activated, keeps a table of CICS systems    *
+*        and for each system a status which can be:                   *
+*                                                                     *
+*              OK:         x'00'   ----  CICS system OK               *
+*              NO_PIPES:   x'40'   ----  NO PIPE condition was raised *
+*                                        on the last call.            *
+*              DEAD:       x'80'   ----  NO CICS condition was raised *
+*                                        on a previous call.          *
+*                                                                     *
+*        The storage for this table is getmained on the first ever    *
+*        request, anchored off the global anchor point, and simply    *
+*        picked up from there on subsequent calls.                    *
+*                                                                     *
+*        For an allocate pipe request, the sample will find the       *
+*        target CICS in the table.  If it can't be found, or if it    *
+*        is found to be dead, a scan of the table will be performed.  *
+*        On the scan, if we find a CICS is dead, we will ignore it.   *
+*        If it is in a NO_PIPE state, we ignore it this time through  *
+*        but set it to OK for next time. If we find it is OK, we use  *
+*        it. If we find the whole table is not usable, we reset all   *
+*        the CICS systems to OK and perform a re-scan.                *
+*                                                                     *
+*        For a NO_CICS condition, we set the appropriate CICS to DEAD *
+*                                                                     *
+*        For a NO_PIPE condition, we set the appropriate CICS to      *
+*        NO_PIPE.                                                     *
+*                                                                     *
+*        For a NO_CICS_IRC_STARTED condition, we do nothing, we       *
+*        simply return to the caller. Other possibilities include     *
+*        putting out WTOs etc.                                        *
+*                                                                     *
+*        For a RRMS_NOT_AVAILABLE condition do the same as for     @P4A
+*        NO_CICS                                                   @P4A
+*                                                                     *
+*        For a WRONG_MVS_FOR_RRMS condition do the same as for     @P4A
+*        NO_CICS                                                   @P4A
+*                                                                  @P4A
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*    RESTRICTIONS = NONE                                              *
+*    REGISTER CONVENTIONS = See comments embedded in the code         *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* ENTRY POINT = DFHXCURM                                              *
+*                                                                     *
+*     PURPOSE = All functions                                         *
+*                                                                     *
+*     LINKAGE = BALR R14,R15 from DFHXCPRH                            *
+*                                                                     *
+*     INPUT = On input, R1 address the URM parameter list, mapped by  *
+*         EXCI_URM_PARMS which is included in DFHXCPLD.               *
+*                                                                     *
+*     OUTPUT = This module may set the following:                     *
+*                                                                     *
+*         1.   The target CICS system name.                           *
+*         2.   The global anchor point.                               *
+*         3.   The XCFGROUP name (on allocate_pipe requests)          *
+*                                                                     *
+*         Any further changes are not permitted, and will have        *
+*         unpredictable results.                                      *
+*                                                                     *
+*     EXIT-NORMAL = BR R14                                            *
+*                                                                     *
+*     EXIT-ERROR = No abends are issued within this sample.           *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* EXTERNAL REFERENCES = None.                                         *
+*                                                                     *
+*     ROUTINES = No external routines are used in this sample.        *
+*                                                                     *
+*     DATA AREAS = DFHXCPLD and DFHXCRCD are included.                *
+*                                                                     *
+*     CONTROL BLOCKS = None.                                          *
+*                                                                     *
+*     GLOBAL VARIABLES = None.                                        *
+*                                                                     *
+* TABLES = None.                                                      *
+*                                                                     *
+* MACROS = None.                                                      *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* DESCRIPTION                                                         *
+*         See description above.                                      *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+**                                                                    *
+*        $MOD(DFHXCURM),COMP(IRC),PROD(CICS TS ):                     *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 660    410 921202 HD5KASR : Create Initial Module           *
+*         R29820 680 110909 HD2GJST : Pass XCFGROUP name to DFHXCURM  *
+*    $P1= M84399 410 931107 HD2GJST : Use plist from DFHXCPLD         *
+*    $P4= D16001 650 060804 HD2GJST : Cater for RRMS retryable errors *
+*                                                                     *
+***********************************************************************
+         DFHREGS ,
+         COPY DFHXCRCD              Include return codes etc.
+         COPY DFHXCPLD              Include Parm list DSECTs
+*
+STATUS_TAB     DSECT
+CICS     DS    CL8
+STATUS   DS    X
+OK       EQU   0
+NO_PIPES EQU   X'40'
+DEAD     EQU   X'80'
+         DS    XL3
+***********************************************************************
+*             S T A R T   O F   M A I N    P R O G R A M              *
+***********************************************************************
+DFHXCURM CSECT
+         ENTRY DFHXCURM
+         USING *,R15                Use R15 as temp base reg
+         B     URMSTART             Branch round VM expansion
+         DROP  R15
+         DFHVM XCURM,ENTRY=DFHXCURM,AMODE=31,RMODE=ANY
+URMSTART DS    0H
+         STM   R14,R12,12(R13)
+         LR    R3,R15
+         USING DFHXCURM,R3
+         LR    R5,R1                R5 --> Plist from DFHXCPRH
+         USING EXCI_URM_PARMS,R5
+*
+***********************************************************************
+*!!!!!   Remove this line to activate this URM     !!!!!!!!!!!!!!!!!!!*
+*!!!!!                                             !!!!!!!!!!!!!!!!!!!*
+         B     RETURN
+*!!!!!                                             !!!!!!!!!!!!!!!!!!!*
+***********************************************************************
+*
+*
+*        Pick up the global anchor address. This will be our table
+*        of CICS systems, and their status. ie. whether they are
+*        up or down, or if they have no spare pipes etc.
+*
+*        If we don't have an anchor point, then this must be our
+*        first invocation. Getmain some storage and setup the
+*        anchor point for future invocations.
+*
+         L     R6,URMANCH           Address Global anchor point
+         ICM   R6,15,0(R6)          Have we got one ?
+         BNZ   BRANCH               Yes...Carry on with the call
+         LA    R0,CTABLEN           Length of table
+         GETMAIN RC,LV=(0),LOC=ANY  Getmain the storage
+         LR    R6,R1                R6 ---> status table
+         L     R2,URMANCH
+         ST    R6,0(,R2)            Remember table address
+         MVC   0(CTABLEN,R6),CICS_TAB
+         LA    R7,4(,R6)            Address of first CICS in table
+         ST    R7,0(,R6)            Setup pointer to first CICS
+*
+*        Work out why we have been called, and branch off to the
+*        appropriate routine to do something about it.
+*
+BRANCH   DS    0H
+         L     R15,URMINV           Address call type
+         L     R15,0(,R15)          and hence R15 = Call type
+         SLL   R15,2
+         L     R15,CALTABLE(R15)    Get address of requested
+         BR    R15                  processor and go there
+RETURN   DS    0H
+         LM    R14,R12,12(R13)
+         BR    R14                  Return to caller
+         EJECT
+*
+***********************************************************************
+*           A L L O C A T E   P I P E   P R O C E S S O R             *
+*                                                                     *
+*  This routine takes the target CICS, (from the callers parameters), *
+*  and the table of defined CICS systems, (from the bottom of this    *
+*  program) and performs the following algorithm:                     *
+*                                                                     *
+*  START:                                                             *
+*    If target CICS is in table THEN                                  *
+*        SELECT on status                                             *
+*           WHEN (ok):       Use target CICS, leave URM               *
+*           WHEN (no_pipe):  Mark as OK again, goto scan              *
+*           WHEN (no_cics):  CICS not available, goto scan            *
+*        END                                                          *
+*                                                                     *
+*  SCAN:                                                              *
+*    For I = 1 to number of CICS in table                             *
+*        SELECT on status of CICS(I)                                  *
+*           WHEN (ok):       Use this CICS, leave URM                 *
+*           WHEN (no_pipe):  Mark as OK again, carry on with scan     *
+*           WHEN (no_cics):  carry on with scan                       *
+*        END                                                          *
+*    END                                                              *
+*                                                                     *
+*    If end of table reached, with none available THEN                *
+*        RESET table to all CICS OK                                   *
+*                                                                     *
+*  END                                                                *
+*                                                                     *
+***********************************************************************
+ALLOCATE DS    0H
+         L     R1,URMCICS           R1 ---> User specified CICS name
+         LA    R7,4(,R6)            R7 ---> First applid in table
+         USING STATUS_TAB,R7
+*
+*        Find target CICS name in our table
+*
+LOOP     DS    0H
+         CLC   CICS,=C'NO--MORE'    Have we hit the end of the table ?
+         BE    SCAN                 Yes - scan for any available CICS
+         CLC   CICS,0(R1)           No - is this our target CICS ?
+         BE    FOUND                     YES - go check it's status
+         LA    R7,12(R7)                 No - address next in table
+         B     LOOP                      and go check this one.
+*
+*        Now we have found it, is it usable ?
+*
+FOUND    DS    0H
+         TM    STATUS,DEAD          Is this CICS dead ?
+         BO    SCAN                 Yes - scan for another CICS
+         TM    STATUS,NO_PIPES      Did this CICS have a lack of pipes?
+         BNO   EOALLOC              No - this CICS OK - go for it.
+         NI    STATUS,255-NO_PIPES  Reset condition for next time
+*
+*        Target is not usable, find an alternate by scanning the
+*        table for an available CICS.
+*
+SCAN     DS    0H
+         L     R7,0(,R6)            Address where we left off last time
+         LR    R8,R7                Remember this is where we started
+LOOP2    DS    0H
+         CLC   CICS,=C'NO--MORE'    Last one ?
+         BNE   NOTBOT               No  - Carry on...
+         LA    R7,4(,R6)            Yes - loop back to start
+         CR    R8,R7                Is this where we came in ?     @P4A
+         BE    RESETAB              Yes, all CICS DEAD; reset them @P4A
+         B     LOOP2
+NOTBOT   DS    0H
+         TM    STATUS,DEAD          No - is it down then ?
+         BO    BUMP                      Yes - go to next in table
+         TM    STATUS,NO_PIPES           No - what about it's pipes
+         BNO   GOTONE                    No - use this CICS then
+         NI    STATUS,255-NO_PIPES       Reset any "no pipe" condition
+BUMP     DS    0H
+         LA    R7,12(R7)                 Address next CICS
+         CR    R8,R7                     Is this where we came in ?
+         BE    RESETAB                   Yes, all CICS DEAD; reset them
+         B     LOOP2                     and loop around
+*
+*        All CICS systems in our table are unavailable. Reset them
+*        all to 'OK' and try the scan again.
+*
+RESETAB  DS    0H
+         LA    R7,4(,R6)            Start of table AGAIN
+         ST    R7,0(,R6)            Update the starting point
+LOOP3    DS    0H
+         CLC   CICS,=C'NO--MORE'    End of table reached ?
+         BE    SCAN                 Yes - start again
+         MVI   STATUS,X'00'         No  - initialise status field.
+         LA    R7,12(R7)            bump CICS counter
+         B     LOOP3                and go check next one
+*
+*        One way or another, we have a CICS system to allocate to.
+*        Put the name of this CICS back into the parameter list and
+*        return.
+*
+GOTONE   DS    0H
+         CLC   0(8,R1),CICS         Is this our original target ?
+         BE    BUMP                 This cannot be OK so bump to next
+         MVC   0(8,R1),CICS         Setup new CICS name
+         ST    R7,0(,R6)            Remember position in table
+EOALLOC  DS    0H
+         B     RETURN
+         EJECT
+***********************************************************************
+*        R E T R Y A B L E:         N O    P I P E                    *
+*                                                                     *
+*  We are being invoked for a retryable response of NO PIPE. This     *
+*  means that the CICS system is available, but all the target pipes  *
+*  are currently in use. Mark this CICS in our table as being         *
+*  temporarily unavailable, which will mean it is not used on the     *
+*  next allocate, but will become available after that.               *
+*                                                                     *
+***********************************************************************
+NOPIPES  DS    0H
+         L     R1,URMCICS           R1 ---> User specified CICS name
+         LA    R7,4(,R6)            R7 ---> First applid in table
+         USING STATUS_TAB,R7
+*
+*        Loop through our table of CICS systems, looking for our
+*        target.
+*
+LOOP4    DS    0H
+         CLC   CICS,=C'NO--MORE'    Have we hit the end of the table ?
+         BE    ENOPIPE              Yes - CICS not in our table !!!!!
+         CLC   CICS,0(R1)           No - is this our target CICS ?
+         BE    FND                       YES - go check set status
+         LA    R7,12(R7)                 No - address next in table
+         B     LOOP4                     and go check this one.
+*
+*        Once found, mark it as temporarily unavailable
+*
+FND      DS    0H
+         OI    STATUS,NO_PIPES
+ENOPIPE  DS    0H
+         B     RETURN
+         EJECT
+*
+***********************************************************************
+*        R E T R Y A B L E:         N O    C I C S                    *
+*                                                                     *
+*  We are being invoked for a retryable response of NO CICS. This     *
+*  means that the CICS system we are trying to talk to is unavailable.*
+*  We therefore mark it as such in our table. No future allocates     *
+*  will be directed to this CICS system, until all entries in the     *
+*  table become unavailable when they will all be reset.              *
+*                                                                     *
+***********************************************************************
+NOCICS   DS    0H
+         L     R1,URMCICS           R1 ---> User specified CICS name
+         LA    R7,4(,R6)            R7 ---> First applid in table
+         USING STATUS_TAB,R7
+*
+*        Scan through the table looking for our target
+*
+LOOP5    DS    0H
+         CLC   CICS,=C'NO--MORE'    Have we hit the end of the table ?
+         BE    ENOCICS              Yes - CICS not in our table !!!!!
+         CLC   CICS,0(R1)           No - is this our target CICS ?
+         BE    FND2                      YES - go check set status
+         LA    R7,12(R7)                 No - address next in table
+         B     LOOP5                     and go check this one.
+*
+*        Having found it, mark it as dead
+*
+FND2     DS    0H
+         OI    STATUS,DEAD
+ENOCICS  DS    0H
+         B     RETURN
+         EJECT
+***********************************************************************
+*        R E T R Y A B L E:   N O    C I C S   I R C   S T A R T E D  *
+*                                                                     *
+*  We are being invoked for a retryable response of NO CICS IRC       *
+*  STARTED. This means that no CICS system has opened IRC services    *
+*  since the IPL of this MVS image. The URM cannot actively deal with *
+*  this, so nothing is attempted.  An alternative would be to output  *
+*  a WTOR to inform the operator.                                     *
+*                                                                     *
+***********************************************************************
+NOIRC    DS    0H
+         B     RETURN
+         EJECT
+***************************************************************    @P4A
+*        R E T R Y A B L E:   R R M S  N O T  A V A I L A B L E    @P4A
+*                                                                  @P4A
+*  We are being invoked for a retryable response of RRMS NOT       @P4A
+*  AVAILABLE. This means that MVS Resource Recovery services       @P4A
+*  (RRS) are not available or have been restarted since the        @P4A
+*  last request using RRS without an intervening syncpoint.        @P4A
+*  We do the same as for NO_CICS.                                  @P4A
+*                                                                  @P4A
+***************************************************************    @P4A
+RRMS_NOT_UP DS 0H                                                  @P4A
+         B     NOCICS                                              @P4A
+         EJECT                                                     @P4A
+***************************************************************    @P4A
+*        R E T R Y A B L E: W R O N G   M V S  F O R   R R M S     @P4A
+*                                                                  @P4A
+*  We are being invoked for a retryable response of WRONG MVS      @P4A
+*  FOR RRMS. This means that a DPL or file request is targeted     @P4A
+*  at a CICS system that is not on the same MVS image as the       @P4A
+*  EXCI client. We do the same as for NO_CICS.                     @P4A
+*                                                                  @P4A
+***************************************************************    @P4A
+RRMS_BAD_MVS DS 0H                                                 @P4A
+         B     NOCICS                                              @P4A
+         EJECT                                                     @P4A
+***********************************************************************
+*        Call type table, CICS table, etc etc.                        *
+***********************************************************************
+CALTABLE DS    0F
+         DC    A(X'80000000'+RETURN)       0 - Invalid - return
+         DC    A(X'80000000'+ALLOCATE)     1 - Allocate pipe
+         DC    A(X'80000000'+NOCICS)       2 - Retryable - no pipes
+         DC    A(X'80000000'+NOPIPES)      3 - Retryable - no CICS
+         DC    A(X'80000000'+NOIRC)        4 - Retryable - no IRC
+         DC    A(X'80000000'+RRMS_NOT_UP)  5 - RRMS not avail      @P4A
+         DC    A(X'80000000'+RRMS_BAD_MVS) 6 - Wrong MVS           @P4A
+CICS_TAB DS    0F
+POINTER  DS    F
+         DC    CL8'DBDCICSA'
+         DC    F'0'
+         DC    CL8'DBDCICSB'
+         DC    F'0'
+         DC    CL8'DBDCICSC'
+         DC    F'0'
+EOTAB    DC    CL8'NO--MORE'
+CTABLEN  EQU   *-CICS_TAB
+         LTORG
+         END  DFHXCURM

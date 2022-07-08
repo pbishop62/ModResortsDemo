@@ -1,0 +1,260 @@
+*ASM XOPTS(CICS,SP)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFHSYDMP                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS Sample User Replaceable Module that      *
+*                    sets default System Dump codes. When one of      *
+*                    these occurs multiple jobs and data spaces       *
+*                    will be dumped.                                  *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 2016, 2016"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION = User Replaceable Module to add system dumpcodes.         *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*    Program must not be defined to a PLTPI table                     *
+*                                                                     *
+*    RESTRICTIONS =                                                   *
+*                                                                     *
+*                                                                     *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable,                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*     $MOD(DFHSYDMP),COMP(STATS),PROD(CICS TS ):                      *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*      R123136   710 160901 HDFVGMB: Create                           *
+*                                                                     *
+***********************************************************************
+* DESCRIPTION                                                         *
+*                                                                     *
+*   DFHSYDMP    : User Replaceable Module to add default system dump  *
+*                 codes to the region's system dumpcode table         *
+*                                                                     *
+*   Background and Purpose:                                           *
+*                                                                     *
+*   Certain errors such as those involving the CICS Logger and        *
+*   TCPIP may need data contained in other address spaces and data    *
+*   spaces to fully diagnose the error. Adding these codes as         *
+*   default sysdump codes will allow all relevant data to be gathered *
+*   when it first occurs rather than depending on a recreate          *
+*                                                                     *
+*   Logic overview:                                                   *
+*                                                                     *
+*                                                                     *
+*   Installation  :                                                   *
+*                                                                     *
+*     This program is invoked prior to 2nd phase PLTPI processing. It *
+*     must not be defined in the PLTPI table for your CICS region.    *
+*                                                                     *
+*                                                                     *
+*   Customisation :                                                   *
+*                                                                     *
+***********************************************************************
+         EJECT ,
+***********************************************************************
+*        REGISTER USAGE                                               *
+***********************************************************************
+R0       EQU   0                   -
+R1       EQU   1                   -
+R2       EQU   2                   -
+R3       EQU   3                   Base reg (default)
+R4       EQU   4                   -
+R5       EQU   5                   -
+R6       EQU   6                   -
+R7       EQU   7                   -
+R8       EQU   8                   -
+R9       EQU   9                   -
+R10      EQU   10                  -
+R11      EQU   11                  EIB Base reg (default)
+R12      EQU   12                  -
+R13      EQU   13                  DFHEISTG Base reg (default)
+R14      EQU   14                  -
+R15      EQU   15                  -
+***********************************************************************
+*        DEFINITIONS                                                  *
+***********************************************************************
+DFHEISTG DSECT
+* Automatic variables
+SSID      DS   CL8
+CONNST    DS   F
+MSTRSUFF  DS   CL4
+DB2JNAME  DS   CL8
+MQJNAME   DS   CL8
+IMSJNAME  DS   CL8
+JOBNAME   DS   CL8
+          COPY DFHDBQDS
+         EJECT
+***********************************************************************
+* Main                                                                *
+***********************************************************************
+DFHSYDMP CSECT  ,
+DFHSYDMP AMODE 31
+DFHSYDMP RMODE ANY
+         SPACE
+***********************************************************************
+* Module entry                                                        *
+***********************************************************************
+*
+*        Branch to default messages.
+*
+         B     DFLTMSGS
+*
+GETDB2   DS    0H                                  Get DB2 name
+         EXEC CICS INQUIRE DB2CONN DB2ID(SSID)                         *
+                   CONNECTST(CONNST) NOHANDLE
+         CLC   CONNST,DFHVALUE(CONNECTED)          Connected ?
+         BNE   GETMQ                               No
+         BAL   R9,MOVESSID
+         CLC   JOBNAME,=CL8' '                     Jobname ?
+         BE    GETMQ                               No
+         MVC   DB2JNAME,JOBNAME
+         MVC   MSTRSUFF,=CL4'MSTR'
+*        Add DB2 dumpcodes here
+*        EXEC CICS SET SYSDUMPCODE(DBxxxx)
+*                   DSPLIST(DBxxxxDLST)
+*                   JOBLIST(DBxxxxJLST)
+*                   SYSDUMP ADD NOHANDLE
+GETMQ    DS    0H      	                           Get MQ name
+*
+         EXEC CICS INQUIRE MQCONN MQNAME(SSID)                         *
+                   CONNECTST(CONNST) NOHANDLE
+         CLC   CONNST,DFHVALUE(CONNECTED)          Connected ?
+         BNE   GETDBCTL                            No
+         BAL   R9,MOVESSID
+         CLC   JOBNAME,=CL8' '                     Jobname ?
+         BE    GETDBCTL                            No
+         MVC   MQJNAME,JOBNAME
+         MVC   MSTRSUFF,=CL4'MSTR'
+*        Add MQ Dumpcodes here
+*        EXEC CICS SET SYSDUMPCODE(MQxxxx)
+*                   DSPLIST(MQxxxxDLST)
+*                   JOBLIST(MQxxxxJLST)
+*                   SYSDUMP ADD NOHANDLE
+GETDBCTL DS    0H                                  Get DBCTL details
+*        GET IMS details
+         EXEC CICS LINK PROGRAM('DFHDBIQ')                             *
+                   COMMAREA(DBIQCOMM) NOHANDLE
+*
+         CLI DBIQSTAT,C'C'                         Connected ?
+         BNE DFLTMSGS                              No
+         CLC   DBIQJOBN,=CL8' '                    Jobname ?
+         BE    DFLTMSGS                            No
+         MVC   IMSJNAME,DBIQJOBN
+*        Add DBCTL dump codes here
+*        EXEC CICS SET SYSDUMPCODE(DBxxxx)
+*                   DSPLIST(DBxxxxDLST)
+*                   JOBLIST(DBxxxxJLST)
+*                   SYSDUMP ADD NOHANDLE
+DFLTMSGS DS 0H
+         EXEC CICS SET SYSDUMPCODE(LG0772)                             *
+                    DSPLIST(LG0772DLST)                                *
+                    JOBLIST(LG0772JLST)                                *
+                    SYSDUMP ADD NOHANDLE
+*
+* This dumpcode is only valid in those systems that run JVM
+* servers. If there are profile problems then uncomment
+* this code in need
+*
+*        EXEC CICS SET SYSDUMPCODE(SJ0210)
+*                   DSPLIST(SJ0210DLST)
+*                   JOBLIST(SJ0210JLST)
+*                   SYSDUMP ADD NOHANDLE
+*
+         EXEC CICS SET SYSDUMPCODE(SO0113)                             *
+                    DSPLIST(SO0113DLST)                                *
+                    JOBLIST(SO0113JLST)                                *
+                    SYSDUMP ADD NOHANDLE
+*
+* Information provided in the DFHSO1000 message may be sufficient to
+* diagnose a TCP/IP communication failure. Uncomment this code
+* if further diagnostics are needed.                          @PI91601A
+*        EXEC CICS SET SYSDUMPCODE(SO1000)
+*                   DSPLIST(SO1000DLST)
+*                   JOBLIST(SO1000JLST)
+*                   SYSDUMP ADD NOHANDLE
+*                                                             @PI91601C
+***********************************************************************
+* Module exit                                                         *
+***********************************************************************
+MODULEND DS    0H                        Return to CICS
+         SPACE
+         EXEC CICS RETURN
+         EJECT
+***********************************************************************
+* Routine to construct the DB2 or MQ jobname that will  be added to   *
+* job list for the system dump code                                   *
+* Note: the suffix is always MSTR                                     *
+***********************************************************************
+MOVESSID DS   0H                         Routine entry
+         MVC   JOBNAME,=CL8' '           Clear jobname
+         CLC   SSID,=CL4'  '             Is SSID spaces?
+         BE    MOVERETN                  Yes, leave
+         LA    R7,SSID                   Load start address
+         XR    R6,R6
+         L     R6,=F'4'
+         AR    R6,R7                     Potential end address
+         XR    R0,R0
+         LHI   R0,C' '                   Load search string
+         SRST  R6,R7                     and search
+         LR    R5,R6
+         LA    R4,JOBNAME
+         SR    R5,R7                     Get SSID length
+         BCTR  R5,0                      decrement by 1
+         EX    R5,MOVECHAR               move SSID into jobname
+         AR    R4,R5                     Add length
+         MVC   0(4,R4),MSTRSUFF          Move suffix
+MOVERETN DS    0H
+         BR    R9                        Routine exit
+***********************************************************************
+* Target of EXecute instruction to move SSID into JOBNAME             *
+***********************************************************************
+MOVECHAR MVC   0(0,R4),0(R7)
+         SPACE
+         EJECT
+***********************************************************************
+* Dump codes, job lists and data space lists                          *
+***********************************************************************
+         DS    0F
+*
+MSTRCONST  DC   CL4'MSTR'
+LG0772     DC   CL8'LG0772'
+LG0772JLST DC CL255'IXGLOGR,XCFAS'
+LG0772DLST DC CL255'SYSLOGR0,SYSIXG*,IXCA*,IXCD*,IXLCBCAD,IXLCTCAD'
+*
+SO0113     DC   CL8'SO0113  '
+SO0113JLST DC CL255'OMVS,TCPIP,RESOLVER'
+SO0113DLST DC CL255'BPXD*,BPXFSCDS,BPXSMBIT,HFSDSP*,SYSZBPX*,SYSIGWB1,C*
+               SM*'
+*
+SJ0210     DC   CL8'SJ0210  '
+SJ0210JLST DC CL255'OMVS'
+SJ0210DLST DC CL255'BPXD*,BPXFSCDS,BPXSMBIT,HFSDSP*,SYSZBPX*,SYSIGWB1'
+*
+SO1000     DC   CL8'SO1000  '
+SO1000JLST DC CL255'OMVS,TCPIP'
+SO1000DLST DC CL255'BPXD*,BPXFSCDS,BPXSMBIT,HFSDSP*,SYSZBPX*,SYSIGWB1,C*
+               SM*'
+         DS    0F
+         LTORG
+         END

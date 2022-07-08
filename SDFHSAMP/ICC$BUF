@@ -1,0 +1,154 @@
+//*******************************************************************
+//                                                                 //
+// Module Name: ICC$BUF                                            //
+//                                                                 //
+// Description:                                                    //
+//    This sample program demonstrates how to use the IccBuf class.//
+//                                                                 //
+//                                                                   //
+//                                                                   //
+//     Licensed Materials - Property of IBM                          //
+//                                                                   //
+//     "Restricted Materials of IBM"                                 //
+//                                                                   //
+//     5655-Y04                                                      //
+//                                                                   //
+//     (C) Copyright IBM Corp. 1998, 2004"                           //
+//                                                                   //
+//                                                                   //
+//                                                                   //
+//                                                                 //
+// Status = %SP00                                                  //
+//                                                                 //
+//-----------------------------------------------------------------//
+//                                                                 //
+// Change Activity :                                               //
+//                                                                 //
+//   $MOD(ICC$BUF),COMP(CEZANNE),PROD(CICS TS ):                   //
+//                                                                 //
+//   PN= REASON REL YYMMDD HDXIII : REMARKS                        //
+//  $P0= M30492 530 981105 HDGYBS : Creation                       //
+//  $P1= M30696 530 981218 HDGYBS : Fix sample c++ programs        //
+//  $P2= D12734 640 041230 HD6KRAH: Language Level                 //
+//                                                                 //
+//*******************************************************************
+#include "icceh.hpp"    //CICS C++ Foundation Classes header files
+#include "iccmain.hpp"  //CICS C++ Foundation Classes main() stub
+#include <string.h>     //we use strlen() function in this sample
+
+struct AStruct
+{
+  char code;
+  char text[20];
+  short id;
+};
+
+AStruct aStruc;
+char data[] = "Some data somewhere";
+char more[] = "more ";
+char xtra[] = "xtra";
+
+//This function (displayBuf) displays (on the CICS terminal) various
+//details of the buffer object reference it is passed.
+void displayBuf( const char* comment, IccBuf& buf )
+{
+  //First get addressability to the CICS terminal.
+  IccTerminal* term = IccControl::instance()->terminal();
+  char dataAreaType = 'F';  //F signifies fixed
+  char dataAreaOwner= 'E';  //E signifies external
+  if (buf.dataAreaType() == IccBuf::extensible)
+    dataAreaType = 'E';  //E signifies extensible
+  if (buf.dataAreaOwner() == IccBuf::internal)
+    dataAreaOwner = 'I';  //I signifies internal
+
+  //Write out information about the buffer to the terminal
+  term->sendLine( "%-36s dal=%2ld dl=%2ld %c+%c [%s]",
+                      comment,
+                      buf.dataAreaLength(),
+                      buf.dataLength(),
+                      dataAreaType,
+                      dataAreaOwner,
+                      buf.dataArea() );
+}
+
+void IccUserControl::run()
+{
+  terminal()->erase();  //Clear the terminal
+  terminal()->send( "This is program 'icc$buf'..." );
+
+  //Construct objects...
+  IccBuf buf1;  //initial allocated length 0, extensible.
+  displayBuf( "IccBuf buf1", buf1 );
+
+  IccBuf buf2( 50 );  //initial allocated length 50, extensible.
+  displayBuf( "IccBuf buf2(50)", buf2 );
+
+  IccBuf buf3( 30, //initial allocated length 30, not extensible.
+               IccBuf::fixed );
+  displayBuf( "IccBuf buf3(30,fixed)", buf3 );
+
+  aStruc.code = '!';
+  strcpy(aStruc.text,"Some text for aStruc");
+  aStruc.id = 7;
+  IccBuf buf4( sizeof(AStruct), &aStruc );
+    //buf object overlaid on existing data area:
+    //dataLength = dataAreaLength = sizeof(myStruct);
+    //fixed.
+  displayBuf( "IccBuf buf4(sizeof(AStruct),&aStruc)", buf4 );
+
+  IccBuf buf5( data );  //copy of string , extensible.
+  displayBuf( "IccBuf buf5(\"A String Literal\")", buf5 );
+
+  IccBuf buf6( buf5 );  //copy of another buffer.
+  displayBuf( "IccBuf buf6(buf5)", buf6 );
+
+
+  //Assignment can be done using operator= or assign action....
+  buf1 = "Some XXX data for buf1";  //operator =
+  displayBuf( "buf1 = \"Some XXX data for buf1\"", buf1);
+
+  buf2.assign( strlen(data), data );
+  displayBuf( "buf2.assign(strlen(data),data)", buf2);
+
+
+  //Manipulating data in the buffer....
+  //Removal of data...
+  buf1.cut(4, 5);  //remove 'XXX' from buf1
+  displayBuf( "buf1.cut(4,5)", buf1);
+
+  //Insertion of extra data...
+  buf5.insert(5, more, 5);  //"Some data" -> "Some more data..."
+  displayBuf( "buf5.insert(5,more,5)", buf5);
+
+  //Replacement of existing data...
+  buf5.replace(4, xtra, 5);  //"Some more data..." -> "Some xtra data"
+  displayBuf( "buf5.replace(4,xtra,5)", buf5);
+
+  //Append a string...
+  buf2 << ".ext";
+  displayBuf( "buf2 << \".ext\"", buf2);
+
+
+  buf3 = buf4;  //assign buf4 to buf3;
+  displayBuf( "buf3 = buf4", buf3 );
+  //Testing equality....
+  if (buf3 == buf4)
+    terminal()->sendLine("(buf3 == buf4) returns true (OK).");
+  else
+    terminal()->sendLine("(buf3 == buf4) returns false (!OK).");
+
+  buf3 = "garbage";  //change contents of buf3
+  displayBuf( "buf3 = \"garbage\"", buf3);
+  //Testing inequality....
+  if (buf3 != buf4)
+    terminal()->sendLine("(buf3 != buf4) returns true (OK).");
+  else
+    terminal()->sendLine("(buf3 != buf4) returns false (!OK).");
+
+  terminal()->send(24,1,"Program 'icc$buf' complete: Hit PF12 to End");
+  terminal()->waitForAID( IccTerminal::PF12 );
+  terminal()->erase();
+  terminal()->freeKeyboard();
+
+  return;  //Return control to CICS
+}

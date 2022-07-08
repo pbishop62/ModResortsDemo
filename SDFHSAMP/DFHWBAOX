@@ -1,0 +1,592 @@
+       PROCESS CICS('NOLINKAGE')
+       Identification Division.
+       Program-id. DFHWBAOX.
+      *===============================================================*
+      *                                                               *
+      * MODULE NAME = DFHWBAOX                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  WEB INTERFACE ANALYZER USER       *
+      *                     REPLACEABLE PROGRAM                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *        Licensed Materials - Property of IBM                   *
+      *                                                               *
+      *        "Restricted Materials of IBM"                          *
+      *                                                               *
+      *        5655-Y04                                               *
+      *                                                               *
+      *        (C) Copyright IBM Corp. 1996, 2008"                    *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *  STATUS = 7.2.0                                               *
+      *                                                               *
+      * FUNCTION = ANALYZES THE INCOMING HTTP REQUEST TO EXTRACT THE  *
+      *            REQUIRED CICS INFORMATION.                         *
+      *                                                               *
+      * VERSIONS OF THIS PROGRAM IN OTHER LANGUAGES ARE ALSO PROVIDED:*
+      *     ASSEMBLER - DFHWBADX                                      *
+      *     C         - DFHWBAHX                                      *
+      *     PL/I      - DFHWBALX                                      *
+      *                                                               *
+      * NOTES :                                                       *
+      *                                                               *
+      *    THIS IS A PRODUCT SENSITIVE SAMPLE.                        *
+      *    REFER TO PRODUCT DOCUMENTATION.                            *
+      *                                                               *
+      *    DEPENDENCIES = S/390                                       *
+      *    MODULE TYPE = EXECUTABLE                                   *
+      *    PROCESSOR = COBOL2 COMPILER                                *
+      *    ATTRIBUTES = READ ONLY, SERIALLY REUSABLE                  *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      *     PURPOSE = ALL FUNCTIONS                                   *
+      *                                                               *
+      *     LINKAGE =                                                 *
+      *     THIS ENTRY POINT IS CALLED BY THE CWS WEB SEND/RECEIVE    *
+      *     PROGRAM DFHWBSR VIA EXEC CICS LINK.                       *
+      *     THE PARAMETERS ARE PASSED TO THE EXIT PROGRAM VIA THE     *
+      *     COMMAREA. THE CONTROL BLOCK FOR THE PARAMETER LIST IS IN  *
+      *     DFHWBTDO.                                                 *
+      *                                                               *
+      *     INPUT =                                                   *
+      *                                                               *
+      *     OUTPUT =                                                  *
+      *                                                               *
+      *     EXIT-NORMAL = EXIT IS VIA AN EXEC CICS RETURN COMMAND.    *
+      *         THE FOLLOWING RETURN CODES MAY BE RETURNED VIA THE    *
+      *         COMMAREA:                                             *
+      *                                                               *
+      *     EXIT-ERROR =                                              *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * EXTERNAL REFERENCES =                                         *
+      *         NONE.                                                 *
+      *                                                               *
+      *     ROUTINES =                                                *
+      *         EXEC CICS RETURN - RETURN TO THE CALLING PROGRAM.     *
+      *                                                               *
+      *     CONTROL BLOCKS =                                          *
+      *        THE CWS ANALYZER PARAMETER LIST IS DEFINED IN DFHWBTDO,*
+      *        ALONG WITH A DESCRIPTION OF THE PARAMETERS.            *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      *    THIS PROGRAM IS A SAMPLE VERSION IN COBOL2 OF THE DEFAULT  *
+      *    CWS ANALYZER. THE PROGRAM IS INVOKED WHEN AN HTTP REQUEST  *
+      *    IS RECEIVED AND CWS ANALYZER EXIT NAME HAS BEEN SET TO     *
+      *    DFHWBAOX. THIS NAME CAN BE CHANGED BY USE OF THE SET       *
+      *    TCPIPSERVICE URM COMMAND IN CECI OR CEMT.                  *
+      *                                                               *
+      *    A PARAMETER LIST IS PROVIDED AS INPUT TO THE PROGRAM. THE  *
+      *    PARAMETER LIST IS PASSED TO THE PROGRAM VIA THE COMMAREA.  *
+      *    THE PARAMETER LIST IS DEFINED IN DFHWBTDC.                 *
+      *    THE PARAMETER LIST IS ADDRESSED BY THE PROGRAM USING THE   *
+      *    NORMAL CONVENTIONS FOR A COMMAREA.                         *
+      *                                                               *
+      *    PLEASE REFER TO INFO APAR II10905 FOR GUIDANCE         @01A*
+      *    ON CUSTOMIZING THE CWS ANALYZER TO DEAL WITH           @01A*
+      *    CLIENTS/BROWSERS WHICH DO NOT CONFORM TO THE HTTP      @01A*
+      *    1.0 STANDARD.                                          @01A*
+      *                                                           @01A*
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *        $MOD(DFHWBAOX),COMP(ISC),PROD(CICS TS ):               *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXXIII : REMARKS                   *
+      * $L0= 723    510 960724 HD0JADT : FIRST CODED                  *
+      * $L5= 830    660 080816 HDISGPL : Add IPV6 to Parameters       *
+      * $P1= M66208 520 970129 HD1MA   : change COBOL string delim    *
+      * $P2= M66512 520 970502 HDFCPMC : User program length bug      *
+      * $P3= M27551 530 980211 HD2WPGK : Allow WEB user token > 8 cha *
+      * $P4= M30435 530 981021 HD4PALS : Remove reference to CWBC     *
+      * $P5= M30840 530 981223 HD4ASLW : Limit eibcalen to DFHWBUN    *
+      * $P6= M31088 530 990104 HDALSLW : ADD URP reason and response  *
+      * $P7= M14435 610 990913 HD4PALS : COPY stmts failed translation*
+      * $P9= M16664 610 001206 HD6NPRW : correct unescape             *
+      * $PA= D02454 620 010802 HD2WPGK : Bad IF construction.         *
+      * $PB= D01262 620 010906 HD2JPEH : Make CWS Analyzers consistent*
+      * $PC= D06927 630 030320 HDFVGMB : Cure storage overlay         *
+      * $PD= D10481 640 050113 HDIKTG  : Analyzer program rejects reso*
+      * $01= A14337 530 980715 HDBGNRB : Migrate PQ14337 from SPA R52 *
+      * $02= A14302 530 981202 HDALSLW : Migrate PQ14302 from SPA R52 *
+      *                                                               *
+      *===============================================================*
+       Environment Division.
+       Data Division.
+       Working-storage section.
+
+      *---------------------------------------------------------------*
+      * CWS SPECIFIC INCLUDES                                         *
+      *---------------------------------------------------------------*
+
+      * CWS URP CONSTANTS
+       COPY DFHWBUCO.
+
+      *---------------------------------------------------------------*
+      * DATA CONSTANTS                                                *
+      *---------------------------------------------------------------*
+
+      * Constants for input validation
+       01  WBADX-MIN-RESOURCE-LENGTH   PIC S9(8) COMP VALUE 6.
+      * MIN RESOURCE IS '/A/B/C'
+       01  WBADX-MAX-CONV-NAME-LENGTH  PIC S9(8) COMP VALUE 8.
+       01  WBADX-MAX-TRAN-NAME-LENGTH  PIC S9(8) COMP VALUE 4.
+       01  WBADX-MAX-SERV-NAME-LENGTH  PIC S9(8) COMP VALUE 8.
+       01  WBADX-MAX-UTOK-NAME-LENGTH  PIC S9(8) COMP VALUE 8.
+
+      * Constant for DFHWBUN maximum commarea size
+       01  WBADX-MAX-SERVER-DATA-LENGTH PIC S9(8) COMP VALUE 32767.
+
+       01 null-image                  pic x(1) value LOW-VALUE.
+
+      *----------------------------------------------------------------
+      *  Structure used for converting hexadecimal single-byte escape
+      *  characters to halfword binary index values.
+      *----------------------------------------------------------------
+       01 HEX-NIBBLES.
+         02 NIBBLE1          PIC S9999 BINARY.
+         02 FILLER REDEFINES NIBBLE1.
+           03 FILLER         PIC X.
+           03 NIBBLE1-X      PIC X.
+         02 NIBBLE2          PIC S9999 BINARY.
+         02 FILLER REDEFINES NIBBLE2.
+           03 FILLER         PIC X.
+           03 NIBBLE2-X      PIC X.
+         02 NIBBLE-INDEX     PIC S9999 BINARY.
+         02 FILLER REDEFINES NIBBLE-INDEX.
+           03 FILLER         PIC X.
+           03 NIBBLE-INDEX-X PIC X.
+
+      *----------------------------------------------------------------
+      *  Structure used for converting hexadecimal single-byte escape
+      *  characters to corresponding single-byte binary values.
+      *  (Any non-valid hexadecimal integers are translated to X'FF'.)
+      *----------------------------------------------------------------
+       01 HEX-CONVERSION.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'0A0B0C0D0E0FFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'0A0B0C0D0E0FFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'.
+         02 FILLER PIC X(16) VALUE X'00010203040506070809FFFFFFFFFFFF'.
+       01 FILLER REDEFINES HEX-CONVERSION.
+         02 HEXBIN PIC X OCCURS 256 TIMES.
+
+      *----------------------------------------------------------------
+      *  Structure used for converting unescaped ASCII values to
+      *  corresponding EBCDIC values. This table converts codepage
+      *  ISO-8859-1 to codepage IBM-037.
+      *----------------------------------------------------------------
+       01 ASCII-TO-EBCDIC.
+         02 FILLER PIC X(16) VALUE X'00010203372D2E2F1605250B0C0D0E0F'.
+         02 FILLER PIC X(16) VALUE X'101112133C3D322618193F27221D351F'.
+         02 FILLER PIC X(16) VALUE X'405A7F7B5B6C507D4D5D5C4E6B604B61'.
+         02 FILLER PIC X(16) VALUE X'F0F1F2F3F4F5F6F7F8F97A5E4C7E6E6F'.
+         02 FILLER PIC X(16) VALUE X'7CC1C2C3C4C5C6C7C8C9D1D2D3D4D5D6'.
+         02 FILLER PIC X(16) VALUE X'D7D8D9E2E3E4E5E6E7E8E9ADE0BD5F6D'.
+         02 FILLER PIC X(16) VALUE X'79818283848586878889919293949596'.
+         02 FILLER PIC X(16) VALUE X'979899A2A3A4A5A6A7A8A9C04FD0A107'.
+         02 FILLER PIC X(16) VALUE X'4320211C23EB249B7128384990BAECDF'.
+         02 FILLER PIC X(16) VALUE X'45292A9D722B8A9A6756644A53685946'.
+         02 FILLER PIC X(16) VALUE X'EADA2CDE8B5541FE5851524869DB8E8D'.
+         02 FILLER PIC X(16) VALUE X'737475FA15B0B1B3B4B56AB7B8B9CCBC'.
+         02 FILLER PIC X(16) VALUE X'AB3E3B0ABF8F3A14A017CBCA1A1B9C04'.
+         02 FILLER PIC X(16) VALUE X'34EF1E0608097770BEBBAC5463656662'.
+         02 FILLER PIC X(16) VALUE X'30424757EE33B6E1CDED3644CECF31AA'.
+         02 FILLER PIC X(16) VALUE X'FC9EAE8CDDDC39FB80AFFD7876B29FFF'.
+       01 FILLER REDEFINES ASCII-TO-EBCDIC.
+         02 EBCDIC PIC X OCCURS 256 TIMES.
+
+      *---------------------------------------------------------------*
+      * Miscellaneous local declarations                              *
+      *---------------------------------------------------------------*
+      * Pointer to ANALYZER commarea
+      * Work length
+      * RESOURCE pointer
+      * Length of RESOURCE left
+       01  wbra-ptr POINTER.
+       01  wbun-ptr POINTER.
+       01  wl       PIC 9(8) COMP.
+       01  rp       POINTER.
+       01  rl       PIC 9(8) COMP.
+       01  char-count PIC 99 COMP.
+       01  user-token PIC X(8) value spaces.
+       01  filler redefines user-token.
+          03  user-token-1 occurs 8 PIC X.
+       01  URL-SEGMENT.
+          02 SEG PIC X OCCURS 8.
+       01  SCAN-STATUS       PIC S99 BINARY.
+         88 SCAN-IN-PROGRESS VALUE 0.
+         88 SCAN-COMPLETE    VALUE 1.
+       77 L PIC S9(8) COMP SYNCHRONIZED.
+
+       Linkage section.
+       COPY DFHEIBLC.
+
+      * ANALYZER PARAMETER LIST
+       COPY DFHWBTDO.
+
+      * DFHWBUN PARAMETER LIST
+       COPY DFHWBUNO.
+
+       01  rpstruct.
+          03  rpchar    PIC X.
+          03  rpplus1   PIC X.
+
+       01 ESCAPE-SEQUENCE.
+         02 ESCAPE-TRIGGER PIC X.
+         02 ESCAPE-DIGIT-1 PIC X.
+         02 ESCAPE-DIGIT-2 PIC X.
+
+       Procedure Division USING DFHEIBLK DFHCOMMAREA.
+      *===============================================================*
+      * Main code                                                     *
+      *===============================================================*
+
+      * Just return if no commarea because nowhere to set rc
+           if eibcalen = 0
+               EXEC CICS RETURN END-EXEC.
+
+      * Addr of parms
+           EXEC CICS ADDRESS COMMAREA(wbra-ptr) END-EXEC.
+           SET ADDRESS OF WBRA-PARMS TO wbra-ptr.
+           move 1 to WBRA-TYPE-HTTP.
+           move low-values to hex-nibbles.
+      *--------------------------------------------------------------*
+      *  Validate the eyecatcher.                                    *
+      *--------------------------------------------------------------*
+           if wbra-eyecatcher not = analyze-eyecatcher-init
+               move URP-INVALID to wbra-response
+               move 0 to wbra-reason
+               EXEC CICS RETURN END-EXEC.
+
+      *==============================================================*
+      *    User specific code below                                  *
+      *==============================================================*
+
+      *--------------------------------------------------------------*
+      *  Processing different versions of input:                     *
+      *  WBRA_VERSION_CTS410 level introduce support for IPV6 addrs  *
+      *  If the parameter list version is less than the CTS410 level *
+      *  this example will load the address of the old ipv4 fields   *
+      *  else this example will load the address of the newer ipv6   *
+      *  address fields.                                             *
+      *--------------------------------------------------------------*
+      *                                                           @L5A
+           if wbra-version < WBRA-VERSION-CTS410
+           then
+
+             SET rp TO ADDRESS OF WBRA-CLIENT-IP-ADDRESS
+             SET rp TO ADDRESS OF WBRA-SERVER-IP-ADDRESS
+           else
+
+
+             SET rp TO ADDRESS OF WBRA-CLIENT-IPV6-ADDRESS
+             SET rp TO ADDRESS OF WBRA-SERVER-IPV6-ADDRESS.
+      *                                                           @L5A
+
+
+      *--------------------------------------------------------------*
+      *  CWS DEFAULT ANALYZER LOGIC                                  *
+      *--------------------------------------------------------------*
+      *---------------------------------------------------------------*
+      * Set the name to be used for codepage translation of the user  *
+      * data to 'DFHWBUD'.                                            *
+      *---------------------------------------------------------------*
+           move cnv-user-data-key to wbra-dfhcnv-key.
+
+      *---------------------------------------------------------------*
+      * If a URIMAP was matched (WBRA_URIMAP not spaces), assume no   *
+      * analysis is necessary, otherwise proceed as below.            *
+      * This default analyzer extracts the required CICS info by      *
+      * assuming the following structure for the resource section     *
+      * of the HTTP request:-                                         *
+      *                                                               *
+      *        /CONVNAME/TRANID/PROGNAME</FILENAME><?TOKEN>           *
+      *                                                               *
+      *  where                                                        *
+      *    CONVNAME = The name of the converter program. Using the    *
+      *               string 'CICS' here will be taken as signifying  *
+      *               that no converter is required.                  *
+      *    TRANID   = The transaction id to be used for the alias.    *
+      *               'CWBA' must be specified to get the supplied    *
+      *               transaction.                                    *
+      *    PROGNAME = The name of the user program to be linked by    *
+      *               the alias.                                      *
+      *    FILENAME = An optional filename (or other information)     *
+      *               when PROGNAME is regarded as a directory.       *
+      *    TOKEN    = An optional 8-char field to be passed in the    *
+      *               user-token field to the decode function of the  *
+      *               converter program.                              *
+      *---------------------------------------------------------------*
+      *                                                          @PDA
+           if wbra-urimap not = SPACES
+               move URP-OK to wbra-response
+               move 0 to wbra-reason
+               EXEC CICS RETURN END-EXEC.
+      * RESOURCE address
+      * RESOURCE length
+           set rp to wbra-resource-ptr.
+           set address of rpstruct to rp.
+           move wbra-resource-length to rl.
+
+      *---------------------------------------------------------------*
+      *  Validate resource length.                                    *
+      *---------------------------------------------------------------*
+           if rl < WBADX-MIN-RESOURCE-LENGTH
+               move URP-EXCEPTION to wbra-response
+               move URP-RESOURCE-TOO-SHORT to wbra-reason
+               EXEC CICS RETURN END-EXEC.
+
+      *---------------------------------------------------------------*
+      *  Ensure valid first character.                                *
+      *---------------------------------------------------------------*
+           if rpchar not = '/'
+               move URP-EXCEPTION to wbra-response
+               move URP-FIRST-SLASH-MISSING to wbra-reason
+               EXEC CICS RETURN END-EXEC.
+
+      *---------------------------------------------------------------*
+      * Scan for converter name                                       *
+      *---------------------------------------------------------------*
+      * Start of converter name
+      * Look for next '/'
+      * Point at next character
+      * Decrement length left
+           Perform UNESCAPE-SEGMENT.
+
+      * '/' not found
+           if rpchar not = '/'
+               move URP-EXCEPTION to wbra-response
+               move URP-SERVER-NAME-MISSING to wbra-reason
+               EXEC CICS RETURN END-EXEC.
+
+      * Length of converter name
+           if ( wl > WBADX-MAX-CONV-NAME-LENGTH or wl = 0 )
+               move URP-EXCEPTION to wbra-response
+               move URP-CONV-NAME-INVALID to wbra-reason
+               EXEC CICS RETURN END-EXEC.
+
+      *---------------------------------------------------------------*
+      * Copy the converter name to the output, converting to upper    *
+      * case in the process. If the null converter name CICS has been *
+      * specified then reset the output field to nulls.               *
+      *---------------------------------------------------------------*
+           move url-segment to wbra-converter-program.
+
+           if wbra-converter-program = 'CICS    '
+             move low-values to wbra-converter-program.
+
+      *---------------------------------------------------------------*
+      * Scan for alias tranid                                         *
+      *---------------------------------------------------------------*
+           Perform UNESCAPE-SEGMENT.
+
+      * '/' not found
+           if rpchar not = '/'
+               move URP-EXCEPTION to wbra-response
+               move URP-SERVER-NAME-MISSING to wbra-reason
+               EXEC CICS RETURN END-EXEC.
+
+      * Length of tranid
+           if ( wl > WBADX-MAX-TRAN-NAME-LENGTH or wl = 0 )
+               move URP-EXCEPTION to wbra-response
+               move URP-TRAN-NAME-INVALID to wbra-reason
+               EXEC CICS RETURN END-EXEC.
+
+      *---------------------------------------------------------------*
+      * Copy the name to the output, converting to upper case in the  *
+      * process.                                                      *
+      *---------------------------------------------------------------*
+           move url-segment to wbra-alias-tranid.
+
+      *---------------------------------------------------------------*
+      * Scan for server program name                                  *
+      *---------------------------------------------------------------*
+           Perform UNESCAPE-SEGMENT.
+
+      * Length of server prog name
+           if ( wl > WBADX-MAX-SERV-NAME-LENGTH or wl = 0 )
+               move URP-EXCEPTION to wbra-response
+               move URP-SERV-NAME-INVALID to wbra-reason
+               EXEC CICS RETURN END-EXEC.
+
+      *---------------------------------------------------------------*
+      * Copy the name to the output, converting to upper case in the  *
+      * process.                                                      *
+      *---------------------------------------------------------------*
+           move url-segment to wbra-server-program.
+
+      *---------------------------------------------------------------*
+      * If another '/' has been found, skip until end or '?'.
+      *---------------------------------------------------------------*
+           if rpchar = '/'
+               perform test after until ( rpchar = '?' or rl = 0 )
+                   subtract 1 from rl
+                   set address of rpstruct to address of rpplus1
+               end-perform.
+
+           if rpchar = '?' and rl > 1
+      *---------------------------------------------------------------*
+      * Copy user token without upper case translate if '?' and data  *
+      * present.                                                      *
+      *---------------------------------------------------------------*
+      * Point at first char of token
+      * Decrement length left
+      * All the rest is user token
+               set address of rpstruct to address of rpplus1
+               subtract 1 from rl
+               move rl to wl
+               if wl > WBADX-MAX-UTOK-NAME-LENGTH
+                   move WBADX-MAX-UTOK-NAME-LENGTH to wl
+
+               perform with test after varying char-count from 1 by +1
+                   until char-count = wl
+                   move rpchar to user-token-1(char-count)
+                   set address of rpstruct to address of rpplus1
+               end-perform
+           end-if
+      *                                                            @PCA
+           move user-token to wbra-user-token.
+
+      *--------------------------------------------------------------*
+      * Link to DFHWBUN to "unescape" escaped data for applications  *
+      * which want to manipulate incoming data in its escaped form,  *
+      * set WBRA-UNESCAPE to WBRA-UNESCAPE-NOT-REQUIRED and do not   *
+      * invoke DFHWBUN                                               *
+      *                                                              *
+      * WBRA-USER-DATA-PTR points to the start of the HTTP request   *
+      * Add WBRA-USER-DATA-LENGTH to WBRA-USER-DATA-PTR to get end of*
+      * HTTP request, subtracting end address from start gives us the*
+      * length of data to be unescaped.                              *
+      *--------------------------------------------------------------*
+           if wbra-unescape = WBRA-UNESCAPE-REQUIRED
+      * Addr of parms
+              EXEC CICS GETMAIN
+                   INITIMG(null-image)
+                   SET(wbun-ptr)
+                   LENGTH(LENGTH OF wbun-commarea)END-EXEC
+
+               SET ADDRESS OF wbun-commarea TO wbun-ptr
+               move DFHWBUN-EYECATCHER-INIT to wbun-eyecatcher
+               move DFHWBUN-CURRENT-VERSION to wbun-version
+               move wbra-user-data-length to wbun-unescape-len
+               if wbun-unescape-len > wbadx-max-server-data-length
+                 then move wbadx-max-server-data-length
+                      to wbun-unescape-len
+               end-if
+      *
+               set wbun-unescape-addr to wbra-user-data-ptr
+               move LENGTH OF wbun-commarea to wbun-length
+               EXEC CICS LINK PROGRAM('DFHWBUN')
+                    COMMAREA(wbun-commarea)
+                    LENGTH(LENGTH OF wbun-commarea)
+                    END-EXEC
+               move WBRA-UNESCAPE-NOT-REQUIRED to wbra-unescape
+           end-if.
+      *                                                    @PAC  @02A
+      *===============================================================*
+      *    User specific code above                                   *
+      *===============================================================*
+
+      *---------------------------------------------------------------*
+      *  Normal return.                                               *
+      *---------------------------------------------------------------*
+           move URP-OK to wbra-response.
+           move 0 to wbra-reason.
+           EXEC CICS RETURN END-EXEC.
+
+      *-----------------------------------------------------------------
+      *  Subroutine to unescape and uppercase a URL "segment".
+      *  (That is, the characters between two slashes.)
+      *  On entry, RP points to the slash at the start of the segment.
+      *  On exit, it points to the slash at the end of the segment
+      *  (or a URL-delimiting character if the URL is malformed).
+      *  Up to eight bytes of the delimited segment are returned in
+      *  URL-SEGMENT, but the scan of the segment is continued beyond
+      *  this length if necessary. The actual length of the segment
+      *  is returned in WL.
+      *-----------------------------------------------------------------
+       UNESCAPE-SEGMENT.
+           Set SCAN-IN-PROGRESS to TRUE.
+           Move ZERO to WL.
+           Move SPACES to URL-SEGMENT.
+           Move LENGTH OF URL-SEGMENT to L.
+           If RPCHAR is equal to '/' then
+             Set RP to address of RPPLUS1
+             Set address of RPSTRUCT to RP
+             Subtract 1 from RL.
+           Perform SCAN-SEGMENT through SCAN-SEGMENT-EXIT
+                   with test before until WL equal L or SCAN-COMPLETE.
+           Perform SCAN-END-CHECK with test before until SCAN-COMPLETE.
+           Move FUNCTION UPPER-CASE(URL-SEGMENT) to URL-SEGMENT.
+       UNESCAPE-EXIT.
+           Exit.
+
+       SCAN-SEGMENT.
+           If RPCHAR is equal to LOW-VALUES or
+              RPCHAR is equal to '/' or
+              RPCHAR is equal to ' ' or
+              RPCHAR is equal to ';' or
+              RPCHAR is equal to '?' then
+                Set SCAN-COMPLETE to TRUE
+                Go to SCAN-SEGMENT-EXIT.
+
+           Add 1 to WL.
+           Evaluate RPCHAR
+             When '%'
+               Set address of ESCAPE-SEQUENCE to RP
+               Move ESCAPE-DIGIT-1            to NIBBLE-INDEX-X
+               Move HEXBIN(NIBBLE-INDEX + 1)  to NIBBLE1-X
+               Move ESCAPE-DIGIT-2            to NIBBLE-INDEX-X
+               Move HEXBIN(NIBBLE-INDEX + 1)  to NIBBLE2-X
+               If NIBBLE1 < 16 and NIBBLE2 < 16
+                 then Compute NIBBLE-INDEX = NIBBLE1 * 16 + NIBBLE2
+                      End-compute
+                      Move EBCDIC(NIBBLE-INDEX + 1) to SEG(WL)
+                      Set RP to address of ESCAPE-DIGIT-2
+                      Subtract 2 from rl
+                 else Move '%' to SEG(WL)
+               End-if
+               Set address of RPSTRUCT to RP
+             When '+'
+               Continue
+             When other
+               Move RPCHAR to SEG(WL)
+           End-evaluate.
+           Set RP to address of RPPLUS1.
+           Set address of RPSTRUCT to RP.
+           Subtract 1 from RL.
+       SCAN-SEGMENT-EXIT.
+           Exit.
+       SCAN-END-CHECK.
+           If RPCHAR is equal to LOW-VALUES or
+              RPCHAR is equal to '/' or
+              RPCHAR is equal to ' ' or
+              RPCHAR is equal to ';' or
+              RPCHAR is equal to '?'
+           then
+             Set SCAN-COMPLETE to TRUE
+           else
+             Add 1 to WL
+             Set RP to address of RPPLUS1
+             Set address of RPSTRUCT to RP
+             Subtract 1 from RL.

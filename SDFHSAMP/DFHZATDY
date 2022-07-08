@@ -1,0 +1,1233 @@
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFHZATDY                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS/ESA(ZCINST) Autoinstall User Program        *
+*                                     Assembler including APPC,       *
+*                                     shipped definitions,        @L3C*
+*                                     Virtual Terminals,          @L3C*
+*                                     Bridge Facilities           @L5A*
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*      Licensed Materials - Property of IBM                           *
+*                                                                     *
+*      "Restricted Materials of IBM"                                  *
+*                                                                     *
+*      5655-Y04                                                       *
+*                                                                     *
+*      (C) Copyright IBM Corp. 1993, 2008"                            *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION = Provide user input to Autoinstall processing including   *
+*            APPC, shipped definitions, Virtual Terminals         @L3C*
+*            for CICS Client EPI interface and Bridge Facilities. @P5C*
+*                                                                     *
+*           DFHZATDX is the default program, but does not allow for   *
+*           APPC autoinstall.  DFHZATDY provides both terminal and    *
+*           a basic APPC support. It may be used as a framework for   *
+*           the user to include their own processing requirements.    *
+*                                                                     *
+*           It is called via a DFHPC CTYPE=LINK_URM command from      *
+*           DFHZATA(INSTALL) and DFHZATD(DELETE).                     *
+*           For shipped definitions it is called from DFHZATS and     *
+*           DFHZATMD.                                                 *
+*           For Bridge facilities it is called from DFHBRAI.      @P5C*
+*                                                                     *
+*           Input to the module is a parameter list addressed by      *
+*           the normal conventions as a COMMAREA.                     *
+*           The COMMAREA is defined in DFHTCUDS A                     *
+*                                                                     *
+*           The program is invoked when:                              *
+*           0) An autoinstall INSTALL is in progress                  *
+*              for a terminal or APPC Single Session secondary        *
+*              (via a CINIT)                                          *
+*           1) An autoinstall DELETE has just completed               *
+*           1) An autoinstall DFHZCP INSTALL has failed               *
+*           2) An autoinstall INSTALL is in progress for an APPC      *
+*              Parallel SNASVCMG session via a CINIT.                 *
+*              This is an unlikely scenario because CICS is       @P1A*
+*              unlikely to receive a PS CINIT from an IWS         @P1A*
+*              or from another CICS.                              @P1A*
+*           3) An autoinstall INSTALL is in progress for an APPC      *
+*              Parallel SNASVCMG session via a BIND.                  *
+*           4) An autoinstall INSTALL is in progress for an APPC      *
+*              Single session via a BIND.                             *
+*           5) An implicitly deletable APPC PS connection has     @L2A*
+*              been deleted.                                      @L2A*
+*           5) An implicitly deletable APPC PS connection has     @L2A*
+*              failed to install.                                 @L2A*
+*           6) An implicitly deletable APPC SS BIND connection    @L2A*
+*              has been deleted.                                  @L2A*
+*           6) An implicitly deletable APPC SS connection has     @L2A*
+*              failed to install.                                 @L2A*
+*           7) A Shipped terminal (skeleton & model | surrogate)  @L3A*
+*              is to be installed.                                @L3A*
+*           8) A Shipped APPC definition (skeleton and TCSE)      @L3A*
+*              is to be installed.                                @L3A*
+*           9) A Virtual Terminal for CICS Client EPI interface   @L3A*
+*              (skeleton & model | surrogate) is to be installed. @L3A*
+*          10) A Shipped terminal has been deleted.               @L3A*
+*          10) A Shipped terminal has failed to install.          @L3A*
+*          11) A Shipped APPC     has been deleted.               @L3A*
+*          11) A Shipped APPC     has failed to install.          @L3A*
+*          12) A Virtual Terminal has been deleted.               @L3A*
+*          12) A Virtual Terminal has failed to install.          @L3A*
+*          13) A console has autoinstalled                        @05A*
+*          13) A console has failed to autoinstall                @05A*
+*          14) A console has been deleted.                        @05A*
+*          15) A bridge link facility is installed                @P6C*
+*          16) A bridge link facility is deleted                  @P6C*
+*          17) A bridge start facility is installed               @P6A
+*          18) A bridge start facility is deleted                 @P6A
+*                                                                     *
+*           The function to be performed is indicated via the         *
+*           parameter list. This is evaluated during initial          *
+*           processing, and control passed to the appropriate         *
+*           routine.                                                  *
+*                                                                     *
+*  Function 0 - INSTALL                                               *
+*  --------------------                                               *
+*  The primary purpose of this function is to complete the            *
+*  SELECTED_PARMS fields.  They are used as input to an auto-         *
+*  install resource 'builder' request.                                *
+*                                                                     *
+*  The following fields may already have been supplied by MTS:        *
+*     SELECTED_MODELNAME                                              *
+*     SELECTED_PRINTER_NETNAME                                        *
+*     SELECTED_ALTPRINTER_NETNAME                                     *
+*  The following fields should be set (if not supplied by MTS):       *
+*     SELECTED_MODELNAME                                              *
+*  The following fields should be set:                                *
+*     SELECTED_TERM_ID                                                *
+*     SELECTED_RETURN_CODE                                            *
+*  The following fields may be set.                                   *
+*     SELECTED_PRINTER_ID                                             *
+*     SELECTED_ALTPRINTER_ID                                          *
+*                                                                     *
+*  The default action of this program is:                             *
+*                                                                     *
+*  - If the modelname list contains no elements, then return          *
+*  - If the first character of SELECTED_MODELNAME is blank            *
+*    (Not supplied by MTS), then copy the first modelname in          *
+*    MODELNAME_LIST into SELECTED_MODELNAME.                          *
+*  - Copy the last 4 non-blank characters of the passed Netname to    *
+*    SELECTED_TERM_ID.                                                *
+*    There is commented out code which allows the TERMID to be    @D3A*
+*    generated from the NETID and NETNAME for CICS systems which  @D3A*
+*    use DYNAMIC LUALIAS netnames.  It takes the last non blank   @D3A*
+*    char from the CINIT NETID and the last 3 non blank chars     @D3A*
+*    from the CINIT NETNAME.  The NETID and NETNAME are found     @D3A*
+*    in the CINIT 0E CV.  If the code fails to derive the TERMID  @D3A*
+*    from the NETNAME it uses the last 4 characters of the        @D3A*
+*    supplied NETNAME instead.                                    @D3A*
+*                                                                 @D4A*
+*    There is further uncalled code which shows how to extract    @D4A*
+*    the Telnet 3270 IP address from the CINIT.  The routine is   @D4A*
+*    called EXTRACT_TNADDR_FROM_CINIT.  CICS calls this           @D4A*
+*    information the TNADDR.  This routine extracts the fields    @D4A*
+*    from Control Vector 64 unconverted (see                      @D4A*
+*    IP_ADDRESS, IP_PORT and IP_HOSTNAME).                        @D4A*
+*    The fields are available in the 'string' format in the NEP   @D4A*
+*    when the DFHZC3461 session started message is written.       @D4A*
+*    DFHTCUDS maps the CV starting with SV_64.  The CV64 only     @D4A*
+*    exists for Telnet 3270 terminals.                            @D4A*
+*                                                                 @D4A*
+*  - Set the SELECTED_RETURN_CODE to RETURN_OK to indicate that       *
+*    a selection has been made.                                       *
+*  - Return to the calling program.                                   *
+*                                                                     *
+*  EXIT-NORMAL =                                                      *
+*       Exit is via an EXEC CICS RETURN command.                      *
+*       Status is set to zero if all processing completes normally.   *
+*                                                                     *
+*  EXIT-ERROR =                                                       *
+*       Exit is via an EXEC CICS RETURN command.                      *
+*       RETURN_CODE is non-zero on entry to this module and is        *
+*       untouched if any error occurs, hence, a non-zero return       *
+*       code is passed back to the calling program.                   *
+*                                                                     *
+*  Function 1 - autoinstall DELETE                                    *
+*  -------------------------------                                    *
+*                                                                     *
+*  This function gives the user the opportunity to perform            *
+*  processing when an autoinstalled terminal has been deleted.        *
+*                                                                     *
+*  The default action of this program is to establish                 *
+*  addressability to the parameter list, and RETURN.                  *
+*                                                                     *
+*  EXIT-NORMAL =                                                      *
+*       Exit is via an EXEC CICS RETURN command.                      *
+*                                                                     *
+*  Function 2-4 APPC autoinstall                                      *
+*  -----------------------------                                      *
+*  The primary purpose of this function is to complete the            *
+*  output fields.  They are used as input to an autoinstall           *
+*  resource 'builder' request.                                        *
+*                                                                     *
+*  The fields are described in more detail in DFHTCUDS A              *
+*                                                                     *
+*  The following input fields are supplied:                           *
+*     INSTALL_APPC_NETNAME_PTR    -> NETNAME_FIELD                    *
+*     INSTALL_APPC_CINIT_PTR      -> incoming CINIT or                *
+*     INSTALL_APPC_BIND_PTR       -> incoming BIND                    *
+*     INSTALL_APPC_SYNCLEVEL_PTR  -> incoming synclevel               *
+*     INSTALL_APPC_NETNAME2_PTR   -> Generic or member netname    @L2A*
+*     INSTALL_APPC_NETID_PTR      -> Network ID                   @L2A*
+*     INSTALL_APPC_TYPE_PTR       -> Generic or member connection @L2A*
+*  The following fields should be set:                                *
+*     INSTALL_APPC_SELECTED_PTR         -> SELECT_RETURN_CODE         *
+*     INSTALL_APPC_TEMPLATE_NETNAME_PTR -> TEMPLATE_NETNAME           *
+*     INSTALL_APPC_TEMPLATE_SYSID_PTR   -> TEMPLATE_SYSID             *
+*     INSTALL_APPC_SYSID_PTR            -> SYSID                      *
+*                                                                     *
+*  Where incoming netname NETNAME_FIELD is in the same form as        *
+*  function 0 above.                                                  *
+*  If APPC_GR_TYPE is G then NETNAME_FIELD contains the generic name. *
+*  If APPC_GR_TYPE is M then NETNAME_FIELD contains the member name.  *
+*                                                                     *
+*  Where incoming CINIT CINIT_RU contains the income CINIT if the     *
+*  incoming session is a secondary.                                   *
+*                                                                     *
+*  Where incoming BIND contains the incoming BIND if the incoming     *
+*  session is a primary.                                              *
+*                                                                     *
+*  Where return code field has to be in exactly the same form as in   *
+*  DFHZATDX.  The other fields in SELECTED_FIELDS are not used.       *
+*                                                                     *
+*  Where synclevel is called SYNCLEVEL and is the form:               *
+*  X'0000' Synclevel 0                                                *
+*  X'0001' Synclevel 1                                                *
+*  X'0002' Synclevel 2                                                *
+*                                                                     *
+*  Where template netname -  TEMPLATE_NETNAME is an 8 byte field      *
+*  that should be set to the template netname to be used in           *
+*  creating the new connection.                                       *
+*  If the name is shorter than 8 characters it must be padded on the  *
+*  right with blanks.                                                 *
+*  This field may be filled in on input - if it is then it will be    *
+*  the NETNAME of the Generic name connection suggested by CICS as    *
+*  the best template.  It may be over-ridden.                         *
+*                                                                     *
+*  Where template sysid   -  TEMPLATE_SYSID   is a  4 byte field      *
+*  that should be set to the template sysid   to be used in           *
+*  creating the new connection.                                       *
+*  If the name is shorter than 4 characters it must be padded on the  *
+*  right with blanks.                                                 *
+*  Only one of the above two fields should be used.                   *
+*                                                                     *
+*  Where APPC_NETNAME2 depends on the setting of APPC_GR_TYPE.        *
+*  G indicates that APPC_NETNAME2 is the member name and              *
+*  M indicates that APPC_NETNAME2 is the generic resource name.       *
+*  APPC_NETNAME2 is in the same form as APPC_NETNAME.                 *
+*                                                                     *
+*  Where APPC_NETID is the network identifier found in the SCIP exit  *
+*  parameter list.                                                    *
+*                                                                     *
+*  Where APPC_GR_TYPE is G, M or blank.                               *
+*  G = APPC_NETNAME holds the generic resource name and both this     *
+*      CICS and the partner are registered as a generic resource.     *
+*      APPC_NETNAME2 holds the member name                            *
+*  M = APPC_NETNAME holds the member name and both this CICS and      *
+*      the partner are registered as a generic resource.              *
+*      APPC_NETNAME2 holds the generic resource name                  *
+*  blank = APPC_NETNAME this is not a generic resource connection     *
+*      and APPC_NETNAME holds the only NETNAME.                       *
+*                                                                     *
+*  Where sysid - SYSID is a 4 byte field that must be set to the      *
+*  SYSID for the new connection.  This must produce a unique name and *
+*  can use the same algorithm as the terminal id.                     *
+*  If the name is shorter that 4 characters it must be padded on the  *
+*  right with blanks.                                                 *
+*                                                                     *
+*  NOTE - If you are using recoverable resources then the SYSID       *
+*  chosen for a connection after a restart must be the same as one    *
+*  chosen in the previous run.  This is because recoverable resources *
+*  are matched together after a restart using the SYSID.              *
+*                                                                 @D3A*
+*  There is commented out code which allows the SYSID  to be      @D3A*
+*  generated from the NETID and NETNAME for CICS systems which    @D3A*
+*  use DYNAMIC LUALIAS netnames.  It takes the last non blank     @D3A*
+*  char from the BIND  NETID and the last 3 non blank chars       @D3A*
+*  from the BIND  NETNAME.  The NETID and NETNAME are found       @D3A*
+*  in the BIND 0E CV.  If the code fails to derive the SYSID      @D3A*
+*  from the NETNAME it uses the last 4 characters of the          @D3A*
+*  supplied NETNAME instead.                                      @D3A*
+*                                                                     *
+*  The default action of these three functions is:                    *
+*                                                                     *
+*  - Function 2 INSTALL_APPC_PS_CINIT An incoming CINIT from a        *
+*    secondary SNASVCMG session has been received so                  *
+*    set TEMPLATE_SYSID to 'CCPS'.                                    *
+*    CCPS must be the SYSID of the connection that is to be used      *
+*    as a template for the new connection.                            *
+*    CICS is unlikely to receive an incoming CINIT for            @P1A*
+*    a parallel session.                                          @P1A*
+*  - Function 3 INSTALL_APPC_PS_BIND  An incoming BIND  from a        *
+*    primary   SNASVCMG session has been received so                  *
+*    set TEMPLATE_SYSID to 'CBPS' or 'CBPD'.                          *
+*    CBPS must be the SYSID of the connection that is to be used      *
+*    as a template for the new connection.                            *
+*    CBPD must be the SYSID of the connection that is to be used      *
+*    as a template for the new connection if Extended security        *
+*    is required.                                                     *
+*  - Function 4 INSTALL_APPC_SS_BIND  An incoming BIND  from a        *
+*    primary  single session has been received so                     *
+*    set TEMPLATE_SYSID to 'CBSS'.                                    *
+*    CBSS must be the SYSID of the connection that is to be used      *
+*    as a template for the new connection.                            *
+*    These names can, of course, be changed to suit the user.         *
+*                                                                     *
+*  - Function 5 DELETE_APPC_PS_BIND. An APPC PS connection that was   *
+*    installed via a BIND has been deleted implicitly.                *
+*    Default action is just to return.                                *
+*                                                                     *
+*  - Function 6 DELETE_APPC_SS_BIND. An APPC SS connection that was   *
+*    installed via a BIND has been deleted implicitly.                *
+*    Default action is just to return.                                *
+*                                                                     *
+*  - Now functions 2-4 converge:                                      *
+*  - Copy the last 4 non-blank characters of the passed Netname to    *
+*    SYSID for the name of the new connection.                        *
+*  - Set the SELECTED_RETURN_CODE to RETURN_OK to indicate that       *
+*    a selection has been made.                                       *
+*  - Return to the calling program.                                   *
+*                                                                     *
+*  EXIT-NORMAL =                                                      *
+*       Exit is via an EXEC CICS RETURN command.                      *
+*       Status is set to zero if all processing completes normally.   *
+*                                                                     *
+*  EXIT-ERROR =                                                       *
+*       Exit is via an EXEC CICS RETURN command.                      *
+*       RETURN_CODE is non-zero on entry to this module and is        *
+*       untouched if any error occurs, hence, a non-zero return       *
+*       code is passed back to the calling program.                   *
+*                                                                     *
+*  Function 7,8 & 9 - autoinstall of a shipped or VT definition   @L3C*
+*  ------------------------------------------------------------       *
+*                                                                     *
+*  The primary purpose of this function is to validate the            *
+*  SELECTED_TERMID field.  This is used as input to an auto-          *
+*  install resource 'builder' request.                                *
+*                                                                     *
+*  The fields are described in more detail in DFHTCUDS A.             *
+*                                                                     *
+*  The following input fields are supplied:                        @04C
+*     INSTALL_SHIPPED_CLASH       -> Y/N                           @04C
+*     INSTALL_SHIPPED_NETNAME_PTR -> NETNAME_FIELD                 @04C
+*     INSTALL_SHIPPED_TERMID_PTR  -> incoming TERMID               @04C
+*     INSTALL_SHIPPED_APPLID_PTR  -> APPLID of TOR                 @04C
+*     INSTALL_SHIPPED_SYSID_PTR   -> SYSID of incoming request     @04C
+*     INSTALL_SHIPPED_CORRID_PTR  -> Correlation token             @04C
+*                                                                  @04C
+*  The following fields should be set on exit:                     @04C
+*     SELECTED_TERM_ID                                             @04C
+*     SELECTED_RETURN_CODE                                         @04C
+*                                                                     *
+*  EXIT-NORMAL =                                                      *
+*       Exit is via an EXEC CICS RETURN command.                      *
+*       Status is set to zero if all processing completes normally.   *
+*                                                                     *
+*  EXIT-ERROR =                                                       *
+*       Exit is via an EXEC CICS RETURN command.                      *
+*       RETURN_CODE is non-zero on entry to this module and is        *
+*       untouched if any error occurs, hence, a non-zero return       *
+*       code is passed back to the calling program.                   *
+*                                                                     *
+*   Function 10,11 & 12 - autoinstall delete of shipped or VT     @L3C*
+*   ---------------------------------------------------------     @L3C*
+*   definition.                                                   @L3A*
+*   -----------                                                   @L3A*
+*   This function gives the user the opportunity to perform           *
+*   processing when an autoinstalled terminal has been deleted.       *
+*                                                                     *
+*   The default action of this program is to establish                *
+*   addressability to the parameter list, and RETURN.                 *
+*                                                                     *
+*                                                                     *
+*     EXIT-NORMAL =                                                   *
+*          Exit is via an EXEC CICS RETURN command.                   *
+*                                                                  @05A
+*  Function 13 - INSTALL Console                                   @05A
+*  -----------------------------                                   @05A
+*  The primary purpose of this function is to complete the         @05A
+*  SELECTED_PARMS fields.  They are used as input to an auto-      @05A
+*  install resource 'builder' request.                             @05A
+*                                                                  @05A
+*  The following fields should be set:                             @05A
+*     SELECTED_MODELNAME                                           @05A
+*     SELECTED_TERM_ID                                             @05A
+*     SELECTED_RETURN_CODE                                         @05A
+*                                                                  @05A
+*  The default action of this program is:                          @05A
+*                                                                  @05A
+*  - If the modelname list contains no elements, then return       @05A
+*  - Copy the first modelname in                                   @05A
+*    MODELNAME_LIST into SELECTED_MODELNAME.                       @05A
+*  - Copy the last 4 non-blank characters of the passed Console    @05A
+*    to SELECTED_TERM_ID.                                          @05A
+*  - Set the SELECTED_RETURN_CODE to RETURN_OK to indicate that    @05A
+*    a selection has been made.                                    @05A
+*  - Return to the calling program.                                @05A
+*                                                                  @05A
+*  EXIT-NORMAL =                                                   @05A
+*       Exit is via an EXEC CICS RETURN command.                   @05A
+*       Status is set to zero if all processing completes normally.@05A
+*                                                                  @05A
+*  EXIT-ERROR =                                                    @05A
+*       Exit is via an EXEC CICS RETURN command.                   @05A
+*       RETURN_CODE is non-zero on entry to this module and is     @05A
+*       untouched if any error occurs, hence, a non-zero return    @05A
+*       code is passed back to the calling program.                @05A
+*                                                                  @05A
+*  Function 14 - Console DELETE                                    @05A
+*  ----------------------------                                    @05A
+*                                                                  @05A
+*  This function gives the user the opportunity to perform         @05A
+*  processing when an autoinstalled console has been deleted.      @05A
+*                                                                  @05A
+*  The default action of this program is to establish              @05A
+*  addressability to the parameter list, and RETURN.               @05A
+*                                                                  @05A
+*  EXIT-NORMAL =                                                   @05A
+*       Exit is via an EXEC CICS RETURN command.                   @05A
+*                                                                  @L5A
+*  Function 15 & 17 - Bridge Facility INSTALL                      @P6C
+*  -------------------------------------                           @L5A
+*                                                                  @L5A
+*  This function gives the user the opportunity to perform         @L5A
+*  processing when an autoinstalled bridge facility is installed.  @L5A
+*  Main options are:                                               @L5A
+*   1) Verify whether the input termid and/or netname are valid.   @L5A
+*      If not then set the SELECTED_BRFAC_RETURN_CODE              @P5C
+*      to REJECT.                                                  @L5A
+*   2) Override the input termid and/or netname by setting the     @L5A
+*      following output fields                                     @L5A
+*      SELECTED_BRFAC_TERMID                                       @P5C
+*      SELECTED_BRFAC_NETNAME                                      @P5C
+*                                                                  @L5A
+*  The default action of this program is:                          @P6C
+*                                                                  @P6A
+*  - Accept the terminal id by copying the terminal id addressed   @P6A
+*    by INSTALL_BRFAC_TERMID_PTR into                              @P6A
+*    SELECTED_BRFAC_TERMID.                                        @P6A
+*  - Accept the netname by copying the netname addressed by        @P6A
+*    INSTALL_BRFAC_NETNAME_PTR into                                @P6A
+*    SELECTED_BRFAC_NETNAME.                                       @P6A
+*  - Set the SELECTED_BRFAC_RETURN_CODE to RETURN_OK to            @P6A
+*    indicate that a selection has been made.                      @P6A
+*  - Return to the calling program.                                @P6A
+*                                                                  @P6A
+*                                                                  @L5A
+*  Function 16 & 18 - Bridge Facility DELETE                       @P6C
+*  ------------------------------------                            @L5A
+*                                                                  @L5A
+*  This function gives the user the opportunity to perform         @L5A
+*  processing when an autoinstalled bridge facility is deleted.    @L5A
+*                                                                  @L5A
+*  The default action of this program is to establish              @L5A
+*  addressability to the parameter list, and RETURN.               @L5A
+*                                                                  @L5A
+*---------------------------------------------------------------------*
+*  Register Usage for mainline code (individual sections may       @06C
+*  have a different register usage.)                               @06A
+*    R0 = not used                                                    *
+*    R1 = not used                                                    *
+*    R2 = Pointer to COMMAREA and the incoming NETNAME                *
+*    R3 = Base                                                        *
+*    R4 = Pointer to model list or template                           *
+*    R5 = Pointer to selected parms                                   *
+*    R6 = Pointer to template netname                                 *
+*    R7 = work register                                               *
+*    R8 = work register                                               *
+*    R9 = Pointer to termid or sysid output field                     *
+*    R10 = Link register                                         @L2C *
+*    R11 = EIB storage                                                *
+*    R12 = Return Register                                            *
+*    R13 = EID save area                                              *
+*    R14 =                                                       @L2C *
+*    R15 = Not used                                                   *
+*---------------------------------------------------------------------*
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*NOTES :                                                              *
+*   DEPENDENCIES = S/370                                              *
+*                                                                     *
+*   PROCESSOR = Assembler                                             *
+*   ATTRIBUTES = Read only, Serially Reusable                         *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*ENTRY POINT = DFHZATDY                                               *
+*                                                                     *
+*    PURPOSE = All Functions                                          *
+*                                                                     *
+*    The request type is analyzed, and control passed to the          *
+*    appropriate routine.                                             *
+*                                                                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*EXTERNAL REFERENCES = None                                           *
+*                                                                     *
+*    ROUTINES =                                                       *
+*        EXEC CICS RETURN - return to calling program                 *
+*                                                                     *
+*                                                                     *
+*    CONTROL BLOCKS =                                                 *
+*        See FUNCTION section for description of input parameters     *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*DESCRIPTION                                                          *
+*                                                                     *
+* A check is made to ensure the presence of the input parameters      *
+* (passed via COMMAREA). If these do not exist a return is made       *
+* to the calling program.                                             *
+*                                                                     *
+* The type of request(INSTALL|DELETE) is then determined, and a       *
+* branch taken to the appropriate function routine (see 'FUNCTION'    *
+* above for details).                                                 *
+*                                                                     *
+***********************************************************************
+*---------------------------------------------------------------------*
+*                                                                     *
+**                                                                    *
+*        $MOD(DFHZATDY),COMP(ZCINST),PROD(CICS TS ):                  *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $04= A92513 520 970408 HDBGNRB : Migrate PN92513 from SPA R510   *
+*    $05= ACONAI 530 971112 HD2WPGK : Migrate INCONAI from SPA R520   *
+*    $06= A48533 660 070815 HDBGNRB: Migrate PK48533 from SPA R650    *
+*    $L1= 663    410 930919 HD4ASJL : 663 BIND receive                *
+*    $L2= 698    510 940713 HD2WPGK : APPC AI delete functions        *
+*    $L3= 704    510 950626 HD2WPGK : Call URM for Virtual Terminal   *
+*    $L5= 775    620 000804 HDDLCRP : Autoinstall (call URM)          *
+*    $P1= M84933 410 931212 HD2WPGK : PS CINIT unlikely               *
+*    $P4= M14649 610 991006 HDHIMI  : Make sample autoinstall URM mor *
+*    $P5= D02199 620 010704 HDFXAB  : Add Bridge code to samples      *
+*    $P6= D02717 620 010914 HDFXAB  : Bridge function codes           *
+*    $P7= D03290 620 011024 HD2WPGK : Match each using with a drop    *
+*    $P8= D03868 630 020128 HD2WPGK : DFHZ*TDX spelling corrections   *
+*    $P9= D10834 640 041014 HDIKTG : Netname truncated in DFHZATDX an *
+*    $PA= D19391 660 071121 HDIRSX : Use R10 as the link register     *
+*    $PB= D23479 660 081229 HDJSCAG: TN3270 exits update              *
+*    $01  Reserved for APAR fix                                       *
+*    $02  Reserved for APAR fix                                       *
+*    $03  Reserved for APAR fix                                       *
+*    $D0= I05877 410 930226 HD2WPGK : APPC AI                         *
+*    $D1= I05866 410 931116 HD5VDLA : Generic resource registration - *
+*    $D2= I06615 510 950516 HD6NPRW : URM shipped definitions         *
+*    $D3= I06709 610 990401 HD2WPGK : LUALIAS                         *
+*    $D4= I06890 630 020108 HD2WPGK : IP ADDR for VTAM terminals      *
+*                                                                     *
+***********************************************************************
+DFHEISTG DSECT ,
+NETID        DS  CL8                                               @D3A
+* The following statements must be kept together.                  @D3A
+REAL_NETNAME DS  CL8                                               @D3A
+REAL_DELIM   DS  C                     Must follow REAL_NETNAME    @D3A
+* The following fields are for the Telnet 3270 IP address          @D4A
+IP_ADDRESS DS  F                       Binary version              @D4A
+IP_V6_ADDRESS DS CL16                  Binary IPv6 address         @PBA
+IP_PORT    DS  H                       Binary version              @D4A
+IP_HOSTNAME_LENGTH DS F                                            @D4A
+IP_HOSTNAME DS CL256                                               @D4A
+***********************************************************************
+* Copy the Commarea definitions
+         COPY  DFHTCUDS
+*
+         DFHEJECT
+DFHZATDY CSECT ,
+***********************************************************************
+* Initialisation                                                      *
+***********************************************************************
+DFHZATDY RMODE ANY
+         DFHREGS ,                 EQUATE REGISTERS
+         OC    EIBCALEN,EIBCALEN   ANY COMMAREA?
+         BZ    RETURN              ...NO, GET OUT
+         L     R2,DFHEICAP         ADDRESS INPUT PARAMETER LIST
+***********************************************************************
+* Select function                                                   * *
+***********************************************************************
+         USING INSTALL_EXIT_COMMAREA,R2  Address commarea
+         CLI   INSTALL_EXIT_FUNCTION,INSTALL_CODE Are we installing
+         BE    INSTALL_TERMINAL
+         CLI   INSTALL_EXIT_FUNCTION,DELETE_CODE  Are we deleting?
+         BE    DELETE_TERMINAL
+         CLI   INSTALL_EXIT_FUNCTION,INSTALL_APPC_PS_CINIT
+         BE    INSTALL_CINIT
+         CLI   INSTALL_EXIT_FUNCTION,INSTALL_APPC_PS_BIND
+         BE    INSTALL_PS_BIND
+         CLI   INSTALL_EXIT_FUNCTION,INSTALL_APPC_SS_BIND
+         BE    INSTALL_SS_BIND
+         CLI   INSTALL_EXIT_FUNCTION,DELETE_APPC_PS_BIND           @L2A
+         BE    DELETE_TERMINAL                                     @L2A
+         CLI   INSTALL_EXIT_FUNCTION,DELETE_APPC_SS_BIND           @L2A
+         BE    DELETE_TERMINAL                                     @L2A
+         CLI   INSTALL_EXIT_FUNCTION,INSTALL_SHIPPED_TERM          @D2A
+         BE    INSTALL_SHIPPED_TERMINAL                            @D2A
+         CLI   INSTALL_EXIT_FUNCTION,DELETE_SHIPPED_TERM           @D2A
+         BE    DELETE_SHIPPED_TERMINAL                             @D2A
+         CLI   INSTALL_EXIT_FUNCTION,INSTALL_SHIPPED_RSE           @D2A
+         BE    INSTALL_SHIPPED_SYSTEM_ENTRY                        @D2A
+         CLI   INSTALL_EXIT_FUNCTION,DELETE_SHIPPED_RSE            @D2A
+         BE    DELETE_SHIPPED_TERMINAL                             @D2A
+         CLI   INSTALL_EXIT_FUNCTION,INSTALL_VIRTUAL_TERM          @L3A
+         BE    INSTALL_SHIPPED_TERMINAL                            @L3A
+         CLI   INSTALL_EXIT_FUNCTION,DELETE_VIRTUAL_TERM           @L3A
+         BE    DELETE_SHIPPED_TERMINAL                             @L3A
+         CLI   INSTALL_EXIT_FUNCTION,CONSOLE_INSTALL_CODE          @05A
+         BE    INSTALL_TERMINAL                                    @05A
+         CLI   INSTALL_EXIT_FUNCTION,CONSOLE_DELETE_CODE           @05A
+         BE    DELETE_TERMINAL                                     @05A
+         CLI   INSTALL_EXIT_FUNCTION,INSTALL_LINK_BRFAC            @P6C
+         BE    INSTALL_BRIDGE_FACILITY                             @L5A
+         CLI   INSTALL_EXIT_FUNCTION,DELETE_LINK_BRFAC             @P6C
+         BE    DELETE_BRIDGE_FACILITY                              @L5A
+         CLI   INSTALL_EXIT_FUNCTION,INSTALL_START_BRFAC           @P6A
+         BE    INSTALL_BRIDGE_FACILITY                             @P6A
+         CLI   INSTALL_EXIT_FUNCTION,DELETE_START_BRFAC            @P6A
+         BE    DELETE_BRIDGE_FACILITY                              @P6A
+         B     RETURN               Invalid function
+         DFHEJECT
+***********************************************************************
+* Function 0 - Install Processing                                     *
+***********************************************************************
+INSTALL_TERMINAL DS 0H
+         L     R4,INSTALL_MODELNAME_PTR Address modelname list
+         USING MODELNAME_LIST,R4   BASE DSECT
+         OC    MODELNAME_COUNT,MODELNAME_COUNT Any Model names?
+         BZ    RETURN              ...NO, GET OUT
+         L     R5,INSTALL_SELECTED_PTR  Address selection list
+         USING SELECTED_PARMS,R5   BASE DSECT
+* Console_install_consname_ptr is an overlay of install_netname    @05A
+* As Consolename and netname are identical overlays, from here     @05A
+* we use netname only for simplicity                               @05A
+         L     R2,INSTALL_NETNAME_PTR   Address netname field
+         DROP  R2                                                  @P7A
+         USING NETNAME_FIELD,R2    BASE DSECT
+         LA    R9,SELECTED_TERM_ID
+*---------------------------------------------------------------------*
+* Check if model name already present                                 *
+*---------------------------------------------------------------------*
+         CLI   SELECTED_MODELNAME,C' ' Is modelname present?
+         BNE   TERMID              ... Yes, Don't change it
+*---------------------------------------------------------------------*
+* Select first model in list                                          *
+*---------------------------------------------------------------------*
+         MVC   SELECTED_MODELNAME,MODELNAME Choose first model
+*---------------------------------------------------------------------*
+* Call CREATE_TERMID to set INSTALL_TERM_ID                           *
+* R9 holds SELECTED_TERM_ID                                           *
+* R2 holds INSTALL_NETNAME_PTR                                        *
+*---------------------------------------------------------------------*
+* Code to derive the TERMID from the NETID and NETNAME             @D3A
+* present in the CINIT.  Code of this sort is needed if            @D3A
+* this CICS system uses the VTAM parameter LUAPFX=xx which         @D3A
+* causes VTAM to send dynamic LUALIAS netnames. It creates         @D3A
+* TERMIDs which are reproducible because they are taken from       @D3A
+* the last non blank character of the NETID and the last 3         @D3A
+* non blank characters of the REAL_NETNAME.  You will need to      @D3A
+* modify this code if the last character of the NETID is not       @D3A
+* different for each network which sends CINITS to this CICS.      @D3A
+*                                                                  @D3A
+* If this code is NOT used, OR if the code FAILS in any way        @D3A
+* (for instance a VTAM control vector is missing or the NETID      @D3A
+* is not available) then the original TERMID code creates the      @D3A
+* TERMID from the NETNAME that CICS will know the resource by.     @D3A
+* If the netname is a dynamic LUALIAS then the TERMID will be      @D3A
+* 0001 or 0002 etc and will be different at the next logon if      @D3A
+* the CDRSCTI interval has expired.                                @D3A
+*        BAL   R10,EXTRACT_NQNAME_FROM_CINIT                       @D3A
+*        CLI   REAL_NETNAME,C' '                                   @D3A
+*        BE    TERMID              Use last 4 chars of netname     @D3A
+*        CLI   NETID,C' '                                          @D3A
+*        BE    TERMID              Use last 4 chars of netname     @D3A
+*        BAL   R10,SET_ALIAS_TERMID                                @D3A
+*        B     BYPASS_TERMID                                       @D3A
+TERMID   DS    0H
+         BAL   R10,CREATE_TERMID                                   @L2C
+BYPASS_TERMID DS 0H                                                @D3A
+*---------------------------------------------------------------------*
+* Install terminal selections complete - set return_ok and return     *
+*---------------------------------------------------------------------*
+         MVI   SELECTED_RETURN_CODE,RETURN_OK Say all went well
+         B     RETURN              EXIT PROGRAM
+*
+         DROP  R2                                                  @P7A
+         DROP  R4
+         DROP  R5
+*
+         DFHEJECT
+***********************************************************************
+* Function 1, 5 and 6 Common delete processing                    @L2A*
+***********************************************************************
+DELETE_TERMINAL DS 0H
+         USING DELETE_EXIT_COMMAREA,R2 Address delete commarea
+* ==> PUT DELETE CODE HERE
+         DROP  R2                                                  @P7A
+         B     RETURN              EXIT PROGRAM
+         DFHEJECT
+***********************************************************************
+* Function 2 - Install APPC parallel connection via CINIT             *
+***********************************************************************
+INSTALL_CINIT DS 0H
+         USING INSTALL_APPC_COMMAREA,R2 Address install APPC commarea
+         L     R6,INSTALL_APPC_TEMPLATE_NETNAME_PTR                @D1A
+         USING TEMPLATE_NETNAME,R6                                 @D1A
+         CLC   TEMPLATE_NETNAME,=CL8' ' If netname contains a value@D1A
+         BNE   APPC_COMMON              ..don't set template_sysid @D1A
+         L     R4,INSTALL_APPC_TEMPLATE_SYSID_PTR
+         USING TEMPLATE_SYSID,R4
+         MVC   TEMPLATE_SYSID,=C'CCPS'
+         B     APPC_COMMON
+         DROP  R4                                                  @P7A
+         DROP  R2                                                  @P7A
+***********************************************************************
+* Function 3 - Install APPC parallel connection via BIND              *
+***********************************************************************
+INSTALL_PS_BIND DS 0H
+         USING INSTALL_APPC_COMMAREA,R2 Address install APPC commarea
+         L     R6,INSTALL_APPC_TEMPLATE_NETNAME_PTR                @D1A
+         CLC   TEMPLATE_NETNAME,=CL8' ' If netname contains a value@D1A
+         BNE   APPC_COMMON              ..don't set template_sysid @D1A
+         L     R4,INSTALL_APPC_TEMPLATE_SYSID_PTR
+         USING TEMPLATE_SYSID,R4                                   @P7A
+         MVC   TEMPLATE_SYSID,=C'CBPS'
+         B     APPC_COMMON
+         DROP  R4                                                  @P7A
+         DROP  R2                                                  @P7A
+***********************************************************************
+* Function 4 - Install APPC single connection via BIND                *
+***********************************************************************
+INSTALL_SS_BIND DS 0H
+         USING INSTALL_APPC_COMMAREA,R2 Address install APPC commarea
+         L     R6,INSTALL_APPC_TEMPLATE_NETNAME_PTR                @D1A
+         CLC   TEMPLATE_NETNAME,=CL8' ' If netname contains a value@D1A
+         BNE   APPC_COMMON              ..don't set template_sysid @D1A
+         DROP  R6                                                  @D1A
+         L     R4,INSTALL_APPC_TEMPLATE_SYSID_PTR
+         USING TEMPLATE_SYSID,R4
+         MVC   TEMPLATE_SYSID,=C'CBSS'
+         DROP  R4
+***********************************************************************
+* Common APPC processing.                                             *
+***********************************************************************
+APPC_COMMON DS 0H
+         L     R5,INSTALL_APPC_SELECTED_PTR  Address return code area
+         USING SELECTED_PARMS,R5
+*---------------------------------------------------------------------*
+* Call subroutine to create the name of the new SYSID.                *
+* and move the name created into the commarea.                        *
+* R9 holds INSTALL_APPC_SYSID_PTR                                     *
+* R2 holds INSTALL_APPC_NETNAME_PTR                                   *
+*---------------------------------------------------------------------*
+         L     R9,INSTALL_APPC_SYSID_PTR
+         L     R2,INSTALL_APPC_NETNAME_PTR
+* Code to derive the SYSID  from the NETID and NETNAME             @D3A
+* present in the BIND.   Code of this sort is needed if            @D3A
+* this CICS system uses the VTAM parameter LUAPFX=xx which         @D3A
+* causes VTAM to send dynamic LUALIAS netnames. It creates         @D3A
+* SYSIDs  which are reproducible because they are taken from       @D3A
+* the last non blank character of the NETID and the last 3         @D3A
+* non blank characters of the REAL_NETNAME.  You will need to      @D3A
+* modify this code if the last character of the NETID is not       @D3A
+* different for each network which sends CINITS to this CICS.      @D3A
+*                                                                  @D3A
+* If this code is NOT used, OR if the code FAILS in any way        @D3A
+* (for instance a VTAM control vector is missing or the NETID      @D3A
+* is not available) then the original SYSID  code creates the      @D3A
+* SYSID  from the NETNAME that CICS will know the resource by.     @D3A
+* If the netname is a dynamic LUALIAS then the SYSID  will be      @D3A
+* 0001 or 0002 etc and will be different at the next logon if      @D3A
+* the CDRSCTI interval has expired.                                @D3A
+*        BAL   R10,EXTRACT_NQNAME_FROM_BIND                        @D3A
+*        CLI   REAL_NETNAME,C' '                                   @D3A
+*        BE    CREATE_SYSID        Use last 4 chars of netname     @D3A
+*        CLI   NETID,C' '                                          @D3A
+*        BE    CREATE_SYSID        Use last 4 chars of netname     @D3A
+*        BAL   R10,SET_ALIAS_TERMID                                @D3A
+*        B     BYPASS_SYSID                                        @D3A
+CREATE_SYSID DS 0H                                                 @D3A
+         BAL   R10,CREATE_TERMID                                   @L2C
+BYPASS_SYSID DS 0H                                                 @D3A
+*---------------------------------------------------------------------*
+* Set the return code to go ahead with the install.                   *
+* This fields is common to existing autoinstall and new APPC AI.      *
+*---------------------------------------------------------------------*
+         MVI   SELECTED_RETURN_CODE,RETURN_OK Go ahead with install
+         DROP  R5
+         DFHEJECT
+         DROP  R2                                                  @P7A
+***********************************************************************
+* Return to caller                                                    *
+***********************************************************************
+RETURN   DS    0H
+         EXEC CICS RETURN ,
+***********************************************************************
+* DERIVE TERMID/SYSID from last 4 non blank characters of NETNAME     *
+* R2 = Input - pointer to netname                                     *
+* R6 = work register                                                  *
+* R7 = work register                                                  *
+* R8 = work register                                                  *
+* R9 = Input - pointer to slot for termid or sysid                    *
+* R10 = Return Register                                           @L2C*
+***********************************************************************
+CREATE_TERMID DS 0H
+         USING NETNAME_FIELD,R2
+         LA    R8,NETNAME
+         LH    R6,NETNAME_LENGTH
+         LA    R7,4                Length for compare
+         CR    R6,R7               NETNAME longer than 4 chars?
+         BNH   NETNAMSL            NO, take first n characters
+NETSCAN1 DS    0H
+* SCAN TO FIND LAST 4 NON-BLANK CHARS
+         BCTR  R6,R0               Decrement character count
+         LA    R7,0(R6,R8)         Next character
+         CLI   0(R7),C' '          Is it blank?
+         BE    NETSCAN1            Yes - try next character
+         LA    R7,3                Length for subtract
+         AR    R8,R6               End of netname
+         SR    R8,R7               Last 4 non-blank chars
+         LA    R6,4                Length of 4 for move
+NETNAMSL DS    0H
+* Move derived name to output field. R8 = start r6 = length r9 = field
+         BCTR  R6,R0               Length of execute
+         EX    R6,TERMIDMV         Move termid/sysid to output field
+         BR    R10                 Return to caller                @L2C
+         DROP  R2
+*
+TERMIDMV MVC   0(,R9),0(R8)        Move termid/sysid to output field
+         DFHEJECT                                                  @D3A
+***********************************************************************
+* EXTRACT_TNADDR_FROM_CINIT                                       @D4A*
+* -------------------------                                       @D4A*
+* Scan the CVs for the '64'X CV.                                  @D4A*
+* Extract the IP_ADDRESS, IP_PORT and IP_HOSTNAME if the          @D4A*
+* subvector '81' is for IP version 4.                             @D4A*
+*                                                                 @D4A*
+* Registers: R10 = LINK register                                  @PAC*
+*            R7 = Work - Scan CINIT                               @D4A*
+*            R8 = Work - Scan CINIT                               @D4A*
+*            R9 = Work                                            @D4A*
+*            RA = Work                                            @D4A*
+* OUTPUT     The following DFHEISTG fields                        @D4A*
+*            IP_ADDRESS                                           @D4A*
+*            IP_PORT                                              @D4A*
+*            IP_HOSTNAME_LENGTH                                   @D4A*
+*            IP_HOSTNAME                                          @D4A*
+***********************************************************************
+EXTRACT_TNADDR_FROM_CINIT DS 0H                                    @D4A
+* Initialize fields                                                @D4A
+         SR    R9,R9                                               @D4A
+         ST    R9,IP_ADDRESS                                       @D4A
+         STH   R9,IP_PORT                                          @D4A
+         ST    R9,IP_HOSTNAME_LENGTH                               @D4A
+         XC    IP_HOSTNAME,IP_HOSTNAME                             @D4A
+* Scan up the CINIT to find the start of the CVs.                  @D4A
+         L     R7,DFHEICAP                                         @D4A
+         USING INSTALL_EXIT_COMMAREA,R7  Address commarea          @D4A
+         L     R7,INSTALL_CINIT_PTR                                @D4A
+         DROP  R7                                                  @D4A
+         USING CINIT_BIND_FIELDS,R7      Step through fields.      @D4A
+* R7 -> start of CINIT, set R9 to -> last byte.                    @D4A
+         LH    R9,CINIT_LEN              Get length.               @D4A
+         LA    R9,CINIT_CHAR(R9)         -> after CINIT.           @D4A
+         BCTR  R9,0                      -> last byte of CINIT.    @D4A
+* Step R7 through CINIT to start of Control Vectors.               @D4A
+         LH    R8,BINDIMGL               Get length.               @D4A
+         LA    R7,BINDIMGD(R8)           Step to end of Bind Image.@D4A
+         SR    R8,R8                                               @D4A
+         IC    R8,SLUNAME_L              Get length.               @D4A
+         LA    R7,SLUNAME(R8)            Step to end of SLU Name.  @D4A
+*        top 3 bytes of R8 still zero                              @D4A
+         IC    R8,RQSTRID_L              Get length.               @D4A
+         LA    R7,RQSTRID(R8)            Step to end of Requester. @D4A
+*        top 3 bytes of R8 still zero                              @D4A
+         IC    R8,PASSWRD_L              Get length.               @D4A
+         LA    R7,PASSWRD(R8)            Step to end of Password.  @D4A
+*        top 3 bytes of R8 still zero                              @D4A
+         IC    R8,USERDAT_L              Get length.               @D4A
+         LA    R7,USERDAT(R8)            Step to end of User Data. @D4A
+         LH    R8,LU_CHR_L               Get length.               @D4A
+         LA    R7,LU_CHR(R8)             Step to end of LU chr.    @D4A
+         SR    R8,R8                                               @D4A
+         IC    R8,SCRYPT_L               Get length.               @D4A
+         LA    R7,SCRYPT(R8)             Step to end of SCrypt.    @D4A
+* R7 -> first (if any) control vector.                             @D4A
+* We've found the start of the CVs.                               @D4A*
+* Scan the CVs, but first check we have not reached the end.      @D4A*
+* R7 -> control vector, R9 -> last byte of CINIT,                 @D4A*
+* R8 is used for length fields.                                   @D4A*
+FIND_64  DS    0H                                                  @D4A
+         CR    R7,R9                     Beyond end of CINIT?      @D4A
+         BNL   EXIT_64                   If so, not there.         @06C
+* Is this the TN 3270 CV 64?                                       @D4A
+         CLI   KL_KEY,X'64'                                        @D4A
+         BE    FOUND_64                                            @D4A
+* Bump to next CV and loop back                                    @D4A
+         SR    R8,R8                                               @D4A
+         IC    R8,KL_LEN                 Get length.               @D4A
+         LA    R7,KL_DATA(R8)            Step to end of CV.        @D4A
+         B     FIND_64                                             @D4A
+FOUND_64 DS    0H                                                  @D4A
+* CV 64 found.                                                    @D4A*
+* Extract the fields from the x'81',x'82' and x'85' subvectors    @D4A*
+* if the X'81' subvector is for IP version 4.                     @D4A*
+* The subvetors can appear in any order.                          @D4A*
+* X'85' is optional.                                              @D4A*
+* R7 -> Start of CV64 then start of each SV                       @D4A*
+* R8 is used for length fields.                                   @D4A*
+* R9 -> end of CV64                                               @D4A*
+         IC    R8,KL_LEN           Length of CV64                  @D4A
+         LA    R7,KL_DATA          Start of subvectors             @D4A
+         LR    R9,R7                                               @D4A
+         AR    R9,R8               R9 -> end of CV64               @D4A
+LOOP_64  DS    0H                                                  @D4A
+         USING SV_64,R7                                            @D4A
+         CLI   SV_KEY,X'81'        Is this TPADDR SV?              @D4A
+         BE    SV_TPADDR                                           @D4A
+         CLI   SV_KEY,X'82'        Is this PORT   SV?              @D4A
+         BE    SV_TPPORT                                           @D4A
+         CLI   SV_KEY,X'85'        Is this NAME   SV?              @D4A
+         BE    SV_TPNAME                                           @D4A
+CONT_64  DS    0H                                                  @D4A
+         IC    R8,SV_LEN           Length of this SV-2             @D4A
+         LA    R7,SV_DATA(R8)      Start of next SV                @D4A
+         CR    R7,R9               Beyond end of CV64?             @D4A
+         BL    LOOP_64             No still some more SVs          @D4A
+EXIT_64  DS    0H                                                  @D4A
+         BR    R10                 Return                          @PAC
+*                                                                  @D4A
+SV_TPADDR DS   0H                                                  @D4A
+         CLI   TP_VERSION,X'04'    IPV4?                           @D4A
+         BNE   SV_NOT_V4           See if it is IPv6               @PBC
+         MVC   IP_ADDRESS,TP_ADDRESS                               @D4A
+         B     CONT_64                                             @D4A
+SV_NOT_V4 DS   0H                                                  @PBA
+         CLI   TP_VERSION,X'06'    IPV6?                           @PBA
+         BNE   EXIT_64             Unsupport version of IP addr    @PBA
+         MVC   IP_V6_ADDRESS,TP_ADDRESS                            @PBA
+         B     CONT_64                                             @PBA
+SV_TPPORT DS   0H                                                  @D4A
+         MVC   IP_PORT,TP_PORT                                     @D4A
+         B     CONT_64                                             @D4A
+SV_TPNAME DS   0H                                                  @D4A
+         IC    R8,SV_LEN           Length of hostname + 1          @D4A
+         BCTR  R8,0                Less flag                       @D4A
+         ST    R8,IP_HOSTNAME_LENGTH                               @D4A
+         BCTR  R8,0                for execute                     @D4A
+         EX    R8,SV_MOVE          Move host name                  @D4A
+         B     CONT_64                                             @D4A
+SV_MOVE  MVC   IP_HOSTNAME(0),TP_HOSTNAME                          @D4A
+***********************************************************************
+* EXTRACT_NQNAME_FROM_CINIT                                       @D4A*
+* -------------------------                                       @D4A*
+* Scan up the CINIT using SNA rules until the CVs are found.      @D3A*
+* Scan the CVs for the 2nd '0E'X  CV.                             @D3A*
+* Extract the NETID and REAL_NETNAME from the CV                  @D3A*
+* If anything is not as expected return with netid and            @D3A*
+* real_netname as blank showing we are unable to extract the      @D3A*
+* NQNAME.                                                         @D3A*
+* Registers: RA = LINK register                                   @P4A*
+*            R7 = Work - Scan CINIT                               @D3A*
+*            R8 = Work - Scan CINIT                               @D3A*
+*            RE = Work                                            @D3A*
+*            RF = Work                                            @D3A*
+***********************************************************************
+EXTRACT_NQNAME_FROM_CINIT DS 0H                                    @D3A
+* Initialize fields                                                @D3A
+         MVC   NETID,=C'        '                                  @D3A
+         MVC   REAL_NETNAME,=C'        '                           @D3A
+* Scan up the CINIT to find the start of the CVs.                  @D3A
+* Point to start of BIND within CINIT                              @D3A
+         L     R7,DFHEICAP                                         @D3A
+         USING INSTALL_EXIT_COMMAREA,R7  Address commarea          @D3A
+         L     R7,INSTALL_CINIT_PTR                                @D3A
+         DROP  R7                                                  @D3A
+         USING CINIT_BIND_FIELDS,R7      Step through fields.      @P4A
+* R7 -> start of CINIT, set RE to -> last byte.                    @P4A
+         LH    RE,CINIT_LEN              Get length.               @P4A
+         LA    RE,CINIT_CHAR(RE)         -> after CINIT.           @P4A
+         BCTR  RE,0                      -> last byte of CINIT.    @P4A
+* Step R7 through CINIT to start of Control Vectors.               @P4A
+         LH    R8,BINDIMGL               Get length.               @P4A
+         LA    R7,BINDIMGD(R8)           Step to end of Bind Image.@P4A
+         SR    R8,R8                                               @P4A
+         IC    R8,SLUNAME_L              Get length.               @P4A
+         LA    R7,SLUNAME(R8)            Step to end of SLU Name.  @P4A
+*        top 3 bytes of R8 still zero                              @P4A
+         IC    R8,RQSTRID_L              Get length.               @P4A
+         LA    R7,RQSTRID(R8)            Step to end of Requester. @P4A
+*        top 3 bytes of R8 still zero                              @P4A
+         IC    R8,PASSWRD_L              Get length.               @P4A
+         LA    R7,PASSWRD(R8)            Step to end of Password.  @P4A
+*        top 3 bytes of R8 still zero                              @P4A
+         IC    R8,USERDAT_L              Get length.               @P4A
+         LA    R7,USERDAT(R8)            Step to end of User Data. @P4A
+         LH    R8,LU_CHR_L               Get length.               @P4A
+         LA    R7,LU_CHR(R8)             Step to end of LU chr.    @P4A
+         SR    R8,R8                                               @P4A
+         IC    R8,SCRYPT_L               Get length.               @P4A
+         LA    R7,SCRYPT(R8)             Step to end of SCrypt.    @P4A
+* R7 -> first (if any) control vector.                             @P4A
+*---------------------------------------------------------------------*
+* We've found the start of the CVs.                               @D3A*
+* Scan the CVs, but first check we have not reached the end.      @D3A*
+* R7 -> control vector, RE -> last byte of CINIT,                 @P4A*
+* R8 is used for length fields.                                   @P4A*
+*---------------------------------------------------------------------*
+FIND_0E  DS    0H                                                  @D3A
+         CR    R7,RE                     Beyond end of CINIT?      @P4A
+         BNL   NO_CV                     If so, not there.         @P4A
+* Is this the 1st 0E?                                              @D3A
+         CLI   KL_KEY,X'0E'                                        @P4A
+         BE    FIRST_0E_FOUND                                      @D3A
+* Bump to next CV and loop back                                    @D3A
+         SR    R8,R8                                               @P4A
+         IC    R8,KL_LEN                 Get length.               @P4A
+         LA    R7,KL_DATA(R8)            Step to end of CV.        @P4A
+         B     FIND_0E                                             @D3A
+FIRST_0E_FOUND DS 0H                                               @D3A
+* Bump to next 0E                                                  @D3A
+         SR    R8,R8                                               @P4A
+         IC    R8,KL_LEN                 Get length.               @P4A
+         LA    R7,KL_DATA(R8)            Step to end of CV.        @P4A
+* Have we reached the end?                                         @D3A
+         CR    R7,RE                     Beyond end of CINIT?      @P4A
+         BNL   NO_CV                     If so, not there.         @P4A
+* Is this the 2nd 0E?                                              @P4A
+         CLI   KL_KEY,X'0E'                                        @P4A
+         BNE   FIRST_0E_FOUND            Keep looking.             @P4A
+*---------------------------------------------------------------------*
+* Either 2nd x'0E' CV found in CINIT or 1st in BIND.              @P4A*
+* This x'0E' CV = '0EllF3'x 'netid.netname'c = desired SLU name   @P4A*
+* Scan for . separating netid and netname.                        @D3A*
+*---------------------------------------------------------------------*
+EXTRACT_NETS DS 0H                                                 @D3A
+         SR    R8,R8                                               @D3A
+         IC    R8,KL_LEN                 Get length.               @P4A
+         LA    R8,KL_DATA(R8)            -> byte after name.       @P4A
+         LA    R7,KL_NQNAME              -> start of name.         @P4A
+         LA    RF,8(R7)                  -> max dot position.      @P4A
+         DROP  R7                                                  @P4A
+         LR    RE,R7                     -> start of name.         @P4A
+FIND_DOT DS    0H                                                  @D3A
+         CLI   0(R7),C'.'                End of netid?             @D3A
+         BE    DOT_FOUND                                           @D3A
+         LA    R7,1(,R7)                 Move to next character    @D3A
+         CR    R7,RF                     netid to big?             @P4A
+         BH    NO_CV                     yes, so can't be valid    @P4A
+         CR    R7,R8                     End of vector?            @D3A
+         BL    FIND_DOT                                            @D3A
+         B     NO_CV                     No period found           @D3A
+DOT_FOUND DS   0H                                                  @D3A
+* Save netid                                                       @D3A
+         SR    R7,RE                     Length of name.           @P4A
+         BCTR  R7,0                      less one for EX.          @P4A
+         EX    R7,NETID_MOVE             MVC NETID,0(R9).          @P4A
+* save netname                                                     @D3A
+         LA    R7,2(R7,RE)               -> after the dot.         @P9C
+         SR    R8,R7                     length of netname         @P4A
+         BM    NO_CV                     if negative length!       @P4A
+         CH    R8,=H'8'                  Limit to 8 chars.         @P4A
+         BH    NO_CV                                               @P4A
+         BCTR  R8,0                      less one for EX.          @P4A
+         EX    R8,NETNAME_MOVE           MVC REAL_NETNAME,0(R7)    @P4A
+* all done                                                         @D3A
+NO_CV    DS    0H                                                  @D3A
+         BR    RA                                                  @P4A
+NETNAME_MOVE MVC   REAL_NETNAME(0),0(R7)                           @D3A
+NETID_MOVE   MVC   NETID(0),0(RE)                                  @P4A
+         DFHEJECT                                                  @D3A
+***********************************************************************
+* Scan up the BIND using SNA rules until the CVs are found.       @D3A*
+* Scan the CVs for the 1st '0E'X  CV.                             @D3A*
+* Extract the NETID and REAL_NETNAME from the CV                  @D3A*
+* If anything is not as expected return with netid and real_netnam@D3A*
+* as blanks showing we are unable to extract the NQNAME.          @D3A*
+* Registers: RA = LINK register                                   @P4A*
+*            R7 = Work - Scan BIND                                @P4A*
+*            R8 = Work - Scan BIND                                @P4A*
+*            RE = Work                                            @P4A*
+*            RF = Work                                            @P4A*
+***********************************************************************
+EXTRACT_NQNAME_FROM_BIND DS 0H                                     @D3A
+* Initialize fields                                                @D3A
+         MVC   NETID,=C'        '                                  @D3A
+         MVC   REAL_NETNAME,=C'        '                           @D3A
+* Scan up the BIND  to find the start of the CVs.                  @D3A
+* Point to start of BIND                                           @P4A
+         L     R7,DFHEICAP                                         @D3A
+         USING INSTALL_APPC_COMMAREA,R7  Address commarea          @D3A
+         L     R7,INSTALL_APPC_BIND_PTR                            @D3A
+         DROP  R7                                                  @D3A
+         USING CINIT_BIND_FIELDS,R7      Step through fields.      @P4A
+* R7 -> start of BIND, set RE to -> last byte.                     @P4A
+         LH    RE,BIND_LEN               Get length.               @P4A
+         LA    RE,BIND_CHAR(RE)          -> after BIND.            @P4A
+         BCTR  RE,0                      -> last byte of BIND.     @P4A
+* Step R7 through BIND to start of Control Vectors.                @P4A
+         SR    R8,R8                                               @P4A
+         IC    R8,PLUNAME_L              Get length.               @P4A
+         LA    R7,PLUNAME(R8)            Step to end of PLU Name.  @P4A
+*        top 3 bytes of R8 still zero                              @P4A
+         IC    R8,USERDAT_L              Get length.               @P4A
+         LA    R7,USERDAT(R8)            Step to end of User Data. @P4A
+*        top 3 bytes of R8 still zero                              @P4A
+         IC    R8,URC_L                  Get length.               @P4A
+         LA    R7,URC(R8)                Step to end of URC.       @P4A
+*        top 3 bytes of R8 still zero                              @P4A
+         IC    R8,BSLUNAM_L              Get length.               @P4A
+         LA    R7,BSLUNAM(R8)            Step to end of BSLU Name. @P4A
+* R7 -> first (if any) control vector.                             @P4A
+*---------------------------------------------------------------------*
+* We've found the start of the CVs.                               @D3A*
+* Scan the CVs, but first check we have not reached the end.      @D3A*
+* R7 -> control vector, RE -> last byte of BIND,                  @P4A*
+* R8 is used for length fields.                                   @P4A*
+*---------------------------------------------------------------------*
+FIND_THE_0E DS 0H                                                  @D3A
+         CR    R7,RE                     Beyond end of BIND?       @P4A
+         BNL   NO_CV                     If so, not there.         @P4A
+* Find the 1st 0E CV.                                              @D3A
+         CLI   KL_KEY,X'0E'                                        @P4A
+         BE    EXTRACT_NETS              Go get names.             @P4A
+* Bump to next CV and loop back                                    @D3A
+         SR    R8,R8                                               @P4A
+         IC    R8,KL_LEN                 Get length.               @P4A
+         LA    R7,KL_DATA(R8)            Step to end of CV.        @P4A
+         B     FIND_THE_0E                                         @D3A
+***********************************************************************
+* SET_ALIAS_TERMID  Sets SELECTED_TERMID from                     @D3A*
+* the last non blank char of NETID and                            @D3A*
+* the last 3 non blank chars of REAL_NETNAME.                     @D3A*
+* The REAL_NETNAME loop is delimited by a blank following         @D3A*
+* REAL_NETNAME.                                                   @D3A*
+* Registers: R10 = Link Register                                  @D3A*
+*            R9 = SYSID or TERMID output pointer                  @D3A*
+*            R7 = work register                                   @D3A*
+***********************************************************************
+SET_ALIAS_TERMID DS 0H                                             @D3A
+         LA    R7,NETID+L'NETID        Last char of NETID + 1      @D3A
+NETID_LOOP DS  0H                                                  @D3A
+         BCTR  R7,0                    back one                    @D3A
+         CLI   0(R7),C' '              Blank?                      @D3A
+         BE    NETID_LOOP              Yes - go back one           @D3A
+         MVC   0(1,R9),0(R7)           1st char for new ID         @D3A
+* Find last 3 non blank chars from real netname                    @D3A
+         MVI   REAL_DELIM,C' '         Must follow REAL_NETNAME    @D3A
+         LA    R7,REAL_NETNAME                                     @D3A
+REAL_LOOP DS   0H                                                  @D3A
+         CLI   3(R7),C' '                                          @D3A
+         BE    REAL_MOVE                                           @D3A
+         LA    R7,1(,R7)                                           @D3A
+         B     REAL_LOOP                                           @D3A
+REAL_MOVE DS   0H                                                  @D3A
+         MVC   1(3,R9),0(R7)           Last 3 chars.               @D3A
+         BR    R10                                                 @D3A
+*
+***********************************************************************
+* Function 7 - Install shipped terminal definition                    *
+***********************************************************************
+INSTALL_SHIPPED_TERMINAL DS 0H                                     @D2A
+         USING INSTALL_SHIPPED_COMMAREA,R2 Address commarea        @D2A
+* ==> PUT INSTALL CODE HERE                                        @D2A
+*                                                                  @D2A
+*     This sample accepts the selected termid value.If however
+*     a termid clash has occurred then this value has been
+*     selected by the caller module DFHZATS.
+*     There is no guarantee that this value will be the same
+*     once a restart has occurred.
+*     Special consideration MUST be given to how this termid
+*     will be used.
+*     This sample will update the selected termid value to         @04A
+*     the original incoming value.If a clash has occurred and      @04A
+*     the definition is not busy then it will be replaced.         @04A
+*                                                                  @D2A
+         L     R5,INSTALL_SHIPPED_SELECTED_PTR                     @D2A
+         USING INSTALL_SHIPPED_SELECTED_PARMS,R5                   @D2A
+         L     R8,INSTALL_SHIPPED_TERMID_PTR                       @04A
+         MVC   SELECTED_SHIPPED_TERMID,0(R8)                       @04C
+         MVI   SELECTED_SHIPPED_RETURN_CODE,RETURN_OK Say all OK   @D2A
+         B     RETURN              EXIT PROGRAM                    @D2A
+         DROP  R2                                                  @P7A
+         DROP  R5                                                  @D2A
+         DFHEJECT                                                  @D2A
+***********************************************************************
+* Function 8 and 10 - Common delete processing for shipped definitions*
+***********************************************************************
+DELETE_SHIPPED_TERMINAL DS 0H                                      @D2A
+         USING DELETE_SHIPPED_COMMAREA,R2 Address commarea         @D2A
+* ==> PUT DELETE CODE HERE                                         @D2A
+         DROP  R2                                                  @P7A
+         B     RETURN              EXIT PROGRAM                    @D2A
+         DFHEJECT                                                  @D2A
+***********************************************************************
+* Function 9 - Install shipped APPC  definition                       *
+***********************************************************************
+INSTALL_SHIPPED_SYSTEM_ENTRY  DS 0H                                @D2A
+         USING INSTALL_SHIPPED_COMMAREA,R2 Address commarea        @D2A
+* ==> PUT INSTALL CODE HERE                                        @D2A
+*                                                                  @D2A
+*     This sample accepts the selected sysid value.If however
+*     a sysid clash has occurred then this value has been
+*     selected by the caller module DFHZATS.
+*     There is no guarantee that this value will be the same
+*     once a restart has occurred.
+*     Special consideration MUST be given to how this sysid
+*     will be used.
+*     This sample will update the selected sysid value to          @04A
+*     the original incoming value.If a clash has occurred and      @04A
+*     the definition is not busy then it will be replaced.         @04A
+*                                                                  @D2A
+         L     R5,INSTALL_SHIPPED_SELECTED_PTR                     @D2A
+         USING INSTALL_SHIPPED_SELECTED_PARMS,R5                   @D2A
+         L     R8,INSTALL_SHIPPED_TERMID_PTR                       @04A
+         MVC   SELECTED_SHIPPED_TERMID,0(R8)                       @04A
+         MVI   SELECTED_SHIPPED_RETURN_CODE,RETURN_OK Say all OK   @D2A
+         B     RETURN              EXIT PROGRAM                    @D2A
+         DROP  R2                                                  @P7A
+         DROP  R5                                                  @D2A
+         DFHEJECT                                                  @D2A
+***********************************************************************
+* Function 15 & 17 - Install bridge facility definition            @P6C
+***********************************************************************
+INSTALL_BRIDGE_FACILITY DS 0H                                      @L5A
+         USING INSTALL_BRFAC_COMMAREA,R2 Address commarea          @P5C
+* ==> PUT INSTALL CODE HERE
+*
+*     This sample accepts the selected termid/netname.
+*     Special consideration MUST be given to how this termid
+*     will be used.
+*     In particular it must not conflict with the namespace of
+*     real terminals.
+*
+         L     R5,INSTALL_BRFAC_SELECTED_PTR                       @P5C
+         USING INSTALL_BRFAC_SELECTED_PARMS,R5                     @P5C
+         L     R8,INSTALL_BRFAC_TERMID_PTR                         @P5C
+         MVC   SELECTED_BRFAC_TERMID,0(R8)                         @P5C
+         L     R8,INSTALL_BRFAC_NETNAME_PTR                        @P5C
+         MVC   SELECTED_BRFAC_NETNAME,0(R8)                        @P5C
+         MVI   SELECTED_BRFAC_RETURN_CODE,RETURN_OK Say all OK     @P5C
+*                                                                  @L5A
+         B     RETURN              EXIT PROGRAM                    @L5A
+         DROP  R2                                                  @P7A
+         DROP  R5                                                  @L5A
+         DFHEJECT  ,                                               @L5A
+***********************************************************************
+* Function 16 & 18 - Delete  bridge facility definition            @P6C
+***********************************************************************
+DELETE_BRIDGE_FACILITY DS 0H                                       @P5C
+         USING DELETE_BRFAC_COMMAREA,R2 Address commarea           @P5C
+* ==> PUT DELETE CODE HERE
+         DROP  R2                                                  @P7A
+         B     RETURN              EXIT PROGRAM                    @L5A
+         DFHEJECT  ,                                               @L5A
+         END   DFHZATDY

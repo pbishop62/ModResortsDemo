@@ -1,0 +1,147 @@
+//*******************************************************************
+//
+// Module Name: ICC$FIL
+//
+// Description:
+//    This sample program demonstrates how to use the IccFile and
+//    IccFileIterator classes.
+//
+//
+//
+//     Licensed Materials - Property of IBM
+//
+//     "Restricted Materials of IBM"
+//
+//     5655-Y04
+//
+//     (C) Copyright IBM Corp. 1998, 2004"
+//
+//
+//
+//
+// Status = %SP00
+//
+//-------------------------------------------------------------------
+//
+// Change Activity:
+//
+//   $MOD(ICC$FIL),COMP(CEZANNE),PROD(CICS TS ):
+//
+//   PN= REASON REL YYMMDD HDXIII : REMARKS
+//  $P0= M30492 530 981106 HDGYBS : Creation
+//  $P1= M30696 530 981218 HDGYBS : Fix sample c++ programs
+//  $P2= D12734 640 041230 HD6KRAH: Language Level
+//
+//*******************************************************************
+#include "icceh.hpp"  //CICS C++ Foundation Classes header files
+#include "iccmain.hpp"  //CICS C++ Foundation Classes main() stub
+
+const char* fileRecords[] =
+{
+ //NAME           KEY  PHONE     USERID
+  "BACH, J S      003  00-1234   BACH      ",
+  "BEETHOVEN, L   007  00-2244   BEET      ",
+  "CHOPIN, F      004  00-3355   CHOPIN    ",
+  "HANDEL, G F    005  00-4466   HANDEL    ",
+  "MOZART, W A    008  00-5577   WOLFGANG  "
+};
+
+void IccUserControl::run()
+{
+  IccTerminal* term = terminal();  //Access terminal
+  term->erase();  //Clear terminal
+  term->sendLine("This is program 'icc$fil'...");
+
+  short recordsDeleted = 0;
+
+  IccFileId id("ICCKFILE");  //File Identifier object
+  IccKey key(3,IccKey::generic);  //3 byte key, initially generic.
+  IccFile file( id );  //KSDS File object
+
+  file.registerRecordIndex( &key );  //register key to use with file
+
+  term->sendLine("Deleting records in file '%s'...", file.name() );
+
+  key = "00";  //Set key to 00
+  recordsDeleted = file.deleteRecord(); //delete all records starting
+                                        //00 and save how many deleted
+                                        //in recordsDeleted.
+  term->sendLine( 35, "... %d records were deleted.", recordsDeleted );
+
+  IccBuf buffer(40);  //buffer object called data1.
+  key.setKind( IccKey::complete );  //change key to complete
+
+  term->sendLine( "Writing records to file '%s'...",file.name() );
+
+  for (short j = 0; j < 5; j++)
+  {
+    buffer = fileRecords[j];  //assign record to buffer
+
+    term->sendLine(" - writing record number %d.", j+1);
+
+    key.assign(3, fileRecords[j]+15);  //Set key to 001,002, etc
+    file.writeRecord( buffer );  //Add record to file.
+
+    term->sendLine( 30,"<%s>", file.conditionText() );
+  }
+
+  term->sendLine( "Browsing records...");
+
+  // create file iterator ...
+  IccFileIterator fIterator( &file, &key );
+  key = "000";  //First record's key
+
+  buffer = fIterator.readNextRecord();  //get first record
+
+  // Loop while NORMAL condition returned
+  while (fIterator.condition() == IccCondition::NORMAL)
+  {
+    // Write out record to terminal
+    term->sendLine( " - record read: [%s]", (const char*)buffer );
+
+    buffer = fIterator.readNextRecord();  //get next record
+  }
+
+  // Now look through records in reverse direction...
+  key = "\xFF\xFF\xFF";  //Last record's key
+  fIterator.reset( &key );  //signal start of new browse
+
+  buffer = fIterator.readPreviousRecord();  //get last record
+
+  // Loop while NORMAL condition returned
+  while (fIterator.condition() == IccCondition::NORMAL)
+  {
+    // Write out record to terminal
+    term->sendLine( " - record read: [%s]", (const char*)buffer );
+
+    buffer = fIterator.readPreviousRecord();  //get previous record
+  }
+
+  term->sendLine( "Updating record 1...");
+  key = "008";  //Set key to point to MOZART
+  term->sendLine( 25, "readRecord(update) ");
+
+  //Read record for update (ie lock record so others cannot change it)
+  buffer = file.readRecord( IccFile::update );
+
+  term->sendLine( 43, "<%s>", file.conditionText() );
+
+  //Alter phone number by manipulating buffer object...
+  buffer.replace( 4, "5678", 23);
+
+  term->sendLine( 55, "rewriteRecord() " );
+  //Complete update of record by rewriting it...
+  file.rewriteRecord( buffer );
+  term->sendLine( 70, "<%s>", file.conditionText() );
+
+  //Now read record again to see the update was done
+  buffer = file.readRecord();
+  term->sendLine( " - record read: [%s]", (const char*)buffer );
+
+  term->send( 24,1,"Program 'icc$fil' complete: Hit PF12 to End");
+  term->waitForAID( IccTerminal::PF12 );
+  term->erase();
+  term->freeKeyboard();
+
+  return;  //Return control to CICS
+}

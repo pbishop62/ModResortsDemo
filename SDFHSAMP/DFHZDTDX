@@ -1,0 +1,995 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* MODULE NAME = DFHZDTDX                                           */
+ /*                                                                  */
+ /* DESCRIPTIVE NAME = CICS/ESA(ZCINST) Terminal Autoinstall User    */
+ /*                                     Program including shipped@P1C*/
+ /*                                     definitions                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*      Licensed Materials - Property of IBM                        */
+ /*                                                                  */
+ /*      "Restricted Materials of IBM"                               */
+ /*                                                                  */
+ /*      5655-Y04                                                    */
+ /*                                                                  */
+ /*      (C) Copyright IBM Corp. 1989, 2016"                         */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* STATUS = 7.2.0                                                   */
+ /*                                                                  */
+ /* FUNCTION = Provide user input to Terminal Autoinstall processing */
+ /*                                                              @P1C*/
+ /*           This is a C version of DFHZATDX.                       */
+ /*                                                                  */
+ /*           It is the default Autoinstall user program(i.e. if the */
+ /*           user does not wish to provide their own). It may be    */
+ /*           used as a framework for the user to include their own  */
+ /*           processing requirements.                               */
+ /*                                                                  */
+ /*           It is called via a DFHPC CTYPE=LINK_URM command from   */
+ /*           DFHZATA(INSTALL) and DFHZATD(DELETE).                  */
+ /*           For shipped definitions it is called from DFHZATS      */
+ /*           and DFHZATMD.                                          */
+ /*           For Bridge facilities it is called from DFHBRAI    @P4A*/
+ /*                                                                  */
+ /*           Input to the module is a parameter list addressed by   */
+ /*           the normal conventions as a COMMAREA.                  */
+ /*           The COMMAREA is defined in DFHTCUDS O (XFHTCUDS).      */
+ /*                                                                  */
+ /*           The program is invoked when:                           */
+ /*           1) An autoinstall INSTALL is in progress               */
+ /*           2) An autoinstall DELETE has just completed            */
+ /*                                                                  */
+ /*           The function to be performed is indicated via the      */
+ /*           parameter list. This is evaluated during initial       */
+ /*           processing, and control passed to the appropriate      */
+ /*           routine.                                               */
+ /*                                                                  */
+ /*  Function 1 - INSTALL                                            */
+ /*  --------------------                                            */
+ /*  The primary purpose of this function is to complete the         */
+ /*  SELECTED_PARMS fields.  They are used as input to an auto-      */
+ /*  install resource 'builder' request.                             */
+ /*                                                                  */
+ /*  The following fields may already have been supplied by MTS:     */
+ /*     SELECTED_MODELNAME                                           */
+ /*     SELECTED_PRINTER_NETNAME                                     */
+ /*     SELECTED_ALTPRINTER_NETNAME                                  */
+ /*  The following fields should be set (if not supplied by MTS):    */
+ /*     SELECTED_MODELNAME                                           */
+ /*  The following fields should be set:                             */
+ /*     SELECTED_TERM_ID                                             */
+ /*     SELECTED_RETURN_CODE                                         */
+ /*  The following fields may be set.                                */
+ /*     SELECTED_PRINTER_ID                                          */
+ /*     SELECTED_ALTPRINTER_ID                                       */
+ /*                                                                  */
+ /*  The default action of this program is:                          */
+ /*                                                                  */
+ /*  - Copy the last 4 non-blank characters of the passed Netname to */
+ /*    SELECTED_TERM_ID.                                             */
+ /*    There is commented out code which allows the TERMID to be @D3A*/
+ /*    generated from the NETID and NETNAME for CICS systems     @P3A*/
+ /*    which use DYNAMIC LUALIAS netnames.  It takes the last    @P3A*/
+ /*    non-blank char from the CINIT NETID and the last 3        @P3A*/
+ /*    non-blank chars from the CINIT NETNAME.  The NETID and    @P3A*/
+ /*    NETNAME are found in the CINIT x'0E' control vector (CV). @P3A*/
+ /*    If the code fails to derive the TERMID from the NETNAME   @P3A*/
+ /*    it uses the last 4 characters of the supplied NETNAME     @P3A*/
+ /*    instead.                                                  @P3A*/
+ /*                                                                  */
+ /*    There is further uncalled code which shows how to extract @D4A*/
+ /*    the TELNET 3270 IP address from the CINIT.  The routine   @D4A*/
+ /*    is called EXTRACT_TNADDR_FROM_CINIT.  CICS calls this     @D4A*/
+ /*    information the TNADDR.  This routine extracts the fields @D4A*/
+ /*    from Control Vector 64 unconverted (see                   @D4A*/
+ /*    IP_ADDRESS, IP_PORT and IP_HOSTNAME).                     @D4A*/
+ /*    The fields are available in the 'string' format in the NEP@D4A*/
+ /*    when the DFHZC3461 session started message is written.    @D4A*/
+ /*    The CV64 only exists for TELNET 3270 terminals.           @D4A*/
+ /*                                                              @D4A*/
+ /*  - If the modelname list contains no elements, then return       */
+ /*  - If the first character of SELECTED_MODELNAME is blank         */
+ /*    (Not supplied by MTS), then copy the first modelname in       */
+ /*    MODELNAME_LIST into SELECTED_MODELNAME.                       */
+ /*  - Set the SELECTED_RETURN_CODE to RETURN_OK to indicate that    */
+ /*    a selection has been made.                                    */
+ /*  - Return to the calling program.                                */
+ /*                                                                  */
+ /*  EXIT-NORMAL =                                                   */
+ /*       Exit is via an EXEC CICS RETURN command.                   */
+ /*       Status is set to zero if all processing completes normally.*/
+ /*                                                                  */
+ /*  EXIT-ERROR =                                                    */
+ /*       Exit is via an EXEC CICS RETURN command.                   */
+ /*       RETURN_CODE is non-zero on entry to this module and is     */
+ /*       untouched if any error occurs, hence, a non-zero return    */
+ /*       code is passed back to the calling program.                */
+ /*                                                                  */
+ /*  Function 2 - autoinstall DELETE                                 */
+ /*  -------------------------------                                 */
+ /*                                                                  */
+ /*  This function gives the user the opportunity to perform         */
+ /*  processing when an autoinstalled terminal has been deleted.     */
+ /*                                                                  */
+ /*  The default action of this program is to establish              */
+ /*  addressability to the parameter list, and RETURN.               */
+ /*                                                                  */
+ /*  EXIT-NORMAL =                                                   */
+ /*       Exit is via an EXEC CICS RETURN command.                   */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*  Function 7, 8 & 9 - INSTALL                                 @L1C*/
+ /*  ---------------------------                                     */
+ /*  Install of a shipped terminal, connection or                @L1A*/
+ /*  virtual terminal.                                           @L1A*/
+ /*                                                                  */
+ /*  The primary purpose of this function is to validate the         */
+ /*  SELECTED_TERMID field.  This is used as input to an auto-       */
+ /*  install resource 'builder' request.                             */
+ /*                                                                  */
+ /*  The fields are described in more detail in DFHTCUDS.            */
+ /*                                                                  */
+ /* The following input fields are supplied:                         */
+ /*    INSTALL_SHIPPED_CLASH       -> Y/N                            */
+ /*    INSTALL_SHIPPED_NETNAME_PTR -> NETNAME_FIELD                  */
+ /*    INSTALL_SHIPPED_TERMID_PTR  -> incoming TERMID                */
+ /*    INSTALL_SHIPPED_APPLID_PTR  -> APPLID of TOR                  */
+ /*    INSTALL_SHIPPED_SYSID_PTR   -> SYSID of incoming request      */
+ /*    INSTALL_SHIPPED_CORRID_PTR  -> Correlation token              */
+ /*                                                                  */
+ /*  The following fields should be set on exit:                     */
+ /*    SELECTED_TERM_ID                                              */
+ /*    SELECTED_RETURN_CODE                                          */
+ /*                                                                  */
+ /*  Function 10, 11 & 12 - DELETE                               @L1C*/
+ /*  -----------------------------                               @L2C*/
+ /*  Delete of a shipped terminal, connection or virtual         @L2A*/
+ /*  terminal.                                                   @L2A*/
+ /*                                                                  */
+ /*  This function gives the user the opportunity to perform         */
+ /*  processing when one of the above has been deleted.          @L2C*/
+ /*                                                                  */
+ /*  EXIT-NORMAL =                                                   */
+ /*  Exit is via an EXEC CICS RETURN command.                        */
+ /*  Status is set to zero if all processing completes normally.     */
+ /*                                                                  */
+ /*  EXIT-ERROR =                                                    */
+ /*     Exit is via an EXEC CICS RETURN command.                     */
+ /*     RETURN_CODE is non-zero on entry to this module and is       */
+ /*     untouched if any error occurs, hence, a non-zero return      */
+ /*     code is passed back to the calling program.                  */
+ /*                                                                  */
+ /*  The default action of this program is to establish              */
+ /*  addressability to the parameter list, and RETURN.               */
+ /*                                                                  */
+ /*                                                                  */
+ /*    EXIT-NORMAL =                                                 */
+ /*         Exit is via an EXEC CICS RETURN command.                 */
+ /*                                                              @D2A*/
+ /*  Function 13 -INSTALL CONSOLE                                @D2A*/
+ /*  ----------------------------                                @D2A*/
+ /*  The primary purpose of this function is to complete the     @D2A*/
+ /*  SELECTED_PARMS fields.  They are used as input to an        @D2A*/
+ /*  auto-install resource 'builder' request.                    @D2A*/
+ /*                                                              @D2A*/
+ /*  The following fields should be set:                         @D2A*/
+ /*     SELECTED_MODELNAME                                       @D2A*/
+ /*     SELECTED_TERM_ID                                         @D2A*/
+ /*     SELECTED_RETURN_CODE                                     @D2A*/
+ /*  The following field may be set:                             @D2A*/
+ /*     SELECTED_CONSOLE_DEL_DELAY                               @D2A*/
+ /*                                                              @D2A*/
+ /*  The default action of this program is:                      @D2A*/
+ /*                                                              @D2A*/
+ /*  - Copy the last 4 non-blank characters of the passed        @D2A*/
+ /*    Consolename to SELECTED_TERM_ID.                          @D2A*/
+ /*  - If the modelname list contains no elements, return        @D2A*/
+ /*  - Copy the first modelname in MODELNAME_LIST into           @D2A*/
+ /*    SELECTED_MODELNAME.                                       @D2A*/
+ /*  - Set the SELECTED_RETURN_CODE to RETURN_OK to indicate     @D2A*/
+ /*    a selection has been made.                                @D2A*/
+ /*  - Return to the calling program.                            @D2A*/
+ /*                                                              @D2A*/
+ /*  EXIT-NORMAL =                                               @D2A*/
+ /*       Exit is via an EXEC CICS RETURN command.               @D2A*/
+ /*       Status is set to zero if all processing completes      @D2A*/
+ /*       normally.                                              @D2A*/
+ /*                                                              @D2A*/
+ /*  EXIT-ERROR =                                                @D2A*/
+ /*       Exit is via an EXEC CICS RETURN command.               @D2A*/
+ /*       RETURN_CODE is non-zero on entry to this module        @D2A*/
+ /*       untouched if any error occurs, hence, a non-zero       @D2A*/
+ /*       return code is passed back to the calling program.     @D2A*/
+ /*                                                              @D2A*/
+ /*  Function 14 - DELETE console                                @D2A*/
+ /*  ----------------------------                                @D2A*/
+ /*                                                              @D2A*/
+ /*  This function gives the user the opportunity to perform     @D2A*/
+ /*  processing when an autoinstalled console has been           @D2A*/
+ /*  deleted.                                                    @D2A*/
+ /*                                                              @D2A*/
+ /*  The default action of this program is to establish          @D2A*/
+ /*  addressability to the parameter list, and RETURN.           @D2A*/
+ /*                                                              @D2A*/
+ /*  EXIT-NORMAL =                                               @D2A*/
+ /*       Exit is via an EXEC CICS RETURN command.               @D2A*/
+ /*                                                              @D2A*/
+ /*  Function 15 & 17 - Bridge Facility INSTALL                  @P6C*/
+ /*  ------------------------------------------                  @P6C*/
+ /*                                                              @P4A*/
+ /*  This function gives the user the opportunity to perform     @P4A*/
+ /*  processing when an autoinstalled bridge facility is         @P4A*/
+ /*  installed.                                                  @P4A*/
+ /*  Main options are:                                           @P4A*/
+ /*   1) Verify whether the input termid and/or netname are      @P4A*/
+ /*      valid.                                                  @P4A*/
+ /*      If not then set the SELECTED_BRFAC_RETURN_CODE          @P4A*/
+ /*      to REJECT.                                              @P4A*/
+ /*   2) Override the input termid and/or netname by setting the @P4A*/
+ /*      following output fields                                 @P4A*/
+ /*      SELECTED_BRFAC_TERMID                                   @P4A*/
+ /*      SELECTED_BRFAC_NETNAME                                  @P4A*/
+ /*                                                              @P4A*/
+ /*  The default action of this program is:                      @P4A*/
+ /*                                                              @P4A*/
+ /*  - Accept the terminal id by copying the terminal id         @P4A*/
+ /*    addressed by INSTALL_BRFAC_TERMID_PTR into                @P4A*/
+ /*    SELECTED_BRFAC_TERMID.                                    @P4A*/
+ /*  - Accept the netname by copying the netname addressed by    @P4A*/
+ /*    INSTALL_BRFAC_NETNAME_PTR into                            @P4A*/
+ /*    SELECTED_BRFAC_NETNAME.                                   @P4A*/
+ /*  - Set the SELECTED_BRFAC_RETURN_CODE to RETURN_OK to        @P4A*/
+ /*    indicate that a selection has been made.                  @P4A*/
+ /*  - Return to the calling program.                            @P4A*/
+ /*                                                              @P4A*/
+ /*  EXIT-NORMAL =                                               @P4A*/
+ /*       Exit is via an EXEC CICS RETURN command.               @P4A*/
+ /*       Status is set to zero if all processing completes      @P4A*/
+ /*       normally.                                              @P4A*/
+ /*                                                              @P4A*/
+ /*  EXIT-ERROR =                                                @P4A*/
+ /*       Exit is via an EXEC CICS RETURN command.               @P4A*/
+ /*       RETURN_CODE is non-zero on entry to this module and is @P4A*/
+ /*       untouched if any error occurs, hence, a non-zero       @P4A*/
+ /*       return code is passed back to the calling program.     @P4A*/
+ /*                                                              @P4A*/
+ /*  Function 16 & 18 - Bridge Facility DELETE                   @P5C*/
+ /*  -----------------------------------------                   @P5C*/
+ /*                                                              @P4A*/
+ /*  This function gives the user the opportunity to perform     @P4A*/
+ /*  processing when an autoinstalled bridge facility is         @P4A*/
+ /*  deleted.                                                    @P4A*/
+ /*                                                              @P4A*/
+ /*  The default action of this program is to establish          @P4A*/
+ /*  addressability to the parameter list, and RETURN.           @P4A*/
+ /*                                                              @P4A*/
+ /*  EXIT-NORMAL =                                               @P4A*/
+ /*       Exit is via an EXEC CICS RETURN command.               @P4A*/
+ /*                                                              @P4A*/
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /*NOTES :                                                           */
+ /*   DEPENDENCIES = S/370                                           */
+ /*                                                                  */
+ /*   PROCESSOR = C compiler                                         */
+ /*   ATTRIBUTES = Read only, Serially Reusable                      */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /*ENTRY POINT = DFHZDTDX                                            */
+ /*                                                                  */
+ /*    PURPOSE = All Functions                                       */
+ /*                                                                  */
+ /*    The request type is analyzed, and control passed to the       */
+ /*    appropriate routine.                                          */
+ /*                                                                  */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /*EXTERNAL REFERENCES = None                                        */
+ /*                                                                  */
+ /*    ROUTINES =                                                    */
+ /*        EXEC CICS RETURN - return to calling program              */
+ /*                                                                  */
+ /*                                                                  */
+ /*    CONTROL BLOCKS =                                              */
+ /*        See FUNCTION section for description of input parameters  */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /*DESCRIPTION                                                       */
+ /*                                                                  */
+ /* A check is made to ensure the presence of the input parameters   */
+ /* (passed via COMMAREA). If these do not exist a return is made    */
+ /* to the calling program.                                          */
+ /*                                                                  */
+ /* The type of request(INSTALL|DELETE) is then determined, and a    */
+ /* branch taken to the appropriate function routine (see 'FUNCTION' */
+ /* above for details).                                              */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* CHANGE ACTIVITY :                                                */
+ /*                                                                  */
+ /*      $MOD(DFHZDTDX),COMP(ZCINST),PROD(CICS TS ):                 */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXIII : REMARKS                         */
+ /*  $L0= 549    320 890929 HD4IAD : LINK_URM conformance            */
+ /*  $L1= 704    510 950627 HD2WPGK : CICS client URM call           */
+ /*  $D1= I06615 510 950523 HD6NPRW : Autoinstall samples            */
+ /*  $03= A92513 520 970408 HDBGNRB : Migrate PN92513 from SPA R510  */
+ /*  $04= ACONAI 530 971112 HD2WPGK : Migrate INCONAI from SPA R520  */
+ /*  $D2= I06688 530 971112 HD2WPGK : Autoinstall for consoles       */
+ /*  $D3= I06709 610 990506 HD2WPGK : Dynamic LUALIAS                */
+ /*  $D4= I06890 630 020108 HD2WPGK : IP ADDR for VTAM terminals     */
+ /*  $P1= M83127 410 930709 HDAFDRB: Correct comments, remove include*/
+ /*  $P3= M14649 610 991007 HDHIMI  : Make sample autoinstall URM mor*/
+ /*  $P4= D02199 620 010703 HDFXAB  : Add Bridge code to samples     */
+ /*  $P5= D02717 620 010914 HDFXAB  : Autoinstall function codes     */
+ /*  $P6= D03868 630 020128 HD2WPGK : DFHZ*TDX spelling corrections  */
+ /*  $P7= D23479 660 081229 HDJSCAG: TN3270 exits update             */
+ /*  $P8= D23864 660 090115 HDJSCAG: Compile error                   */
+ /*      R116234 710 160617 HDAFDRB: Correct SV81 definition         */
+ /*                                                                  */
+ /********************************************************************/
+
+  #include "dfhtcuds.h"                /* ZATA/D interface definition*/
+
+/*-------------------------------------------------------------------*/
+/* The following structs define the incoming CINIT to allow the  @D3A*/
+/* NQNAME or TNADDR to be extracted.                             @D2C*/
+/*-------------------------------------------------------------------*/
+struct cinitru                            /* Define CINIT_RU     @D3A*/
+{                                                              /*@D3A*/
+  unsigned short cinit_len;                                    /*@D3A*/
+  char cinitchar[10];                                          /*@D3A*/
+  unsigned short bindimg_len;                                  /*@P3A*/
+  char bindimgdata[1];                    /* Bind Image Data     @P3A*/
+} cinit_f;                                                     /*@D3A*/
+
+struct sluname_f                          /* SLU Name field      @D3A*/
+{                                                              /*@D3A*/
+  char type;                                                   /*@P3A*/
+  unsigned char len;                                           /*@P3A*/
+  char data[1];                                                /*@P3A*/
+};
+
+struct rqstrid_f                          /* Requester ID field  @D3A*/
+{                                                              /*@D3A*/
+  unsigned char len;                                           /*@P3A*/
+  char data[1];                                                /*@P3A*/
+};
+
+struct password_f                         /* Password field      @D3A*/
+{                                                              /*@D3A*/
+  unsigned char len;                                           /*@P3A*/
+  char data[1];                                                /*@P3A*/
+};                                                             /*@D3A*/
+
+struct userdata_f                         /* User field          @D3A*/
+{                                                              /*@D3A*/
+  unsigned char len;                                           /*@P3A*/
+  char data[1];                                                /*@P3A*/
+};
+
+struct luchr_f                /* LU or Non-SNA device specs      @D3A*/
+{                                                              /*@D3A*/
+  unsigned short len;                                          /*@P3A*/
+  char data[1];                                                /*@P3A*/
+};
+
+struct scrypt_f                    /* Session Cryptography field @D3A*/
+{                                                              /*@D3A*/
+  unsigned char len;                                           /*@P3A*/
+  char data[1];                                                /*@P3A*/
+};                                                             /*@D3A*/
+
+/* This is the end of the base RU. CVs, if any, start here.      @D3A*/
+
+/* CVs are optional and appear in any order on the end of the    @D3A*/
+/* RU. They are all preceded by a one byte key which identifies  @D3A*/
+/* type of vector and a one byte length field.                   @D3A*/
+struct cv_f                        /* Format of CV               @P3A*/
+{                                                              /*@D3A*/
+  char key;                                                    /*@P3A*/
+  unsigned char len;                                           /*@P3A*/
+  char f3;                         /* x'F3' in 0E vector         @D3A*/
+  char nqname[17];                 /*                            @D3A*/
+};                                                             /*@D3A*/
+struct cv_64_f                     /* Format of CV 64            @D4A*/
+{                                                              /*@D4A*/
+  char key;                                                    /*@D4A*/
+  unsigned char len;                                           /*@D4A*/
+  char data;                                                   /*@D4A*/
+};                                                             /*@D4A*/
+                                                               /*@D4A*/
+struct sv_f                         /* format of subvector       @D4A*/
+{                                                              /*@D4A*/
+  char key;                         /* SV key                    @D4A*/
+  unsigned char len;                /* SV data length            @D4A*/
+  char data;                                                   /*@D4A*/
+};                                                             /*@D4A*/
+ /* TELNET 3270 control vector 64 sub vector fields              @D4A*/
+struct sv_81_f                                                 /*@D4A*/
+{                                                              /*@D4A*/
+  char key;                                                    /*@D4A*/
+  char len;                                                    /*@D4A*/
+  unsigned char tp_version;         /* x'04' = IP version 4      @D4A*/
+  char flags;                    /* Flags                   @R116234A*/
+  char          tp_address[16];  /* Binary IP address            @P8C*/
+};                                                             /*@D4A*/
+struct sv_82_f                                                 /*@D4A*/
+{                                                              /*@D4A*/
+  char key;                                                    /*@D4A*/
+  char len;                                                    /*@D4A*/
+  unsigned short int tp_port;       /*  xxxx binary port         @D4A*/
+};                                                             /*@D4A*/
+struct sv_85_f                                                 /*@D4A*/
+{                                                              /*@D4A*/
+  char key;                                                    /*@D4A*/
+  char len;                                                    /*@D4A*/
+  unsigned char tp_hostname_f;      /* X'80' hostname truncated  @D4A*/
+  char tp_hostname[256];            /* up to 256 bytes of hostnam@D4A*/
+};                                                             /*@D4A*/
+union cinit                        /* common field definition    @P3A*/
+{                                                              /*@P3A*/
+    struct cinitru    cinitru  ;                               /*@P3A*/
+    struct sluname_f  sluname  ;                               /*@P3A*/
+    struct rqstrid_f  rqstrid  ;                               /*@P3A*/
+    struct password_f password ;                               /*@P3A*/
+    struct userdata_f userdata ;                               /*@P3A*/
+    struct luchr_f    luchr    ;                               /*@P3A*/
+    struct scrypt_f   scrypt   ;                               /*@P3A*/
+    struct cv_f       CV       ;                               /*@P3A*/
+    struct cv_64_f    cv_64    ;                               /*@D4A*/
+    struct sv_f       SV       ;                               /*@D4A*/
+    struct sv_81_f    sv_81    ;                               /*@D4A*/
+    struct sv_82_f    sv_82    ;                               /*@D4A*/
+    struct sv_85_f    sv_85    ;                               /*@D4A*/
+};                                                             /*@P3A*/
+
+typedef union cinit * CIP;         /* common field pointer       @P3A*/
+
+char save_net[8];                     /* Temp save area for NET  @D3A*/
+char netid[8];                                                 /*@D3A*/
+char real_netname[8];                                          /*@D3A*/
+char termid[4];                                                /*@D3A*/
+unsigned short i = 0;                                          /*@D3A*/
+#define HOSTLEN 256                                            /*@D4A*/
+#define NETLEN 8                                               /*@D3A*/
+#define TERMIDLEN 4                                            /*@D3A*/
+#define TRUE 1                                                 /*@D3A*/
+#define FALSE 0                                                /*@D3A*/
+char first_0e = FALSE;                                         /*@D3A*/
+/* The following fields are for the TELNET 3270 IP address       @D4A*/
+struct                                 /* format of subvector    @D4A*/
+{                                                              /*@D4A*/
+  char               ip_address[4];    /* Binary IPv4 address    @P7C*/
+  char               ip_v6_address[16]; /* Binary IPv6 address   @P7A*/
+  unsigned short int ip_port;          /* Binary version         @D4A*/
+  unsigned short int ip_fill;          /* alignment              @D4A*/
+  signed long int    ip_hostname_length;                       /*@D4A*/
+  char               ip_hostname[256];                         /*@D4A*/
+} tnaddr;                                                      /*@D4A*/
+
+                                       /* Standard functions         */
+#include <string.h>
+
+    struct install_exit_commarea
+               *comm_ptr ;
+    struct install_shipped_commarea
+               *shipped_comm_ptr ;
+    struct install_console_commarea                       /*     @D2A*/
+               *cons_ptr ;                                /*     @D2A*/
+    struct install_brfac_commarea                             /* @P4A*/
+               *brfac_comm_ptr ;                              /* @P4A*/
+/*********************************************************************/
+/* Subroutines                                                   @D3A*/
+/*********************************************************************/
+/*********************************************************************/
+/* Scan up the CINIT using SNA rules until the CVs are found.        */
+/* Scan the CVs for the 2nd '0E'X  CV.                               */
+/* Extract the NETID and REAL_NETNAME from the CV                    */
+/* If anything is not as expected return with netid and              */
+/* real_netname as blank showing we are unable to extract the        */
+/* NQNAME.                                                       @D3A*/
+/*********************************************************************/
+static void extract_nqname_from_cinit()
+{
+   CIP pCV,                        /* -> to step in cinit to CV  @P3A*/
+       end_cinit_ru_ptr;           /* -> next byte after cinit   @P3A*/
+   long int len;                                               /*@P3A*/
+
+   /* Initialize fields                                          @D3A*/
+   memset(netid, ' ', NETLEN);                                 /*@D3A*/
+   memset(real_netname, ' ', NETLEN);                          /*@D3A*/
+   /*----------------------------------------------------------------*/
+   /* Point to the end of the Control Vectors  in the CINIT_RU   @D3A*/
+   /*----------------------------------------------------------------*/
+   pCV = (CIP) comm_ptr->install_cinit_ptr; /* start cinit      *@P3A*/
+   /* Point to next byte sfter the CINIT_RU                      @P3A*/
+   end_cinit_ru_ptr = (CIP) ((char *)pCV +                     /*@P3A*/
+                             pCV->cinitru.cinit_len);          /*@P3A*/
+   /* Skip to end of each field using length part                @P3A*/
+   pCV = (CIP) (pCV->cinitru.bindimgdata +                     /*@P3A*/
+                pCV->cinitru.bindimg_len);                     /*@P3A*/
+   pCV = (CIP) (pCV->sluname.data +                            /*@P3A*/
+                pCV->sluname.len);                             /*@P3A*/
+   pCV = (CIP) (pCV->rqstrid.data +                            /*@P3A*/
+                pCV->rqstrid.len);                             /*@P3A*/
+   pCV = (CIP) (pCV->password.data +                           /*@P3A*/
+                pCV->password.len);                            /*@P3A*/
+   pCV = (CIP) (pCV->userdata.data +                           /*@P3A*/
+                pCV->userdata.len);                            /*@P3A*/
+   pCV = (CIP) (pCV->luchr.data +                              /*@P3A*/
+                pCV->luchr.len);                               /*@P3A*/
+   pCV = (CIP) (pCV->scrypt.data +                             /*@P3A*/
+                pCV->scrypt.len);                              /*@P3A*/
+   /*----------------------------------------------------------------*/
+   /* If the CINIT_RU contains control vectors then...           @D3A*/
+   /*----------------------------------------------------------------*/
+   while (pCV < end_cinit_ru_ptr)                              /*@P3A*/
+   {                                                           /*@D3A*/
+     /*--------------------------------------------------------------*/
+     /* Scan through the CV until the 2nd 0E is found.           @D3A*/
+     /*--------------------------------------------------------------*/
+     switch (pCV->CV.key)                                      /*@P3A*/
+     {                                                         /*@D3A*/
+       case 0x0E:                                              /*@D3A*/
+         if (!first_0e)                                        /*@D3A*/
+           first_0e = TRUE;                /* Found the first one    */
+         else                              /* This is the 2nd 0E     */
+         {                                                     /*@D3A*/
+           /*--------------------------------------------------------*/
+           /* The 0E vector contains X'0EllF3' followed by       @D3A*/
+           /* C'netid.netname' = desired SLU name.               @D3A*/
+           /*--------------------------------------------------------*/
+           len = pCV->CV.len -                                 /*@P3A*/
+                 sizeof(pCV->CV.f3);       /* Len of nqnqame     @P3A*/
+           for (i=0;                                           /*@P3A*/
+                pCV->CV.nqname[i] != '.' &&                    /*@P3A*/
+                   i < len &&                                  /*@P3A*/
+                   i < NETLEN;                                 /*@P3A*/
+                i++) ;                     /* just skip along    @P3A*/
+           if (pCV->CV.nqname[i] == '.')   /* If NETID exists    @P3A*/
+           {                                                   /*@D3A*/
+             memcpy(netid, pCV->CV.nqname, i);                 /*@P3A*/
+             len = len - i - 1;         /* Len of real netname   @D3A*/
+             memcpy(real_netname, (pCV->CV.nqname)+i+1, len);  /*@P3A*/
+           }                                                   /*@D3A*/
+         }                                                     /*@D3A*/
+         break;                                                /*@D3A*/
+       default:                                                /*@D3A*/
+         ;                                                     /*@D3A*/
+     }                                                         /*@D3A*/
+     pCV = (CIP) (&(pCV->CV.f3) +                              /*@P3A*/
+                  pCV->CV.len);                                /*@P3A*/
+    }                                                          /*@D3A*/
+   return;                                                     /*@D3A*/
+}                                                              /*@D3A*/
+/*********************************************************************/
+/* SET_ALIAS_TERMID  Sets SELECTED_TERMID from                       */
+/* the last non blank char of NETID and                              */
+/* the last 3 non blank chars of REAL_NETNAME.                       */
+/* The REAL_NETNAME loop is delimited by a blank following           */
+/* REAL_NETNAME.                                                 @D3A*/
+/*********************************************************************/
+static void set_alias_termid()
+{                                                              /*@D3A*/
+   memset(comm_ptr->install_selected_ptr->selected_term_id,
+          ' ',TERMIDLEN);                                      /*@D3A*/
+   i = NETLEN;                                                 /*@D3A*/
+   while (netid[i-1] == ' ' && i > 0)                          /*@D3A*/
+      i--;                    /* Find last non-blank NETID character */
+   comm_ptr->install_selected_ptr->selected_term_id[0] =
+             netid[i-1];                                       /*@D3A*/
+   i = NETLEN;                                                 /*@D3A*/
+   while (real_netname[i-1] == ' ' && i > 0)                   /*@D3A*/
+      i--;                       /* Find last 3 non-blank characters */
+   if (i < 3)                                                  /*@D3A*/
+      memcpy(&comm_ptr->install_selected_ptr->selected_term_id[1],
+             &real_netname, i);                                /*@D3A*/
+   else                                                        /*@D3A*/
+      memcpy(&comm_ptr->install_selected_ptr->selected_term_id[1],
+             &real_netname[i-3], 3 );                          /*@D3A*/
+   return;                                                     /*@D3A*/
+}                                                              /*@D3A*/
+ /********************************************************************/
+ /* EXTRACT_TNADDR_FROM_CINIT                                    @D4A*/
+ /* -------------------------                                    @D4A*/
+ /* Scan up the CINIT using SNA rules until the CVs are found.   @D4A*/
+ /* Scan the CVs for the '64'X CV.                               @D4A*/
+ /* Extract the IP_ADDRESS, IP_PORT and IP_HOSTNAME if the       @D4A*/
+ /* subvector '81' is for IP version 4 or 6                      @P7C*/
+ /*                                                              @D4A*/
+ /* OUTPUT     The following fields defined in this program      @D4A*/
+ /*            IP_ADDRESS or IP_V6_ADDRESS                       @P7C*/
+ /*            IP_PORT                                           @D4A*/
+ /*            IP_HOSTNAME_LENGTH                                @D4A*/
+ /*            IP_HOSTNAME                                       @D4A*/
+ /********************************************************************/
+static void extract_tnaddr_from_cinit()                        /*@D4A*/
+{                                                              /*@D4A*/
+   CIP pCV,                        /* -> to step in cinit to CV  @D4A*/
+       end_cinit_ru_ptr,           /* -> next byte after cinit   @D4A*/
+       pSV,                        /* -> to step in CV to SV     @D4A*/
+       end_cv_ptr;                 /* -> next byte after CV      @D4A*/
+   long int len;                                               /*@D4A*/
+                                                               /*@D4A*/
+   /* Initialize fields                                          @D4A*/
+   memset(tnaddr.ip_address,0x00,4);                           /*@P7C*/
+   memset(tnaddr.ip_v6_address,0x00,16);                       /*@P7A*/
+   tnaddr.ip_port = 0;                                         /*@D4A*/
+   tnaddr.ip_fill = 0;                                         /*@D4A*/
+   tnaddr.ip_hostname_length = 0;                              /*@D4A*/
+   memset(tnaddr.ip_hostname,' ',HOSTLEN);                     /*@D4A*/
+   /*----------------------------------------------------------------*/
+   /* Point to the end of the Control Vectors  in the CINIT_RU   @D4A*/
+   /*----------------------------------------------------------------*/
+   pCV = (CIP) comm_ptr->install_cinit_ptr; /* start cinit       @D4A*/
+   /* Point to next byte sfter the CINIT_RU                      @D4A*/
+   end_cinit_ru_ptr = (CIP) ((char *)pCV +                     /*@D4A*/
+                             pCV->cinitru.cinit_len);          /*@D4A*/
+   /* Skip to end of each field using length part                @D4A*/
+   pCV = (CIP) (pCV->cinitru.bindimgdata +                     /*@D4A*/
+                pCV->cinitru.bindimg_len);                     /*@D4A*/
+   pCV = (CIP) (pCV->sluname.data +                            /*@D4A*/
+                pCV->sluname.len);                             /*@D4A*/
+   pCV = (CIP) (pCV->rqstrid.data +                            /*@D4A*/
+                pCV->rqstrid.len);                             /*@D4A*/
+   pCV = (CIP) (pCV->password.data +                           /*@D4A*/
+                pCV->password.len);                            /*@D4A*/
+   pCV = (CIP) (pCV->userdata.data +                           /*@D4A*/
+                pCV->userdata.len);                            /*@D4A*/
+   pCV = (CIP) (pCV->luchr.data +                              /*@D4A*/
+                pCV->luchr.len);                               /*@D4A*/
+   pCV = (CIP) (pCV->scrypt.data +                             /*@D4A*/
+                pCV->scrypt.len);                              /*@D4A*/
+   /*----------------------------------------------------------------*/
+   /* If the CINIT_RU contains control vectors then...           @D4A*/
+   /*----------------------------------------------------------------*/
+   while (pCV < end_cinit_ru_ptr)                              /*@D4A*/
+   {                                                           /*@D4A*/
+     /*--------------------------------------------------------------*/
+     /* Scan through the CV until the TELNET CV 64 is found      @D4A*/
+     /*--------------------------------------------------------------*/
+     switch (pCV->cv_64.key)                                   /*@D4A*/
+     {                                                         /*@D4A*/
+       case 0x64:                                              /*@D4A*/
+         end_cv_ptr = (CIP) ((char *)pCV + pCV->cv_64.len);    /*@D4A*/
+         pSV = (CIP) &(pCV->cv_64.data);                       /*@D4A*/
+         while (pSV < end_cv_ptr)                              /*@D4A*/
+         {                                                     /*@D4A*/
+           switch (pSV->SV.key)                                /*@D4A*/
+           {                                                   /*@D4A*/
+             /*------------------------------------------------------*/
+             /* Extract ip-address from subvector 81             @D4A*/
+             /* if the address is for version 4.                 @D4A*/
+             /*------------------------------------------------------*/
+             case 0x81:                                        /*@D4A*/
+               if (pSV->sv_81.tp_version == 0x04)              /*@D4A*/
+                 memcpy(tnaddr.ip_address,                     /*@P8C*/
+                        pSV->sv_81.tp_address,                 /*@P8C*/
+                        4);                                    /*@P8C*/
+               if (pSV->sv_81.tp_version == 0x06)              /*@P7A*/
+                 memcpy(tnaddr.ip_v6_address,                  /*@P7A*/
+                        pSV->sv_81.tp_address,                 /*@P8C*/
+                        16);                                   /*@P7A*/
+               break;                                          /*@D4A*/
+             /*------------------------------------------------------*/
+             /* Extract ip-port from subvector 82                @D4A*/
+             /*------------------------------------------------------*/
+             case 0x82:                                        /*@D4A*/
+               tnaddr.ip_port = pSV->sv_82.tp_port;            /*@D4A*/
+               break;                                          /*@D4A*/
+             /*------------------------------------------------------*/
+             /* Extract ip-hostname-len and ip-hostname from     @D4A*/
+             /* subvector 85 which is optional.                  @D4A*/
+             /*------------------------------------------------------*/
+             case 0x85:                                        /*@D4A*/
+               tnaddr.ip_hostname_length = pSV->SV.len - 1;    /*@D4A*/
+               memcpy(tnaddr.ip_hostname,                      /*@D4A*/
+                      pSV->sv_85.tp_hostname,                  /*@D4A*/
+                      tnaddr.ip_hostname_length);              /*@D4A*/
+               break;                                          /*@D4A*/
+             default:                                          /*@D4A*/
+               ;                                               /*@D4A*/
+           }                           /* of switch subvector    @D4A*/
+           pSV = (CIP) (&(pSV->SV.data) + pSV->SV.len);        /*@D4A*/
+         }                             /* of while pSV           @D4A*/
+         break;                                                /*@D4A*/
+       default:                                                /*@D4A*/
+         ;                                                     /*@D4A*/
+     }                                                         /*@D4A*/
+     pCV = (CIP) (&(pCV->cv_64.data) + pCV->cv_64.len);        /*@D4A*/
+    }                                                          /*@D4A*/
+   return;                                                     /*@D4A*/
+}                                                              /*@D4A*/
+/*-------------------------------------------------------------------*/
+/* Functions:                                                        */
+/*-------------------------------------------------------------------*/
+
+/*-------------------------------------------------------------------*/
+/* INSTALL function: This function creates a term_id dependent upon  */
+/*                   netname and chooses an autoinstall model. The   */
+/*                   model chosen will be                            */
+/*                   - the model selected via MTS (if any)           */
+/*                   or                                              */
+/*                   - the 1st entry in the model list (if any)      */
+/*-------------------------------------------------------------------*/
+static void install()
+{
+    char       *start,*end;            /* Pointers to termid part of */
+                                       /* netname                    */
+    int        len;                    /* Length of netname          */
+
+                                       /* Initialise returned termid */
+    memset(comm_ptr->install_selected_ptr->selected_term_id,
+           ' ',
+           TERMID_LEN);
+
+    if (comm_ptr->install_exit_standard.install_exit_function ==
+        INSTALL_CONSOLE)                                  /*     @D2C*/
+     {                                                    /*     @D2C*/
+                          /* Initialise console fields           @D2C*/
+     len   =                                              /*     @D2C*/
+        cons_ptr->install_console_consolename_ptr->consolename_length;
+     start =                                              /*     @D2C*/
+        cons_ptr->install_console_consolename_ptr->consolename;
+                                                          /*     @D2C*/
+                          /* Get -> to 1st blank char            @D2A*/
+     end  =                                               /*     @D2A*/
+        memchr(cons_ptr->install_console_consolename_ptr->consolename,
+                  ' ',                                    /*     @D2A*/
+                  len);                                   /*     @D2A*/
+     }                                                    /*     @D2A*/
+    else                                                  /*     @D2A*/
+      {                                                   /*     @D2A*/
+                          /* Initialise netname fields           @D2A*/
+      len   = comm_ptr->install_netname_ptr->netname_length;
+      start = comm_ptr->install_netname_ptr->netname;     /*     @D2A*/
+                                                          /*     @D2A*/
+                          /* Get -> to 1st blank char            @D2A*/
+      end   = memchr(comm_ptr->install_netname_ptr->netname,
+                   ' ',                                   /*     @D2A*/
+                   len);                                  /*     @D2A*/
+      } ;                                                 /*     @D2A*/
+                                       /* Correct length for blanks  */
+    if (end != NULL)
+      len = end - start;
+                                       /* Correct start pos for move */
+    if (len > TERMID_LEN)
+      {
+       start += len - TERMID_LEN;
+       len    = TERMID_LEN;
+      }
+    /*---------------------------------------------------------------*/
+    /* Code to derive the TERMID from the NETID and NETNAME          */
+    /* present in the CINIT.  Code of this sort is needed if         */
+    /* this CICS system uses the VTAM parameter LUAPFX=xx which      */
+    /* causes VTAM to send dynamic LUALIAS netnames. It creates      */
+    /* TERMIDs which are reproducible because they are taken from    */
+    /* the last non blank character of the NETID and the last 3      */
+    /* non blank characters of the REAL_NETNAME. You will need       */
+    /* to modify this code if the last character of the NETID        */
+    /* is not different for each network which sends CINITs          */
+    /* to this CICS.                                                 */
+    /*                                                               */
+    /* If this code is NOT used, OR if the code FAILS in any way     */
+    /* (for instance a VTAM control vector is missing or the         */
+    /* NETID is not available) then the original TERMID code         */
+    /* creates the TERMID from the NETNAME that CICS knows the       */
+    /* resource by. If the netname is a dynamic LUALIAS then the     */
+    /* TERMID will be 0001 or 0002 etc and will be different at      */
+    /* the next logon if the CDRSCTI interval has expired.       @D3A*/
+    /*                                                               */
+    /*  The logic is:                                                */
+    /*  if not install_console                                       */
+    /*    extract nqname from cinit which sets NETID and NETNAME     */
+    /*  if install_console or NETID and NETNAME not set              */
+    /*    get TERMID from normal netname.                            */
+    /*  else                                                         */
+    /*    create TERMID from NETID and NETNAME                   @D3A*/
+    /*---------------------------------------------------------------*/
+ /* if (comm_ptr->install_exit_standard.install_exit_function !=     */
+ /*     INSTALL_CONSOLE)                                             */
+ /*   extract_nqname_from_cinit();                           *//*@D3A*/
+ /* if ((comm_ptr->install_exit_standard.install_exit_function ==    */
+ /*   INSTALL_CONSOLE) || memcmp(real_netname, "        ", 8) == 0 ||*/
+ /*   memcmp(netid, "        ", NETLEN) == 0)                *//*@D3A*/
+                                       /* Copy last non-blank chars  */
+                                       /* of netname to termid       */
+
+      memcpy(comm_ptr->install_selected_ptr->selected_term_id,
+             start,
+             len);
+ /* else                                                     *//*@D3A*/
+ /*    set_alias_termid();                                   *//*@D3A*/
+
+
+                                       /* Copy 1st input modelname   */
+                                       /* as selected modelname if   */
+                                       /* no modelname already       */
+                                       /* selected via MTS           */
+
+    if ((comm_ptr->install_selected_ptr->selected_modelname[0] == ' ')
+      &&
+        (comm_ptr->install_modelname_ptr->modelname_count > 0))
+      memcpy(comm_ptr->install_selected_ptr->selected_modelname,
+             &comm_ptr->install_modelname_ptr->modelname[0],
+             MODELNAME_LEN);
+
+                                       /* Set good return code       */
+    comm_ptr->install_selected_ptr->selected_return_code = RETURN_OK;
+    return;
+}
+
+/*-------------------------------------------------------------------*/
+/* DELETE function: This sample takes no action at terminal delete   */
+/*                  time. Any delete code should be added here.      */
+/*-------------------------------------------------------------------*/
+static void delete()
+{
+    return;
+}
+
+/*-------------------------------------------------------------------*/
+/* INSTALL_SHIPPED function: This sample accepts the selected termid,*/
+/*                 sets a good return code and returns.              */
+/*-------------------------------------------------------------------*/
+static void install_shipped()
+{
+  /* This sample accepts the selected termid value.If however        */
+  /* a termid clash has occurred then this value has been            */
+  /* selected by the caller module DFHZATS.                          */
+  /* There is no guarantee that this value will be the same          */
+  /* once a restart has occurred.                                    */
+  /* Special consideration MUST be given to how this termid          */
+  /* will be used.                                                   */
+  /* This sample will update the selected termid value to            */
+  /* the original incoming value.If a clash has occurred and         */
+  /* the definition is not busy then it will be replaced.            */
+   EXEC CICS ADDRESS COMMAREA(shipped_comm_ptr);
+   memcpy(shipped_comm_ptr->install_shipped_selected_ptr->
+        selected_shipped_termid,
+        shipped_comm_ptr->install_shipped_termid_ptr,
+        TERMID_LEN);
+
+                                        /* Set good return code      */
+   shipped_comm_ptr->install_shipped_selected_ptr->
+                    selected_shipped_return_code= RETURN_OK;
+    return;
+}
+/*-------------------------------------------------------------------*/
+/* DELETE SHIPPED function: This sample takes no action at delete    */
+/*                  time. Any delete code should be added here.      */
+/*-------------------------------------------------------------------*/
+static void delete_shipped()
+{
+    return;
+}
+/*---------------------------------------------------------------@P4A*/
+/* INSTALL_BRIDGE_FACILILITY function: This sample accepts the   @P4A*/
+/*                           selected termid/netname, sets a     @P4A*/
+/*                           good return code and returns.       @P4A*/
+/*-------------------------------------------------------------------*/
+static void install_bridge_facility()                         /* @P4A*/
+{                                                             /* @P4A*/
+  /* This sample accepts the selected termid and netname values  @P4A*/
+  /* Special consideration MUST be given to how this termid will @P4A*/
+  /* be used.                                                    @P4A*/
+  /* In particular it must not conflict with the namespace of    @P4A*/
+  /* real terminals.                                             @P4A*/
+    EXEC CICS ADDRESS COMMAREA(brfac_comm_ptr);               /* @P4A*/
+    memcpy(brfac_comm_ptr->                                   /* @P4A*/
+         install_brfac_selected_ptr->                         /* @P4A*/
+         selected_brfac_termid,                               /* @P4A*/
+         brfac_comm_ptr->                                     /* @P4A*/
+         install_brfac_termid_ptr,                            /* @P4A*/
+         TERMID_LEN);                                         /* @P4A*/
+    memcpy(brfac_comm_ptr->                                   /* @P4A*/
+         install_brfac_selected_ptr->                         /* @P4A*/
+         selected_brfac_netname,                              /* @P4A*/
+         brfac_comm_ptr->                                     /* @P4A*/
+         install_brfac_netname_ptr,                           /* @P4A*/
+         8);                                                  /* @P4A*/
+    brfac_comm_ptr->install_brfac_selected_ptr->              /* @P4A*/
+                selected_brfac_return_code= RETURN_OK;        /* @P4A*/
+    return;                                                   /* @P4A*/
+}                                                             /* @P4A*/
+/*---------------------------------------------------------------@P4A*/
+/* DELETE_BRIDGE_FACILITY function: This sample takes no action  @P4A*/
+/*                        at delete time. Any delele code        @P4A*/
+/*                        should be added here.                  @P4A*/
+/*---------------------------------------------------------------@P4A*/
+static void delete_bridge_facility()                          /* @P4A*/
+{                                                             /* @P4A*/
+    return;                                                   /* @P4A*/
+}                                                             /* @P4A*/
+/*-------------------------------------------------------------------*/
+/* DUMP: Produce a dump if the request is not INSTALL or DELETE  @D3A*/
+/*-------------------------------------------------------------------*/
+static void dump()
+{
+    EXEC CICS DUMP TASK DUMPCODE("AUTO");                      /*@D3A*/
+}
+/*-------------------------------------------------------------------*/
+/* Program start:                                                    */
+/*-------------------------------------------------------------------*/
+
+void main()
+{
+    EXEC CICS ADDRESS EIB (dfheiptr);  /* Address the EIB            */
+
+    if (dfheiptr->eibcalen != 0)       /* If there is a commarea     */
+      {
+                                       /*   address it               */
+       EXEC CICS ADDRESS COMMAREA(comm_ptr);
+       EXEC CICS ADDRESS COMMAREA(cons_ptr);              /*     @D2A*/
+
+                                       /*   perform appropriate      */
+                                       /*   function                 */
+       switch (comm_ptr->install_exit_standard.install_exit_function)
+       {
+         case INSTALL_CODE:
+              install();               /*  Perform install function  */
+              break;
+         case DELETE_CODE:
+              delete();                /*  Perform delete  function  */
+              break;
+         case INSTALL_SHIPPED_TERM:
+              install_shipped();       /*  Install shipped function  */
+              break;
+         case INSTALL_SHIPPED_RSE:
+              install_shipped();       /*  Install shipped function  */
+              break;
+         case INSTALL_VIRTUAL_TERM:
+              install_shipped();       /*  Install VT            @L1A*/
+              break;
+         case DELETE_SHIPPED_TERM:
+              delete_shipped();        /*  Delete shipped function   */
+              break;
+         case DELETE_SHIPPED_RSE:
+              delete_shipped();        /*  Delete shipped function   */
+              break;
+         case DELETE_VIRTUAL_TERM:
+              delete_shipped();        /*  Delete VT             @L1A*/
+              break;
+         case INSTALL_CONSOLE:                            /*     @D2A*/
+              install();  /*  Perform install function           @D2A*/
+              break;                                      /*     @D2A*/
+         case DELETE_CONSOLE:                             /*     @D2A*/
+              delete();   /*  Perform delete  function           @D2A*/
+              break;                                      /*     @D2A*/
+         case INSTALL_LINK_BRFAC:                         /*     @P5C*/
+              install_bridge_facility();  /* Bridge install      @P4A*/
+              break;                                      /*     @P4A*/
+         case DELETE_LINK_BRFAC:                          /*     @P5C*/
+              delete_bridge_facility();   /* Bridge delete       @P4A*/
+              break;                                      /*     @P4A*/
+         case INSTALL_START_BRFAC:                        /*     @P5A*/
+              install_bridge_facility();  /* Bridge install      @P5A*/
+              break;                                      /*     @P5A*/
+         case DELETE_START_BRFAC:                         /*     @P5A*/
+              delete_bridge_facility();   /* Bridge delete       @P5A*/
+              break;                                      /*     @P5A*/
+         default:
+              dump();                  /*  If we get here, the   @D3A*/
+              break;                   /*  install_exit_commarea     */
+                                       /*  contains an unexpected    */
+                                       /*  install_exit_function     */
+                                       /*  value. This could be due  */
+                                       /*  to a corrupt parm list    */
+                                       /*  or, perhaps, to extensions*/
+                                       /*  to the interface not yet  */
+                                       /*  catered for in this prog. */
+       }
+      }
+
+    EXEC CICS RETURN;
+}                                      /* End MAIN                   */

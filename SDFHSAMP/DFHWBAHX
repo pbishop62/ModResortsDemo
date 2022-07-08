@@ -1,0 +1,479 @@
+/*====================================================================*/
+/*                                                                    */
+/* MODULE NAME = DFHWBAHX                                             */
+/*                                                                    */
+/* DESCRIPTIVE NAME = CICS TS  Web Support Analyzer                   */
+/*                             user replaceable program               */
+/*                                                                    */
+/*                                                                    */
+/*                                                                    */
+/*        Licensed Materials - Property of IBM                        */
+/*                                                                    */
+/*        "Restricted Materials of IBM"                               */
+/*                                                                    */
+/*        5655-Y04                                                    */
+/*                                                                    */
+/*        (C) Copyright IBM Corp. 1996, 2008"                         */
+/*                                                                    */
+/*                                                                    */
+/*                                                                    */
+/*                                                                    */
+/*  STATUS = 7.2.0                                                    */
+/*                                                                    */
+/* FUNCTION = Analyzes the incoming HTTP request to extract the       */
+/*            required CICS information.                              */
+/*                                                                    */
+/*   Versions of this program in other languages are also provided:   */
+/*     Assembler - DFHWBADX                                           */
+/*     COBOL     - DFHWBAOX                                           */
+/*     PLI       - DFHWBALX                                           */
+/*                                                                    */
+/* NOTES :                                                            */
+/*                                                                    */
+/*    THIS IS A PRODUCT SENSITIVE SAMPLE.                             */
+/*    REFER TO PRODUCT DOCUMENTATION.                                 */
+/*                                                                    */
+/*    DEPENDENCIES = S/390                                            */
+/*    MODULE TYPE = Executable                                        */
+/*    PROCESSOR = C compiler                                          */
+/*    ATTRIBUTES = Read only, Serially Reusable                       */
+/*                                                                    */
+/*--------------------------------------------------------------------*/
+/*                                                                    */
+/* ENTRY POINT = DFHWBAHX                                             */
+/*                                                                    */
+/*     PURPOSE = All functions                                        */
+/*                                                                    */
+/*     LINKAGE =                                                      */
+/*         This entry point is called by the CWS Web Send/Receive     */
+/*         program DFHWBSR via EXEC CICS LINK.                        */
+/*         The parameters are passed to the exit program via the      */
+/*         commarea. The control block for the parameter list is in   */
+/*         DFHWBTDH.                                                  */
+/*                                                                    */
+/*     INPUT =                                                        */
+/*                                                                    */
+/*     OUTPUT =                                                       */
+/*                                                                    */
+/*     EXIT-NORMAL = Exit is via an EXEC CICS RETURN command.         */
+/*         The following return codes may be returned via the         */
+/*         commarea:                                                  */
+/*                                                                    */
+/*     EXIT-ERROR =                                                   */
+/*                                                                    */
+/*--------------------------------------------------------------------*/
+/*                                                                    */
+/* EXTERNAL REFERENCES =                                              */
+/*         None.                                                      */
+/*                                                                    */
+/*     ROUTINES =                                                     */
+/*         EXEC CICS RETURN - return to the calling program.          */
+/*                                                                    */
+/*     CONTROL BLOCKS =                                               */
+/*         The CWS Analyzer parameter list is defined in DFHWBTDH,    */
+/*         along with a description of the parameters.                */
+/*                                                                    */
+/*--------------------------------------------------------------------*/
+/*                                                                    */
+/* DESCRIPTION                                                        */
+/*                                                                    */
+/*        This program is a sample version in C of the default CWS    */
+/*        Analyzer. The program is invoked when an HTTP request       */
+/*        is received and CWS Analyzer exit name has been set to      */
+/*        DFHWBAHX. This name can be changed by use of the SET        */
+/*        TCPIPSERVICE URM command in CEMT or CECI.                   */
+/*                                                                    */
+/*        A parameter list is provided as input to the program. The   */
+/*        parameter list is passed to the program via the commarea.   */
+/*        The parameter list is defined in DFHWBTDH.                  */
+/*        The parameter list is addressed by the program using the    */
+/*        normal conventions for a commarea.                          */
+/*                                                                    */
+/*        Please refer to INFO APAR II10905 for guidance on       @01A*/
+/*        customizing the CWS Analyzer to deal with clients/      @01A*/
+/*        browsers which do not conform to the HTTP 1.0           @01A*/
+/*        standard.                                               @01A*/
+/*                                                                @01A*/
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* CHANGE ACTIVITY :                                                */
+ /*        $MOD(DFHWBAHX),COMP(CICSWEB),PROD(CICS TS ):              */
+ /*                                                                  */
+ /*     PN= REASON REL YYMMDD HDXXIII : REMARKS                      */
+ /*  $L0= 723    510 960611 HD0JADT : First coded                    */
+ /*  $L5= 830    660 080816 HDISGPL : Add IPV6 to Parameters         */
+ /*  $P1= M27551 530 980211 HD2WPGK : Allow WEB user token > 8 chars */
+ /*  $P2= M30435 530 981021 HD4PALS : Remove reference to CWBC       */
+ /*  $P3= M31088 530 990104 HDALSLW : ADD URP reason and response cod*/
+ /*  $P4= M30840 530 990107 HDALSLW : PAss maximum of 32K to DFHWBUN */
+ /*  $P5= M16664 610 001206 HD6NPRW : unescape test                  */
+ /*  $P6= D01262 620 010906 HD2JPEH : Make CWS Analyzers consistent  */
+ /*    $P7= D09937 640 040317 HD3SCWG : Add XOPTS                    */
+ /*    $P8= D10481 640 050113 HDIKTG  : Analyzer program rejects reso*/
+ /*    $P9= D22460 660 081015 HDISGPL : Correct compiler errors      */
+ /*  $01= A14337 530 980715 HDBGNRB : Migrate PQ14337 from SPA R520  */
+ /*  $02= A14302 530 981204 HDALSLW : Migrate PQ14302 from SPA R520  */
+ /*    $03= A74475 630 030620 HDBGNRB : Migrate PQ74475 from SPA R620*/
+ /*                                                                  */
+ /*==================================================================*/
+#pragma XOPTS(CICS)                                             /*@P7A*/
+#pragma csect(STATIC,"DFHWBAH#")                                /*@P6A*/
+#pragma csect(CODE,  "DFHWBAHX")                                /*@P6A*/
+
+/*--------------------------------------------------------------------*/
+/* Standard includes for a C/370 application                          */
+/*--------------------------------------------------------------------*/
+#include <ctype.h>
+#include <string.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+
+/*--------------------------------------------------------------------*/
+/* CWS specific includes                                              */
+/*--------------------------------------------------------------------*/
+#include "dfhwbtdh.h"           /* Analyzer parameter list            */
+#include "dfhwbuch.h"           /* CWS URP constants                  */
+#include "dfhwbunh.h"           /* WBUN commare def             @P4A  */
+
+/*--------------------------------------------------------------------*/
+/* Data constants                                                     */
+/*--------------------------------------------------------------------*/
+#define TRUE  1
+#define FALSE 0
+
+#define DFHWBUN "DFHWBUN "                                      /*@02A*/
+
+
+/* Constants for input validation */
+#define WBADX_MIN_RESOURCE_LENGTH    6    /* Min resource is '/A/B/C' */
+#define WBADX_MAX_CONV_NAME_LENGTH   8
+#define WBADX_MAX_TRAN_NAME_LENGTH   4
+#define WBADX_MAX_SERV_NAME_LENGTH   8
+#define WBADX_MAX_UTOK_NAME_LENGTH   8
+#define MAX_SERVER_DATA_LEN          32767                    /*  @P4A*/
+#define min(a,b) ((a<b) ? (a) : (b))                            /*@P6A*/
+
+/*--------------------------------------------------------------------*/
+/* Function prototypes                                                */
+/*--------------------------------------------------------------------*/
+void cics_return(int response, int reason) ;
+
+/*--------------------------------------------------------------------*/
+/* Miscellaneous local declarations                                   */
+/*--------------------------------------------------------------------*/
+ wbra_parms* wbra_ptr ;          /* Pointer to ANALYZER commarea      */
+ char*       wp ;                /* Work pointer                      */
+ int         wl ;                /* Work length                       */
+ int         i  ;                /* Work variable                     */
+ char*       rp ;                /* RESOURCE pointer                  */
+ int         rl ;                /* Length of RESOURCE left           */
+ wbun_commarea wbun_comm;        /* WBUN commarea @P4A*/
+ const short wbun_calen = sizeof(wbun_commarea);                /*@02A*/
+ short       datlen;             /* length of wbun data    @P4A       */
+ int unescape_segment(char**, char*, int);                      /*@P6A*/
+
+/*====================================================================*/
+/* Main code                                                          */
+/*====================================================================*/
+ main()
+ {
+  EXEC CICS ADDRESS EIB(dfheiptr);
+  if ( dfheiptr->eibcalen == 0 )       /* Just return if no commarea..*/
+    EXEC CICS RETURN ;                 /* ..because nowhere to set rc */
+
+  EXEC CICS ADDRESS COMMAREA(wbra_ptr);     /* Address of parameters  */
+
+ /*-------------------------------------------------------------------*/
+ /*  Validate the eyecatcher.                                         */
+ /*-------------------------------------------------------------------*/
+  if (memcmp(wbra_ptr->wbra_eyecatcher,                         /*@P6A*/
+             ANALYZE_EYECATCHER_INIT,8))                        /*@P6A*/
+    cics_return(URP_INVALID,0) ;
+
+ /*===================================================================*/
+ /*    User specific code below                                       */
+ /*===================================================================*/
+
+ /*-------------------------------------------------------------------*/
+ /*  Processing different versions of input:                          */
+ /*  WBRA_VERSION_CTS410 level introduce support for IPV6 addresses   */
+ /*-------------------------------------------------------------------*/
+
+  if (memcmp((char*)wbra_ptr->wbra_version,
+             (char*)WBRA_VERSION_CTS410,1) < 0 ) { /*            @L9C*/
+                                       /* If ipv6 not supported  @P9C*/
+
+    /* This is where users would execute older IP address manipulation*/
+    /* using fields WBRA_CLIENT_IP_ADDRESS and WBRA_SERVER_IP_ADDRESS */
+
+  }                                                             /*@L5A*/
+  else {                               /* IPV6 addresses supported@L5A*/
+
+    /* This is where users would execute newer IP address manipulation*/
+    /* using fields WBRA_CLIENT_IPV6_ADDRESS and                      */
+    /* WBRA_SERVER_IPV6_ADDRESS                                       */
+
+  }                                                             /*@L5A*/
+
+ /*-------------------------------------------------------------------*/
+ /*  CWS DEFAULT ANALYZER LOGIC                                       */
+ /*-------------------------------------------------------------------*/
+ /*-------------------------------------------------------------------*/
+ /*  Set the default name used for codepage translation of the user   */
+ /*  data.                                                            */
+ /*-------------------------------------------------------------------*/
+  memcpy(wbra_ptr->wbra_dfhcnv_key,CNV_USER_DATA_KEY,8);        /*@P6A*/
+
+ /*-------------------------------------------------------------------*/
+ /* If a URIMAP was matched (wbra_urimap not spaces), assume no       */
+ /* analysis is necessary, otherwise proceed as below.                */
+ /* This default analyzer extracts the required CICS information by   */
+ /* assuming the following structure for the resource section         */
+ /* of the HTTP request:-                                             */
+ /*                                                                   */
+ /*             /CONVNAME/TRANID/PROGNAME</FILENAME><?TOKEN>          */
+ /*                                                                   */
+ /*  where                                                            */
+ /*    CONVNAME = The name of the converter program. The use of the   */
+ /*               string 'CICS' here will be taken as signifying that */
+ /*               no converter is required.                           */
+ /*    TRANID   = The transaction id to be used for the alias.        */
+ /*               'CWBA' must be specified to get the supplied        */
+ /*               transaction.                                        */
+ /*    PROGNAME = The name of the user program to be linked by the    */
+ /*               alias.                                              */
+ /*    FILENAME = An optional filename (or other information)         */
+ /*               when PROGNAME is regarded as a directory.           */
+ /*    TOKEN    = An optional 8-character field to be passed in the   */
+ /*               user_token field to the decode function of the      */
+ /*               converter program.                                  */
+ /*-------------------------------------------------------------------*/
+  if (wbra_ptr->wbra_urimap[0] != ' ')           /* URIMAP found? @P8A*/
+    cics_return ( URP_OK, 0 ) ;                                 /*@P8A*/
+  rp = (char*)(wbra_ptr->wbra_resource_ptr) ;     /* RESOURCE address */
+  rl = wbra_ptr->wbra_resource_length ;           /* RESOURCE length  */
+
+ /*-------------------------------------------------------------------*/
+ /*  Validate resource length.                                        */
+ /*-------------------------------------------------------------------*/
+  if ( rl < WBADX_MIN_RESOURCE_LENGTH )
+    cics_return ( URP_EXCEPTION , URP_RESOURCE_TOO_SHORT ) ;  /* @P3C */
+
+ /*-------------------------------------------------------------------*/
+ /*  Ensure valid first character.                                    */
+ /*-------------------------------------------------------------------*/
+  if ( *rp != '/' )
+    cics_return ( URP_EXCEPTION , URP_FIRST_SLASH_MISSING ) ; /* @P3C */
+
+ /*-------------------------------------------------------------------*/
+ /* Scan for converter name (unescaping and uppercasing as well)      */
+ /*-------------------------------------------------------------------*/
+  wl=unescape_segment(&rp,                                      /*@P6A*/
+                    (char*)&wbra_ptr->wbra_converter_program,8);/*@P6A*/
+
+  if ( *rp != '/' )                 /* '/' not found                  */
+    cics_return ( URP_EXCEPTION , URP_SERVER_NAME_MISSING ) ; /* @P3C */
+
+  if ( (wl>WBADX_MAX_CONV_NAME_LENGTH) || (wl==0) )
+    cics_return ( URP_EXCEPTION , URP_CONV_NAME_INVALID ) ;   /* @P3C */
+
+ /*-------------------------------------------------------------------*/
+ /* If the null converter name CICS has been specified then reset     */
+ /* the output field to nulls.                                        */
+ /*-------------------------------------------------------------------*/
+  if (!memcmp(&wbra_ptr->wbra_converter_program,"CICS    ",8))  /*@P6C*/
+    memset(&wbra_ptr->wbra_converter_program,0,8);              /*@P6C*/
+
+ /*-------------------------------------------------------------------*/
+ /* Scan for alias tranid                                             */
+ /*-------------------------------------------------------------------*/
+  wl=unescape_segment(&rp,                                      /*@P6A*/
+                      (char*)&wbra_ptr->wbra_alias_tranid,4);   /*@P6A*/
+
+  if ( *rp != '/' )                 /* '/' not found                  */
+    cics_return ( URP_EXCEPTION , URP_SERVER_NAME_MISSING ) ;  /* @P3C*/
+
+  if ( (wl>WBADX_MAX_TRAN_NAME_LENGTH) || (wl==0) )
+    cics_return ( URP_EXCEPTION , URP_TRAN_NAME_INVALID ) ;    /* @P3C*/
+
+
+ /*-------------------------------------------------------------------*/
+ /* Scan for server program name                                      */
+ /*-------------------------------------------------------------------*/
+  wl=unescape_segment(&rp,                                      /*@P6A*/
+                     (char*)&wbra_ptr->wbra_server_program,8);  /*@P6A*/
+  if ( wl == 0 || wl > WBADX_MAX_SERV_NAME_LENGTH )             /*@P6C*/
+    cics_return (URP_EXCEPTION, URP_SERV_NAME_INVALID);        /*@P3C */
+
+ /*-------------------------------------------------------------------*/
+ /* Copy user token without upper case translate if '?' and data      */
+ /* present.                                                          */
+ /*-------------------------------------------------------------------*/
+  rl=rl-(rp-(char*)wbra_ptr->wbra_resource_ptr); /* Resource left @P6A*/
+  while (  (rl>0)                   /* Scan remaining length          */
+        && (*rp!='?')               /* ... for query string           */
+        )  {
+    rp = rp + 1 ;                   /* Point at next character        */
+    rl = rl - 1 ;                   /* Decrement length left          */
+  }
+  if ( rl > 1 ) {
+    rp = rp + 1 ;               /* Point at first char of token       */
+    wp = rp ;                   /* Point at first char of token       */
+    rl = rl - 1 ;               /* Decrement length left              */
+    wl = rl ;                   /* All the rest is user token         */
+    if ( wl > WBADX_MAX_UTOK_NAME_LENGTH )
+      wl = WBADX_MAX_UTOK_NAME_LENGTH ;                        /* @P1C*/
+    memcpy(wbra_ptr->wbra_user_token,"        ",8);            /* @P6C*/
+    memcpy(wbra_ptr->wbra_user_token,wp,wl);                   /* @P6C*/
+  }
+ /*-------------------------------------------------------------------*/
+ /* Link to DFHWBUN to "unescape" escaped data.                       */
+ /* For applications which want to manipulate incoming data           */
+ /* in escaped form, set WBRA_UNESCAPE to                             */
+ /* WBRA_UNESCAPE_NOT_REQUIRED and do not invoke DFHWBUN.             */
+ /*                                                                   */
+ /* WBRA_USER_DATA_PTR points to the start of the HTTP request.       */
+ /*                                                                   */
+ /* WVRA_USER_DATA_LENGTH contains the length of the user data that   */
+ /* is to be unescaped.                                               */
+ /*                                                                   */
+ /* If user data length is greater than 32K just pass in the          */
+ /* first 32K (maximum size of the commarea we are working with).     */
+ /* For HTTP requests with greater than 32K of data to be received,   */
+ /* use EXEC CICS WEB RECEIVE with UNESCAPE keyword to get the whole  */
+ /* response in its escaped form.                                     */
+ /*-------------------------------------------------------------------*/
+  if (memcmp(wbra_ptr->wbra_server_program,"DFHWBTTA",8)        /*@06C*/
+      != 0) {                                                   /*@02A*/
+    if (wbra_ptr->wbra_unescape                                 /*@02A*/
+        = WBRA_UNESCAPE_REQUIRED) {                        /*     @P5A*/
+      wbun_comm.wbun_unescape_len =
+                           min(MAX_SERVER_DATA_LEN,
+                               wbra_ptr->wbra_user_data_length);/*@P6A*/
+      wbun_comm.wbun_unescape_addr =                            /*@02A*/
+      (unsigned long int*)wbra_ptr->wbra_user_data_ptr;         /*@02A*/
+      EXEC CICS LINK PROGRAM(DFHWBUN)
+                     COMMAREA(wbun_comm)
+                     LENGTH(wbun_calen);                        /*@02A*/
+      wbra_ptr->wbra_unescape = WBRA_UNESCAPE_NOT_REQUIRED;     /*@02A*/
+    }                                                           /*@02A*/
+    else {                                                      /*@02A*/
+    /* Unescaping required after returning from Analyzer        /*@02A*/
+    }                                                           /*@02A*/
+  }                                                             /*@02A*/
+  else {                                                        /*@02A*/
+    wbra_ptr->wbra_unescape = WBRA_UNESCAPE_NOT_REQUIRED;       /*@02A*/
+  }                                                             /*@02A*/
+
+
+
+
+
+ /*===================================================================*/
+ /*    User specific code above                                       */
+ /*===================================================================*/
+
+ /*-------------------------------------------------------------------*/
+ /*  Normal return.                                                   */
+ /*-------------------------------------------------------------------*/
+  cics_return ( URP_OK , 0 ) ;
+
+ }                                        /* End main                 */
+
+ /*-------------------------------------------------------------------*/
+ /*  Subroutine to unescape and uppercase a URL "segment".            */
+ /*  (That is, the characters between two slashes.)                   */
+ /*  On entry *urlp points to the slash at the start of the segment.  */
+ /*  On exit, it points to the slash at the end of the segment        */
+ /*  (or a URL-delimiting character if the URL is malformed).         */
+ /*  segl is the expected length of the segment. Up to this length    */
+ /*  is returned into the location pointer to by segp, but the scan   */
+ /*  of the segment is continued beyond this length if necessary.     */
+ /*  The returned value is the actual length of the segment content.  */
+ /*                                                                   */
+ /*  Modified by PQ74475:                                         @03A*/
+ /*  Call to atoe replaced with the ebcdic lookup table,          @03A*/
+ /*  and array z[2] replaced with a single character z.           @03A*/
+ /*-------------------------------------------------------------------*/
+int unescape_segment(char **urlp, char *segp, int segl)         /*@P6A*/
+ {int i,j,k,l;                         /* Work integers           @P6A*/
+  char *p, *s, z;                      /* Work characters         @03C*/
+  static char hexbin[] =               /* EBCDIC hex to binary    @P6A*/
+   {255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255, 10, 11, 12, 13, 14, 15,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255, 10, 11, 12, 13, 14, 15,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+      0,  1,  2,  3,  4,  5,  6,  7,  8,  9,255,255,255,255,255,255};
+  static char ebcdic[] =                                   /*     @03A*/
+   {  0,  1,  2,  3, 55, 45, 46, 47, 22,  5, 37, 11, 12, 13, 14, 15,
+     16, 17, 18, 19, 60, 61, 50, 38, 24, 25, 63, 39, 34, 29, 53, 31,
+     64, 90,127,123, 91,108, 80,125, 77, 93, 92, 78,107, 96, 75, 97,
+    240,241,242,243,244,245,246,247,248,249,122, 94, 76,126,110,111,
+    124,193,194,195,196,197,198,199,200,201,209,210,211,212,213,214,
+    215,216,217,226,227,228,229,230,231,232,233,173,224,189, 95,109,
+    121,129,130,131,132,133,134,135,136,137,145,146,147,148,149,150,
+    151,152,153,162,163,164,165,166,167,168,169,192, 79,208,161,  7,
+     67, 32, 33, 28, 35,235, 36,155,113, 40, 56, 73,144,186,236,223,
+     69, 41, 42,157,114, 43,138,154,103, 86,100, 74, 83,104, 89, 70,
+    234,218, 44,222,139, 85, 65,254, 88, 81, 82, 72,105,219,142,141,
+    115,116,117,250, 21,176,177,179,180,181,106,183,184,185,204,188,
+    171, 62, 59, 10,191,143, 58, 20,160, 23,203,202, 26, 27,156,  4,
+     52,239, 30,  6,  8,  9,119,112,190,187,172, 84, 99,101,102, 98,
+     48, 66, 71, 87,238, 51,182,225,205,237, 54, 68,206,207, 49,170,
+    252,158,174,140,221,220, 57,251,128,175,253,120,118,178,159,255};
+                                       /*                         @P6A*/
+   l = segl;                           /* Copy target length      @P6A*/
+   /* z[1] = 0;                           DELETED BY APAR         @03D*/
+   memcpy(segp,"        ",l);          /* Clear output to blanks  @P6A*/
+
+   p = *urlp;                          /* Copy current scan ptr   @P6A*/
+   if (*p=='/') p++;                   /* Bump over initial slash @P6A*/
+
+   for(k=0,s=segp;;s++,p++,k++)        /* Scan though the segment @P6A*/
+      {if (*p==0                       /* If                      @P6A*/
+         ||*p=='/'                     /*   any                   @P6A*/
+         ||*p==' '                     /*     sort                @P6A*/
+         ||*p==';'                     /*       of                @P6A*/
+         ||*p=='?'                     /*         URL             @P6A*/
+         ||*p=='#') break;             /*           delimiter     @P6A*/
+       if (k<l)                        /* If within target size   @P6A*/
+          switch (*p)                  /* Check escape characters @P6A*/
+                 {case '%': i = hexbin[*(p+1)];/* First nibble    @P6A*/
+                            j = hexbin[*(p+2)];/* Second nibble   @P6A*/
+                            if (i<=15 && j<=15)/* If valid hex    @P6A*/
+                               {z = ebcdic[16*i+j];/*convert      @03C*/
+                                *s = toupper(z);/* uppercase      @03C*/
+                                p+=2;}         /* Skip hex digits @P6A*/
+                            else               /* If invalid hex  @P6A*/
+                                *s = '%';      /* Don't unescape  @P6A*/
+                  case '+': continue;  /* Skip escaped blank      @P6A*/
+                  default : *s = toupper(*p); /* Non-escaped char @P6A*/
+                 }                     /*                         @P6A*/
+      }                                /*                         @P6A*/
+    *urlp = p;                         /* Return the scan pointer @P6A*/
+    return k;                          /* Return the segment len  @P6A*/
+ }                                     /*                         @P6A*/
+
+/*--------------------------------------------------------------------*/
+/* CICS_RETURN. Issue the exec cics return after setting the analyzer */
+/*  response and reason codes.                                        */
+/*--------------------------------------------------------------------*/
+void cics_return(int response, int reason)
+ {
+   wbra_ptr->wbra_response = response ;
+   wbra_ptr->wbra_reason   = reason   ;
+   EXEC CICS RETURN ;
+ }

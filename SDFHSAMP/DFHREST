@@ -1,0 +1,165 @@
+REST     TITLE 'CUSTOMER INFORMATION CONTROL SYSTEM   TRANSACTION RESTA*
+               RT EXIT PROGRAM'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFHREST                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS/ESA TRANSACTION RESTART PROGRAM             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1993, 2000"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*        This module signals to Transaction Manager whether or not    *
+*        the task that calls it after an abend may be restarted.      *
+*        For further information, see the CICS/ESA Recovery and       *
+*        Restart Guide, and the CICS/ESA Customization Guide.         *
+*        This program is invoked via an APLU LINK_URM call from the   *
+*        Transaction Manager task reply gate.                         *
+*                                                                     *
+*        THIS IS A PRODUCT SENSITIVE SAMPLE.                          *
+*        REFER TO PRODUCT DOCUMENTATION.                              *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFHREST),COMP(TRANMGR),PROD(CICS TS ):                  *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= 647    410 930202 HD4XGN  : Create DFHREST                  *
+*    $L1= 651    410 940113 HD2GJST : Remove Local DLI deadlock test  *
+*    $L2= 651    510 940615 HD0FJTC : Restart after VSAM CI deadlock  *
+*    $L3= 654    510 950201 HD0PIHR : Restart After AFCW              *
+*    $P1= M82373 410 930415 HD2YAIH : COBOL version of DFHXMRSC       *
+*    $P2= M16418 610 001020 HD7OPJW : Binder error messages           *
+*                                                                     *
+***********************************************************************
+* * * * *         T R A N S A C T I O N    R E S T A R T      * * * * *
+* * * * *                   P R O G R A M                     * * * * *
+***********************************************************************
+         COPY DFHXMRSD             Data passed from transaction mgr
+***********************************************************************
+* * *          R E G I S T E R   D E F I N I T I O N              * * *
+***********************************************************************
+PARMBAR  EQU   7                   Base register for commarea
+WORK     EQU   8                   Work register
+***********************************************************************
+* * *          D Y N A M I C  S T O R A G E                       * * *
+***********************************************************************
+DFHEISTG DSECT  ,
+DATA     DS    0CL80               NB. Keep in step with MESSAGE1 below
+         DS    CL12
+TRANID   DS    CL4                 Transaction id insert for msg
+         DS    CL9
+TASKID   DS    CL8                 Taskid insert for msg
+         DS    CL34
+DATEND   DS    CL13                Tail of message to be blanked
+         DFHEJECT ,
+***********************************************************************
+* * * * *                 T A S K   R E T R Y                 * * * * *
+* * * * *                    P R O G R A M                    * * * * *
+***********************************************************************
+DFHREST  CSECT                     Transaction restart program CSECT
+DFHREST  AMODE 31                                                  @P2A
+DFHREST  RMODE ANY                                                 @P2A
+         L     PARMBAR,DFHEICAP    Address commarea
+         USING XMRS_COMMAREA,PARMBAR Tell the assembler
+***********************************************************************
+*                                                                     *
+*  If the transaction has issued a read or write to the terminal or   *
+*  has executed a syncpoint, then don't attempt to restart.           *
+*                                                                     *
+***********************************************************************
+         CLI   XMRS_READ,XMRS_READ_YES                             @P1C
+         BE    RESTNO
+         CLI   XMRS_WRITE,XMRS_WRITE_YES                           @P1C
+         BE    RESTNO
+         CLI   XMRS_SYNCPOINT,XMRS_SYNCPOINT_YES                   @P1C
+         BE    RESTNO
+***********************************************************************
+*                                                                     *
+*  If the transaction has been restarted a particular number of       *
+*  times, then don't attempt to restart.                              *
+*                                                                     *
+***********************************************************************
+         SR    WORK,WORK
+         LH    WORK,XMRS_RESTART_COUNT
+         C     WORK,LIMIT
+         BNL   RESTNO
+***********************************************************************
+*                                                                     *
+*  Only consider restarting the transaction if the current abend      *
+*  code shows that the failure was due to a deadlock.  There is then  *
+*  a reasonable chance of the restarted transaction succeeding.       *
+*                                                                     *
+*  Documented deadlock abend codes are:                               *
+*                                                                     *
+*    ADCD  DBCTL deadlock                                             *
+*    AFCF  Deadlock detected CICS (non-RLS) File Control              *
+*    AFCW  Deadlock detected by RLS                                   *
+*                                                                     *
+***********************************************************************
+         CLC   XMRS_CURRENT_ABEND_CODE,=CL4'ADCD'
+         BE    RESTYES
+         CLC   XMRS_CURRENT_ABEND_CODE,=CL4'AFCF'                  @L2A
+         BE    RESTYES                                             @L2A
+         CLC   XMRS_CURRENT_ABEND_CODE,=CL4'AFCW'                  @L3A
+         BE    RESTYES                                             @L3A
+***********************************************************************
+*                                                                     *
+*  Tell Transaction Manager not to restart the transaction and exit   *
+*  (without issuing a message).                                       *
+*                                                                     *
+***********************************************************************
+RESTNO   DS    0H
+         MVI   XMRS_RESTART,XMRS_RESTART_NO                        @P1C
+         B     RESTEND
+***********************************************************************
+*                                                                     *
+*  Tell Transaction Manager to restart the transaction and issue a    *
+*  message to CSMT.                                                   *
+*                                                                     *
+***********************************************************************
+RESTYES  DS    0H
+         MVI   XMRS_RESTART,XMRS_RESTART_YES                       @P1C
+*
+         MVC   DATA(MSGEND-MESSAGE1),MESSAGE1
+         MVC   DATEND,=CL13' '     Blank tail of message
+         MVC   TRANID,EIBTRNID     Give actual transaction id.
+*
+RESTTASKNO DS  0H
+         UNPK  TASKID+1(7),EIBTASKN  Make task number printable
+         MVZ   TASKID+7(1),TASKID+6
+*
+         EXEC CICS WRITEQ TD QUEUE('CSMT') FROM(DATA) NOHANDLE.
+*
+RESTEND  DS    0H
+         EXEC CICS RETURN.
+         SPACE 6
+***********************************************************************
+* * *                C O N S T A N T S   A R E A                  * * *
+***********************************************************************
+**   Fields between here and MSGEND must remain consecutive
+**   and match those fields defined in dynamic storage
+**   collectively called 'DATA'.
+MESSAGE1 DC    C'TRANSACTION '
+         DC    CL4' '
+         DC    C', TASK NO'
+         DC    CL8' 0000000'
+         DC    C', IS BEING RESTARTED AUTOMATICALLY'
+MSGEND   EQU   *
+HEXLIST  DC    X'0123456789ABCDEF'
+LIMIT    DC    F'20'               Limit for number of restarts
+         LTORG *
+         END  ,

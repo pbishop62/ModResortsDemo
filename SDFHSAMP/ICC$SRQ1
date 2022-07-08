@@ -1,0 +1,114 @@
+//*******************************************************************
+//
+// Module Name: ICC$SRQ1
+//
+// Description:
+//    This sample program demonstrates how to use the IccStartRequestQ
+//    class.
+//
+// Instructions:
+//    Start this program under a transaction definition isr1. Program
+//    icc$srq2 should be defined under a transaction definition of ISR2
+//    on another CICS system:-
+//
+//       SYSIDNT=ICC1 <-------------> SYSIDNT=ICC2
+//       TERMID=TRM1                  TERMID=TRM2
+//       TXN=ITMP                     TXN=ISR2
+//
+//    ISR1 will start ISR2 (on TERMID=TRM2) on ICC2 system.
+//    ISR2 will finish by starting ITMP transaction on initial
+//    terminal in ICC1 system. (ITMP should be defined to run
+//    program icctmp).
+//
+//
+//
+//     Licensed Materials - Property of IBM
+//
+//     "Restricted Materials of IBM"
+//
+//     5655-Y04
+//
+//     (C) Copyright IBM Corp. 1998"
+//
+//
+//
+//
+// Status = %SP00
+//
+//-------------------------------------------------------------------
+//
+// Change Activity:
+//
+//   $MOD(ICC$SRQ1),COMP(CEZANNE),PROD(CICS TS ):
+//
+//   PN= REASON REL YYMMDD HDXIII : REMARKS
+//  $P0= M30492 530 981109 HDGYBS : Creation
+//  $P1= M30696 530 981207 HDGYBS : Fix sample c++ programs
+//
+//********************************************************************
+#include "icceh.hpp"  //CICS C++ Foundation Classes header files
+#include "iccmain.hpp"  //CICS C++ Foundation Classes main() stub
+
+void IccUserControl::run()
+{
+  IccTerminal* term = terminal();  //access terminal.
+  term->erase();  //clear terminal.
+  term->sendLine("This is program 'icc$srq1'...");
+
+  //Construct objects..
+  IccRequestId req1;  //create request object.
+  IccRequestId req2("REQUEST1");  //unique request object.
+  IccTimeInterval ti(0,0,5);  //5 seconds.
+  IccTermId remoteTermId("PE06");  //termid: *change if needed*
+  IccTransId ISR2("ISR2");  //transaction Id.
+  IccTransId ITMP("ITMP");  //transaction Id.
+  IccBuf buffer;  //buffer object.
+
+  IccStartRequestQ* startQ = startRequestQ();  //Access start est queue
+
+  startQ->setRouteOption( "ICC2" );  //start to be issued on
+                                     //system 'ICC2'
+
+  //register a buffer object to contain start data ...
+  startQ->registerData( &buffer );
+
+
+  startQ->setReturnTermId( term->name() );  //specify name of
+                                            //return termid.
+  startQ->setReturnTransId( ITMP );  //specify name of
+                                     //return transid.
+  startQ->setQueueName( "startqnm" );  //specify name of queue.
+
+  //populate buffer object...
+  buffer = "This is a greeting from program 'icc$srq1'!!";
+
+  term->sendLine(
+        "Starting Tran '%s' on terminal '%s' after %ld seconds...",
+         ISR2.name(), remoteTermId.name(), ti.timeInSeconds() );
+
+  // actual start request                                         @P1A
+  req1 = startQ->start( ISR2, &remoteTermId, &ti );             //@P1C
+
+  term->sendLine( " - <%s> request='%s'", startQ->conditionText(),
+  req1.name());
+
+  //Now cancel previous start request (as it will not have expired yet)
+  term->sendLine( "Issuing cancel for start request='%s'...",
+  req1.name() );
+  startQ->cancel( req1 );
+  term->sendLine( " - <%s> request='%s'", startQ->conditionText(),
+  req1.name());
+
+  //Now issue another start request - this time let it succeed...
+  term->sendLine(
+        "Starting Tran '%s' on terminal '%s' after %ld seconds...",
+         ISR2.name(), remoteTermId.name(), ti.timeInSeconds() );
+
+  req1 = startQ->start( ISR2, &remoteTermId, &ti, &req2 );      //@P1C
+  term->sendLine( " - <%s> request='%s'", startQ->conditionText(),
+  req1.name());
+
+  term->send( 24,1,"Program 'icc$srq1' complete." );
+
+  return;
+}

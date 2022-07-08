@@ -1,0 +1,127 @@
+//*******************************************************************
+//
+// Module Name: ICC$SES2
+//
+// Description:
+//    This sample program demonstrates how to use the IccSession
+//    class. This is the back end part of a DTP program pair.
+//
+// Instructions:
+//    Start this program under a transaction definition in 2 CICS
+//    systems that have communication channels to each other:-
+//
+//       SYSIDNT=ICC1 <-------------> SYSIDNT=ICC2
+//       TXN=ISE1                     TXN=ISE2
+//
+//
+//
+//     Licensed Materials - Property of IBM
+//
+//     "Restricted Materials of IBM"
+//
+//     5655-Y04
+//
+//     (C) Copyright IBM Corp. 1998"
+//
+//
+//
+//
+// Status = %SP00
+//
+//-------------------------------------------------------------------
+//
+// Change Activity:
+//
+//   $MOD(ICC$SES2),COMP(CEZANNE),PROD(CICS TS ):
+//
+//   PN= REASON REL YYMMDD HDXIII : REMARKS
+//  $P0= M30492 530 981109 HDGYBS : Creation
+//  $P1= M30696 530 981211 HDGYBS : Fix sample c++ programs
+//
+//*******************************************************************
+#include "icceh.hpp"  //CICS C++ Foundation Classes header files
+#include "iccmain.hpp"  //CICS C++ Foundation Classes main() stub
+#include <string.h>
+
+struct Pip
+{
+  short LL;
+  short RR;
+  char  data[33];
+} PIPList;
+
+void IccUserControl::run()
+{
+  //Construct objects...
+  IccClock clock;
+  IccSysId backEndSysId("ICC2");  //IccSysId object for back end system
+  IccSession*    session = IccControl::session();
+  //Access our facility:
+  // an IccSession object
+  IccBuf buffer(55);  //55 byte buffer object
+  IccBuf record(80);  //80 byte buffer object
+  IccTempStoreId id("DTPBKEND");  //Temp Store identification object.
+  IccTempStore store( id );  //Temp Store resource object.
+
+
+  store.empty();  //Clear Temp Store object
+
+  //Build bufferrmational text string in buffer object...
+  buffer << "Transaction '" << task()->transId().name();
+  buffer << "' starting.";
+  store.writeItem( buffer );  //Write buffer to Temp Store.
+
+  store.writeItem( "extractProcess...");
+  session->extractProcess();
+  store.writeItem( record.assign( "<%s> STATE=%ld %s ERR=%d",
+                   session->conditionText(),
+            session->state( IccSession::extractState ),
+     session->stateText(), session->isErrorSet() ));
+
+  if ( Icc::ClassInfo().platform == Icc::OS2 )
+     store.writeItem( record.assign(
+     "process=[%s] syncLevel=%d PIP=[%s]",
+                      (const char*)session->process(),
+                      (short)session->syncLevel() ));
+  else
+     store.writeItem( record.assign(
+     "process=[%s] syncLevel=%d PIP=[%s]",
+                      (const char*)session->process(),
+                      (short)session->syncLevel(),
+                      (char*)session->PIPList().dataArea(4) ));
+
+  store.writeItem( "receive...");
+  buffer = session->receive();
+  store.writeItem( record.assign( "<%s> STATE=%ld %s ERR=%d NoData=%d",
+                   session->conditionText(),
+                   session->state(), session->stateText(),
+                   session->isErrorSet(), session->isNoDataSet() ));
+
+  if (session->condition() == IccCondition::NORMAL)
+  store.writeItem( record.assign( "data from front end=[%s]",
+     (const char*)buffer ));
+
+  store.writeItem( "sendLast ...");
+
+  //Build send bufferrmation in data buffer object...
+  buffer = "Hi there this is from backEnd TIME=";
+  buffer += clock.time( ':' );
+  buffer += " on ";
+  buffer += clock.date( IccClock::DDMMYY, '/' );
+
+  //Now send data buffer...
+  session->sendLast( buffer );
+  store.writeItem( record.assign( "<%s> STATE=%ld %s ERR=%d",
+                   session->conditionText(), session->state(),
+     session->stateText(), session->isErrorSet() ));
+
+
+  //Communication is complete so free session
+  store.writeItem( "free...");
+  session->free();
+  store.writeItem( record.assign( "<%s> STATE=%ld %s ERR=%d",
+                   session->conditionText(), session->state(),
+     session->stateText(), session->isErrorSet() ));
+
+  return;  //Return control to CICS
+}
