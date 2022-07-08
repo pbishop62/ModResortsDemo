@@ -1,0 +1,502 @@
+CBL CICS('COBOL3 CICS DLI')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0DLCE                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Exec DL/I Sample Program                   *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      *                  DATABASE  STRUCTURE                          *
+      *                                                               *
+      *                     *************                             *
+      *                     *           *                             *
+      *                     *  PARTROOT *                             *
+      *                     *           *                             *
+      *                     *************                             *
+      *                           *                                   *
+      *                           *                                   *
+      *             *****************************                     *
+      *             *                           *                     *
+      *             *                           *                     *
+      *             *                           *                     *
+      *       *************               *************               *
+      *       *           *               *           *               *
+      *       *  STANINFO *               *  STOKSTAT *               *
+      *       *           *               *           *               *
+      *       *************               *************               *
+      *                                         *                     *
+      *                                         *                     *
+      *                                         *                     *
+      *                                  ***************              *
+      *                                  *             *              *
+      *                                  *             *              *
+      *                            ************* *************        *
+      *                            *           * *           *        *
+      *                            *  CYCCOUNT * *  BACKORDR *        *
+      *                            *           * *           *        *
+      *                            ************* *************        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *     $MOD(DFH0DLCE),COMP(SAMPLES),PROD(CICS TS ):              *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900320        : Created.                   *
+      *    $P1= M90474 330 910808 HDBWSH : Prologue Fixed.            *
+      *    $P2= M91869 330 920211 HD9TMW : Remove use of STRING and   *
+      *                                  : INSPECT                    *
+      *    $P3= D02814 620 010121 HDFVGMB: Remove extra fullstops     *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFHDLCE.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  INSPECT-IND PIC X.
+           88  NO-MORE  VALUE '1'.
+       01  INMSGLEN PIC 9(4) COMP VALUE IS 80.
+       01  MSGLEN80 PIC 9(4) COMP VALUE IS 80.
+       01  HEAD1  PIC X(80) VALUE IS '   AREA  INV  PROJ  DIV    UNIT
+      -        ' CURRENT    ON       IN      TOTAL  COUNT BACK'.
+       01  HEAD2  PIC X(80) VALUE IS '        DEPT   CD          PRICE
+      -        ' REQMTS    ORDER    STOCK  DISBURSE TAKEN ORDR'.
+      *
+      *        USER  WORK AREA - 350 BYTES -
+      *
+        01 USERTWA.
+           02  PSBNAME PIC   X(8).
+      *
+      *  THE FOLLOWING DESCRIPTION OF THE DATA BASE SEGMENTS
+      *  ARE AS THEY ARE USED IN THIS PROGRAM
+      *
+           02  SEGRETRN PIC X(160).
+           02  SEGROOT REDEFINES SEGRETRN.
+               03  SEGNO               PIC X(17).
+               03  SEGF1               PIC X(9).
+               03  SEGDESC             PIC X(20).
+               03  SEGF1A              PIC X(104).
+               03  FILLER              PIC X(10).
+           02  SEGSTAT REDEFINES SEGROOT.
+               03  SEGTYPE             PIC XX.
+               03  SEGAREA             PIC X.
+               03  SEGDEPT             PIC XX.
+               03  SEGPROJ             PIC XXX.
+               03  SEGDIV              PIC XX.
+               03  SEGF2               PIC X(12).
+               03  SEGPRICE            PIC 9(4)V999.
+               03  SEGF3               PIC X(4).
+               03  SEGUNIT             PIC XXXX.
+               03  SEGF4               PIC X(37).
+               03  SEGCOUNT            PIC XXX.
+               03  SEGF5               PIC X(12).
+               03  SEGCREQ             PIC S9(8).
+               03  SEGFREQ             PIC S9(8).
+               03  SEGORDER            PIC S9(8).
+               03  SEGSTOCK            PIC S9(8).
+               03  SEGPDISB            PIC S9(8).
+               03  SEGUDISB            PIC S9(8).
+               03  SEGF5A              PIC X(13).
+               03  FILLER              PIC X(10).
+           02  SEGINFO REDEFINES SEGSTAT.
+               03  SEGCODE             PIC XX.
+               03  SEGF6               PIC X(16).
+               03  SEGPCODE            PIC XX.
+               03  SEGDCODE            PIC X.
+               03  SEGF7               PIC X(64).
+               03  FILLER              PIC X(75).
+       01  INREC.
+           02  INPUTFLD.
+               03  TRAN                PIC X(4).
+               03  TCODE               PIC X(3).
+               03  PARTNBR             PIC X(17).
+               03  DESC                PIC X(20).
+               03  INVKEY              PIC X(16).
+               03  PROC                PIC XX.
+               03  DISB                PIC X.
+               03  QUANT               PIC XXXX.
+               03  FILLER1             PIC X(13).
+           02  STOCKCNT PIC  S99 USAGE IS COMP.
+           02  WORK1    PIC  S9(8) USAGE COMP-3.
+           02  WORK2    PIC  S9(8) USAGE COMP-3.
+       01  OUTREC.
+           02  MSG PIC X(80).
+           02  DSPALLI-LINE-ONE REDEFINES MSG.
+               03  L1-F1               PIC X(8).
+               03  L1-F2               PIC X(18).
+               03  L1-F3               PIC X(54).
+           02  DSPALLI-LINE-TWO REDEFINES DSPALLI-LINE-ONE.
+               03  L2-F1 USAGE DISPLAY PIC Z9.
+               03  FILL10              PIC XXX.
+               03  L2-F2               PIC X.
+               03  FILL11              PIC XXX.
+               03  L2-F3               PIC XX.
+               03  FILL12              PIC XXX.
+               03  L2-F4               PIC XXX.
+               03  FILL13              PIC XXX.
+               03  L2-F5               PIC XX.
+               03  L2-F6 USAGE DISPLAY PIC  Z(6).999.
+               03  L2-F7 USAGE DISPLAY PIC  ZZZZZZZ9-.
+               03  L2-F8 USAGE DISPLAY PIC  ZZZZZZZ9-.
+               03  L2-F9 USAGE DISPLAY PIC  ZZZZZZZ9-.
+               03  L2-F10 USAGE DISPLAY PIC  ZZZZZZZZ9-.
+               03  L2-F11              PIC X(6).
+               03  L2-F12              PIC X(5).
+           02  MSG-OUT REDEFINES DSPALLI-LINE-TWO.
+               03  MSG-F1.
+                   04  MSG-F1A.
+                       05  MSG-F1A1    PIC X(4).
+                       05  FILLER      PIC X.
+                       05  MSG-F1A2    PIC X(3).
+                       05  FILLER      PIC XX.
+                   04  MSG-F1B.
+                       05  MSG-F1B1    PIC X(20).
+                       05  MSG-F1B2    PIC X(20).
+                       05  MSG-F1B3    PIC X(30).
+       01  TEMP-PARTNBR PIC X(17).
+       01  FILLER REDEFINES TEMP-PARTNBR.
+           02  TEMP PIC X OCCURS 17 INDEXED BY TEMPI.
+       01  FILLER REDEFINES TEMP-PARTNBR.
+           02  TEMP-INVKEY PIC X(16).
+           02  FILLER    PIC X.
+      * ****************************************************** *
+      *                                                        *
+      *                                                        *
+      *        MAIN LINE LOGIC FOR DFH0DLCE                    *
+      *                                                        *
+      *                                                        *
+      * ****************************************************** *
+       PROCEDURE DIVISION.
+           MOVE MSGLEN80 TO INMSGLEN.
+           EXEC CICS RECEIVE INTO(INREC) LENGTH(INMSGLEN) END-EXEC.
+           PERFORM INSPECT-PARTNBR.
+           MOVE SPACES TO MSG.
+           PERFORM OUTRTN.
+           MOVE ZERO TO STOCKCNT.
+           MOVE 'INPUT = ' TO MSG-F1A.
+           MOVE INPUTFLD TO MSG-F1B.
+           PERFORM OUTRTN.
+             IF TCODE = 'DPA' THEN PERFORM DSPALLI GO TO MORE.
+             IF TCODE = 'DPI' THEN PERFORM DSPINV  GO TO MORE.
+             IF TCODE = 'ADD' THEN PERFORM ADDPART GO TO MORE.
+             IF TCODE = 'DEL' THEN PERFORM DELPART GO TO MORE.
+             IF TCODE = 'DSB' THEN PERFORM DSBURSE GO TO MORE.
+      *
+           MOVE TRAN  TO MSG-F1A1.
+           MOVE TCODE TO MSG-F1A2.
+           MOVE 'WRONG TRANCODE USED ' TO MSG-F1B1.
+           PERFORM OUTRTN.
+      *
+       MORE.
+           EXEC CICS RETURN END-EXEC.
+           GOBACK.
+      *
+       SEARCH-AND-REPLACE.
+           SEARCH TEMP VARYING TEMPI
+           AT END MOVE '1' TO INSPECT-IND
+           WHEN TEMP(TEMPI) EQUAL TO LOW-VALUE MOVE SPACE TO TEMP(TEMPI)
+           .
+      *
+      *    CANNOT USE 'INSPECT' FEATURE IN OLD COBOL
+       INSPECT-PARTNBR.
+           MOVE PARTNBR TO TEMP-PARTNBR.
+           MOVE SPACE TO INSPECT-IND.
+           PERFORM SEARCH-AND-REPLACE UNTIL NO-MORE.
+           MOVE TEMP-PARTNBR TO PARTNBR.
+      *
+      *    CANNOT USE 'INSPECT' FEATURE IN OLD COBOL
+       INSPECT-INVKEY.
+           MOVE INVKEY TO TEMP-INVKEY.
+           MOVE SPACE TO INSPECT-IND.
+           PERFORM SEARCH-AND-REPLACE UNTIL NO-MORE.
+           MOVE TEMP-INVKEY TO INVKEY.
+      *
+      *        DISPLAY INVENTORY -- ALL LOCATIONS
+      *
+       DSPALLI SECTION.
+           MOVE 'DFHSAM25' TO PSBNAME.
+           PERFORM SCHED.
+           EXEC DLI GU SEGMENT(PARTROOT) INTO (SEGRETRN) SEGLENGTH (50)
+                WHERE (PARTKEY=PARTNBR) FIELDLENGTH (17) END-EXEC.
+           PERFORM CALLRET.
+           IF DIBSTAT NOT = '  '
+              THEN
+              MOVE 'GU ERROR IN DSPALLI' TO MSG-F1
+              PERFORM ABEND1.
+           MOVE 'PART NO.=' TO MSG-F1A.
+           MOVE PARTNBR TO MSG-F1B1.
+           MOVE 'DESCRIPTION =' TO MSG-F1B2.
+           MOVE SEGDESC TO MSG-F1B3.
+           PERFORM OUTRTN.
+           MOVE HEAD1 TO MSG.
+           PERFORM OUTRTN.
+           MOVE HEAD2 TO MSG.
+           PERFORM OUTRTN.
+       CONT1.
+           EXEC DLI GN INTO (SEGRETRN) SEGLENGTH (160) END-EXEC.
+           PERFORM CALLRET.
+           IF DIBSTAT = '  '
+              THEN IF DIBSEGM = 'STANINFO'
+                      THEN GO TO CONT1
+                      ELSE NEXT SENTENCE
+              ELSE IF DIBSTAT NOT = 'GK'
+                      THEN GO TO STKERR.
+           IF DIBSEGM = 'STOKSTAT'
+              THEN GO TO STOKSTAT.
+       STKERR.
+           PERFORM TERMSCD.
+           MOVE 'NO INVENTORY FOR THIS PART' TO MSG.
+           PERFORM OUTRTN.
+           GO TO ENDDSPALLI.
+       STOKSTAT.
+           ADD 1 TO STOCKCNT.
+           MOVE STOCKCNT TO L2-F1.
+       STOKPRT.
+           MOVE '.' TO FILL10.
+           MOVE SEGAREA TO L2-F2.
+           MOVE SEGDEPT TO L2-F3.
+           MOVE SEGPROJ TO L2-F4.
+           MOVE SEGDIV TO L2-F5.
+           MOVE SEGPRICE TO L2-F6.
+           MOVE SEGCREQ TO L2-F7.
+           MOVE SEGORDER TO L2-F8.
+           MOVE SEGSTOCK TO L2-F9.
+           MOVE SEGPDISB TO WORK1.
+           MOVE SEGUDISB TO WORK2.
+           ADD WORK1, WORK2 GIVING L2-F10.
+           MOVE SEGCOUNT TO L2-F11.
+           MOVE 'N/A' TO L2-F12.
+           PERFORM OUTRTN.
+       STOKNXT.
+           EXEC DLI GN INTO (SEGRETRN) SEGLENGTH (160) END-EXEC.
+           PERFORM CALLRET.
+           IF DIBSTAT = '  ' AND DIBSEGM = 'STOKSTAT' GO TO STOKSTAT.
+           PERFORM TERMSCD.
+           PERFORM OUTRTN.
+       ENDDSPALLI. EXIT.
+      *
+      *        DISBURSE INVENTORY FROM STOCK
+      *
+       DSBURSE SECTION.
+           MOVE 'DFHSAM24' TO PSBNAME.
+           PERFORM SCHED.
+           PERFORM INSPECT-INVKEY.
+           EXEC DLI GU SEGMENT (PARTROOT) WHERE (PARTKEY=PARTNBR)
+                    FIELDLENGTH (17) SEGMENT (STOKSTAT)
+                    WHERE (STOCKEY=INVKEY) FIELDLENGTH (16) LOCKED
+                    INTO (SEGRETRN) SEGLENGTH (160) END-EXEC.
+           PERFORM CALLRET.
+           IF DIBSTAT NOT = '  '
+              THEN
+              MOVE 'GHU ERROR IN DSBURSE' TO MSG
+              PERFORM ABEND1.
+           MOVE QUANT TO WORK1.
+           IF DISB = 'P'
+              THEN
+              MOVE SEGPDISB TO WORK2
+              ADD WORK1 TO WORK2
+              MOVE WORK2 TO SEGPDISB
+              ELSE
+              IF DISB = 'U'
+                 THEN
+                 MOVE SEGUDISB TO WORK2
+                 ADD WORK1 TO WORK2
+                 MOVE WORK2 TO SEGUDISB
+                 ELSE
+                 MOVE 'WRONG DSBURSE CODE--ONLY P OR U ALLOWED' TO MSG
+                 PERFORM TERMSCD
+                 PERFORM OUTRTN
+                 GO TO ENDDSBURSE.
+           EXEC DLI REPL SEGMENT (STOKSTAT) FROM (SEGRETRN)
+                         SEGLENGTH (160) END-EXEC.
+           PERFORM CALLRET.
+           IF DIBSTAT = '  '
+              THEN
+              PERFORM TERMSCD
+              MOVE 'DSBURSE COMPLETED' TO MSG
+              PERFORM OUTRTN
+              GO TO ENDDSBURSE.
+           MOVE 'REPLACE ERROR FOR DSBURSE' TO MSG.
+           PERFORM ABEND1.
+       ENDDSBURSE. EXIT.
+      *
+      *        DELETE A PART FROM INVENTORY - ALL SEGMENTS
+      *
+       DELPART SECTION.
+           MOVE 'DFHSAM24' TO PSBNAME.
+           PERFORM SCHED.
+           EXEC DLI GU SEGMENT (PARTROOT)
+                    WHERE (PARTKEY=PARTNBR) FIELDLENGTH (17)
+                    INTO (SEGRETRN) SEGLENGTH (50) LOCKED END-EXEC.
+           PERFORM CALLRET.
+           IF DIBSTAT NOT = '  '
+              THEN
+              MOVE 'GHU ERROR IN DELPART' TO MSG
+              PERFORM ABEND1.
+           EXEC DLI DLET SEGMENT (PARTROOT) FROM
+                         (SEGRETRN) SEGLENGTH (50) END-EXEC.
+           PERFORM CALLRET.
+           IF DIBSTAT NOT = '  '
+              THEN
+              MOVE 'DELETE FAILED' TO MSG-F1
+              PERFORM ABEND1.
+           PERFORM TERMSCD.
+           MOVE 'PART NO. ' TO MSG-F1A.
+           MOVE PARTNBR TO MSG-F1B1.
+           MOVE 'DELETED FROM DATA BASE' TO MSG-F1B3.
+           PERFORM OUTRTN.
+      *
+      *        ADD A NEW PART TO INVENTORY
+      *
+       ADDPART SECTION.
+           MOVE 'DFHSAM24' TO PSBNAME.
+           PERFORM SCHED.
+           MOVE PARTNBR TO SEGNO.
+           MOVE DESC TO SEGDESC.
+           MOVE SPACES TO SEGF1.
+           MOVE SPACES TO SEGF1A.
+           EXEC DLI ISRT SEGMENT (PARTROOT) FROM (SEGRETRN)
+                         SEGLENGTH (50) END-EXEC.
+           PERFORM CALLRET.
+           IF DIBSTAT NOT = '  '
+              THEN IF DIBSTAT = 'II'
+                      THEN
+                      PERFORM TERMSCD
+                      MOVE 'SEGMENT ALREADY EXISTS' TO MSG
+                      PERFORM OUTRTN
+                      GO TO ENDADDPART
+              ELSE GO TO ISRTERR.
+           MOVE '02' TO SEGCODE.
+           MOVE SPACES TO SEGF6.
+           MOVE PROC TO SEGPCODE.
+           MOVE SPACES TO SEGDCODE.
+           MOVE SPACES TO SEGF7.
+           EXEC DLI ISRT SEGMENT (PARTROOT) WHERE (PARTKEY=PARTNBR)
+                         FIELDLENGTH(17) SEGMENT (STANINFO)
+                         FROM(SEGRETRN) SEGLENGTH (85) END-EXEC.
+           PERFORM CALLRET.
+           IF DIBSTAT NOT = '  '
+              THEN IF DIBSTAT = 'II'
+                      THEN
+                      PERFORM TERMSCD
+                      MOVE 'STANINFO SEGMENT ALREADY EXISTS' TO MSG
+                      PERFORM OUTRTN
+                      GO TO ENDADDPART
+              ELSE GO TO ISRTERR.
+           PERFORM TERMSCD.
+           MOVE 'PART NO.' TO MSG-F1A.
+           MOVE PARTNBR TO MSG-F1B1.
+           MOVE 'ADDED TO DATA BASE' TO MSG-F1B2.
+           PERFORM OUTRTN.
+           GO TO ENDADDPART.
+       ISRTERR.
+           MOVE 'INSERT RULES VIOLATED' TO MSG.
+           PERFORM ABEND1.
+       ENDADDPART. EXIT.
+      *
+      *        DISPLAY INVENTORY FROM A DESIGNATED LOCATION
+      *
+       DSPINV SECTION.
+           MOVE 'DFHSAM25' TO PSBNAME.
+           PERFORM SCHED.
+           EXEC DLI GU SEGMENT (PARTROOT) INTO (SEGRETRN) SEGLENGTH (50)
+                       WHERE (PARTKEY=PARTNBR) FIELDLENGTH(17) END-EXEC.
+           PERFORM CALLRET.
+           IF DIBSTAT NOT = '  '
+              THEN
+              MOVE 'GU ERROR IN DSPINV' TO MSG
+              PERFORM ABEND1.
+           MOVE 'PART NO =' TO MSG-F1A.
+           MOVE SEGNO TO MSG-F1B1.
+           MOVE 'PART DESCRIPTION = ' TO MSG-F1B2.
+           MOVE SEGDESC TO MSG-F1B3.
+           PERFORM OUTRTN.
+           PERFORM INSPECT-INVKEY.
+           EXEC DLI GU SEGMENT (PARTROOT) WHERE (PARTKEY=PARTNBR)
+                       FIELDLENGTH (17)
+                       SEGMENT (STOKSTAT) WHERE (STOCKEY=INVKEY)
+                       FIELDLENGTH (16)
+                       INTO (SEGRETRN) SEGLENGTH (160) END-EXEC.
+           PERFORM CALLRET.
+           IF DIBSTAT NOT = '  '
+              THEN
+              MOVE 'GU ERROR IN DSPINV' TO MSG
+              PERFORM ABEND1.
+           PERFORM TERMSCD.
+           MOVE HEAD1 TO MSG.
+           PERFORM OUTRTN.
+           MOVE HEAD2 TO MSG.
+           PERFORM OUTRTN.
+           PERFORM STOKPRT.
+           MOVE 'UNIT = ' TO MSG.
+           MOVE SEGUNIT TO L1-F2.
+           MOVE '  PLANNED DISBURSALS' TO MSG-F1B1.
+           MOVE SEGPDISB TO L2-F7.
+           MOVE 'UNPLANNED' TO MSG-F1B3.
+           MOVE SEGUDISB TO L2-F10.
+           PERFORM OUTRTN.
+      *
+       ABEND1 SECTION.
+           PERFORM OUTRTN.
+           MOVE DIBSEGLV TO L2-F3.
+           MOVE DIBSTAT TO FILL12.
+           MOVE DIBSEGM TO L1-F3.
+           PERFORM OUTRTN.
+           EXEC CICS ABEND ABCODE('DL42') END-EXEC.
+      *
+      *
+       CALLRET SECTION.
+           IF DIBSTAT = 'GB'
+              THEN
+              PERFORM TERMSCD
+              MOVE 'END OF DATA BASE REACHED' TO MSG
+              PERFORM OUTRTN
+              EXEC CICS RETURN END-EXEC.
+           IF DIBSTAT = 'GE'
+              THEN
+              PERFORM TERMSCD
+              MOVE 'RECORD NOT FOUND FOR PART NO=' TO MSG
+              MOVE PARTNBR TO L1-F3
+              PERFORM OUTRTN
+              EXEC CICS RETURN END-EXEC.
+      *
+      *
+       OUTRTN SECTION.
+           EXEC CICS SEND FROM(MSG) LENGTH(MSGLEN80) END-EXEC.
+           MOVE SPACES TO MSG.
+      *
+      *
+       SCHED SECTION.
+           EXEC DLI SCHEDULE PSB ((PSBNAME)) END-EXEC.
+           IF DIBSTAT NOT = '  '
+              THEN
+              MOVE 'SCHEDULE ERROR - PSBNAME=' TO MSG
+              MOVE PSBNAME TO MSG-F1B2
+              PERFORM OUTRTN
+              PERFORM ABEND1.
+      *
+      *
+       TERMSCD SECTION.
+           EXEC DLI TERM END-EXEC.
+           IF DIBSTAT NOT = '  '
+              THEN
+              MOVE 'PSB TERMINATION ERROR' TO MSG
+              PERFORM ABEND1.

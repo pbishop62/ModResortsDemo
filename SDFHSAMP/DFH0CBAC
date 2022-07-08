@@ -1,0 +1,328 @@
+       PROCESS CICS('COBOL3,APOST,SP')
+       PROCESS APOST TRUNC(BIN) NOSSRANGE
+       Identification Division.
+       Program-id. DFH0CBAC
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CBAC                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Sample CICS BTS 3270 Transaction Client    *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1998, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * TRANSACTION NAME = CBAC                                       *
+      *                                                               *
+      * FUNCTION = Sample CICS BTS 3270 Transaction Client            *
+      *                                                               *
+      * The Client is a CICS BTS activity which runs one or more      *
+      * user transactions as activities. The transactions are         *
+      * part of a pseudo-conversation or a suite of transaction with  *
+      * use EXEC CICS START to start the next transaction.            *
+      * The client activity ends when the last user transaction       *
+      * terminates with an EXEC CICS RETURN with no next transid,     *
+      * and there are no queued start requests.                       *
+      * The client knows that its activies are 3270 transactions.     *
+      * Before running the activity it creates a container with data  *
+      * which enables the transaction to run in a bridge environment. *
+      * After the activity completes an output container has the data *
+      * output from the 3270 transaction.                             *
+      * All input and output data are in the form of MQCIH messages   *
+      * with BRMQ vectors.                                            *
+      * Messages are created by linking to 'input-program'.           *
+      * The results of messages are passed to 'output-program'.       *
+      * For conversational transactions, this program is also run     *
+      * as a child of the user transaction (i.e. a grand-child of     *
+      * itself).                                                      *
+      *                                                               *
+      * NOTES :                                                       *
+      *  DEPENDENCIES = S/390                                         *
+      *  RESTRICTIONS = Same as CICS BTS and the bridge.              *
+      *  REGISTER CONVENTIONS = Normal                                *
+      *  PATCH LABEL = Standard COBOL patch Area                      *
+      *  MODULE TYPE = Executable                                     *
+      *  PROCESSOR = COBOL                                            *
+      *  ATTRIBUTES = Read only, Serially Reusable                    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * ENTRY POINT = DFH0CBAC                                        *
+      *                                                               *
+      *   PURPOSE = All functions                                     *
+      *                                                               *
+      *   LINKAGE = Normal CICS program                               *
+      *                                                               *
+      *   INPUT = EXEC CICS LINK to DFH0CBAI for input                *
+      *                                                               *
+      *   OUTPUT = EXEC CICS LINK to DFH0CBAO for output              *
+      *                                                               *
+      *   EXIT-NORMAL = EXEC CICS RETURN                              *
+      *                                                               *
+      *   EXIT-ERROR = None                                           *
+      *                                                               *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $MOD(DFH0CBAC),COMP(BAM),PROD(CICS TS ):                      *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      * $D0= I06825 530 981016 HDDLCRP : CBTS 3270 Bridge Samples     *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $P1= M30800 530 981204 HDDLCRP : Storage needs to be getmaine *
+      * $P2= M31127 530 990105 HDDLCRP : FACILITYTOKN on first transa *
+      * $P3= M31129 530 990113 HDHAIGG : GETWAIT timeout function     *
+      * $P4= M31676 530 990218 HDDLCRP : BTS bridge abend processing  *
+      * $P5= D00650 620 010209 HDDLCRP : Compile option NOSSRANGE     *
+      *****************************************************************
+       Environment Division.
+
+      *****************************************************************
+       Data Division.
+       Working-Storage Section.
+       01 rc                 pic s9(8) comp.
+       01 compstat           pic s9(8) comp.
+       01 abcode             pic x(4).
+      * Events                                                        *
+       01 event-name         pic x(16).
+          88 DFH-Initial     value 'DFHINITIAL'.
+          88 End-Of-Task     value 'End_Of_Task'.
+       01 End-Of-Task-Event  pic x(16) value 'End_Of_Task'.
+      * Activities                                                    *
+       01 user-tran          pic x(16) value 'User_Tran'.
+       01 requestor          pic x(16) value 'Requestor'.
+      * Containers                                                    *
+       01 state-container    pic x(16) value 'State'.
+       01 msg-container      pic x(16) value 'Message'.
+       01 req-container      pic x(16) value 'Request'.
+       01 container          pic x(16).
+      * Message input/output                                          *
+       01 input-program      pic x(8)  value 'DFH0CBAI'.
+       01 output-program     pic x(8)  value 'DFH0CBAO'.
+       01 input-output-commarea.
+        02 input-output-area.
+          03 msg-ptr         pointer.
+          03 msg-len         pic s9(8) comp.
+          03 msg-storage-len pic s9(8) comp.
+          03 msg-num         pic s9(4) comp.
+        02 i-o-getwaitint    pic s9(8) comp.
+      * Misc                                                          *
+       01 bridge-monitor     pic x(4).
+       01 set-ptr            pointer.
+       01 container-msg-len  pic s9(8) comp.
+
+      *****************************************************************
+       Linkage Section.
+       01 msg.
+       copy DFHBRMHO REPLACING ==02== BY ==03==
+                               ==01== BY ==02==.
+       01 set-storage        pic x(1).
+      *****************************************************************
+
+       Procedure Division.
+      *****************************************************************
+      **  Begin-Process                                               *
+      *****************************************************************
+       Begin-Process section.
+
+           initialize input-output-commarea
+
+           EXEC CICS RETRIEVE REATTACH EVENT(event-name) END-EXEC
+
+           if DFH-Initial
+              EXEC CICS ASSIGN BRIDGE(bridge-monitor) END-EXEC
+              if bridge-monitor = spaces
+                 perform Initial-Activity
+              else
+                 perform Conversational-Activity
+              end-if
+           else
+              perform End-Of-Task-Activity
+           end-if
+           exit.
+
+      *****************************************************************
+      **  Initial-Activity                                            *
+      *****************************************************************
+       Initial-Activity section.
+      * Get the message to run the first leg of a pseudo conversation *
+           move 1 to msg-num
+           EXEC CICS LINK PROGRAM(input-program)
+                     COMMAREA(input-output-commarea)
+                     END-EXEC
+
+           set address of msg to msg-ptr
+
+           EXEC CICS DEFINE ACTIVITY(user-tran)
+                     EVENT(End-Of-Task-Event)
+                     TRANSID(mqcih-transactionid)
+                     END-EXEC
+
+           EXEC CICS PUT CONTAINER(msg-container)
+                     ACTIVITY(user-tran)
+                     FROM(msg)
+                     FLENGTH(msg-len)
+                     END-EXEC
+           if mqcih-facility = LOW-VALUE
+              EXEC CICS RUN ACTIVITY(user-tran)
+                        ASYNCHRONOUS
+                        END-EXEC
+           else
+              EXEC CICS RUN ACTIVITY(user-tran)
+                        FACILITYTOKN(mqcih-facility)
+                        ASYNCHRONOUS
+                        END-EXEC
+           end-if
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      **  End-Of-Task-Activity                                        *
+      *****************************************************************
+       End-Of-Task-Activity section.
+           EXEC CICS CHECK ACTIVITY(user-tran)
+                     COMPSTATUS(compstat)
+                     ABCODE(abcode)
+                     END-EXEC
+      * If the transaction abends then terminate the activity         *
+           if compstat not = DFHVALUE(NORMAL)
+              EXEC CICS ABEND
+                        ABCODE(abcode)
+                        NODUMP
+                        END-EXEC
+           end-if
+      * Get the message giving output from the transaction            *
+           move msg-container to container
+           perform Get-Message
+      * Process the output from the transaction                       *
+           EXEC CICS LINK PROGRAM(output-program)
+                     COMMAREA(input-output-commarea)
+                     END-EXEC
+           if mqcih-nexttransactionid = spaces
+             EXEC CICS RETURN END-EXEC
+           else
+      * Extract the getwait interval from the message                 *
+             move mqcih-getwaitinterval to i-o-getwaitint
+      * Delete the old child activity                                 *
+             EXEC CICS DELETE ACTIVITY(user-tran)
+                       END-EXEC
+      * Run the next leg of a pseudo conversation                     *
+             perform initial-activity
+           end-if
+           exit.
+      *****************************************************************
+      *****************************************************************
+      ** The following messages are called as children of the user tra*
+      ** This could be moved to another program, but looks clearer her*
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      **  Check why we have been called                               *
+      **  We must have been passed either a request message.          *
+      *****************************************************************
+       Conversational-Activity section.
+           perform get-state-container
+           move req-container to container
+           perform Get-Message
+           perform Read-Message-Activity
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      **  Read-Message-Activity                                       *
+      *****************************************************************
+       Read-Message-Activity section.
+      * Extract the getwait interval from the message                 *
+           move mqcih-getwaitinterval to i-o-getwaitint
+
+      * Process the request for more information                      *
+           EXEC CICS LINK PROGRAM(output-program)
+                     COMMAREA(input-output-commarea)
+                     END-EXEC
+
+      * Get the reply to the request                                  *
+           add 1 to msg-num
+           EXEC CICS LINK PROGRAM(input-program)
+                     COMMAREA(input-output-commarea)
+                     END-EXEC
+
+           perform save-state-container
+
+      * Readdress the message area
+           set address of msg to msg-ptr
+
+           EXEC CICS PUT CONTAINER(req-container)
+                     FROM(msg)
+                     FLENGTH(msg-len)
+                     END-EXEC
+           exit.
+
+      *****************************************************************
+      **  Get-State-Container                                         *
+      *****************************************************************
+       Get-State-Container section.
+           EXEC CICS GET CONTAINER(state-container)
+                     INTO(input-output-area)
+                     FLENGTH(length of input-output-area)
+                     RESP(rc)
+                     END-EXEC
+           if rc not equal DFHRESP(NORMAL)
+             move 1 to msg-num
+           end-if
+           exit.
+
+      *****************************************************************
+      **  Save-State-Container                                        *
+      *****************************************************************
+       Save-State-Container section.
+           EXEC CICS PUT CONTAINER(state-container)
+                     FROM(input-output-area)
+                     FLENGTH(length of input-output-area)
+                     END-EXEC
+           exit.
+
+      *****************************************************************
+      **  Get-Message                                                 *
+      **  Get variable length message from the container.             *
+      **  Need to do a GETMAIN for the storage as we call other progs *
+      **  with will free up the SET storage.                          *
+      *****************************************************************
+       Get-Message section.
+           if container = msg-container
+              EXEC CICS GET CONTAINER(container)
+                        ACTIVITY(user-tran)
+                        SET(set-ptr)
+                        FLENGTH(msg-len)
+                        END-EXEC
+           else
+              EXEC CICS GET CONTAINER(container)
+                        SET(set-ptr)
+                        FLENGTH(msg-len)
+                        END-EXEC
+           end-if
+           if msg-len > msg-storage-len
+             if msg-storage-len not equal zero
+                EXEC CICS FREEMAIN
+                          DATAPOINTER(msg-ptr)
+                          END-EXEC
+             end-if
+           end-if
+           EXEC CICS GETMAIN FLENGTH(msg-len)
+                     SET(msg-ptr)
+                     END-EXEC
+           set address of set-storage to set-ptr
+           set address of msg         to msg-ptr
+           move msg-len to msg-storage-len
+           move set-storage(1 : msg-len) to msg(1 : msg-len)
+           exit.

@@ -1,0 +1,180 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CCOM                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Order Entry Queue Print for Sample App.    *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $SEG(DFH0CCOM),COMP(SAMPLES),PROD(CICS TS ):                  *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900320        : CREATED.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FILECCOM.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  Q-LENGTH     PIC 9(4)  COMP VALUE 22.
+       77  PRESMSG      PIC X(30) VALUE 'PROCESSING COMPLETED'.
+       77  RESPONSE     PIC S9(8) COMP.
+       77  ATIME        PIC S9(8) COMP-3.
+       01  LOGORD.
+           02  LOGTIME.
+               03  LDATE PIC X(8).
+               03  LTIME PIC X(8).
+           02  LITEM     PIC X(22).
+           02  COMMENT   PIC X(11) VALUE 'ORDER ENTRY'.
+           02  FILLER    PIC X(51) VALUE SPACES.
+                    COPY DFH0CGL.
+       01  FILEA.   COPY DFH0CFIL.
+       01  L86O.    COPY DFH0CL86.
+                    COPY DFHBMSCA.
+       PROCEDURE DIVISION.
+      *
+      *    AN EXIT IS SET UP TO TRAP ANY UNEXPEDTED ERRORS. NOTE THAT
+      *    ALL OTHER ERRORS ARE DETECTED EXPLICITLY BY THE PROGRAM BY
+      *    USING THE "RESP" OPTION ON CICS COMMANDS.
+      *
+           EXEC CICS HANDLE CONDITION ERROR(ERRORS) END-EXEC.
+      *
+      *    THE TERMINAL-ID IS TESTED TO SEE WHETHER THIS TRANSACTION
+      *    WAS STARTED FROM A TERMINAL OR AT THE PRINTER.
+      *
+           IF EIBTRMID NOT = 'L86O' THEN
+              GO TO ASK-TIME.
+           MOVE LOW-VALUES TO PRINTO.
+       Q-READ.
+      *
+      *    A QUEUE ITEM (CUSTOMER ORDER) IS READ INTO THE PROGRAM.
+      *    THE PROGRAM TESTS THE RESPONSE TO THE COMMAND.
+      *
+           EXEC CICS READQ TD INTO(L86O) LENGTH(Q-LENGTH)
+                              RESP(RESPONSE) QUEUE('L86O') END-EXEC.
+           IF RESPONSE = DFHRESP(QZERO) THEN GO TO ENDA.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+       MAP-BUILD.
+      *
+      *    THE FILE CONTROL "READ" COMMAND READS THE RECORD INTO A
+      *    RECORD AREA SO THAT THE AMOUNT MAY BE CHECKED.
+      *
+           EXEC CICS READ FILE('FILEA') INTO(FILEA) RIDFLD(CUSTNO)
+                     END-EXEC.
+      *
+      *    THE AMOUNT (BANK BALANCE) IS TESTED. IF IT IS OVER ›100
+      *    THEN THE ORDER IS ACCEPTABLE, OTHERWISE THE ORDER IS
+      *    REJECTED.
+      *    THIS TEST IS ONLY A SUGGESTION; A SUITABLE FORM OF EDITING
+      *    SHOULD BE INSERTED HERE TO ENSURE VALID ORDERS ARE SENT TO
+      *    THE WAREHOUSE.
+      *
+           IF AMOUNT  > '›0100.00' THEN
+              MOVE ADDRX    TO ADDRO
+              MOVE NAME     TO NAMO
+      *
+      *       THE ORDER DETAILS ARE MOVED TO THE MAP AREA FOR "DFH0CGL"
+      *
+              MOVE PARTNO   TO PARTO
+              MOVE CUSTNO   TO NUMBO
+              MOVE ITEM     TO LITEM
+              MOVE QUANTITY TO QUANTO
+      *
+      *       THE ORDER MAP IS SENT TO THE PRINTER TERMINAL AT THE
+      *       WAREHOUSE.
+      *
+              EXEC CICS SEND MAP('PRINT') MAPSET('DFH0CGL')
+                        ERASE PRINT L80 END-EXEC
+              GO TO Q-READ
+           ELSE
+      *
+      *       THE CURRENT DATE AND TIME, AND DETAILS OF THE REJECTED
+      *       ORDER ARE MOVED TO A LOG RECORD AREA.
+      *
+                  EXEC CICS ASKTIME ABSTIME(ATIME)
+                                    END-EXEC
+                  EXEC CICS FORMATTIME ABSTIME(ATIME)
+                                    DATE(LDATE)
+                                    TIME(LTIME)
+                                    DATESEP
+                                    TIMESEP
+                                    END-EXEC
+                  MOVE ITEM TO LITEM
+      *
+      *       THE "WRITEQ TD" COMMAND WRITES DETAILS OF THE REJECTED
+      *       ORDER TO "LOGA", A TRANSIENT DATA QUEUE.
+      *
+                  EXEC CICS WRITEQ TD QUEUE('LOGA')
+                            FROM(LOGORD) LENGTH(100) END-EXEC.
+              GO TO Q-READ.
+       ERRORS.
+      *
+      *       IF THE "ERROR" CONDITION OCCURS ON ANY CICS COMMAND,
+      *       A DUMP IS TAKEN AND THE PROGRAM TERMINATES.
+      *
+              EXEC CICS DUMP DUMPCODE('ERRS') END-EXEC.
+              MOVE 'ERROR - TRANSACTION TERMINATED' TO PRESMSG.
+              GO TO FIN.
+       ENDA.
+           MOVE LOW-VALUES  TO PRINTO
+      *
+      *    WHEN THE QUEUE IS EMPTY, THE MESSAGE "ORDER QUEUE IS EMPTY"
+      *    IS MOVED TO THE MAP AREA WHICH IS THEN SENT TO THE PRINTER
+      *    TERMINAL AT THE WAREHOUSE.
+      *
+           MOVE 'ORDER QUEUE IS EMPTY' TO TITLEO
+           EXEC CICS SEND MAP('PRINT') MAPSET('DFH0CGL')
+                     DATAONLY ERASE PRINT L80 END-EXEC.
+           GO TO FIN.
+       ASK-TIME.
+      *
+      *    THE "START" COMMAND STARTS THE "OREQ" TRANSACTION (THIS
+      *    PROGRAM), AFTER ONE HOUR DELAY, WITH A TERMINAL IDENTIFIER
+      *    OF L86O. (THE TIME INTERVAL COULD BE CHANGED, FOR DEMO-
+      *    NSTRATION PURPOSES, BY CHANGING THE "INTERVAL" VALUE).
+      *    IF THE COMMENT DELIMITERS ARE REMOVED FROM THE NEXT TWO
+      *    COBOL STATEMENTS, "EIBTIME" IS REFRESHED AND, IF THE TIME
+      *    IS BEFORE 1400 HOURS, THE TRANSACTION IS STARTED IN ONE
+      *    HOUR. IF THE COMMENT DELIMITERS ARE NOT REMOVED, THE
+      *    TRANSACTION IS STARTED UNCONDITIONALLY IN ONE HOUR.
+      *
+      *
+      *    EXEC CICS ASKTIME END-EXEC.
+      *    IF EIBTIME NOT > 140000 THEN
+              EXEC CICS START TRANSID('OREQ') INTERVAL(10000)
+                        TERMID('L86O') END-EXEC.
+       FIN.
+      *
+      *    THE MESSAGE "PROCESSING COMPLETED" IS SENT TO THE TERMINAL
+      *    ASSOCIATED WITH THIS INVOCATION OF "OREQ", EITHER THE
+      *    PRINTER AT THE WAREHOUSE OR THE SCREEN ON WHICH "OREQ" WAS
+      *    ENTERED. THE PROGRAM TERMINATES BY RETURNING CONTROL TO
+      *    CICS.
+      *
+           EXEC CICS SEND TEXT FROM(PRESMSG)
+                               LENGTH(30)
+                               ERASE
+                               PRINT
+                               END-EXEC
+           EXEC CICS SEND CONTROL FREEKB END-EXEC.
+           EXEC CICS RETURN END-EXEC.
+           GOBACK.

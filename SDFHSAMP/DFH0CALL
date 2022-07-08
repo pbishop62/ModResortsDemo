@@ -1,0 +1,490 @@
+       PROCESS CICS('COBOL3,APOST,SP')
+       PROCESS APOST TRUNC(BIN) NOSSRANGE
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CALL                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = File Inquiry/Update for Sample Application *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 2015"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $SEG(DFH0CALL),COMP(SAMPLES),PROD(CICS TS ):                  *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900320        : Created.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *    $P2= M91869 330 920204 HDCTRC : INSPECTs removed.          *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FILECALL.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  MESSAGES     PIC X(39).
+       01  TEMP-NAME    PIC X(20).
+       01  FILLER REDEFINES TEMP-NAME.
+           02  TEMPA    PIC X OCCURS 20 INDEXED BY TEMPI.
+       77  KEYNUM       PIC 9(6).
+       77  COMLEN       PIC S9(4) COMP.
+       77  RESPONSE     PIC 9(9)  COMP.
+       01  INSPECT-IND  PIC X.
+           88  NO-MORE  VALUE '1'.
+                        COPY DFH0CGA.
+                        COPY DFH0CGB.
+      *
+      *    NEXT FIELD TO VERIFY AMOUNTI
+      *
+       01  AMOUNTN.
+           03  AMOUNTN1  PIC X.
+           03  AMOUNTN25 PIC X(4).
+           03  AMOUNTN6  PIC X.
+           03  AMOUNTN78 PIC X(2).
+       01  FILEA.       COPY DFH0CFIL.
+       01  LOGA.        COPY DFH0CLOG.
+                        COPY DFHBMSCA.
+       01  COMMAREA.    COPY DFH0CFIL.
+       LINKAGE SECTION.
+       01  DFHCOMMAREA. COPY DFH0CFIL.
+       PROCEDURE DIVISION.
+      *
+      *    THE POSSIBLE INVOKING TRANSACTION-IDS ARE TESTED. IF THE
+      *    TRANSACTION-ID IS NOT ONE OF "INQY", "ADDS" OR "UPDT" THEN
+      *    A DUMP IS TAKEN AND THE OPERATOR INSTRUCTION SCREEN IS
+      *    RESDISPLAYED.
+      *
+           IF EIBTRNID NOT = 'INQY'
+             AND EIBTRNID NOT = 'ADDS'
+             AND EIBTRNID NOT = 'UPDT' THEN
+                 EXEC CICS DUMP DUMPCODE('ERRS') END-EXEC
+                 GO TO MENU.
+      *
+      *    THE "ERROR" EXIT IS SET UP. THIS IS TO TRAP ANY UNEXPECTED
+      *    ERRORS, ALL OTHER ERROR CONDITIONS ARE TESTED FOR EXPLICITLY
+      *    BY THE PROGRAM, USING THE "RESP" OPTION ON COMMANDS.
+      *
+           EXEC CICS HANDLE CONDITION ERROR(ERRORS) END-EXEC.
+      *
+      *    THE LENGTH OF THE "COMMAREA" IS TESTED. IF NOT ZERO THEN
+      *    THIS IS THE VALIDATION STAGE OF AN ADD OR UPDATE.
+      *
+      *    IF IT HAS A LENGTH, THE "COMMAREA" RETURNED IS MOVED TO
+      *    WORKING STORAGE IN THE PROGRAM.
+      *
+           IF EIBCALEN NOT = 0 THEN
+              MOVE DFHCOMMAREA TO COMMAREA GO TO READ-INPUT.
+      *
+      *    THE MENU MAP "DFH0CGA" IS RECEIVED. THE ACCOUNT NUMBER, IF
+      *    ENTERED, IS MAPPED INTO "KEYI" IN THE DSECT FOR "DFH0CGA".
+      *    NOTE THAT THE RESPONSE RESPONSE TO THE COMMAND IS EXPLICITLY
+      *    TESTED BY THE PROGRAM.
+      *
+           EXEC CICS RECEIVE MAP('MENU') MAPSET('DFH0CGA')
+                     RESP(RESPONSE) END-EXEC.
+      *
+      *    CHECK RESPONSE TO COMMAND
+      *
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO CHECK-RESP.
+           IF KEYL = ZERO THEN GO TO BADLENG.
+      *
+      *    THE ACCOUNT NUMBER IS VALIDATED AND SAVED.
+      *
+           MOVE KEYI TO KEYNUM.
+           IF KEYI IS NOT NUMERIC THEN GO TO BADCHARS.
+           MOVE LOW-VALUES TO DETAILO.
+      *
+      *    IF THE PROGRAM IS INVOKED BY "ADDS", A TITLE AND COMMAND
+      *    MESSAGE ARE MOVED TO THE MAP AREA.
+      *    THE RECORD KEY IS MOVED TO THE MAP AREA AND SAVED IN
+      *    "COMMAREA".
+      *
+           IF EIBTRNID = 'ADDS' THEN
+              MOVE 'FILE ADD' TO TITLEO
+              MOVE 'ENTER DATA AND PRESS ENTER KEY' TO MSG3O
+      *
+      *       THE RECORD KEY IS MOVED TO THE "COMMAREA" AND TO THE
+      *       MAP AREA.
+      *
+              MOVE KEYI TO NUMB IN COMMAREA, NUMBO
+      *
+      *       FOR THE "ADDS" TRANSACTION, THE AMOUNT FIELD HAS THE
+      *       ATTRIBUTE BYTE SET TO NUMERIC SO ONLY NUMERIC DATA CAN
+      *       BE ENTERED.
+      *
+              MOVE DFHBMUNN TO AMOUNTA
+              MOVE '$0000.00' TO AMOUNTO
+              MOVE 7 TO COMLEN GO TO MAP-SEND.
+      *
+      *    THE FILE CONTROL "READ" COMMAND READS THE FILE RECORD INTO
+      *    THE FILE AREA.
+      *
+           EXEC CICS READ FILE('FILEA') INTO(FILEA) RIDFLD(KEYNUM)
+                     RESP(RESPONSE) END-EXEC.
+      *
+      *    CHECK RESPONSE TO COMMAND
+      *
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO CHECK-RESP.
+           IF EIBTRNID = 'INQY' THEN
+      *
+      *       IF PROGRAM IS INVOKED BY " INQY", A TITLE AND COMMAND
+      *       MESSAGE ARE MOVED TO THE MAP AREA.
+      *
+              MOVE 'FILE INQUIRY' TO TITLEO
+              MOVE 'PRESS ENTER TO CONTINUE' TO MSG3O
+      *
+      *       ALL FIELD ATTRIBUTES ARE PROTECTED.
+      *
+              MOVE DFHBMPRO TO NAMEA
+              MOVE DFHBMPRO TO ADDRA
+              MOVE DFHBMPRO TO PHONEA
+              MOVE DFHBMPRO TO DATEA
+              MOVE DFHBMPRO TO AMOUNTA
+              MOVE DFHBMPRO TO COMMENTA
+      *
+      *       THE FILE RECORD FIELDS ARE MOVED TO THE MAP AREA, AND
+      *       THE INQUIRY SCREEN IS DISPLAYED.
+      *
+              PERFORM MAP-BUILD THRU MAP-SEND
+      *
+      *       THIS INVOCATION OF THE PROGRAM TERMINATES. THE "TRANSID"
+      *       OF "MENU" CAUSES THE OPERATOR INSTRUCTION PROGRAM TO BE
+      *       INVOKED WHEN THE NEXT RESPONSE IS RECEIVED FROM THE
+      *       TERMINAL.
+      *
+              EXEC CICS RETURN TRANSID('MENU') END-EXEC.
+           IF EIBTRNID = 'UPDT' THEN
+      *
+      *       IF THE PROGRAM IS INVOKED BY "UPDT", A TITLE AND COMMAND
+      *       MESSAGE ARE MOVED TO THE MAP AREA.
+      *
+              MOVE 'FILE UPDATE' TO TITLEO
+              MOVE 'CHANGE FIELDS AND PRESS ENTER' TO MSG3O
+      *
+      *       THE FILE RECORD IS MOVED TO THE "COMMAREA" AND THE LENGTH
+      *       OF THE "COMMAREA" TO BE RETURNED IS SET UP.
+      *
+              MOVE FILEREC IN FILEA TO FILEREC IN COMMAREA
+              MOVE 80 TO COMLEN.
+       MAP-BUILD.
+           MOVE NUMB    IN FILEA TO NUMBO.
+           MOVE NAME    IN FILEA TO NAMEO.
+      *
+      *    THE FIELDS FROM THE FILE AREA ARE MOVED TO THE MAP AREA
+      *
+           MOVE ADDRX   IN FILEA TO ADDRO.
+           MOVE PHONE   IN FILEA TO PHONEO.
+           MOVE DATEX   IN FILEA TO DATEO.
+           MOVE AMOUNT  IN FILEA TO AMOUNTO.
+           MOVE COMMENT IN FILEA TO COMMENTO.
+       MAP-SEND.
+      *
+      *    "MAP-SEND" SENDS THE MAP "DFH0CGB" TO THE SCREEN SPECIFYING
+      *    THAT THE SCREEN IS TO BE ERASED BEFORE THE MAP IS DISPLAYED.
+      *
+           EXEC CICS SEND MAP('DETAIL') MAPSET('DFH0CGB')
+                     ERASE END-EXEC.
+       FIN.
+           EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)
+                     LENGTH(COMLEN) END-EXEC.
+      *
+      *    CONTROL IS PASSED HERE WHEN THE TEST OF "EIBCALEN", AT THE
+      *    BEGINING  OF THE PROGRAM, FINDS THAT A "COMMAREA" HAS BEEN
+      *    RECEIVED. THIS PART OF THE PROGRAM MAPS IN DATA FOR AN ADD
+      *    OR UPDATE REQUEST, PERFORMS VALIDATION AND UPDATES "FILEA".
+      *
+       READ-INPUT.
+      *
+      *    THE "RECEIVE MAP" COMMAND MAPS IN THE VARIABLES FROM THE
+      *    SCREEN.
+      *
+           EXEC CICS RECEIVE MAP('DETAIL') MAPSET('DFH0CGB')
+                     RESP(RESPONSE) END-EXEC.
+      *
+      *    CHECK RESPONSE TO COMMAND
+      *
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO CHECK-RESP.
+           IF EIBTRNID = 'UPDT' THEN
+      *
+      *       IF THIS IS AN UPDATE REQUEST A FILE CONTROL "READ UPDATE"
+      *       READS THE EXISTING RECORD USING THE NUMBER STORED IN
+      *       "COMMAREA" BY THE LAST INVOCATION OF THIS PROGRAM.
+      *
+              EXEC CICS READ UPDATE FILE('FILEA') INTO(FILEA)
+                   RESP(RESPONSE) RIDFLD(NUMB IN COMMAREA) END-EXEC
+      *
+      *    CHECK RESPONSE TO COMMAND
+      *
+              IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO CHECK-RESP
+              ELSE
+      *
+      *       IF THE CURRENT FILE RECORD IS NOT THE SAME AS THE ONE
+      *       SAVED IN THE "COMMAREA" THEN ANOTHER USER HAS UPDATED THE
+      *       RECORD. A WARNING MESSAGE IS DISPLAYED, WITH FIELDS FROM
+      *       THE RECORD READ FROM "FILEA", FOR REENTRY OF THE UPDATES.
+      *
+              IF FILEREC IN FILEA NOT = FILEREC IN COMMAREA THEN
+                 MOVE 'RECORD UPDATED BY OTHER USER, TRY AGAIN' TO MSG1O
+                 MOVE DFHBMASB TO MSG1A
+                 MOVE DFHPROTN TO MSG3A
+                 PERFORM MAP-BUILD
+                 EXEC CICS SEND MAP('DETAIL') MAPSET('DFH0CGB')
+                           END-EXEC
+                 MOVE 80 TO COMLEN
+                 MOVE FILEREC IN FILEA TO FILEREC IN COMMAREA
+                 GO TO CICS-CONTROL
+               ELSE
+      *
+      *          THE UPDATE FLAG IS SET IN THE RECORD AREA AND THE
+      *          MESSAGE "RECORD UPDATED" IS MOVED TO THE MESSAGE AREA
+      *          READY FOR DISPLAY ON THE OPERATOR INSTRUCTION SCREEN.
+      *
+                 MOVE 'U' TO STAT IN FILEA
+                 PERFORM CHECK THRU FILE-WRITE
+                 MOVE 'RECORD UPDATED' TO MESSAGES GO TO MENU.
+      *
+      *    IF THIS IS AN ADD REQUEST THE ADD FLAG IS SET IN THE NEW
+      *    RECORD AND THE MESSAGE "RECORD ADDED" IS MOVED TO THE MESSAGE
+      *    AREA READY FOR DISPLAY ON THE OPERATOR INSTRUCTION SCREEN.
+      *
+           IF EIBTRNID = 'ADDS' THEN
+                 MOVE LOW-VALUES TO FILEREC IN FILEA
+                 MOVE 'A' TO STAT IN FILEA
+                 PERFORM CHECK THRU FILE-WRITE
+                 MOVE 'RECORD ADDED' TO MESSAGES GO TO MENU.
+      *
+      *    CHECK FIELDS ADDED/UPDATED
+      *
+       CHECK.
+           IF NAMEI    = LOW-VALUES AND
+              ADDRI    = LOW-VALUES AND
+      *
+      *       ANY REQUIRED EDITING STEPS SHOULD BE INSERTED HERE.
+      *       A SUITABLE FORM OF EDITING SHOULD BE USED TO ENSURE VALID
+      *       RECORDS ARE PLACED ON THE FILE. THE ROUTINE "INSP-NAME"
+      *       IS CALLED AS AN EXAMPLE, TO REMOVE ALL NON-ALPHANUMERIC
+      *       CHARACTERS AND REPLACE THEM WITH SPACES.
+      *
+              PHONEI   = LOW-VALUES AND
+              DATEI    = LOW-VALUES AND
+              AMOUNTI  = LOW-VALUES AND
+              COMMENTI = LOW-VALUES
+              THEN MOVE 'RECORD NOT MODIFIED' TO MESSAGES
+                   GO TO MENU.
+      *
+      *   INSP-NAME CHANGES ALL NON-ALPHABETIC CHARACTERS THAT ARE
+      *   VALID IN A NAME TO SPACES SO THAT AN ALPHABETIC TEST MAY
+      *   MAY BE APPLIED TO IT. THE CHANGED NAME IS RETURNED IN
+      *   TEMP-NAME.
+      *
+           PERFORM INSP-NAME.
+           IF EIBTRNID = 'ADDS' THEN
+              IF TEMP-NAME NOT ALPHABETIC THEN GO TO DATA-ERROR.
+           IF EIBTRNID = 'UPDT' THEN
+               IF NAMEI NOT = LOW-VALUES
+               AND TEMP-NAME NOT ALPHABETIC THEN GO TO DATA-ERROR.
+      *
+      *    AMOUNTI MUST BE IN FORMAT ›NNNN.NN OR $NNNN.NN
+      *
+           IF AMOUNTI = LOW-VALUE THEN GO TO FILE-WRITE.
+           MOVE AMOUNTI TO AMOUNTN.
+           IF (AMOUNTN1 = '›' OR '$') AND
+              (AMOUNTN25 IS NUMERIC)  AND
+              (AMOUNTN6 = '.')        AND
+              (AMOUNTN78 IS NUMERIC)
+               THEN GO TO FILE-WRITE
+           ELSE
+               GO TO DATA-ERROR.
+
+       INSP-NAME.
+           MOVE NAMEI TO TEMP-NAME.
+           MOVE SPACE TO INSPECT-IND.
+      *    CANNOT USE 'INSPECT' FEATURE IN OLD COBOL
+           PERFORM SEARCH-NAME UNTIL NO-MORE.
+
+       SEARCH-NAME.
+           SET TEMPI TO 1
+      *                                                        @PI36152A
+           SEARCH TEMPA VARYING TEMPI
+           AT END MOVE '1' TO INSPECT-IND
+           WHEN TEMPA(TEMPI) EQUAL TO '.' MOVE SPACE TO TEMPA(TEMPI)
+           WHEN TEMPA(TEMPI) EQUAL TO '-' MOVE SPACE TO TEMPA(TEMPI)
+           WHEN TEMPA(TEMPI) EQUAL TO QUOTES MOVE SPACE TO TEMPA(TEMPI).
+
+       FILE-WRITE.
+           IF EIBTRNID = 'ADDS' THEN MOVE NUMB IN COMMAREA TO
+                                          NUMB IN FILEA.
+           IF NAMEI   NOT = LOW-VALUE MOVE NAMEI   TO NAME   IN FILEA.
+      *
+      *    THIS CODE CREATES OR UPDATES THE ACCOUNT RECORD. ANY FIELD
+      *    WHICH HAS BEEN ENTERED IS MOVED TO THE ACCOUNT RECORD.
+      *
+           IF ADDRI   NOT = LOW-VALUE MOVE ADDRI   TO ADDRX  IN FILEA.
+           IF PHONEI  NOT = LOW-VALUE MOVE PHONEI  TO PHONE  IN FILEA.
+           IF DATEI   NOT = LOW-VALUE MOVE DATEI   TO DATEX  IN FILEA.
+           IF AMOUNTI NOT = LOW-VALUE MOVE AMOUNTI TO AMOUNT IN FILEA.
+           IF AMOUNTI = LOW-VALUE AND EIBTRNID = 'ADDS' THEN
+              MOVE '$0000.00' TO AMOUNT IN FILEA.
+           IF COMMENTI NOT = LOW-VALUE THEN
+              MOVE COMMENTI TO COMMENT IN FILEA.
+           MOVE FILEREC IN FILEA TO LOGREC.
+           MOVE EIBDATE TO LDAY.
+      *
+      *    THE RECORD FIELDS, THE DATE, THE TIME, AND THE TERMINAL
+      *    IDENTIFICATION ARE MOVED TO UPDATE THE LOG RECORD AREA.
+      *
+           MOVE EIBTIME TO LTIME.
+           MOVE EIBTRMID TO LTERML.
+      *
+      *    THE RECORD IS WRITTEN TO THE UPDATE LOG WHICH IS A TRANSIENT
+      *    DATA QUEUE.
+      *
+           EXEC CICS WRITEQ TD QUEUE('LOGA') FROM(LOGA) LENGTH(92)
+                     END-EXEC.
+           IF EIBTRNID = 'UPDT' THEN
+      *
+      *       FOR AN UPDATE REQUEST THE UPDATED ACCOUNT RECORD IS
+      *       REWRITTEN TO "FILEA".
+      *
+              EXEC CICS REWRITE FILE('FILEA') FROM(FILEA)
+                        RESP(RESPONSE) END-EXEC
+      *
+      *       CHECK RESPONSE TO COMMAND
+      *
+              IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO CHECK-RESP
+              ELSE NEXT SENTENCE
+           ELSE
+      *
+      *       TRANSACTION IS 'ADDS'. FOR AN ADD REQUEST THE NEW ACCOUNT
+      *       RECORD IS WRITTEN TO "FILEA".
+      *
+              EXEC CICS WRITE FILE('FILEA') FROM(FILEA)
+                   RIDFLD(NUMB IN COMMAREA) RESP(RESPONSE) END-EXEC.
+              IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO CHECK-RESP.
+       DATA-ERROR.
+           MOVE DFHBMASB TO MSG3A.
+      *
+      *    WHEN A DATA ERROR IS DETECTED THE SCREEN IS REDISPLAYED FOR
+      *    ERRORS TO BE CORRECTED. AN ERROR MESSAGE IS MOVED TO THE MAP
+      *    AREA AND HIGHLIGHTED.
+      *
+           MOVE 'DATA ERROR - CORRECT AND PRESS ENTER' TO MSG3O
+      *
+      *    THE FIELD ATTRIBUTE IS SET TO MODIFIED SO DATA WILL DISPLAY
+      *    AMOUNT IS SET NUMERIC ALSO.
+      *
+           MOVE DFHUNNUM TO AMOUNTA.
+      *
+      *    THE MODIFIED DATA TAG IS SET ON FOR ALL THE DATA FIELDS SO
+      *    THAT ALL THE DATA IS RECEIVED AT THE NEXT "RECEIVE MAP".
+      *
+           MOVE DFHBMFSE TO NAMEA, ADDRA, PHONEA, DATEA,
+                COMMENTA.
+      *
+      *    THE CONTENTS OF MAP "DFH0CGB" ARE SENT TO THE SCREEN. THE
+      *    CONSTANT INFORMATION ON THE SCREEN IS NOT REFRESHED AS A
+      *    RESULT OF THE USE OF THE "DATAONLY" OPTION.
+      *
+           EXEC CICS SEND MAP('DETAIL') MAPSET('DFH0CGB')
+                     DATAONLY END-EXEC.
+      *
+      *    THE SIZE OF THE "COMMAREA" IS SET TO 7 FOR AN ADD REQUEST
+      *    OR TO 80 FOR AN UPDATE REQUEST.
+      *
+           IF EIBTRNID = 'ADDS' THEN MOVE 7 TO COMLEN
+           ELSE MOVE 80 TO COMLEN.
+       CICS-CONTROL.
+      *
+      *    AFTER THE "FILE ADD" OR "FILE UPDATE" SCREEN HAS BEEN
+      *    DISPLAYED THE PROGRAM BRANCHES HERE TO RETURN TO CICS
+      *    AWAITING A RESPONSE FROM THE TERMINAL. THE "RETURN" GIVES
+      *    CICS THE TRANSACTION IDENTIFIER FOR NEXT TRANSACTION AT
+      *    THIS TERMINAL TOGETHER WITH A "COMMAREA" CONTAINING ALL
+      *    INFORMATION THAT THE PROGRAM NEEDS TO CONTINUE THE UPDATE.
+      *    THE "COMMAREA" IS PASSED TO THE NEXT INVOCATION OF THIS
+      *    PROGRAM.
+      *
+           EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)
+                     LENGTH(COMLEN) END-EXEC.
+      *
+      *    THIS ROUTINE GAINS CONTROL WHENEVER A CICS COMMAND RETURNS A
+      *    NON-"NORMAL" RESPONSE. THE ROUTINE EXPLICITLY CHECKS FOR THE
+      *    RESPONSES "NOTFND", "DUPREC", AND "MAPFAIL". THERE IS ALSO A
+      *    'CATCH ALL' TO TRAP ANY RESPONSE THAT IS NOT "NORMAL". THE
+      *    ROUTINE "MENU" IS CALLED TO RE-DISPLAY THE MENU MAP, ALONG
+      *    WITH AN ERROR MESSAGE.
+      *
+       CHECK-RESP.
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'INVALID NUMBER - PLEASE REENTER' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE = DFHRESP(DUPREC) THEN
+              MOVE 'DUPLICATE RECORD' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE = DFHRESP(MAPFAIL) THEN
+              IF EIBCALEN = 0 THEN
+                 MOVE 'PRESS CLEAR TO EXIT' TO MESSAGES
+                 GO TO MENU
+              ELSE
+                 MOVE 'RECORD NOT MODIFIED' TO MESSAGES
+                 GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN
+              EXEC CICS DUMP DUMPCODE('ERRS') END-EXEC.
+              MOVE 'TRANSACTION TERMINATED' TO MESSAGES
+              GO TO MENU.
+      *
+      *    THESE SHORT ERROR ROUTINES SET UP AN ERROR MESSAGE IN
+      *    "MESSAGES" AND BRANCH TO "MENU" TO DISPLAY THE MESSAGE
+      *    ON THE OPERATOR INSTRUCTION MENU "DFH0CGA".
+      *
+       BADLENG.
+           MOVE 'PLEASE ENTER AN ACCOUNT NUMBER' TO MESSAGES.
+           GO TO MENU.
+       BADCHARS.
+           MOVE 'ACCOUNT NUMBER MUST BE NUMERIC' TO MESSAGES.
+           GO TO MENU.
+      *
+      *    IF A CICS COMMAND FAILS WITH THE "ERROR" CONDITION, THE
+      *    MESSAGE "ERROR. TRANSACTION TERMINATED" IS MOVED TO
+      *    "MESSAGES" FOR DISPLAY ON THE MENU SCREEN.
+      *
+       ERRORS.
+           MOVE 'ERROR. TRANSACTION TERMINATED' TO MESSAGES.
+           GO TO MENU.
+       MENU.
+      *
+      *    THIS CODE GETS CONTROL WHEN AN ADD OR UPDATE IS COMPLETE.
+      *    AN INFORMATION OR ERROR MESSAGE IS IN "MESSAGES".
+      *    THE OPERATOR INSTRUCTION MAP AREA IS CLEARED. THE MESSAGE
+      *    IS MOVED TO THE MAP AREA AND HIGHLIGHTED.
+      *
+           MOVE LOW-VALUE TO MENUO.
+           MOVE DFHBMASB  TO MSGA.
+           MOVE MESSAGES  TO MSGO.
+      *
+      *    THE OPERATOR INSTRUCTION MAP "DFH0CGA" IS DISPLAYED ON AN
+      *    ERASED SCREEN.
+      *
+           EXEC CICS SEND MAP('MENU') MAPSET('DFH0CGA')
+                     ERASE END-EXEC.
+      *
+      *    THE PROGRAM TERMINATES BY RETURNING TO CICS.
+      *    NO TRANSACTION IDENTIFIER OR "COMMAREA" IS SPECIFIED.
+      *
+           EXEC CICS RETURN END-EXEC.
+           GOBACK.

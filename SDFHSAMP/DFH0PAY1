@@ -1,0 +1,475 @@
+       CBL CICS('COBOL3')
+       TITLE 'CICS BTS - SAMPLE PROGRAM - COBOL'
+      ******************************************************************
+      *                                                                *
+      * MODULE NAME = DFH0PAY1                                         *
+      *                                                                *
+      * DESCRIPTIVE NAME = CICS TS  SAMPLE PROGRAM FOR CICS BTS        *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *     Licensed Materials - Property of IBM                       *
+      *                                                                *
+      *     "Restricted Materials of IBM"                              *
+      *                                                                *
+      *     5655-Y04                                                   *
+      *                                                                *
+      *     (C) Copyright IBM Corp. 1998, 2002"                        *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      * STATUS = 7.2.0                                                 *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *                                                                *
+      * CHANGE ACTIVITY :                                              *
+      *                                                                *
+      * $MOD(DFH0PAY1),COMP(SAMPLES),PROD(CICS TS ):                   *
+      *                                                                *
+      * PN= REASON REL YYMMDD HDXXIII : REMARKS                        *
+      * $D1= I07267 630 020403 HDHYJB  : Compile all samples          *
+      * $P0= M30594 530 981105 HDGLTJB : Supply and ship CICS BTS      *
+      *                                :                 SAMPLES       *
+      * $P1= M31471 530 990129 HDGLTJB : remove handle condition on    *
+      * $P2= M31555 530 990203 HDGLTJB : Supply CICS BTS Repository f *
+      *$P3= D08874 %AT 031023 HDHYJB  : Change CBL XOPTS to CBL CICS   *
+      *                                : RECEIVE MAP.                  *
+      *                                                                *
+      *----------------------------------------------------------------*
+      ******************************************************************
+      *             PROGRAM MAINTENANCE HISTORY                        *
+      ******************************************************************
+      *                                                                *
+      *  THIS PROGRAM IS THE MAIN DRIVER FOR A CICS BTS PROCESS, IN    *
+      *  THIS EXAMPLE IT IS DRIVEN BY AN INPUT REQUEST. POSSIBLY FROM  *
+      *  A 3270 TYPE DEVICE, A WEB BROWSER REQUEST OR ANY OTHER        *
+      *  ELECTRONIC INTERFACE INCLUDING A MQ QUEUE.                    *
+      *                                                                *
+      *  THE PAYMENT DETAILS ARE RECEIVED FROM THE INPUTTER.           *
+      *  THE RELEVANT ORDER PROCESS IS ACQUIRED AND RUN.               *
+      *  THIS WILL CAUSE THE OUTSTANDING EVENTS TO BE CANCELLED AND    *
+      *  TIDIED UP THUS ALLOWING THE ORDER PROCESS TO COMPLETE         *
+      *  NORMALLY.                                                     *
+      *                                                                *
+      ******************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID.  DFH0PAY1.
+      *
+       AUTHOR.      IBM.
+      *
+       DATE-COMPILED.
+      *
+      *REMARKS.
+      ******************************************************************
+      *                                                                *
+      *                                                                *
+      ******************************************************************
+      *
+       ENVIRONMENT DIVISION.
+      *
+       CONFIGURATION SECTION.
+      *
+       SPECIAL-NAMES.
+      *
+       DATA DIVISION.
+      *
+       WORKING-STORAGE SECTION.
+
+       01  WS-START                        PIC X(44)
+           VALUE '*** DFH0PAY1 WORKING STORAGE STARTS HERE ***'.
+      *
+       01  WS-START-CODE                   PIC X(2).
+           88 TDQ-START                    VALUE 'QD'.
+           88 MQ-START-DATA                VALUE 'SD'.
+           88 MQ-START-NODATA              VALUE 'S'.
+           88 TERM-START                   VALUE 'TD'.
+       01  PROCESS-NAME.
+           03  PROCESS-ID                  PIC X(5) VALUE 'SALES'.
+           03  ORDER-NUMBER                PIC 9(6).
+           03  FILLER                      PIC X(25) VALUE SPACES.
+       01  RESP-AREA                       PIC 9(8) COMP.
+       01  RESP2-AREA                      PIC 9(8) COMP.
+       01  ABEND-CODE                      PIC X(4) VALUE SPACES.
+       01  ERROR-MSG1                      PIC X(46) VALUE
+           'DFH0PAY1 - PROCESS FAILED DUE TO BAD RESP CODE'.
+       01  ERROR-MSG1-LEN                  PIC S9(4) VALUE +46 COMP.
+       01  START-ERROR-MSG                 PIC X(42) VALUE
+           'DFH0PAY1 - UNKNOWN START CODE - ABEND U002'.
+       01  START-ERROR-LEN                 PIC S9(4) VALUE +42 COMP.
+       01  NO-PROCESS-MSG                  PIC X(40) VALUE
+           'DFH0PAY1 - NO PROCESS FOUND - ABEND U003'.
+       01  NO-PROCESS-LEN                  PIC S9(4) VALUE +40 COMP.
+       01  NO-MAP-MSG                      PIC X(40) VALUE
+           'DFH0PAY1 - NO MAP RECEIVED              '.
+      *
+      *     INPUT AREAS
+      *
+      *  GET CONTAINER COPY BOOK
+       COPY DFH0CONT.
+      *
+      *  GET EIB AID COPY BOOK
+       COPY DFHAID.
+      *
+      *  GET MAPSET COPY BOOK
+       COPY DFH0PAYC.
+      *
+       01  TDQIN-AREA.
+           03  TDQ-ORDER-NUMBER            PIC 9(06).
+           03  TDQ-CUST-NUMBER             PIC 9(06).
+           03  TDQ-PAY-AMOUNT              PIC S9(5)V99.
+       01  TDQ-LENGTH                      PIC S9(4) VALUE +20 COMP.
+      *
+       01  MQIN-AREA.
+           03  MQ-DATA                     PIC X(20).
+       01  MQIN-LENGTH                     PIC S9(4) VALUE +20 COMP.
+      *
+       LINKAGE SECTION.
+      *
+       PROCEDURE DIVISION.
+
+      ******************************************************************
+      *BEGIN-PROCESS                                                   *
+      *FIND OUT HOW THIS PROGRAM WAS STARTED BY EXAMINING THE START    *
+      *CODE.                                                           *
+      *ACQUIRE THE ORDER PROCESS AND RUN IT SYNCHRONOUSLY              *
+      ******************************************************************
+       BEGIN-PROCESS.
+
+      * FIND OUT HOW THIS PROGRAM GOT STARTED.
+
+           EXEC CICS ASSIGN
+                     STARTCODE(WS-START-CODE)
+                     RESP(RESP-AREA)
+                     RESP2(RESP2-AREA)
+           END-EXEC.
+
+           EVALUATE TRUE
+             WHEN TDQ-START
+               PERFORM TDQ-STARTED
+             WHEN MQ-START-DATA
+               PERFORM MQD-STARTED
+             WHEN MQ-START-NODATA
+               PERFORM MQND-STARTED
+             WHEN TERM-START
+               PERFORM TERM-STARTED
+             WHEN OTHER
+               PERFORM START-ERROR
+           END-EVALUATE.
+
+      ******************************************************************
+      *  PUT THE CODE HERE TO SAVE THE PAYMENT DETAILS AS              *
+      *  REQUIRED BY YOUR APPLICATION                                  *
+      *  THEN ACQUIRE AND RUN THE ORDER PROCESS INDICATED BY           *
+      *  THE ORDER NUMBER ON INPUT.                                    *
+      ******************************************************************
+
+           EXEC CICS ACQUIRE PROCESS(PROCESS-NAME)
+                             PROCESSTYPE('ORDER')
+                             RESP(RESP-AREA)
+                             RESP2(RESP2-AREA)
+           END-EXEC.
+
+           IF RESP-AREA NOT = DFHRESP(NORMAL) THEN
+             PERFORM NO-PROCESS-ERROR
+           END-IF.
+
+           EXEC CICS RUN ACQPROCESS
+                         SYNCHRONOUS
+                         INPUTEVENT('DELETE-TIMER')
+                         RESP(RESP-AREA)
+                         RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *  RETURN FROM PROCESS                                           *
+      *  CHECK RESP AREAS FOR NORMAL COMPLETION                        *
+      *  DO ANY NECESSARY ERROR HANDLING HERE                          *
+      *  IF OKAY THEN CONTINUE                                         *
+      ******************************************************************
+
+           IF RESP-AREA = DFHRESP(NORMAL) THEN
+             PERFORM GOOD-RETURN
+           ELSE
+             PERFORM BAD-RETURN
+           END-IF.
+
+           EXEC CICS RETURN
+           END-EXEC.
+
+      ******************************************************************
+      *                                                                *
+      *  PROCESSING FOR TYPES OF START                                 *
+      *                                                                *
+      ******************************************************************
+      *TERM-STARTED                                                    *
+      *COME HERE IF WE WERE STARTED FROM A TERMINAL, WE GET THE INPUT  *
+      *FROM THE MAP.                                                   *
+      ******************************************************************
+       TERM-STARTED.
+           EXEC CICS RECEIVE
+                     MAP('PAYMENT')
+                     MAPSET('DFH0PAS')
+                     INTO(PAYMENTI)
+                     RESP(RESP-AREA)
+                     RESP2(RESP2-AREA)
+           END-EXEC.
+
+           IF RESP-AREA NOT = DFHRESP(NORMAL) THEN
+
+             EVALUATE EIBAID
+                 WHEN DFHCLEAR
+                      EXEC CICS SEND CONTROL ERASE FREEKB
+                      END-EXEC
+                      EXEC CICS RETURN
+                      END-EXEC
+                 WHEN OTHER
+                   MOVE SPACES TO MSGO
+                   MOVE NO-MAP-MSG TO MSGO
+
+                   EXEC CICS SEND
+                             MAP('PAYMENT')
+                             MAPSET('DFH0PAS')
+                             FROM(PAYMENTO)
+                             RESP(RESP-AREA)
+                             RESP2(RESP2-AREA)
+                   END-EXEC
+                   EXEC CICS RETURN TRANSID('PAY1')
+                   END-EXEC
+             END-EVALUATE
+
+           END-IF.
+
+
+           MOVE ORDNOI TO ORDER-NUMBER.
+
+      ******************************************************************
+      *TDQ-STARTED                                                     *
+      *COME HERE IF WE WERE STARTED BY A TRIGGER TDQ, WE GET THE INPUT *
+      *BY ISSUING A RETRIEVE FOR THE DATA.                             *
+      ******************************************************************
+       TDQ-STARTED.
+           EXEC CICS RETRIEVE
+                     INTO(TDQIN-AREA)
+                     LENGTH(TDQ-LENGTH)
+                     RESP(RESP-AREA)
+                     RESP2(RESP2-AREA)
+           END-EXEC.
+
+           MOVE TDQ-ORDER-NUMBER TO ORDER-NUMBER.
+
+      ******************************************************************
+      *MQND-STARTED                                                    *
+      *COME HERE IF WE WERE STARTED FROM A MQ QUEUE BUT WITH NO DATA,  *
+      *WE WILL HAVE TO GET THE DATA BY READING A MQ QUEUE.             *
+      ******************************************************************
+       MQND-STARTED.
+      ******************************************************************
+      *  PUT YOUR CODE HERE TO GET THE MQ MESSAGE AND THEN PUT         *
+      *  THE INPUT DATA INTO THE CONTAINER AREA.                       *
+      ******************************************************************
+      *
+      ******************************************************************
+      *MQD-STARTED                                                     *
+      *COME HERE IF WE WERE STARTED FROM A MQ QUEUE BUT WITH DATA.     *
+      ******************************************************************
+       MQD-STARTED.
+      ******************************************************************
+      *  PUT YOUR CODE HERE TO GET THE DATA AND ALSO ANY MQ REQUESTS   *
+      *  THEN PUT THE INPUT DATA INTO THE CONTAINER AREA.              *
+      ******************************************************************
+      *
+      ******************************************************************
+      *START-ERROR                                                     *
+      *UNKNOWN START CODE, ISSUE ERROR MESSAGE TO CICS CONSOLE AND     *
+      *ABEND WITH A U002.                                              *
+      ******************************************************************
+       START-ERROR.
+           EXEC CICS WRITEQ TD
+                            QUEUE('CSMT')
+                            FROM(START-ERROR-MSG)
+                            LENGTH(START-ERROR-LEN)
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+           MOVE 'U002' TO ABEND-CODE.
+
+           EXEC CICS ABEND ABCODE(ABEND-CODE) NODUMP
+           END-EXEC.
+
+      ******************************************************************
+      *                                                                *
+      *  PROCESSING FOR RETURNING TO INSTIGATOR                        *
+      *                                                                *
+      ******************************************************************
+      *GOOD-RETURN                                                     *
+      *FIND OUT HOW WE WERE STARTED SO WE CAN RETURN THE SAME WAY.     *
+      ******************************************************************
+       GOOD-RETURN.
+           EVALUATE TRUE
+             WHEN TDQ-START
+               PERFORM TDQ-GOOD-RETURN
+             WHEN MQ-START-DATA
+               PERFORM MQD-GOOD-RETURN
+             WHEN MQ-START-NODATA
+               PERFORM MQND-GOOD-RETURN
+             WHEN TERM-START
+               PERFORM TERM-GOOD-RETURN
+             WHEN OTHER
+               PERFORM START-ERROR
+           END-EVALUATE.
+      ******************************************************************
+      *TERM-GOOD-RETURN                                                *
+      *RETURN ACCEPTED TO THE TERMINAL                                 *
+      ******************************************************************
+       TERM-GOOD-RETURN.
+      ******************************************************************
+      *  PUT CODE HERE TO RETURN UPDATED PAYMENT DETAILS TO THE        *
+      *  INPUTTER.  E.G.IF THE DETAILS WERE SUCCESSFULLY PROCESSED ETC.*
+      ******************************************************************
+
+           MOVE 'Y' TO ACCEPTO.
+           MOVE SPACES TO MSGO.
+
+           EXEC CICS SEND
+                     MAP('PAYMENT')
+                     MAPSET('DFH0PAS')
+                     FROM(PAYMENTO)
+                     RESP(RESP-AREA)
+                     RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *TDQ-GOOD-RETURN                                                 *
+      *RETURN ACCEPTED TO THE TDQ SENDER IF WE CAN                     *
+      ******************************************************************
+       TDQ-GOOD-RETURN.
+      ******************************************************************
+      *  PUT YOUR CODE HERE TO RETURN ANY INFORMATION TO THE TDQ       *
+      *  INSTIGATOR.                                                   *
+      ******************************************************************
+      *
+      ******************************************************************
+      *MQND-GOOD-RETURN                                                *
+      *RETURN ACCEPTED TO THE MQ  SENDER IF WE CAN                     *
+      ******************************************************************
+       MQND-GOOD-RETURN.
+      ******************************************************************
+      *  PUT YOUR CODE HERE TO RETURN ANY INFORMATION TO THE MQ        *
+      *  INSTIGATOR.                                                   *
+      ******************************************************************
+      *
+      ******************************************************************
+      *MQD-GOOD-RETURN                                                 *
+      ******************************************************************
+      *RETURN ACCEPTED TO THE MQ  SENDER IF WE CAN                     *
+      ******************************************************************
+       MQD-GOOD-RETURN.
+      ******************************************************************
+      *  PUT YOUR CODE HERE TO RETURN ANY INFORMATION TO THE MQ        *
+      *  INSTIGATOR.                                                   *
+      ******************************************************************
+      *NO-PROCESS-ERROR                                                *
+      *ABEND WITH U003 IF NO ACQUIRED PROCESS                          *
+      ******************************************************************
+       NO-PROCESS-ERROR.
+           EXEC CICS WRITEQ TD
+                            QUEUE('CSMT')
+                            FROM(NO-PROCESS-MSG)
+                            LENGTH(NO-PROCESS-LEN)
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+           EXEC CICS ABEND ABCODE('U003') NODUMP
+           END-EXEC.
+      ******************************************************************
+      *BAD-RETURN                                                      *
+      *FIND OUT HOW WE WERE STARTED SO WE CAN RETURN THE SAME WAY      *
+      ******************************************************************
+       BAD-RETURN.
+           EVALUATE TRUE
+             WHEN TDQ-START
+               PERFORM TDQ-BAD-RETURN
+             WHEN MQ-START-DATA
+               PERFORM MQD-BAD-RETURN
+             WHEN MQ-START-NODATA
+               PERFORM MQND-BAD-RETURN
+             WHEN TERM-START
+               PERFORM TERM-BAD-RETURN
+             WHEN OTHER
+               PERFORM START-ERROR
+           END-EVALUATE.
+
+           EXEC CICS WRITEQ TD
+                            QUEUE('CSMT')
+                            FROM(ERROR-MSG1)
+                            LENGTH(ERROR-MSG1-LEN)
+                            RESP(RESP-AREA)
+                            RESP2(RESP2-AREA)
+           END-EXEC.
+
+           MOVE 'U001' TO ABEND-CODE.
+
+           EXEC CICS ABEND ABCODE(ABEND-CODE) NODUMP
+           END-EXEC.
+      ******************************************************************
+      *TERM-BAD-RETURN                                                 *
+      *RETURN NOT ACCEPTED TO THE TERMINAL                             *
+      ******************************************************************
+       TERM-BAD-RETURN.
+      ******************************************************************
+      *  PUT CODE HERE TO RETURN ANY HELPFUL INFORMATION FOR DEBUGGING *
+      * THE FAILURE.                                                   *
+      *  E.G.  SUITABLE ERROR MESSAGE AT BOTTOM OF SCREEN.             *
+      *        INCLUDE RESP AND RESP 2 VALUES.                         *
+      ******************************************************************
+
+           MOVE 'N' TO ACCEPTO.
+           MOVE SPACES TO MSGO.
+           MOVE ERROR-MSG1 TO MSGO.
+
+           EXEC CICS SEND
+                     MAP('PAYMENT')
+                     MAPSET('DFH0PAS')
+                     FROM(PAYMENTO)
+                     RESP(RESP-AREA)
+                     RESP2(RESP2-AREA)
+           END-EXEC.
+
+      ******************************************************************
+      *TDQ-BAD-RETURN                                                  *
+      *RETURN NOT ACCEPTED TO THE TDQ SENDER IF WE CAN                 *
+      ******************************************************************
+       TDQ-BAD-RETURN.
+      ******************************************************************
+      *  PUT YOUR CODE HERE TO RETURN ANY INFORMATION TO THE TDQ       *
+      *  INSTIGATOR.                                                   *
+      ******************************************************************
+      *
+      ******************************************************************
+      *MQND-BAD-RETURN                                                 *
+      *RETURN NOT ACCEPTED TO THE MQ SENDER                            *
+      ******************************************************************
+       MQND-BAD-RETURN.
+      ******************************************************************
+      *  PUT YOUR CODE HERE TO RETURN ANY INFORMATION TO THE MQ        *
+      *  INSTIGATOR.                                                   *
+      ******************************************************************
+      *
+      ******************************************************************
+      *MQD-BAD-RETURN                                                  *
+      *RETURN NOT ACCEPTED TO THE MQ SENDER                            *
+      ******************************************************************
+       MQD-BAD-RETURN.
+      ******************************************************************
+      *  PUT YOUR CODE HERE TO RETURN ANY INFORMATION TO THE MQ        *
+      *  INSTIGATOR.                                                   *
+      ******************************************************************
+      *
+      ******************************************************************
+      *DUMMY-GOBACK                                                    *
+      *BECAUSE SOME COMPILERS NEED IT                                  *
+      ******************************************************************
+       DUMMY-GOBACK.
+            GOBACK.
+      *

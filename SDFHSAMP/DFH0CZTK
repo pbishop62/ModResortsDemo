@@ -1,0 +1,577 @@
+ #pragma XOPTS(FEPI)                                          /* @L1C*/
+
+ /*********************************************************************
+ *                                                                    *
+ *      MODULE NAME = DFH0CZTK                                        *
+ *                                                                    *
+ *      DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample program:          *
+ *                         Key stroke CONVERSE.                       *
+ *                         C version                                  *
+ *                                                                    *
+ *                                                                    *
+ *                                                                    *
+ *            Licensed Materials - Property of IBM                    *
+ *                                                                    *
+ *            "Restricted Materials of IBM"                           *
+ *                                                                    *
+ *            5655-Y04                                                *
+ *                                                                    *
+ *            (C) Copyright IBM Corp. 1998"                           *
+ *                                                                    *
+ *                                                                    *
+ *                                                                    *
+ *                                                                    *
+ *      FUNCTION = This sample program demonstrates using FEPI to     *
+ *                 obtain information from a back-end transaction     *
+ *                 using the key stroke data format.                  *
+ *                                                                    *
+ *      TRANSACTION NAME = CZTK                                       *
+ *                                                                    *
+ *      MAP NAME = DFH0MZ6                                            *
+ *                                                                    *
+ **********************************************************************
+ *                                                                    *
+ *      OVERVIEW                                                      *
+ *                                                                    *
+ *      On the first invocation of the transaction,                   *
+ *      a map is sent to the front-end terminal.                      *
+ *                                                                    *
+ *      When there is input from the front-end terminal, CICS         *
+ *      reinvokes the transaction.  The customer number from the      *
+ *      input is built into a key stroke sequence which runs a        *
+ *      transaction at the back-end system.  The key strokes are sent *
+ *      and the results received using a FEPI ALLOCATE-CONVERSE-FREE  *
+ *      command sequence.  Information is extracted from the results  *
+ *      and sent to the front-end terminal.  Further input is then    *
+ *      awaited.                                                      *
+ *                                                                    *
+ *      When PF3 or CLEAR is received from the front-end terminal,    *
+ *      the transaction ends.  If there is an error, the front-end    *
+ *      map is reset.  These situations are detected using HANDLE     *
+ *      CONDITION.                                                    *
+ *                                                                    *
+ *      If the back-end system sends a CICS message, it is sent on    *
+ *      to the front-end terminal, and the transaction ends.          *
+ *                                                                    *
+ *      For clarity, error checking is minimal except for the FEPI    *
+ *      commands.  Note that the key stroke sequence used involves    *
+ *      several attention keys, so that if the intermediate responses *
+ *      are not what is expected, the effects are unpredictable.      *
+ *      According to your requirements, it may be advisable to send   *
+ *      each attention sequence individually and to check each time   *
+ *      that the results are as expected.                             *
+ *                                                                    *
+ **********************************************************************
+ *                                                                    *
+ *      PROGRAM LOGIC                                                 *
+ *                                                                    *
+ *        MAIN procedure:                                             *
+ *                                                                    *
+ *          Test COMMAREA                                             *
+ *          If transaction not previously invoked - send_new          *
+ *                                                                    *
+ *          RECEIVE MAP from front-end terminal                       *
+ *          If CLEAR or PF3 - end_prog                                *
+ *          If map error - send_new                                   *
+ *                                                                    *
+ *          Build key stroke sequence to:                             *
+ *              clear back-end screen                                 *
+ *              type  transaction ID                                  *
+ *              ENTER                                                 *
+ *              type the customer number                              *
+ *              ENTER                                                 *
+ *                                                                    *
+ *          FEPI ALLOCATE conversation with back-end system           *
+ *          FEPI CONVERSE to send key strokes to back-end system      *
+ *              and get the resulting screen image                    *
+ *                                                                    *
+ *          If CICS message received from back-end system             *
+ *              SEND message to front-end terminal                    *
+ *              RETURN                                                *
+ *                                                                    *
+ *          Get customer information from back-end screen image       *
+ *          Build data for front-end terminal map                     *
+ *          FEPI FREE     conversation with back-end system           *
+ *                                                                    *
+ *          SEND map data to front-end terminal                       *
+ *          RETURN TRANSID(CZTK) with COMMAREA                        *
+ *                                                                    *
+ *        send_new routine:                                           *
+ *                                                                    *
+ *          SEND new map to front-end terminal                        *
+ *          RETURN TRANSID(CZTK) with COMMAREA                        *
+ *                                                                    *
+ *        end_prog routine:                                           *
+ *                                                                    *
+ *          Clear front-end terminal                                  *
+ *          RETURN                                                    *
+ *                                                                    *
+ *--------------------------------------------------------------------*
+ *                                                                    *
+ * CHANGE ACTIVITY :                                                  *
+ *                                                                    *
+ *       $MOD(DFH0CZTK),COMP(SAMPLES),PROD(CICS TS ):                 *
+ *                                                                    *
+ *    PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+ *   $L1= M28379 530 980806 HD7OPJW: Incorrect #pragmas               *
+ *                                                                    *
+ *********************************************************************/
+
+
+ /*********************************************************************
+ *             Includes and function definitions                      *
+ *********************************************************************/
+
+ /*  DFH0BZ6C defines the layout of the front-end terminal map.      */
+
+ #include "dfh0bz6c.h"
+
+ /*  DFH0BZCC defines the customizable constants used by the         */
+ /*  FEPI sample programs.                                           */
+
+ #include "dfh0bzcc.h"
+
+ /*  DFH0BZMC defines the messages and other text used by the        */
+ /*  FEPI sample programs.                                           */
+
+ #include "dfh0bzmc.h"
+
+ /*  DFHSZAPC defines the FEPI RESP2 values.                         */
+
+ #include "dfhszapc.h"
+
+ /*  DFHAID defines the standard attention identifiers (AIDs).       */
+
+ #include "dfhaid.h"
+
+ /*  C functions.                                                    */
+
+ #include "string.h"
+ #include "stdio.h"
+
+ /*  Functions defined in this program.                              */
+
+ void bld_conv(void);
+ void formmap(char* convid, char* pszscreen);
+ void getfield(char* convid, short fieldnum,
+              char* psbmsfield, long maxflength);
+ void end_prog(void);
+ void send_new(void);
+
+ /*  Constants.                                                      */
+
+ static const char *const c_mapname      = "DFH0MZ6";
+ static const char *const c_keystrokes   = "&CL%.4s&EN%.4s&EN";
+ static const char *const c_cics         = "DFH";
+ #define C_SCREENSIZE     1921L
+ #define C_FLD_CUSTNO     5
+ #define C_FLD_CUSTNAME   8
+ #define C_FLD_ADDR1      12
+ #define C_FLD_ADDR2      13
+ #define C_FLD_ADDR3      14
+ #define C_FLD_MSG        17
+
+
+ /*********************************************************************
+ *             Main procedure                                         *
+ *********************************************************************/
+
+ /*  This section controls processing.  Depending on information     */
+ /*  in the COMMAREA, it sends a new map to the front-end terminal   */
+ /*  to get input, or it processes that input, building a key stroke */
+ /*  sequence to send to the back-end system.  Data is extracted     */
+ /*  from the returned screen image to send to the front-end         */
+ /*  terminal.                                                       */
+
+ void main(void)
+ {
+
+    char *commarea;          /* Pointer to COMMAREA                  */
+    long int resp1;          /* CICS error condition                 */
+    long int resp2;          /* CICS error condition detail          */
+    short length;            /* Length for CICS commands             */
+
+ /*  Get addressability to EIB and COMMAREA.                         */
+
+    EXEC CICS ADDRESS EIB(dfheiptr);
+    EXEC CICS ADDRESS COMMAREA(commarea);
+
+ /*  If this transaction has not previously been invoked             */
+ /*  (no COMMAREA, implying no transaction in progress),             */
+ /*  send a new map to the front-end terminal and exit.              */
+ /*  (Note: '??!' is a trigraph for logical or '|'.)                 */
+
+    if ((dfheiptr->eibcalen == 0)
+    ??!??! (strncmp(dfheiptr->eibtrnid, commarea, 4)))
+        send_new();
+
+ /*  RECEIVE map from front-end terminal.                            */
+
+    EXEC CICS RECEIVE MAP(c_mapname)
+                      INTO(&dfh0mz6.dfh0mz6i)
+                      RESP(resp1)
+                      RESP2(resp2);
+
+ /*  Check for PF3 or CLEAR key.                                     */
+
+    if ((dfheiptr->eibaid == DFHCLEAR)
+    ??!??! (dfheiptr->eibaid == DFHPF3))
+        end_prog();
+
+ /*  Check for map error.                                            */
+
+    if (resp1 == DFHRESP(MAPFAIL))
+        send_new();
+
+ /*  Pass the customer number to the back-end transaction            */
+ /*  to get data from the customer database.                         */
+ /*  Extract customer name from the resulting screen image.          */
+ /*  Also check for a CICS message.                                  */
+
+    bld_conv();
+
+ /*  Send the map to the front-end terminal.                         */
+
+    length = sizeof(dfh0mz6.dfh0mz6o.mtrno);
+    strncpy(dfh0mz6.dfh0mz6o.mtrno,dfheiptr->eibtrnid,length);
+
+    length = sizeof(dfh0mz6.dfh0mz6o);
+    EXEC CICS SEND MAP(c_mapname)
+                   FROM(dfh0mz6.dfh0mz6o)
+                   LENGTH(length);
+
+ /*  Exit - with own transaction ID to continue the transaction      */
+ /*  when the user responds.                                         */
+
+    length = strlen(dfheiptr->eibtrnid);
+    EXEC CICS RETURN
+              TRANSID(dfheiptr->eibtrnid)
+              COMMAREA(dfheiptr->eibtrnid)
+              LENGTH(length);
+
+ }
+
+
+ /*********************************************************************
+ *             Build key strokes and CONVERSE routine                 *
+ *********************************************************************/
+
+ /*  This section builds the key stroke sequence which controls the  */
+ /*  back-end transaction.  It then performs the FEPI CONVERSE       */
+ /*  to get the resulting screen image.                              */
+
+ void bld_conv(void)
+ {
+
+    char convid[8];          /* FEPI conversation ID                 */
+    long int resp1;          /* CICS error condition                 */
+    long int resp2;          /* CICS error condition detail          */
+    long lengthretd;         /* Length of data returned by CONVERSE  */
+
+ /*  The data from the back-end system is in screen image format,    */
+ /*  represented by an 80*24 character string.                       */
+
+    char screen[C_SCREENSIZE];
+    long lenscreen = C_SCREENSIZE - 1L;
+                             /* Length of screen image for CONVERSE  */
+    char keystroke_seq[80];  /* Key stroke sequence                  */
+    long lenkeys;            /* Length of key strokes for CONVERSE   */
+
+ /*  A key stroke sequence is used to access the back-end            */
+ /*  transaction.  It clears the screen, types the transaction ID,   */
+ /*  then ENTER.  When the results appear, it types the customer     */
+ /*  number and then ENTER.                                          */
+ /*  Complete the key stroke sequence with the customer number       */
+ /*  input by the user and the back-end transaction name.            */
+
+
+    lenkeys = sprintf(keystroke_seq, c_keystrokes,
+                                     dfh0bzcc_backend_transid,
+                                     dfh0mz6.dfh0mz6i.mcustnoi);
+
+ /*  Allocate a conversation to the back-end system                  */
+ /*  using formatted data.                                           */
+
+    EXEC CICS FEPI ALLOCATE
+                   TIMEOUT(DFH0BZCC_TIMEOUT)
+                   POOL(dfh0bzcc_formatted_pool)
+                   TARGET(dfh0bzcc_target_cics)
+                   CONVID(convid)
+                   RESP(resp1)
+                   RESP2(resp2);
+
+ /*  Check the response - exit with message if error.                */
+
+    if (resp2 != 0)
+      {
+        strcpy(dfh0mz6.dfh0mz6o.mmsg2o, dfh0bzmc_msg4);
+        return;
+      }
+
+ /*  The FEPI CONVERSE FORMATTED command is used to communicate      */
+ /*  with a back-end system.                                         */
+ /*  The options used are individually                               */
+ /*  discussed in the order they appear in the command.              */
+ /*                                                                  */
+ /*  Basic command, specifying that formatted data is used.          */
+ /*      EXEC CICS FEPI CONVERSE FORMATTED                           */
+ /*                                                                  */
+ /*  If TIMEOUT is zero, the command will not time-out.              */
+ /*  Because this could lead to queueing problems, a suitable        */
+ /*  application- and system-dependent value should be set.          */
+ /*  For this sample, the value 20 seconds is used.                  */
+ /*            TIMEOUT(DFH0BZCC_TIMEOUT)                             */
+ /*                                                                  */
+ /*  CONVID identifies the conversation which has previously         */
+ /*  been allocated.                                                 */
+ /*            CONVID(convid)                                        */
+ /*                                                                  */
+ /*  The FROM area is where the SEND part of the command obtains its */
+ /*  data to transmit.  In this case it is an area initialized with  */
+ /*  a key stroke sequence.                                          */
+ /*            FROM(keystroke_seq)                                   */
+ /*                                                                  */
+ /*  The FROMLENGTH option reflects the length of the data area      */
+ /*  to be transmitted.                                              */
+ /*            FROMFLENGTH(lenkeys)                                  */
+ /*                                                                  */
+ /*  KEYSTROKES specified that the data is a sequence of key strokes.*/
+ /*            KEYSTROKES                                            */
+ /*                                                                  */
+ /*  The escape character which signals that the following           */
+ /*  characters have special significance is defined as an           */
+ /*  ampersand.                                                      */
+ /*            ESCAPE('&')                                           */
+ /*                                                                  */
+ /*  The INTO area is where the data returned by the command is      */
+ /*  placed.                                                         */
+ /*            INTO(screen)                                          */
+ /*                                                                  */
+ /*  MAXFLENGTH is the length of the INTO area.                      */
+ /*            MAXFELNGTH(lenscreen)                                 */
+ /*                                                                  */
+ /*  And TOFLENGTH is where the length of data returned is put.      */
+ /*            TOFLENGTH(lengthretd)                                 */
+ /*                                                                  */
+ /*  The RESP option returns DFHRESP(NORMAL) or DFHRESP(INVREQ).     */
+ /*  In the latter case, further                                     */
+ /*  information can be obtained from the RESP2 option.              */
+ /*            RESP(resp1)                                           */
+ /*            RESP2(resp2)                                          */
+
+    EXEC CICS FEPI CONVERSE FORMATTED
+                   TIMEOUT(DFH0BZCC_TIMEOUT)
+                   CONVID(convid)
+                   FROM(keystroke_seq)
+                   FROMFLENGTH(lenkeys)
+                   KEYSTROKES
+                   ESCAPE('&')
+                   INTO(screen)
+                   MAXFLENGTH(lenscreen)
+                   TOFLENGTH(lengthretd)
+                   RESP(resp1)
+                   RESP2(resp2);
+
+ /*  Check the response - exit with message if error.                */
+
+    if (resp2 != 0)
+        strcpy(dfh0mz6.dfh0mz6o.mmsg2o, dfh0bzmc_msg2);
+    else
+
+ /*  Extract customer name from the resulting screen image.          */
+ /*  Also check for a CICS message.                                  */
+ /*  Build map for front-end terminal.                               */
+
+        formmap(convid, screen);
+
+ /*  FREE the conversation.                                          */
+
+    EXEC CICS FEPI FREE
+                   CONVID(convid)
+                   RESP(resp1)
+                   RESP2(resp2);
+
+ /*  Check the response - exit with message if error.                */
+
+    if (resp2 != 0)
+         strcpy(dfh0mz6.dfh0mz6o.mmsg2o, dfh0bzmc_msg5);
+
+ /*  End of routine                                                  */
+
+    return;
+ }
+
+
+ /*********************************************************************
+ *             Format map routine                                     *
+ *********************************************************************/
+
+ /*  This section examines the returned screen image.                */
+ /*  If there is a CICS message, it is sent on to the front-end      */
+ /*  terminal.  Otherwise, data to be displayed at the front-end     */
+ /*  terminal is extracted.                                          */
+
+ void formmap(
+    char* convid,             /* FEPI conversation ID                */
+    char* pszscreen)          /* Pointer to the screen image         */
+ {
+
+    char *psdfh;              /* Pointer to CICS message, if any     */
+    char *pstemp;             /* Screen image work pointer           */
+    short length;             /* Length of data for CICS command     */
+
+ /*  C string-handling functions rely on NULL terminated strings.    */
+ /*  Therefore change all the NULLS in the screen image to some      */
+ /*  safe non-null character (X'11'), and add a terminating null.    */
+
+    for (pstemp = pszscreen; pstemp < (pszscreen + C_SCREENSIZE - 1);
+         pstemp++)
+        if (*pstemp == '\0')
+            *pstemp = '\x11';
+    pszscreen[C_SCREENSIZE - 1] = '\0';
+
+ /*  Examine the screen image for a CICS message.                    */
+
+    psdfh = strstr(pszscreen, c_cics);
+
+ /*  If a CICS message was present, it is                            */
+ /*  doubtful that the transaction completed, so send the            */
+ /*  message to the front-end terminal and exit.                     */
+
+    if (psdfh != NULL)
+      {
+        length = sizeof(dfh0mz6.dfh0mz6o.mtrno);
+        strncpy(dfh0mz6.dfh0mz6o.mtrno,dfheiptr->eibtrnid,length);
+
+        length = sizeof(dfh0mz6.dfh0mz6o.mmsg2o);
+        strncpy(dfh0mz6.dfh0mz6o.mmsg2o,psdfh,length);
+        length = sizeof(dfh0mz6.dfh0mz6o);
+
+        EXEC CICS SEND MAP(c_mapname)
+                  FROM(dfh0mz6.dfh0mz6o)
+                  LENGTH(length)
+                  ERASE;
+
+        EXEC CICS RETURN;
+      }
+
+ /*  Extract required customer data field-by-field using             */
+ /*  FEPI EXTRACT FIELD.  If there is an error a message is sent.    */
+
+    else
+      {
+        getfield(convid, C_FLD_MSG,      dfh0mz6.dfh0mz6o.mmsg2o  ,
+                                  sizeof(dfh0mz6.dfh0mz6o.mmsg2o  ));
+        getfield(convid, C_FLD_CUSTNO,   dfh0mz6.dfh0mz6o.mcustnoo,
+                                  sizeof(dfh0mz6.dfh0mz6o.mcustnoo));
+        getfield(convid, C_FLD_CUSTNAME, dfh0mz6.dfh0mz6o.mcustnmo,
+                                  sizeof(dfh0mz6.dfh0mz6o.mcustnmo));
+        getfield(convid, C_FLD_ADDR1,    dfh0mz6.dfh0mz6o.mcusta1o,
+                                  sizeof(dfh0mz6.dfh0mz6o.mcusta1o));
+        getfield(convid, C_FLD_ADDR2,    dfh0mz6.dfh0mz6o.mcusta2o,
+                                  sizeof(dfh0mz6.dfh0mz6o.mcusta2o));
+        getfield(convid, C_FLD_ADDR3,    dfh0mz6.dfh0mz6o.mcusta3o,
+                                  sizeof(dfh0mz6.dfh0mz6o.mcusta3o));
+      }
+
+ /*  End of routine                                                  */
+
+    return;
+ }
+
+
+ /*********************************************************************
+ *             Get field routine                                      *
+ *********************************************************************/
+
+ /*  This section gets a customer data field from the screen iamge   */
+ /*  using FEPI EXTRACT.                                             */
+
+ void getfield(
+    char* convid,            /* FEPI conversation ID                 */
+    short fieldnum,          /* Field number                         */
+    char* psbmsfield,        /* Pointer to field in front-end map    */
+    long bmslength)          /* Length of field in front-end map     */
+ {
+
+    long int resp1;          /* CICS error condition                 */
+    long int resp2;          /* CICS error condition detail          */
+
+    EXEC CICS FEPI EXTRACT
+                   CONVID(convid)
+                   FIELDNUM(fieldnum)
+                   INTO(psbmsfield)
+                   MAXFLENGTH(bmslength)
+                   RESP(resp1)
+                   RESP2(resp2);
+
+ /*  Check the response - exit with message if error.                */
+
+    if (resp2 != 0)
+        strcpy(dfh0mz6.dfh0mz6o.mmsg2o, dfh0bzmc_msgd);
+
+ /*  End of routine                                                  */
+
+    return;
+ }
+
+
+ /*********************************************************************
+ *             End transaction routine                                *
+ *********************************************************************/
+
+ /*  This section gets control if PF3 or CLEAR is input at the       */
+ /*  front-end terminal.                                             */
+
+ /*  The transaction exits after clearing the front-end terminal.    */
+
+ void end_prog(void)
+ {
+
+    short length = 1;         /* Length of data for CICS command     */
+    static const char *const pszblank = " ";
+
+    EXEC CICS SEND FROM(pszblank)
+              LENGTH(length)
+              ERASE;
+
+    EXEC CICS RETURN;
+ }
+
+
+ /*********************************************************************
+ *             Send new map routine                                   *
+ *********************************************************************/
+
+ /*  This section gets control if the MAPFAIL condition is raised    */
+ /*  or if the transaction has not previously been invoked.          */
+
+ /*  It sends a new map to the front-end terminal and returns to     */
+ /*  CICS to await the user input.                                   */
+
+ void send_new(void)
+ {
+
+    short length;            /* Length of COMMAREA                   */
+
+    length = sizeof(dfh0mz6.dfh0mz6o.mtrno);
+    strncpy(dfh0mz6.dfh0mz6o.mtrno,dfheiptr->eibtrnid,length);
+
+    length = sizeof(dfh0mz6.dfh0mz6o);
+    EXEC CICS SEND MAP(c_mapname)
+                   FROM(dfh0mz6)
+                   LENGTH(length)
+                   ERASE;
+
+    length = strlen(dfheiptr->eibtrnid);
+    EXEC CICS RETURN
+              TRANSID(dfheiptr->eibtrnid)
+              COMMAREA(dfheiptr->eibtrnid)
+              LENGTH(length);
+
+ }
+
+
+ /*********************************************************************
+ *             End of program DFH0CZTK                                *
+ *********************************************************************/

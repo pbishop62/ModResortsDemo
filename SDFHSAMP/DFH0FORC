@@ -1,0 +1,3374 @@
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0FORC                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = DB2 Formatting Sample Program              *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 2017"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      *  The function of this program is to format data passed to it  *
+      *  via the user exit in the off-line utility program DFHCSDUP,  *
+      *  into a format suitable for the DB2 table load utility. The   *
+      *  data is formatted into columns which correspond to those     *
+      *  defined in the load utility input. Each resource on the CSD  *
+      *  in the selected RDO groups results in a record in this       *
+      *  programs output file with the first 4 characters of the      *
+      *  record identifying the resource type (this is necessary so   *
+      *  that the load utility can determine which DB2 table to load  *
+      *  a records contents into).                                    *
+      *                                                               *
+      *  This program is designed to work with any EXTRACT command of *
+      *  the form:                                                    *
+      *            EXTRACT GROUP(<group name> OBJECTS                 *
+      *      or                                                       *
+      *            EXTRACT LIST(<list name> OBJECTS                   *
+      *      where                                                    *
+      *           <group name> may be generic                         *
+      *           <list name> must not be generic                     *
+      *                                                               *
+      * N.B This program must be link edited with the stub DFHEXLE.   *
+      *     AMODE(31) RMODE(24) must be specified on the link edit.   *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *     $MAC(DFH0FORC),COMP(SPI),PROD(CICS TS ):                  *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900320        : Created.                   *
+      *    $P1= M90474 330 910808 HDBWSH : Prologue Fixed.            *
+      *    $P2= M90952 330 910926 HD4OGB : Change DPLSUBSET to        *
+      *                                    EXECUTIONSET               *
+      *    $P3= M91330 330 911111 HDBWSH : Fix TRANSACTION-W padding. *
+      *    $P4= M83879 410 930916 HD4OGB : Update                     *
+      *    $P5= M51469 620 010227 HD4PALS: Remove obsolete XRFSIGNOFF *
+      *    $P6= M02544 620 010814 HD4PALS: Fix REMOTELEN in TDQUEUE   *
+      *    $P7= D03533 620 011113 HD4PALS: Remove reference to DFHEXCI*
+      *    $P8= D07535 630 030513 HD4PALS: Add solicited to TERMINAL  *
+      *    $P9= D15845 650 060522 HD4PALS: IPCONN was ignored         *
+      *    $PA= D20697 660 080416 HD4PALS: overflow of keyword values *
+      *    $PB= D20748 660 080424 HD4PALS: should match FORA & FORP   *
+      *    $PC= D26604 670 110216 HDHBIMS: JOURNALNAME-TYPE cld=DUMMY *
+      *    $L1= 660    410 920810 HD4OGB : Batch Call Interface       *
+      *    $L2= 647    410 930108 HD4OGB : Transaction Mgr Domain     *
+      *    $L3= 614    410 930108 HD4OGB : Sympathy Sickness          *
+      *    $L4= 626    410 930605 HD4OGB : Transaction Isolation      *
+      *    $L5= 654    510 931102 HDAEGJB: CEDA DEF FILE for RLS      *
+      *    $L6= 569    510 941021 HD4OGB : Rdo for TD                 *
+      *    $L7= 715    520 960417 HD4OGB : Rdo for RCT                *
+      *    $L8= 795    610 991111 HD4PALS: Rdo for EJB                *
+      *    $L9= 773    620 010227 HD4PALS: Add ATTACHSEC to TCPIPSERV *
+      *    $LA= 813    630 020828 HD4PALS: Add ASSERTED to CORBASERVER*
+      *    $LB= 781    640 041010 HD4PALS: Apollo lids/increase size  *
+      *    $LC= 710    650 060410 HD4PALS: Add IPCONN and 3.2 attribs *
+      *    $LD= 830    660 080422 HD4PALS: Add IPV6 attribute HOST    *
+      *    $LE= R00368 670 100104 HD4PALT: Add MIRRORLIFE to IPCONN   *
+      *    $LF= R00552 670 101115 HD4PALT: New attr on URIMAP & TCPIPS*
+      *    $LG= R22789 670 101217 HD4PALT: Chg RESYNCMEMBER on MQCONN *
+      *         R78960 690 131113 HDAFDRB: Change for EXPIRYINTMIN    *
+      *         R78960 690 131118 HDAFDRB: Change for other keywords  *
+      *        R110014 710 160701 HDFVGMB: Rdo for MQMONITOR          *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FORMCSD.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT DATAOUT
+                  ASSIGN TO SYS002-DA-3380-S-FOROUT
+                  ORGANIZATION IS SEQUENTIAL
+                  FILE STATUS IS OUTPUT-FILE-STATUS
+                  ACCESS IS SEQUENTIAL.
+       EJECT.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  DATAOUT
+           RECORD CONTAINS 1536 CHARACTERS
+           BLOCK CONTAINS 0 RECORDS
+           RECORDING MODE IS F
+           LABEL RECORDS ARE OMITTED.
+      * ****************************** *
+      * Define the output record types *
+      * ****************************** *
+       01  PROGRAM-F        PIC X(1536).
+       01  TRANSACTION-F    PIC X(1536).
+       01  CONNECTION-F     PIC X(1536).
+       01  MAPSET-F         PIC X(1536).
+       01  PARTITIONSET-F   PIC X(1536).
+       01  PROFILE-F        PIC X(1536).
+       01  SESSIONS-F       PIC X(1536).
+       01  RDO-TERMINAL-F   PIC X(1536).
+       01  RDO-TYPETERM-F   PIC X(1536).
+       01  RDO-FILE-F       PIC X(1536).
+       01  RDO-LSRPOOL-F    PIC X(1536).
+       01  RDO-PARTNER-F    PIC X(1536).
+       01  RDO-TRANCLASS-F  PIC X(1536).
+       01  TDQUEUE-F        PIC X(1536).
+       01  JOURNALMODEL-F   PIC X(1536).
+       01  DB2CONN-F        PIC X(1536).
+       01  DB2ENTRY-F       PIC X(1536).
+       01  DB2TRAN-F        PIC X(1536).
+       01  ENQMODEL-F       PIC X(1536).
+       01  TSMODEL-F        PIC X(1536).
+       01  PROCESSTYPE-F    PIC X(1536).
+       01  REQUESTMODEL-F   PIC X(1536).
+       01  TCPIPSERVICE-F   PIC X(1536).
+       01  DOCTEMPLATE-F    PIC X(1536).
+       01  CORBASERVER-F    PIC X(1536).
+       01  DJAR-F           PIC X(1536).
+       01  PIPELINE-F       PIC X(1536).
+       01  URIMAP-F         PIC X(1536).
+       01  WEBSERVICE-F     PIC X(1536).
+       01  IPCONN-F         PIC X(1536).
+       01  LIBRARY-F        PIC X(1536).
+       01  ATOMSERVICE-F    PIC X(1536).
+       01  BUNDLE-F         PIC X(1536).
+       01  JVMSERVER-F      PIC X(1536).
+       01  MQCONN-F         PIC X(1536).
+       01  MQMON-F          PIC X(1536).
+       EJECT.
+      * ************************************************************* *
+      *          D E F I N E  W O R K I N G  S T O R A G E            *
+      * ************************************************************* *
+       WORKING-STORAGE SECTION.
+       01  EXIT-KEYWORD-VALUE-W.
+           02 KEYWORD-VALUE-CHAR        PIC X OCCURS 255 TIMES.
+       01  RESOURCE-DEFINITION-DATA.
+           02 RESOURCE-TYPE             PIC X(12).
+           02 RESOURCE-KEYWORD-VALUES   PIC X(1600).
+       77  RESOURCE-DEFINITION-PTR      PIC 9999.
+       77  STRING-DELIMITER-1           PIC X VALUE HIGH-VALUES.
+       77  STRING-DELIMITER-2           PIC X VALUE LOW-VALUES.
+       77  MAX-KEYWORD-VALUE-LENGTH     PIC 9999 COMP.
+       77  KEYWORD-COUNT                PIC 99.
+       77  CMD-PART-1                   PIC X(100).
+       77  OBJECTS-OPTION               PIC X(7).
+           88  OBJECTS-NOT-SPECIFIED    VALUE IS SPACES.
+      * ************************************************************** *
+      * Define the error status flag and all return code values set by *
+      * this program.                                                  *
+      * ************************************************************** *
+       77  OUTPUT-FILE-STATUS           PIC XX.
+           88  ERROR-ON-OUTPUT-FILE     VALUES ARE '01' THRU '99'.
+       77  OBJECTS-OPTION-MISSING       PIC S9999 COMP VALUE IS 1.
+       77  OUTPUT-FILE-OPEN-ERROR       PIC S9999 COMP VALUE IS 2.
+       77  OUTPUT-FILE-CLOSE-ERROR      PIC S9999 COMP VALUE IS 3.
+       77  OUTPUT-FILE-WRITE-ERROR      PIC S9999 COMP VALUE IS 4.
+       77  KEYWORD-VALUE-LENGTH-ERROR   PIC S9999 COMP VALUE IS 5.
+       77  KEYWORD-TABLE-ERROR          PIC S9999 COMP VALUE IS 6.
+       77  UNDEFINED-RESOURCE-TYPE      PIC S9999 COMP VALUE IS 7.
+       77  OTHER-ERRORS                 PIC S9999 COMP VALUE IS 99.
+       77  OUTPUT-FILE-FLAG             PIC X.
+           88  OUTPUT-FILE-OPEN         VALUE IS '1'.
+       77  FILE-OPEN                    PIC X VALUE '1'.
+       EJECT.
+      * ************************************************************** *
+      * Define the maximum number of keywords in each type of resource *
+      * DEFINITION (PLUS 1 FOR THE DEF-PADDING FIELD).                 *
+      * ************************************************************** *
+       77   ATOMSERVICE-KEYWORD-COUNT   PIC 99 VALUE IS 13.
+       77   BUNDLE-KEYWORD-COUNT        PIC 99 VALUE IS 10.
+       77   CONNECTION-KEYWORD-COUNT    PIC 99 VALUE IS 28.
+       77   CORBASERVER-KEYWORD-COUNT   PIC 99 VALUE IS 20.
+       77   DB2CONN-KEYWORD-COUNT       PIC 99 VALUE IS 34.
+       77   DB2ENTRY-KEYWORD-COUNT      PIC 99 VALUE IS 18.
+       77   DB2TRAN-KEYWORD-COUNT       PIC 99 VALUE IS 9.
+       77   DJAR-KEYWORD-COUNT          PIC 99 VALUE IS 9.
+       77   DOCTEMPLATE-KEYWORD-COUNT   PIC 99 VALUE IS 18.
+       77   ENQMODEL-KEYWORD-COUNT      PIC 99 VALUE IS 10.
+       77   FILE-KEYWORD-COUNT          PIC 99 VALUE IS 44.
+       77   IPCONN-KEYWORD-COUNT        PIC 99 VALUE IS 28.
+       77   JOURNALMODEL-KEYWORD-COUNT  PIC 99 VALUE IS 10.
+       77   JVMSERVER-KEYWORD-COUNT     PIC 99 VALUE IS 11.
+       77   LIBRARY-KEYWORD-COUNT       PIC 99 VALUE IS 26.
+       77   LSRPOOL-KEYWORD-COUNT       PIC 99 VALUE IS 49.
+       77   MAPSET-KEYWORD-COUNT        PIC 99 VALUE IS 11.
+       77   MQCONN-KEYWORD-COUNT        PIC 99 VALUE IS 10.
+       77   MQMON-KEYWORD-COUNT         PIC 99 VALUE IS 14.
+       77   PARTITIONSET-KEYWORD-COUNT  PIC 99 VALUE IS 11.
+       77   PARTNER-KEYWORD-COUNT       PIC 99 VALUE IS 12.
+       77   PIPELINE-KEYWORD-COUNT      PIC 99 VALUE IS 12.
+       77   PROCESSTYPE-KEYWORD-COUNT   PIC 99 VALUE IS 11.
+       77   PROFILE-KEYWORD-COUNT       PIC 99 VALUE IS 23.
+       77   PROGRAM-KEYWORD-COUNT       PIC 99 VALUE IS 26.
+       77   REQUESTMODEL-KEYWORD-COUNT  PIC 99 VALUE IS 15.
+       77   SESSIONS-KEYWORD-COUNT      PIC 99 VALUE IS 29.
+       77   TCPIPSERVICE-KEYWORD-COUNT  PIC 99 VALUE IS 24.
+       77   TDQUEUE-KEYWORD-COUNT       PIC 99 VALUE IS 35.
+       77   TERMINAL-KEYWORD-COUNT      PIC 99 VALUE IS 32.
+       77   TRANCLASS-KEYWORD-COUNT     PIC 99 VALUE IS 9.
+       77   TRANSACTION-KEYWORD-COUNT   PIC 99 VALUE IS 45.
+       77   TSMODEL-KEYWORD-COUNT       PIC 99 VALUE IS 17.
+       77   TYPETERM-KEYWORD-COUNT      PIC 99 VALUE IS 72.
+       77   URIMAP-KEYWORD-COUNT        PIC 99 VALUE IS 33.
+       77   WEBSERVICE-KEYWORD-COUNT    PIC 99 VALUE IS 12.
+      * ************************************************************** *
+      * Define the area  which all the resource definitions are        *
+      * formatted into the appropriate columns before output. The      *
+      * first three fields of each record are:                         *
+      *             1) Resource type identifier e.g TRAN, PROG e.t.c   *
+      *             2) Resource name                                   *
+      *             3) RDO Group Name                                  *
+      * The fields that follow are dependent on the resource type      *
+      * and the overlays of FORMATTED-AREA which follow define         *
+      * the formats of the various different resources. It is essential*
+      * that any change in the CEDA language is reflected by changes   *
+      * to both the overlay definition and to the associated processing*
+      * procedure.                                                     *
+      * ************************************************************** *
+       01  FORMATTED-AREA.
+           05 RESOURCE-TYPE-F  PIC X(4).
+           05 RESOURCE-NAME-F  PIC X(8).
+           05 RDO-GROUP-NAME-F PIC X(8).
+           05 FORMATTED-DATA   PIC X(1516) USAGE IS DISPLAY.
+      *
+      *       A T O M S E R V I C E   D E F I N I T I O N
+      *
+      * Please Note - the length of ATOMSERVICE-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  ATOMSERVICE-W REDEFINES FORMATTED-DATA.
+           10  ATOMSERVICE-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 ATOMTYPE     PIC X(10)   USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 CONFIGFILE   PIC X(255)  USAGE IS DISPLAY.
+               15 RESOURCENAME PIC X(16)   USAGE IS DISPLAY.
+               15 RESOURCETYPE PIC X(7)    USAGE IS DISPLAY.
+               15 BINDFILE     PIC X(255)  USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(853)  USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       B U N D L E   D E F I N I T I O N
+      *
+      * Please Note - the length of BUNDLE-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  BUNDLE-W REDEFINES FORMATTED-DATA.
+           10  BUNDLE-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 BUNDLEDIR    PIC X(255)  USAGE IS DISPLAY.
+               15 BASESCOPE    PIC X(255)  USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(886)  USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       C O N N E C T I O N   D E F I N I T I O N
+      *
+      * Please Note - the length of CONNECTION-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  CONNECTION-W REDEFINES FORMATTED-DATA.
+           10  CONNECTION-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 NETNAME      PIC X(8)    USAGE IS DISPLAY.
+               15 INDSYS       PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTESYSTEM PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTENAME   PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTESYSNET PIC X(8)    USAGE IS DISPLAY.
+               15 ACCESSMETHOD PIC X(8)    USAGE IS DISPLAY.
+               15 PROTOCOL     PIC X(4)    USAGE IS DISPLAY.
+               15 CONNTYPE     PIC X(8)    USAGE IS DISPLAY.
+               15 SINGLESESS   PIC X(3)    USAGE IS DISPLAY.
+               15 DATASTREAM   PIC X(8)    USAGE IS DISPLAY.
+               15 RECORDFORMAT PIC X(2)    USAGE IS DISPLAY.
+               15 QUEUELIMIT   PIC X(4)    USAGE IS DISPLAY.
+               15 MAXQTIME     PIC X(4)    USAGE IS DISPLAY.
+               15 AUTOCONNECT  PIC X(3)    USAGE IS DISPLAY.
+               15 INSERVICE    PIC X(3)    USAGE IS DISPLAY.
+               15 SECURITYNAME PIC X(8)    USAGE IS DISPLAY.
+               15 ATTACHSEC    PIC X(10)   USAGE IS DISPLAY.
+               15 BINDSECURITY PIC X(3)    USAGE IS DISPLAY.
+               15 USEDFLTUSER  PIC X(3)    USAGE IS DISPLAY.
+               15 PSRECOVERY   PIC X(10)   USAGE IS DISPLAY.
+               15 XLNACTION    PIC X(5)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1290) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       C O R B A S E R V E R   D E F I N I T I O N
+      *
+      * Please Note - the length of CORBASERVER-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  CORBASERVER-W REDEFINES FORMATTED-DATA.
+           10  CORBASERVER-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 JNDIPREFIX   PIC X(255)  USAGE IS DISPLAY.
+               15 AUTOPUBLISH  PIC X(3)    USAGE IS DISPLAY.
+               15 SESSBEANTIME PIC X(8)    USAGE IS DISPLAY.
+               15 SHELF        PIC X(255)  USAGE IS DISPLAY.
+               15 DJARDIR      PIC X(255)  USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 HOST         PIC X(255)  USAGE IS DISPLAY.
+               15 CERTIFICATE  PIC X(56)   USAGE IS DISPLAY.
+               15 UNAUTH       PIC X(8)    USAGE IS DISPLAY.
+               15 CLIENTCERT   PIC X(8)    USAGE IS DISPLAY.
+               15 SSLUNAUTH    PIC X(8)    USAGE IS DISPLAY.
+               15 ASSERTED     PIC X(8)    USAGE IS DISPLAY.
+               15 CIPHERS      PIC X(56)   USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(221)  USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       D B 2 C O N N   D E F I N I T I O N
+      *
+      * Please Note - the length of DB2CONN-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  DB2CONN-W REDEFINES FORMATTED-DATA.
+           10  DB2CONN-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 CONNECTERROR PIC X(7)    USAGE IS DISPLAY.
+               15 DB2GROUPID   PIC X(4)    USAGE IS DISPLAY.
+               15 DB2ID        PIC X(4)    USAGE IS DISPLAY.
+               15 MSGQUEUE1    PIC X(4)    USAGE IS DISPLAY.
+               15 MSGQUEUE2    PIC X(4)    USAGE IS DISPLAY.
+               15 MSGQUEUE3    PIC X(4)    USAGE IS DISPLAY.
+               15 NONTERMREL   PIC X(3)    USAGE IS DISPLAY.
+               15 PURGECYCLE   PIC X(5)    USAGE IS DISPLAY.
+               15 RESYNCMEMBER PIC X(3)    USAGE IS DISPLAY.
+               15 REUSELIMIT   PIC X(5)    USAGE IS DISPLAY.
+               15 SIGNID       PIC X(8)    USAGE IS DISPLAY.
+               15 STANDBYMODE  PIC X(9)    USAGE IS DISPLAY.
+               15 STATSQUEUE   PIC X(4)    USAGE IS DISPLAY.
+               15 TCBLIMIT     PIC X(4)    USAGE IS DISPLAY.
+               15 THREADERROR  PIC X(5)    USAGE IS DISPLAY.
+               15 ACCOUNTREC   PIC X(4)    USAGE IS DISPLAY.
+               15 AUTHID       PIC X(8)    USAGE IS DISPLAY.
+               15 AUTHTYPE     PIC X(6)    USAGE IS DISPLAY.
+               15 DROLLBACK    PIC X(3)    USAGE IS DISPLAY.
+               15 PLAN         PIC X(8)    USAGE IS DISPLAY.
+               15 PLANEXITNAME PIC X(8)    USAGE IS DISPLAY.
+               15 PRIORITY     PIC X(5)    USAGE IS DISPLAY.
+               15 THREADLIMIT  PIC X(4)    USAGE IS DISPLAY.
+               15 THREADWAIT   PIC X(3)    USAGE IS DISPLAY.
+               15 COMAUTHID    PIC X(8)    USAGE IS DISPLAY.
+               15 COMAUTHTYPE  PIC X(6)    USAGE IS DISPLAY.
+               15 COMTHREADLIM PIC X(4)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1264) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       D B 2 E N T R Y   D E F I N I T I O N
+      *
+      * Please Note - the length of DB2ENTRY-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  DB2ENTRY-W REDEFINES FORMATTED-DATA.
+           10  DB2ENTRY-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 TRANSID      PIC X(4)    USAGE IS DISPLAY.
+               15 ACCOUNTREC   PIC X(4)    USAGE IS DISPLAY.
+               15 AUTHID       PIC X(8)    USAGE IS DISPLAY.
+               15 AUTHTYPE     PIC X(6)    USAGE IS DISPLAY.
+               15 DROLLBACK    PIC X(3)    USAGE IS DISPLAY.
+               15 PLAN         PIC X(8)    USAGE IS DISPLAY.
+               15 PLANEXITNAME PIC X(8)    USAGE IS DISPLAY.
+               15 PRIORITY     PIC X(5)    USAGE IS DISPLAY.
+               15 PROTECTNUM   PIC X(4)    USAGE IS DISPLAY.
+               15 THREADLIMIT  PIC X(4)    USAGE IS DISPLAY.
+               15 THREADWAIT   PIC X(4)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1346) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       D B 2 T R A N   D E F I N I T I O N
+      *
+      * Please Note - the length of DB2TRAN-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  DB2TRAN-W REDEFINES FORMATTED-DATA.
+           10  DB2TRAN-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 RDO-ENTRY    PIC X(8)    USAGE IS DISPLAY.
+               15 TRANSID      PIC X(4)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1392) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       D J A R   D E F I N I T I O N
+      *
+      * Please Note - the length of DJAR-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  DJAR-W REDEFINES FORMATTED-DATA.
+           10  DJAR-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 CORBASERVER  PIC X(4)    USAGE IS DISPLAY.
+               15 HFSFILE      PIC X(255)  USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1145) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       D O C T E M P L A T E   D E F I N I T I O N
+      *
+      * Please Note - the length of DOCTEMPLATE-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  DOCTEMPLATE-W REDEFINES FORMATTED-DATA.
+           10  DOCTEMPLATE-DEF.
+               15 DESCRIPTION     PIC X(58)   USAGE IS DISPLAY.
+               15 TEMPLATE-NAME   PIC X(48)   USAGE IS DISPLAY.
+               15 TEMPLATE-FILE   PIC X(8)    USAGE IS DISPLAY.
+               15 TEMPLATE-TSQ    PIC X(16)   USAGE IS DISPLAY.
+               15 TEMPLATE-TDQ    PIC X(4)    USAGE IS DISPLAY.
+               15 TEMPLATE-PROG   PIC X(8)    USAGE IS DISPLAY.
+               15 TEMPLATE-EXIT   PIC X(8)    USAGE IS DISPLAY.
+               15 TEMPLATE-DDNAME PIC X(8)    USAGE IS DISPLAY.
+               15 TEMPLATE-MEMBER PIC X(8)    USAGE IS DISPLAY.
+               15 HFSFILE         PIC X(255)  USAGE IS DISPLAY.
+               15 APPENDCRLF      PIC X(3)    USAGE IS DISPLAY.
+               15 TEMPLATE-TYPE   PIC X(6)    USAGE IS DISPLAY.
+               15 DEFINETIME      PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME      PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID     PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT     PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL     PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING     PIC X(1032) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       E N Q M O D E L   D E F I N I T I O N
+      *
+      * Please Note - the length of ENQMODEL-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  ENQMODEL-W REDEFINES FORMATTED-DATA.
+           10  ENQMODEL-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 NQSCOPE      PIC X(4)    USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 ENQNAME      PIC X(255)  USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1137) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       F I L E   D E F I N I T I O N
+      *
+      * Please Note - the length of FILE-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  FILE-W REDEFINES FORMATTED-DATA.
+           10  FILE-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 DSNAME       PIC X(44)   USAGE IS DISPLAY.
+      *        15 FI-PASSWORD  PIC X(8)    USAGE IS DISPLAY.@PI56763D
+               15 RLSACCESS    PIC X(3)    USAGE IS DISPLAY.
+               15 LSRPOOLNUM   PIC X(3)    USAGE IS DISPLAY.
+               15 READINTEG    PIC X(11)   USAGE IS DISPLAY.
+               15 DSNSHARING   PIC X(10)   USAGE IS DISPLAY.
+               15 STRINGS      PIC X(3)    USAGE IS DISPLAY.
+               15 NSRGROUP     PIC X(8)    USAGE IS DISPLAY.
+               15 REMOTESYSTEM PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTENAME   PIC X(8)    USAGE IS DISPLAY.
+               15 RECORDSIZE   PIC X(5)    USAGE IS DISPLAY.
+               15 KEYLENGTH    PIC X(3)    USAGE IS DISPLAY.
+               15 FI-STATUS    PIC X(9)    USAGE IS DISPLAY.
+               15 OPENTIME     PIC X(8)    USAGE IS DISPLAY.
+               15 DISPOSITION  PIC X(5)    USAGE IS DISPLAY.
+               15 DATABUFFERS  PIC X(5)    USAGE IS DISPLAY.
+               15 INDEXBUFFERS PIC X(5)    USAGE IS DISPLAY.
+               15 FI-TABLE     PIC X(4)    USAGE IS DISPLAY.
+               15 MAXNUMRECS   PIC X(8)    USAGE IS DISPLAY.
+               15 CFDTPOOL     PIC X(8)    USAGE IS DISPLAY.
+               15 TABLENAME    PIC X(8)    USAGE IS DISPLAY.
+               15 UPDATEMODEL  PIC X(10)   USAGE IS DISPLAY.
+               15 LOAD         PIC X(3)    USAGE IS DISPLAY.
+               15 RECORDFORMAT PIC X(1)    USAGE IS DISPLAY.
+               15 FI-ADD       PIC X(3)    USAGE IS DISPLAY.
+               15 FI-BROWSE    PIC X(3)    USAGE IS DISPLAY.
+               15 FI-DELETE    PIC X(3)    USAGE IS DISPLAY.
+               15 FI-READ      PIC X(3)    USAGE IS DISPLAY.
+               15 FI-UPDATE    PIC X(3)    USAGE IS DISPLAY.
+               15 JOURNAL      PIC X(2)    USAGE IS DISPLAY.
+               15 JNLREAD      PIC X(10)   USAGE IS DISPLAY.
+               15 JNLSYNCREAD  PIC X(3)    USAGE IS DISPLAY.
+               15 JNLUPDATE    PIC X(3)    USAGE IS DISPLAY.
+               15 JNLADD       PIC X(6)    USAGE IS DISPLAY.
+               15 JNLSYNCWRITE PIC X(3)    USAGE IS DISPLAY.
+               15 RECOVERY     PIC X(11)   USAGE IS DISPLAY.
+               15 FWDRECOVLOG  PIC X(2)    USAGE IS DISPLAY.
+               15 BACKUPTYPE   PIC X(7)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1166) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       I P C O N N   D E F I N I T I O N
+      *
+      * Please Note - the length of IPCONN-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  IPCONN-W REDEFINES FORMATTED-DATA.
+           10  IPCONN-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 APPLID       PIC X(8)    USAGE IS DISPLAY.
+               15 NETWORKID    PIC X(8)    USAGE IS DISPLAY.
+               15 HOST         PIC X(116)  USAGE IS DISPLAY.
+               15 PORT         PIC X(5)    USAGE IS DISPLAY.
+               15 TCPIPSERVICE PIC X(8)    USAGE IS DISPLAY.
+               15 HA           PIC X(3)    USAGE IS DISPLAY.
+               15 RECEIVECOUNT PIC X(3)    USAGE IS DISPLAY.
+               15 SENDCOUNT    PIC X(3)    USAGE IS DISPLAY.
+               15 QUEUELIMIT   PIC X(4)    USAGE IS DISPLAY.
+               15 MAXQTIME     PIC X(4)    USAGE IS DISPLAY.
+               15 AUTOCONNECT  PIC X(3)    USAGE IS DISPLAY.
+               15 INSERVICE    PIC X(3)    USAGE IS DISPLAY.
+               15 SSL          PIC X(3)    USAGE IS DISPLAY.
+               15 CERTIFICATE  PIC X(32)   USAGE IS DISPLAY.
+               15 CIPHERS      PIC X(56)   USAGE IS DISPLAY.
+               15 LINKAUTH     PIC X(8)    USAGE IS DISPLAY.
+               15 SECURITYNAME PIC X(8)    USAGE IS DISPLAY.
+               15 USERAUTH     PIC X(11)   USAGE IS DISPLAY.
+               15 IDPROP       PIC X(10)   USAGE IS DISPLAY.
+               15 XLNACTION    PIC X(5)    USAGE IS DISPLAY.
+               15 MIRRORLIFE   PIC X(7)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1096) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       J O U R N A L M O D E L   D E F I N I T I O N
+      *
+      * Please Note - the length of JOURNALMODEL-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  JOURNALMODEL-W REDEFINES FORMATTED-DATA.
+           10  JOURNALMODEL-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 JOURNALNAME  PIC X(8)    USAGE IS DISPLAY.
+               15 RDO-TYPE     PIC X(3)    USAGE IS DISPLAY.
+               15 STREAMNAME   PIC X(26)   USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1365) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       J V M S E R V E R   D E F I N I T I O N
+      *
+      * Please Note - the length of JVMSERVER-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  JVMSERVER-W REDEFINES FORMATTED-DATA.
+           10  JVMSERVER-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 JVMPROFILE   PIC X(8)    USAGE IS DISPLAY.
+               15 LERUNOPTS    PIC X(8)    USAGE IS DISPLAY.
+               15 THREADLIMIT  PIC X(3)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1377) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       L I B R A R Y   D E F I N I T I O N
+      *
+      * Please Note - the length of LIBRARY-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  LIBRARY-W REDEFINES FORMATTED-DATA.
+           10  LIBRARY-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 RANKING      PIC X(2)    USAGE IS DISPLAY.
+               15 CRITICAL     PIC X(3)    USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 DSNAME01     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME02     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME03     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME04     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME05     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME06     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME07     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME08     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME09     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME10     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME11     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME12     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME13     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME14     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME15     PIC X(44)   USAGE IS DISPLAY.
+               15 DSNAME16     PIC X(44)   USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(687)  USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       L S R P O O L   D E F I N I T I O N
+      *
+      * Please Note - the length of LSRPOOL-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  LSRPOOL-W REDEFINES FORMATTED-DATA.
+           10  LSRPOOL-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 LSRPOOLNUM   PIC X(3)    USAGE IS DISPLAY.
+               15 MAXKEYLENGTH PIC X(3)    USAGE IS DISPLAY.
+               15 SHARELIMIT   PIC X(3)    USAGE IS DISPLAY.
+               15 STRINGS      PIC X(3)    USAGE IS DISPLAY.
+               15 DATA512      PIC X(5)    USAGE IS DISPLAY.
+               15 DATA1K       PIC X(5)    USAGE IS DISPLAY.
+               15 DATA2K       PIC X(5)    USAGE IS DISPLAY.
+               15 DATA4K       PIC X(5)    USAGE IS DISPLAY.
+               15 DATA8K       PIC X(5)    USAGE IS DISPLAY.
+               15 DATA12K      PIC X(5)    USAGE IS DISPLAY.
+               15 DATA16K      PIC X(5)    USAGE IS DISPLAY.
+               15 DATA20K      PIC X(5)    USAGE IS DISPLAY.
+               15 DATA24K      PIC X(5)    USAGE IS DISPLAY.
+               15 DATA28K      PIC X(5)    USAGE IS DISPLAY.
+               15 DATA32K      PIC X(5)    USAGE IS DISPLAY.
+               15 INDEX512     PIC X(5)    USAGE IS DISPLAY.
+               15 INDEX1K      PIC X(5)    USAGE IS DISPLAY.
+               15 INDEX2K      PIC X(5)    USAGE IS DISPLAY.
+               15 INDEX4K      PIC X(5)    USAGE IS DISPLAY.
+               15 INDEX8K      PIC X(5)    USAGE IS DISPLAY.
+               15 INDEX12K     PIC X(5)    USAGE IS DISPLAY.
+               15 INDEX16K     PIC X(5)    USAGE IS DISPLAY.
+               15 INDEX20K     PIC X(5)    USAGE IS DISPLAY.
+               15 INDEX24K     PIC X(5)    USAGE IS DISPLAY.
+               15 INDEX28K     PIC X(5)    USAGE IS DISPLAY.
+               15 INDEX32K     PIC X(5)    USAGE IS DISPLAY.
+               15 HSDATA4K     PIC X(8)    USAGE IS DISPLAY.
+               15 HSDATA8K     PIC X(8)    USAGE IS DISPLAY.
+               15 HSDATA12K    PIC X(8)    USAGE IS DISPLAY.
+               15 HSDATA16K    PIC X(8)    USAGE IS DISPLAY.
+               15 HSDATA20K    PIC X(8)    USAGE IS DISPLAY.
+               15 HSDATA24K    PIC X(8)    USAGE IS DISPLAY.
+               15 HSDATA28K    PIC X(8)    USAGE IS DISPLAY.
+               15 HSDATA32K    PIC X(8)    USAGE IS DISPLAY.
+               15 HSINDEX4K    PIC X(8)    USAGE IS DISPLAY.
+               15 HSINDEX8K    PIC X(8)    USAGE IS DISPLAY.
+               15 HSINDEX12K   PIC X(8)    USAGE IS DISPLAY.
+               15 HSINDEX16K   PIC X(8)    USAGE IS DISPLAY.
+               15 HSINDEX20K   PIC X(8)    USAGE IS DISPLAY.
+               15 HSINDEX24K   PIC X(8)    USAGE IS DISPLAY.
+               15 HSINDEX28K   PIC X(8)    USAGE IS DISPLAY.
+               15 HSINDEX32K   PIC X(8)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1154) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       M A P S E T   D E F I N I T I O N
+      *
+      * Please Note - the length of MAPSET-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  MAPSET-W REDEFINES FORMATTED-DATA.
+           10  MAPSET-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 RESIDENT     PIC X(3)    USAGE IS DISPLAY.
+               15 RDO-USAGE    PIC X(9)    USAGE IS DISPLAY.
+               15 USELPACOPY   PIC X(3)    USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1381) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       M Q C O N N   D E F I N I T I O N
+      *
+      * Please Note - the length of MQCONN-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  MQCONN-W REDEFINES FORMATTED-DATA.
+           10  MQCONN-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 MQNAME       PIC X(4)    USAGE IS DISPLAY.
+               15 RESYNCMEMBER PIC X(11)   USAGE IS DISPLAY.
+               15 INITQNAME    PIC X(48)   USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1341) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       M Q M O N    D E F I N I T I O N
+      *
+      * Please Note - the length of MQMON-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  MQMON-W REDEFINES FORMATTED-DATA.
+           10  MQMON-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 STATUSM      PIC X(8)    USAGE IS DISPLAY.
+               15 AUTOSTART    PIC X(3)    USAGE IS DISPLAY.
+               15 MONDATA      PIC X(200)  USAGE IS DISPLAY.
+               15 MONUSERID    PIC X(8)    USAGE IS DISPLAY.
+               15 QNAME        PIC X(48)   USAGE IS DISPLAY.
+               15 USERID       PIC X(8)    USAGE IS DISPLAY.
+               15 TRANSACTION  PIC X(4)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1070) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       P A R T I T I O N S E T   D E F I N I T I O N
+      *
+      * Please Note - the length of PARTITIONSET-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  PARTITIONSET-W REDEFINES FORMATTED-DATA.
+           10  PARTITIONSET-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 RESIDENT     PIC X(3)    USAGE IS DISPLAY.
+               15 RDO-USAGE    PIC X(9)    USAGE IS DISPLAY.
+               15 USELPACOPY   PIC X(3)    USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1381) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       P A R T N E R   D E F I N I T I O N
+      *
+      * Please Note - the length of PARTNER-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  PARTNER-W REDEFINES FORMATTED-DATA.
+           10  PARTNER-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 NETNAME      PIC X(8)    USAGE IS DISPLAY.
+               15 NETWORK      PIC X(8)    USAGE IS DISPLAY.
+               15 PROFILE      PIC X(8)    USAGE IS DISPLAY.
+               15 TPNAME       PIC X(64)   USAGE IS DISPLAY.
+               15 XTPNAME      PIC X(128)  USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1188) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       P I P E L I N E   D E F I N I T I O N
+      *
+      * Please Note - the length of PIPELINE-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  PIPELINE-W REDEFINES FORMATTED-DATA.
+           10  PIPELINE-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 RESPWAIT     PIC X(4)    USAGE IS DISPLAY.
+               15 CONFIGFILE   PIC X(255)  USAGE IS DISPLAY.
+               15 SHELF        PIC X(255)  USAGE IS DISPLAY.
+               15 WSDIR        PIC X(255)  USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(627)  USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       P R O C E S S T Y P E   D E F I N I T I O N
+      *
+      * Please Note - the length of PROCESSTYPE-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  PROCESSTYPE-W REDEFINES FORMATTED-DATA.
+           10  PROCESSTYPE-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 PTYPE-FILE   PIC X(8)    USAGE IS DISPLAY.
+               15 AUDITLOG     PIC X(8)    USAGE IS DISPLAY.
+               15 AUDITLEVEL   PIC X(8)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1372) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       P R O F I L E   D E F I N I T I O N
+      *
+      * Please Note - the length of PROFILE-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  PROFILE-W REDEFINES FORMATTED-DATA.
+           10  PROFILE-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 SCRNSIZE     PIC X(9)    USAGE IS DISPLAY.
+               15 UCTRAN       PIC X(3)    USAGE IS DISPLAY.
+               15 MODENAME     PIC X(8)    USAGE IS DISPLAY.
+               15 FACILITYLIKE PIC X(4)    USAGE IS DISPLAY.
+               15 PRINTERCOMP  PIC X(3)    USAGE IS DISPLAY.
+               15 JOURNAL      PIC X(2)    USAGE IS DISPLAY.
+               15 MSGJRNL      PIC X(6)    USAGE IS DISPLAY.
+               15 MSGINTEG     PIC X(3)    USAGE IS DISPLAY.
+               15 ONEWTE       PIC X(3)    USAGE IS DISPLAY.
+               15 CHAINCONTROL PIC X(3)    USAGE IS DISPLAY.
+               15 DVSUPRT      PIC X(7)    USAGE IS DISPLAY.
+               15 INBFMH       PIC X(4)    USAGE IS DISPLAY.
+               15 RAQ          PIC X(3)    USAGE IS DISPLAY.
+               15 LOGREC       PIC X(3)    USAGE IS DISPLAY.
+               15 NEPCLASS     PIC X(3)    USAGE IS DISPLAY.
+               15 RTIMOUT      PIC X(4)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1336) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       P R O G R A M   D E F I N I T I O N
+      *
+      * Please Note - the length of PROGRAM-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  PROGRAM-W REDEFINES FORMATTED-DATA.
+           10  PROGRAM-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 LANGUAGE     PIC X(9)    USAGE IS DISPLAY.
+               15 RDO-RELOAD   PIC X(3)    USAGE IS DISPLAY.
+               15 RESIDENT     PIC X(3)    USAGE IS DISPLAY.
+               15 RDO-USAGE    PIC X(9)    USAGE IS DISPLAY.
+               15 USELPACOPY   PIC X(3)    USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 CEDF         PIC X(3)    USAGE IS DISPLAY.
+               15 DATALOCATION PIC X(5)    USAGE IS DISPLAY.
+               15 EXECKEY      PIC X(4)    USAGE IS DISPLAY.
+               15 CONCURRENCY  PIC X(10)   USAGE IS DISPLAY.
+               15 API          PIC X(7)    USAGE IS DISPLAY.
+               15 RDO-DYNAMIC  PIC X(3)    USAGE IS DISPLAY.
+               15 REMOTESYSTEM PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTENAME   PIC X(8)    USAGE IS DISPLAY.
+               15 TRANSID      PIC X(4)    USAGE IS DISPLAY.
+               15 EXECUTIONSET PIC X(9)    USAGE IS DISPLAY.
+               15 JVM          PIC X(3)    USAGE IS DISPLAY.
+               15 JVMCLASS     PIC X(255)  USAGE IS DISPLAY.
+               15 JVMSERVER    PIC X(8)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1046) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       R E Q U E S T M O D E L   D E F I N I T I O N
+      *
+      * Please Note - the length of REQUESTMODEL-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  REQUESTMODEL-W REDEFINES FORMATTED-DATA.
+           10  REQUESTMODEL-DEF.
+               15 DESCRIPTION   PIC X(58)   USAGE IS DISPLAY.
+               15 CORBASERVER   PIC X(4)    USAGE IS DISPLAY.
+               15 REQMODEL-TYPE PIC X(7)    USAGE IS DISPLAY.
+               15 BEANNAME      PIC X(240)  USAGE IS DISPLAY.
+               15 INTFACETYPE   PIC X(6)    USAGE IS DISPLAY.
+               15 MODULE        PIC X(255)  USAGE IS DISPLAY.
+               15 INTERFACE     PIC X(255)  USAGE IS DISPLAY.
+               15 OPERATION     PIC X(255)  USAGE IS DISPLAY.
+               15 TRANSID       PIC X(4)    USAGE IS DISPLAY.
+               15 DEFINETIME    PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME    PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID   PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT   PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL   PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING   PIC X(378)  USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       S E S S I O N S   D E F I N I T I O N
+      *
+      * Please Note - the length of SESSIONS-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  SESSIONS-W REDEFINES FORMATTED-DATA.
+           10  SESSIONS-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 CONNECTION   PIC X(4)    USAGE IS DISPLAY.
+               15 SESSNAME     PIC X(4)    USAGE IS DISPLAY.
+               15 NETNAMEQ     PIC X(8)    USAGE IS DISPLAY.
+               15 MODENAME     PIC X(8)    USAGE IS DISPLAY.
+               15 PROTOCOL     PIC X(4)    USAGE IS DISPLAY.
+               15 MAXIMUM      PIC X(7)    USAGE IS DISPLAY.
+               15 RECEIVEPFX   PIC X(2)    USAGE IS DISPLAY.
+               15 RECEIVECOUNT PIC X(3)    USAGE IS DISPLAY.
+               15 SENDPFX      PIC X(2)    USAGE IS DISPLAY.
+               15 SENDCOUNT    PIC X(3)    USAGE IS DISPLAY.
+               15 SENDSIZE     PIC X(5)    USAGE IS DISPLAY.
+               15 RECEIVESIZE  PIC X(5)    USAGE IS DISPLAY.
+               15 SESSPRIORITY PIC X(3)    USAGE IS DISPLAY.
+               15 USERID       PIC X(8)    USAGE IS DISPLAY.
+               15 AUTOCONNECT  PIC X(3)    USAGE IS DISPLAY.
+               15 BUILDCHAIN   PIC X(3)    USAGE IS DISPLAY.
+               15 USERAREALEN  PIC X(3)    USAGE IS DISPLAY.
+               15 IOAREALEN    PIC X(11)   USAGE IS DISPLAY.
+               15 RELREQ       PIC X(3)    USAGE IS DISPLAY.
+               15 DISCREQ      PIC X(3)    USAGE IS DISPLAY.
+               15 NEPCLASS     PIC X(3)    USAGE IS DISPLAY.
+               15 RECOVOPTION  PIC X(11)   USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1298) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       T C P I P S E R V I C E   D E F I N I T I O N
+      *
+      * Please Note - the length of TCPIPSERVICE-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  TCPIPSERVICE-W REDEFINES FORMATTED-DATA.
+           10  TCPIPSERVICE-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 URM          PIC X(8)    USAGE IS DISPLAY.
+               15 PORTNUMBER   PIC X(5)    USAGE IS DISPLAY.
+               15 STATUZ       PIC X(6)    USAGE IS DISPLAY.
+               15 PROTOCOL     PIC X(4)    USAGE IS DISPLAY.
+               15 TRANSACTION  PIC X(4)    USAGE IS DISPLAY.
+               15 BACKLOG      PIC X(5)    USAGE IS DISPLAY.
+      *        15 TSQPREFIX    PIC X(6)    USAGE IS DISPLAY.@PI59763D
+               15 HOST         PIC X(116)  USAGE IS DISPLAY.
+               15 IPADDRESS    PIC X(15)   USAGE IS DISPLAY.
+               15 SPECIFTCPS   PIC X(8)    USAGE IS DISPLAY.
+               15 SOCKETCLOSE  PIC X(6)    USAGE IS DISPLAY.
+               15 MAXPERSIST   PIC X(5)    USAGE IS DISPLAY.
+               15 MAXDATALEN   PIC X(6)    USAGE IS DISPLAY.
+               15 SSL          PIC X(10)   USAGE IS DISPLAY.
+               15 CERTIFICATE  PIC X(56)   USAGE IS DISPLAY.
+               15 CIPHERS      PIC X(56)   USAGE IS DISPLAY.
+               15 AUTHENTICATE PIC X(12)   USAGE IS DISPLAY.
+               15 TCPIP-REALM  PIC X(56)   USAGE IS DISPLAY.
+               15 ATTACHSEC    PIC X(6)    USAGE IS DISPLAY.
+      *        15 DNSGROUP     PIC X(18)   USAGE IS DISPLAY.@PI67594D
+      *        15 GRPCRITICAL  PIC X(3)    USAGE IS DISPLAY.@PI67594D
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1007) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       T D Q U E U E   D E F I N I T I O N
+      *
+      * Please Note - the length of TDQUEUE-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  TDQUEUE-W REDEFINES FORMATTED-DATA.
+           10  TDQUEUE-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 RDO-TYPE     PIC X(8)    USAGE IS DISPLAY.
+               15 DATABUFFERS  PIC X(3)    USAGE IS DISPLAY.
+               15 DDNAME       PIC X(8)    USAGE IS DISPLAY.
+               15 DSNAME       PIC X(44)   USAGE IS DISPLAY.
+               15 SYSOUTCLASS  PIC X(1)    USAGE IS DISPLAY.
+               15 ERROROPTION  PIC X(6)    USAGE IS DISPLAY.
+               15 OPENTIME     PIC X(8)    USAGE IS DISPLAY.
+               15 RDO-REWIND   PIC X(6)    USAGE IS DISPLAY.
+               15 TYPEFILE     PIC X(6)    USAGE IS DISPLAY.
+               15 RECORDSIZE   PIC X(5)    USAGE IS DISPLAY.
+               15 BLOCKSIZE    PIC X(5)    USAGE IS DISPLAY.
+               15 RECORDFORMAT PIC X(8)    USAGE IS DISPLAY.
+               15 BLOCKFORMAT  PIC X(9)    USAGE IS DISPLAY.
+               15 PRINTCONTROL PIC X(1)    USAGE IS DISPLAY.
+               15 DISPOSITION  PIC X(3)    USAGE IS DISPLAY.
+               15 JOBUSERID    PIC X(8)    USAGE IS DISPLAY.
+               15 ATIFACILITY  PIC X(8)    USAGE IS DISPLAY.
+               15 RECOVSTATUS  PIC X(8)    USAGE IS DISPLAY.
+               15 FACILITYID   PIC X(4)    USAGE IS DISPLAY.
+               15 TRANSID      PIC X(4)    USAGE IS DISPLAY.
+               15 TRIGGERLEVEL PIC X(5)    USAGE IS DISPLAY.
+               15 USERID       PIC X(8)    USAGE IS DISPLAY.
+               15 RDO-WAIT     PIC X(3)    USAGE IS DISPLAY.
+               15 WAITACTION   PIC X(6)    USAGE IS DISPLAY.
+               15 INDIRECTNAME PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTENAME   PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTESYSTEM PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTELENGTH PIC X(5)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1212) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       T E R M I N A L   D E F I N I T I O N
+      *
+      * Please Note - the length of RDO-TERMINAL-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  RDO-TERMINAL-W REDEFINES FORMATTED-DATA.
+           10  RDO-TERMINAL-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 AUTINSTMODEL PIC X(4)    USAGE IS DISPLAY.
+               15 AUTINSTNAME  PIC X(8)    USAGE IS DISPLAY.
+               15 TYPETERM     PIC X(8)    USAGE IS DISPLAY.
+               15 NETNAME      PIC X(8)    USAGE IS DISPLAY.
+               15 RDO-CONSNAME PIC X(8)    USAGE IS DISPLAY.
+               15 REMOTESYSTEM PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTENAME   PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTESYSNET PIC X(8)    USAGE IS DISPLAY.
+               15 MODENAME     PIC X(8)    USAGE IS DISPLAY.
+               15 PRINTER      PIC X(4)    USAGE IS DISPLAY.
+               15 PRINTERCOPY  PIC X(3)    USAGE IS DISPLAY.
+               15 ALTPRINTER   PIC X(4)    USAGE IS DISPLAY.
+               15 ALTPRINTCOPY PIC X(3)    USAGE IS DISPLAY.
+               15 POOL         PIC X(8)    USAGE IS DISPLAY.
+               15 TASKLIMIT    PIC X(5)    USAGE IS DISPLAY.
+               15 USERID       PIC X(8)    USAGE IS DISPLAY.
+               15 NATLANG      PIC X(1)    USAGE IS DISPLAY.
+               15 TRANSACTION  PIC X(4)    USAGE IS DISPLAY.
+               15 TERMPRIORITY PIC X(3)    USAGE IS DISPLAY.
+               15 INSERVICE    PIC X(3)    USAGE IS DISPLAY.
+               15 SOLICITED    PIC X(3)    USAGE IS DISPLAY.
+               15 SECURITYNAME PIC X(8)    USAGE IS DISPLAY.
+               15 ATTACHSEC    PIC X(10)   USAGE IS DISPLAY.
+               15 BINDSECURITY PIC X(3)    USAGE IS DISPLAY.
+               15 USEDFLTUSER  PIC X(3)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1271) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       T R A N C L A S S   D E F I N I T I O N
+      *
+      * Please Note - the length of TRANCLASS-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  TRANCLASS-W REDEFINES FORMATTED-DATA.
+           10  TRANCLASS-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 MAXACTIVE    PIC X(3)    USAGE IS DISPLAY.
+               15 PURGETHRESH  PIC X(7)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1394) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       T R A N S A C T I O N   D E F I N I T I O N
+      *
+      * Please Note - the length of TRANSACTION-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  TRANSACTION-W REDEFINES FORMATTED-DATA.
+           10  TRANSACTION-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 TXN-PROGRAM  PIC X(8)    USAGE IS DISPLAY.
+               15 TWASIZE      PIC X(5)    USAGE IS DISPLAY.
+               15 PROFILE      PIC X(8)    USAGE IS DISPLAY.
+               15 PARTITIONSET PIC X(8)    USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 TASKDATALOC  PIC X(5)    USAGE IS DISPLAY.
+               15 TASKDATAKEY  PIC X(4)    USAGE IS DISPLAY.
+               15 STORAGECLEAR PIC X(3)    USAGE IS DISPLAY.
+               15 RUNAWAY      PIC X(7)    USAGE IS DISPLAY.
+               15 SHUTDOWN     PIC X(8)    USAGE IS DISPLAY.
+               15 ISOLATE      PIC X(3)    USAGE IS DISPLAY.
+               15 BREXIT       PIC X(8)    USAGE IS DISPLAY.
+               15 RDO-DYNAMIC  PIC X(3)    USAGE IS DISPLAY.
+               15 ROUTABLE     PIC X(3)    USAGE IS DISPLAY.
+               15 REMOTESYSTEM PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTENAME   PIC X(8)    USAGE IS DISPLAY.
+               15 TRPROF       PIC X(8)    USAGE IS DISPLAY.
+               15 LOCALQ       PIC X(3)    USAGE IS DISPLAY.
+               15 PRIORITY     PIC X(3)    USAGE IS DISPLAY.
+               15 TRANCLASS    PIC X(8)    USAGE IS DISPLAY.
+               15 ALIAS        PIC X(4)    USAGE IS DISPLAY.
+               15 TASKREQ      PIC X(4)    USAGE IS DISPLAY.
+               15 XTRANID      PIC X(8)    USAGE IS DISPLAY.
+               15 TPNAME       PIC X(64)   USAGE IS DISPLAY.
+               15 XTPNAME      PIC X(128)  USAGE IS DISPLAY.
+               15 DTIMOUT      PIC X(4)    USAGE IS DISPLAY.
+               15 RESTART      PIC X(3)    USAGE IS DISPLAY.
+               15 SPURGE       PIC X(3)    USAGE IS DISPLAY.
+               15 TPURGE       PIC X(3)    USAGE IS DISPLAY.
+               15 DUMP         PIC X(3)    USAGE IS DISPLAY.
+               15 RDO-TRACE    PIC X(3)    USAGE IS DISPLAY.
+               15 CONFDATA     PIC X(3)    USAGE IS DISPLAY.
+               15 OTSTIMEOUT   PIC X(6)    USAGE IS DISPLAY.
+               15 ACTION       PIC X(7)    USAGE IS DISPLAY.
+               15 RDO-WAIT     PIC X(3)    USAGE IS DISPLAY.
+               15 WAITTIME     PIC X(8)    USAGE IS DISPLAY.
+               15 RESSEC       PIC X(3)    USAGE IS DISPLAY.
+               15 CMDSEC       PIC X(3)    USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1029) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       T S M O D E L   D E F I N I T I O N
+      *
+      * Please Note - the length of TSMODEL-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  TSMODEL-W REDEFINES FORMATTED-DATA.
+           10  TSMODEL-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 PREFIX       PIC X(16)   USAGE IS DISPLAY.
+               15 XPREFIX      PIC X(32)   USAGE IS DISPLAY.
+               15 LOCATION     PIC X(9)    USAGE IS DISPLAY.
+               15 EXPIRYINTMIN PIC X(6)    USAGE IS DISPLAY.
+               15 RECOVERY     PIC X(3)    USAGE IS DISPLAY.
+               15 RDO-SECURITY PIC X(3)    USAGE IS DISPLAY.
+               15 POOLNAME     PIC X(8)    USAGE IS DISPLAY.
+               15 REMOTESYSTEM PIC X(4)    USAGE IS DISPLAY.
+               15 REMOTEPREFIX PIC X(16)   USAGE IS DISPLAY.
+               15 XREMOTEPFX   PIC X(32)   USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1275) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       T Y P E T E R M   D E F I N I T I O N
+      *
+      * Please Note - the length of TYPETERM-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  TYPETERM-W REDEFINES FORMATTED-DATA.
+           10  TYPETERM-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 DEVICE       PIC X(8)    USAGE IS DISPLAY.
+               15 TERMMODEL    PIC X(1)    USAGE IS DISPLAY.
+               15 SESSIONTYPE  PIC X(8)    USAGE IS DISPLAY.
+               15 LDCLIST      PIC X(8)    USAGE IS DISPLAY.
+               15 SHIPPABLE    PIC X(3)    USAGE IS DISPLAY.
+               15 PAGESIZE     PIC X(7)    USAGE IS DISPLAY.
+               15 ALTPAGE      PIC X(7)    USAGE IS DISPLAY.
+               15 ALTSUFFIX    PIC X(1)    USAGE IS DISPLAY.
+               15 FMHPARM      PIC X(3)    USAGE IS DISPLAY.
+               15 OBOPERID     PIC X(3)    USAGE IS DISPLAY.
+               15 AUTOPAGE     PIC X(3)    USAGE IS DISPLAY.
+               15 DEFSCREEN    PIC X(7)    USAGE IS DISPLAY.
+               15 ALTSCREEN    PIC X(7)    USAGE IS DISPLAY.
+               15 APLKYBD      PIC X(3)    USAGE IS DISPLAY.
+               15 APLTEXT      PIC X(3)    USAGE IS DISPLAY.
+               15 AUDIBLEALARM PIC X(3)    USAGE IS DISPLAY.
+               15 COLOR        PIC X(3)    USAGE IS DISPLAY.
+               15 RDO-COPY     PIC X(3)    USAGE IS DISPLAY.
+               15 DUALCASEKYBD PIC X(3)    USAGE IS DISPLAY.
+               15 EXTENDEDDS   PIC X(3)    USAGE IS DISPLAY.
+               15 HILIGHT      PIC X(3)    USAGE IS DISPLAY.
+               15 KATAKANA     PIC X(3)    USAGE IS DISPLAY.
+               15 LIGHTPEN     PIC X(3)    USAGE IS DISPLAY.
+               15 MSRCONTROL   PIC X(3)    USAGE IS DISPLAY.
+               15 OBFORMAT     PIC X(3)    USAGE IS DISPLAY.
+               15 PARTITIONS   PIC X(3)    USAGE IS DISPLAY.
+               15 PRINTADAPTER PIC X(3)    USAGE IS DISPLAY.
+               15 PROGSYMBOLS  PIC X(3)    USAGE IS DISPLAY.
+               15 VALIDATION   PIC X(3)    USAGE IS DISPLAY.
+               15 FORMFEED     PIC X(3)    USAGE IS DISPLAY.
+               15 HORIZFORM    PIC X(3)    USAGE IS DISPLAY.
+               15 VERTICALFORM PIC X(3)    USAGE IS DISPLAY.
+               15 TEXTKYBD     PIC X(3)    USAGE IS DISPLAY.
+               15 TEXTPRINT    PIC X(3)    USAGE IS DISPLAY.
+               15 QUERY        PIC X(4)    USAGE IS DISPLAY.
+               15 OUTLINE      PIC X(3)    USAGE IS DISPLAY.
+               15 SOSI         PIC X(3)    USAGE IS DISPLAY.
+               15 BACKTRANS    PIC X(3)    USAGE IS DISPLAY.
+               15 CGCSGID      PIC X(11)   USAGE IS DISPLAY.
+               15 ASCII        PIC X(2)    USAGE IS DISPLAY.
+               15 SENDSIZE     PIC X(5)    USAGE IS DISPLAY.
+               15 RECEIVESIZE  PIC X(5)    USAGE IS DISPLAY.
+               15 BRACKET      PIC X(3)    USAGE IS DISPLAY.
+               15 LOGMODE      PIC X(8)    USAGE IS DISPLAY.
+               15 ERRLASTLINE  PIC X(3)    USAGE IS DISPLAY.
+               15 ERRINTENSIFY PIC X(3)    USAGE IS DISPLAY.
+               15 ERRCOLOR     PIC X(9)    USAGE IS DISPLAY.
+               15 ERRHILIGHT   PIC X(9)    USAGE IS DISPLAY.
+               15 AUTOCONNECT  PIC X(3)    USAGE IS DISPLAY.
+               15 ATI          PIC X(3)    USAGE IS DISPLAY.
+               15 TTI          PIC X(3)    USAGE IS DISPLAY.
+               15 CREATESESS   PIC X(3)    USAGE IS DISPLAY.
+               15 RELREQ       PIC X(3)    USAGE IS DISPLAY.
+               15 DISCREQ      PIC X(3)    USAGE IS DISPLAY.
+               15 NEPCLASS     PIC X(3)    USAGE IS DISPLAY.
+               15 SIGNOFF      PIC X(6)    USAGE IS DISPLAY.
+               15 RSTSIGNOFF   PIC X(7)    USAGE IS DISPLAY.
+               15 ROUTEDMSGS   PIC X(8)    USAGE IS DISPLAY.
+               15 LOGONMSG     PIC X(3)    USAGE IS DISPLAY.
+               15 BUILDCHAIN   PIC X(3)    USAGE IS DISPLAY.
+               15 USERAREALEN  PIC X(3)    USAGE IS DISPLAY.
+               15 IOAREALEN    PIC X(11)   USAGE IS DISPLAY.
+               15 UCTRAN       PIC X(6)    USAGE IS DISPLAY.
+               15 RECOVOPTION  PIC X(11)   USAGE IS DISPLAY.
+               15 RECOVNOTIFY  PIC X(11)   USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(1114) USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       U R I M A P   D E F I N I T I O N
+      *
+      * Please Note - the length of URIMAP-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  URIMAP-W REDEFINES FORMATTED-DATA.
+           10  URIMAP-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 STATUZ       PIC X(8)    USAGE IS DISPLAY.
+               15 RDO-USAGE    PIC X(9)    USAGE IS DISPLAY.
+               15 SCHEME       PIC X(5)    USAGE IS DISPLAY.
+               15 PORT         PIC X(5)    USAGE IS DISPLAY.
+               15 HOST         PIC X(116)  USAGE IS DISPLAY.
+               15 PATH         PIC X(255)  USAGE IS DISPLAY.
+               15 SOCKETCLOSE  PIC X(6)    USAGE IS DISPLAY.
+               15 TCPIPSERVICE PIC X(8)    USAGE IS DISPLAY.
+               15 ANALYZER     PIC X(3)    USAGE IS DISPLAY.
+               15 CONVERTER    PIC X(8)    USAGE IS DISPLAY.
+               15 TRANSACTION  PIC X(4)    USAGE IS DISPLAY.
+               15 URI-PROGRAM  PIC X(8)    USAGE IS DISPLAY.
+               15 PIPELINE     PIC X(8)    USAGE IS DISPLAY.
+               15 WEBSERVICE   PIC X(32)   USAGE IS DISPLAY.
+               15 ATOMSERVICE  PIC X(8)    USAGE IS DISPLAY.
+               15 USERID       PIC X(8)    USAGE IS DISPLAY.
+               15 CIPHERS      PIC X(56)   USAGE IS DISPLAY.
+               15 CERTIFICATE  PIC X(32)   USAGE IS DISPLAY.
+               15 AUTHENTICATE PIC X(5)    USAGE IS DISPLAY.
+               15 MEDIATYPE    PIC X(56)   USAGE IS DISPLAY.
+               15 CHARACTERSET PIC X(40)   USAGE IS DISPLAY.
+               15 HOSTCODEPAGE PIC X(10)   USAGE IS DISPLAY.
+               15 TEMPLATENAME PIC X(48)   USAGE IS DISPLAY.
+               15 HFSFILE      PIC X(255)  USAGE IS DISPLAY.
+               15 REDIRECTTYPE PIC X(9)    USAGE IS DISPLAY.
+               15 LOCATION     PIC X(255)  USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(147)  USAGE IS DISPLAY.
+       EJECT.
+      *
+      *       W E B S E R V I C E   D E F I N I T I O N
+      *
+      * Please Note - the length of WEBSERVICE-W must be equal to
+      *               that of FORMATTED-DATA.
+      *
+       05  WEBSERVICE-W REDEFINES FORMATTED-DATA.
+           10  WEBSERVICE-DEF.
+               15 DESCRIPTION  PIC X(58)   USAGE IS DISPLAY.
+               15 PIPELINE     PIC X(8)    USAGE IS DISPLAY.
+               15 VALIDATION   PIC X(3)    USAGE IS DISPLAY.
+               15 WSBIND       PIC X(255)  USAGE IS DISPLAY.
+               15 WSDLFILE     PIC X(255)  USAGE IS DISPLAY.
+               15 ARCHIVEFILE  PIC X(255)  USAGE IS DISPLAY.
+               15 DEFINETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGETIME   PIC X(17)   USAGE IS DISPLAY.
+               15 CHANGEUSRID  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGENT  PIC X(8)    USAGE IS DISPLAY.
+               15 CHANGEAGREL  PIC X(4)    USAGE IS DISPLAY.
+               15 DEF-PADDING  PIC X(628)  USAGE IS DISPLAY.
+       EJECT.
+      *
+      * ************************************************************** *
+      *                                                                *
+      *      D E F I N E  L I N K A G E  W I T H  D F H C S D U P      *
+      *                                                                *
+      *  COBOL automatically establishes addressability to the values  *
+      *  addressed by the parameter list passed from the exit in       *
+      *  DFHCSDUP. So all we need do here is define the actual values  *
+      *  themselves.                                                   *
+      * ************************************************************** *
+       LINKAGE SECTION.
+       01  EXIT-FUNCTION-CODE      PIC 99 COMP.
+             88 INITIAL-CALL         VALUE IS 0.
+             88 LIST-START-CALL      VALUE IS 2.
+             88 GROUP-START-CALL     VALUE IS 4.
+             88 OBJECT-START-CALL    VALUE IS 6.
+             88 DETAIL-CALL          VALUE IS 8.
+             88 OBJECT-END-CALL      VALUE IS 10.
+             88 GROUP-END-CALL       VALUE IS 12.
+             88 LIST-END-CALL        VALUE IS 14.
+             88 FINAL-CALL           VALUE IS 16.
+       01  EXIT-WORK-AREA-PTR      POINTER.
+       01  EXIT-BACK-TRANS-CMD-PTR POINTER.
+       01  EXIT-LIST-NAME          PIC X(8).
+       01  EXIT-GROUP-NAME         PIC X(8).
+       01  EXIT-OBJECT-TYPE        PIC X(12).
+       01  EXIT-OBJECT-NAME        PIC X(8).
+       01  EXIT-KEYWORD-NAME       PIC X(12).
+       01  EXIT-KEYWORD-LENGTH     PIC 99 COMP.
+       01  EXIT-KEYWORD-VALUE.
+           03 EXIT-KEYWORD-CHAR    PIC X OCCURS 1 TO 182
+                                   DEPENDING ON EXIT-KEYWORD-LENGTH.
+       01  BACK-TRANSLATED-COMMAND PIC X(100).
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *        M A I N L I N E  C O D E  S T A R T S  H E R E          *
+      *        ==============================================          *
+      *                                                                *
+      * ************************************************************** *
+       PROCEDURE DIVISION USING EXIT-FUNCTION-CODE
+                                EXIT-WORK-AREA-PTR
+                                EXIT-BACK-TRANS-CMD-PTR
+                                EXIT-LIST-NAME
+                                EXIT-GROUP-NAME
+                                EXIT-OBJECT-TYPE
+                                EXIT-OBJECT-NAME
+                                EXIT-KEYWORD-NAME
+                                EXIT-KEYWORD-LENGTH
+                                EXIT-KEYWORD-VALUE.
+      * ************************************************ *
+      * Determine the call type and process accordingly. *
+      * ************************************************ *
+       MAIN-CONTROL.
+           IF INITIAL-CALL THEN
+             PERFORM PROCESS-INITIAL-CALL
+           ELSE
+           IF OBJECT-START-CALL THEN
+             PERFORM PROCESS-OBJECT-START-CALL
+           ELSE
+           IF DETAIL-CALL THEN
+             PERFORM PROCESS-DETAIL-CALL
+           ELSE
+           IF OBJECT-END-CALL THEN
+             PERFORM PROCESS-OBJECT-END-CALL
+           ELSE
+           IF FINAL-CALL THEN
+             PERFORM PROCESS-FINAL-CALL
+             PERFORM CHECK-RETURN-CODE
+             STOP RUN.
+      * ************************************************************** *
+      * If the value in the 'RETURN-CODE' special register at this     *
+      * point is non-zero then the current EXTRACT command will        *
+      * be terminated. Return must be made via a GOBACK in order to    *
+      * prevent STOP RUN processing.                                   *
+      * Call CHECK-RETURN-CODE to check return code setting and close  *
+      * output file is necessary                                       *
+      * ************************************************************** *
+           PERFORM CHECK-RETURN-CODE.
+           GOBACK.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *         P R O C E S S  A N  I N I T I A L  C A L L             *
+      *                                                                *
+      *  This is the first call to the exit program so:                *
+      *                                                                *
+      *    1)  Check user has specified OBJECTS on the EXTRACT command *
+      *        If not set return code and quit.                        *
+      *                                                                *
+      *    2)  Open the output file. The return code special register  *
+      *        is set if an I/O error occurs.                          *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-INITIAL-CALL.
+           MOVE '00' TO OUTPUT-FILE-STATUS.
+           MOVE ZERO TO OUTPUT-FILE-FLAG.
+           MOVE SPACES TO OBJECTS-OPTION.
+           SET ADDRESS OF BACK-TRANSLATED-COMMAND TO
+                          EXIT-BACK-TRANS-CMD-PTR.
+           UNSTRING BACK-TRANSLATED-COMMAND DELIMITED BY 'OBJECTS'
+                    INTO CMD-PART-1 DELIMITER IN OBJECTS-OPTION.
+           IF OBJECTS-NOT-SPECIFIED THEN
+             MOVE OBJECTS-OPTION-MISSING TO RETURN-CODE
+           ELSE
+             OPEN OUTPUT DATAOUT
+             IF ERROR-ON-OUTPUT-FILE THEN
+               MOVE OUTPUT-FILE-OPEN-ERROR TO RETURN-CODE
+             ELSE
+               MOVE FILE-OPEN TO OUTPUT-FILE-FLAG
+             END-IF
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *      P R O C E S S  A N  O B J E C T  S T A R T  C A L L       *
+      *                                                                *
+      *  Clear the keyword save area RESOURCE-KEYWORD-VALUES and reset *
+      *  the pointer to it in preparation for the construction of a    *
+      *  new string of keyword values by PROCESS-DETAIL-CALL in the    *
+      *  'detail' call that follow before the next 'object end' type   *
+      *  call.                                                         *
+      * ************************************************************** *
+       PROCESS-OBJECT-START-CALL.
+           MOVE SPACES TO RESOURCE-KEYWORD-VALUES.
+           MOVE 1 TO RESOURCE-DEFINITION-PTR.
+           MOVE EXIT-OBJECT-TYPE TO RESOURCE-TYPE.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *     P R O C E S S  A  K E Y W O R D  D E T A I L  C A L L      *
+      *                                                                *
+      *  Process next keyword. Check length is not longer than         *
+      *  maximum catered for by this program. If not then add it to    *
+      *  the string of values built so far in RESOURCE-KEYWORD-VALUES. *
+      * ************************************************************** *
+       PROCESS-DETAIL-CALL.
+           MOVE EXIT-KEYWORD-VALUE TO EXIT-KEYWORD-VALUE-W.
+           MOVE EXIT-KEYWORD-LENGTH TO MAX-KEYWORD-VALUE-LENGTH.
+           IF MAX-KEYWORD-VALUE-LENGTH > 255 THEN
+              MOVE KEYWORD-VALUE-LENGTH-ERROR TO RETURN-CODE
+            ELSE
+      *      ********************************************************* *
+      *      * Concatenate the new key word and a delimiter then add   *
+      *      * this new string to the string in RESOURCE-KEYWORD-VALUES*
+      *      ********************************************************* *
+             ADD 1 TO  EXIT-KEYWORD-LENGTH.
+             MOVE STRING-DELIMITER-1 TO
+                  KEYWORD-VALUE-CHAR(EXIT-KEYWORD-LENGTH).
+             STRING EXIT-KEYWORD-VALUE-W
+                    DELIMITED BY STRING-DELIMITER-1
+                    STRING-DELIMITER-2 DELIMITED BY SIZE
+                    INTO RESOURCE-KEYWORD-VALUES
+                    WITH POINTER RESOURCE-DEFINITION-PTR.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *           P R O C E S S  A N  O B J E C T  E N D  C A L L      *
+      *                                                                *
+      *  Clear the formatting area. Set object name and RDO group      *
+      *  name. Invoke the appropriate processing procedure to format   *
+      *  the contents of RESOURCE-KEYWORD-VALUES into the output buffer*
+      * ************************************************************** *
+       PROCESS-OBJECT-END-CALL.
+           MOVE SPACES TO FORMATTED-AREA.
+           MOVE ZERO TO KEYWORD-COUNT.
+           MOVE EXIT-OBJECT-NAME TO RESOURCE-NAME-F.
+           MOVE EXIT-GROUP-NAME TO RDO-GROUP-NAME-F.
+           IF RESOURCE-TYPE = 'PROGRAM' THEN
+                PERFORM PROCESS-PROGRAM-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'TRANSACTION' THEN
+                PERFORM PROCESS-TRANSACTION-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'ATOMSERVICE' THEN
+                PERFORM PROCESS-ATOMSERVICE-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'BUNDLE' THEN
+                PERFORM PROCESS-BUNDLE-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'CONNECTION' THEN
+                PERFORM PROCESS-CONNECTION-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'MAPSET' THEN
+                PERFORM PROCESS-MAPSET-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'PARTITIONSET' THEN
+                PERFORM PROCESS-PARTITION-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'PROFILE' THEN
+                PERFORM PROCESS-PROFILE-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'SESSIONS' THEN
+                PERFORM PROCESS-SESSIONS-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'TERMINAL' THEN
+                PERFORM PROCESS-TERMINAL-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'TYPETERM' THEN
+                PERFORM PROCESS-TYPETERM-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'FILE' THEN
+                PERFORM PROCESS-FILE-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'LIBRARY' THEN
+                PERFORM PROCESS-LIBRARY-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'LSRPOOL' THEN
+                PERFORM PROCESS-LSRPOOL-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'MQCONN' THEN
+                PERFORM PROCESS-MQCONN-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'MQMONITOR' THEN
+                PERFORM PROCESS-MQMON-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'PARTNER' THEN
+                PERFORM PROCESS-PARTNER-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'TRANCLASS' THEN
+                PERFORM PROCESS-TRANCLASS-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'TDQUEUE' THEN
+                PERFORM PROCESS-TDQUEUE-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'JOURNALMODEL' THEN
+                PERFORM PROCESS-JOURNALM-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'DB2CONN' THEN
+                PERFORM PROCESS-DB2CONN-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'DB2ENTRY' THEN
+                PERFORM PROCESS-DB2ENTRY-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'DB2TRAN' THEN
+                PERFORM PROCESS-DB2TRAN-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'ENQMODEL' THEN
+                PERFORM PROCESS-ENQMODEL-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'TSMODEL' THEN
+                PERFORM PROCESS-TSMODEL-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'PROCESSTYPE' THEN
+                PERFORM PROCESS-PROCESSTYPE-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'DOCTEMPLATE' THEN
+                PERFORM PROCESS-DOCTEMPLATE-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'REQUESTMODEL' THEN
+                PERFORM PROCESS-REQUESTM-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'TCPIPSERVICE' THEN
+                PERFORM PROCESS-TCPIPSER-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'CORBASERVER' THEN
+                PERFORM PROCESS-CORBASERVER-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'DJAR' THEN
+                PERFORM PROCESS-DJAR-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'PIPELINE' THEN
+                PERFORM PROCESS-PIPELINE-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'URIMAP' THEN
+                PERFORM PROCESS-URIMAP-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'WEBSERVICE' THEN
+                PERFORM PROCESS-WEBSERVICE-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'IPCONN' THEN
+                PERFORM PROCESS-IPCONN-DEFINITION
+           ELSE
+           IF RESOURCE-TYPE = 'JVMSERVER' THEN
+                PERFORM PROCESS-JVMSERVER-DEFINITION
+           ELSE
+                MOVE UNDEFINED-RESOURCE-TYPE TO RETURN-CODE.
+           IF ERROR-ON-OUTPUT-FILE THEN
+             MOVE OUTPUT-FILE-WRITE-ERROR TO RETURN-CODE.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *          P R O C E S S  A  F I N A L  C A L L                  *
+      *                                                                *
+      *  Final call to exit so close the output file. The return code  *
+      *  special register is set if an I/O error occurs.               *
+      * ************************************************************** *
+       PROCESS-FINAL-CALL.
+           CLOSE  DATAOUT.
+           IF ERROR-ON-OUTPUT-FILE THEN
+             MOVE OUTPUT-FILE-CLOSE-ERROR TO RETURN-CODE
+           ELSE
+             MOVE ZERO TO OUTPUT-FILE-FLAG.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *          C H E C K  R E T U R N  C O D E                       *
+      *                                                                *
+      *  If return code is non zero and the output file is still open  *
+      *  we must close the output file to avoid any C03 abends.        *
+      * ************************************************************** *
+       CHECK-RETURN-CODE.
+           IF RETURN-CODE IS NOT ZERO AND OUTPUT-FILE-OPEN THEN
+               CLOSE  DATAOUT.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *      F O R M A T T I N G  O F  O U T P U T  R E C O R D        *
+      *      ==================================================        *
+      *                                                                *
+      *  The following procedures format the data saved by a series of *
+      *  'detail' calls to this exit program in RESOURCE-KEYWORD-VALUES*
+      *  into the appropriate output record columns. The keywords      *
+      *  are passed to the exit in the order in which they appear      *
+      *  both in a off-line utility LIST command output listing and    *
+      *  also the order in which they occur on the CEDA panels (see the*
+      *  RESOURCE DEFINITION (ONLINE) manual). The definitions of the  *
+      *  receiving fields is such as to allow for the greatest possible*
+      *  value. It is important that any changes in the CEDA language  *
+      *  are reflected by changes in this portion of the program.      *
+      *                                                                *
+      * ************************************************************** *
+
+
+      * ************************************************************** *
+      *                                                                *
+      *     F O R M A T  A  P R O G R A M  D E F I N I T I O N         *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-PROGRAM-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF PROGRAM-DEF
+                  LANGUAGE      OF PROGRAM-DEF
+                  RDO-RELOAD    OF PROGRAM-DEF
+                  RESIDENT      OF PROGRAM-DEF
+                  RDO-USAGE     OF PROGRAM-DEF
+                  USELPACOPY    OF PROGRAM-DEF
+                  STATUZ        OF PROGRAM-DEF
+                  CEDF          OF PROGRAM-DEF
+                  DATALOCATION  OF PROGRAM-DEF
+                  EXECKEY       OF PROGRAM-DEF
+                  CONCURRENCY   OF PROGRAM-DEF
+                  API           OF PROGRAM-DEF
+                  RDO-DYNAMIC   OF PROGRAM-DEF
+                  REMOTESYSTEM  OF PROGRAM-DEF
+                  REMOTENAME    OF PROGRAM-DEF
+                  TRANSID       OF PROGRAM-DEF
+                  EXECUTIONSET  OF PROGRAM-DEF
+                  JVM           OF PROGRAM-DEF
+                  JVMCLASS      OF PROGRAM-DEF
+                  JVMSERVER     OF PROGRAM-DEF
+                  DEFINETIME    OF PROGRAM-DEF
+                  CHANGETIME    OF PROGRAM-DEF
+                  CHANGEUSRID   OF PROGRAM-DEF
+                  CHANGEAGENT   OF PROGRAM-DEF
+                  CHANGEAGREL   OF PROGRAM-DEF
+                  DEF-PADDING   OF PROGRAM-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a PROGRAM.                        *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < PROGRAM-KEYWORD-COUNT OR
+              DEF-PADDING OF PROGRAM-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'PROG' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO PROGRAM-F
+                WRITE PROGRAM-F.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *   F O R M A T  A  T R A N S A C T I O N   D E F I N I T I O N  *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-TRANSACTION-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF TRANSACTION-DEF
+                  TXN-PROGRAM   OF TRANSACTION-DEF
+                  TWASIZE       OF TRANSACTION-DEF
+                  PROFILE       OF TRANSACTION-DEF
+                  PARTITIONSET  OF TRANSACTION-DEF
+                  STATUZ        OF TRANSACTION-DEF
+                  TASKDATALOC   OF TRANSACTION-DEF
+                  TASKDATAKEY   OF TRANSACTION-DEF
+                  STORAGECLEAR  OF TRANSACTION-DEF
+                  RUNAWAY       OF TRANSACTION-DEF
+                  SHUTDOWN      OF TRANSACTION-DEF
+                  ISOLATE       OF TRANSACTION-DEF
+                  BREXIT        OF TRANSACTION-DEF
+                  RDO-DYNAMIC   OF TRANSACTION-DEF
+                  ROUTABLE      OF TRANSACTION-DEF
+                  REMOTESYSTEM  OF TRANSACTION-DEF
+                  REMOTENAME    OF TRANSACTION-DEF
+                  TRPROF        OF TRANSACTION-DEF
+                  LOCALQ        OF TRANSACTION-DEF
+                  PRIORITY      OF TRANSACTION-DEF
+                  TRANCLASS     OF TRANSACTION-DEF
+                  ALIAS         OF TRANSACTION-DEF
+                  TASKREQ       OF TRANSACTION-DEF
+                  XTRANID       OF TRANSACTION-DEF
+                  TPNAME        OF TRANSACTION-DEF
+                  XTPNAME       OF TRANSACTION-DEF
+                  DTIMOUT       OF TRANSACTION-DEF
+                  RESTART       OF TRANSACTION-DEF
+                  SPURGE        OF TRANSACTION-DEF
+                  TPURGE        OF TRANSACTION-DEF
+                  DUMP          OF TRANSACTION-DEF
+                  RDO-TRACE     OF TRANSACTION-DEF
+                  CONFDATA      OF TRANSACTION-DEF
+                  OTSTIMEOUT    OF TRANSACTION-DEF
+                  ACTION        OF TRANSACTION-DEF
+                  RDO-WAIT      OF TRANSACTION-DEF
+                  WAITTIME      OF TRANSACTION-DEF
+                  RESSEC        OF TRANSACTION-DEF
+                  CMDSEC        OF TRANSACTION-DEF
+                  DEFINETIME    OF TRANSACTION-DEF
+                  CHANGETIME    OF TRANSACTION-DEF
+                  CHANGEUSRID   OF TRANSACTION-DEF
+                  CHANGEAGENT   OF TRANSACTION-DEF
+                  CHANGEAGREL   OF TRANSACTION-DEF
+                  DEF-PADDING   OF TRANSACTION-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a TRANSACTION.                    *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < TRANSACTION-KEYWORD-COUNT OR
+              DEF-PADDING OF TRANSACTION-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'TRAN' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO TRANSACTION-F
+                WRITE TRANSACTION-F.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *  F O R M A T  A N  A T O M S E R V I C E   D E F I N I T I O N *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-ATOMSERVICE-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF ATOMSERVICE-DEF
+                  ATOMTYPE      OF ATOMSERVICE-DEF
+                  STATUZ        OF ATOMSERVICE-DEF
+                  CONFIGFILE    OF ATOMSERVICE-DEF
+                  RESOURCENAME  OF ATOMSERVICE-DEF
+                  RESOURCETYPE  OF ATOMSERVICE-DEF
+                  BINDFILE      OF ATOMSERVICE-DEF
+                  DEFINETIME    OF ATOMSERVICE-DEF
+                  CHANGETIME    OF ATOMSERVICE-DEF
+                  CHANGEUSRID   OF ATOMSERVICE-DEF
+                  CHANGEAGENT   OF ATOMSERVICE-DEF
+                  CHANGEAGREL   OF ATOMSERVICE-DEF
+                  DEF-PADDING   OF ATOMSERVICE-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of an ATOMSERVICE                    *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < ATOMSERVICE-KEYWORD-COUNT OR
+              DEF-PADDING OF ATOMSERVICE-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'ATOM' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO ATOMSERVICE-F
+                WRITE ATOMSERVICE-F.
+       EJECT.
+
+      * ************************************************************** *
+      *                                                                *
+      *    F O R M A T  A  B U N D L E   D E F I N I T I O N           *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-BUNDLE-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF BUNDLE-DEF
+                  STATUZ        OF BUNDLE-DEF
+                  BUNDLEDIR     OF BUNDLE-DEF
+                  BASESCOPE     OF BUNDLE-DEF
+                  DEFINETIME    OF BUNDLE-DEF
+                  CHANGETIME    OF BUNDLE-DEF
+                  CHANGEUSRID   OF BUNDLE-DEF
+                  CHANGEAGENT   OF BUNDLE-DEF
+                  CHANGEAGREL   OF BUNDLE-DEF
+                  DEF-PADDING   OF BUNDLE-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a BUNDLE.                         *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < BUNDLE-KEYWORD-COUNT OR
+              DEF-PADDING OF BUNDLE-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'BUND' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO BUNDLE-F
+                WRITE BUNDLE-F.
+       EJECT.
+
+      * ************************************************************** *
+      *                                                                *
+      *    F O R M A T  A  C O N N E C T I O N   D E F I N I T I O N   *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-CONNECTION-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF CONNECTION-DEF
+                  NETNAME       OF CONNECTION-DEF
+                  INDSYS        OF CONNECTION-DEF
+                  REMOTESYSTEM  OF CONNECTION-DEF
+                  REMOTENAME    OF CONNECTION-DEF
+                  REMOTESYSNET  OF CONNECTION-DEF
+                  ACCESSMETHOD  OF CONNECTION-DEF
+                  PROTOCOL      OF CONNECTION-DEF
+                  CONNTYPE      OF CONNECTION-DEF
+                  SINGLESESS    OF CONNECTION-DEF
+                  DATASTREAM    OF CONNECTION-DEF
+                  RECORDFORMAT  OF CONNECTION-DEF
+                  QUEUELIMIT    OF CONNECTION-DEF
+                  MAXQTIME      OF CONNECTION-DEF
+                  AUTOCONNECT   OF CONNECTION-DEF
+                  INSERVICE     OF CONNECTION-DEF
+                  SECURITYNAME  OF CONNECTION-DEF
+                  ATTACHSEC     OF CONNECTION-DEF
+                  BINDSECURITY  OF CONNECTION-DEF
+                  USEDFLTUSER   OF CONNECTION-DEF
+                  PSRECOVERY    OF CONNECTION-DEF
+                  XLNACTION     OF CONNECTION-DEF
+                  DEFINETIME    OF CONNECTION-DEF
+                  CHANGETIME    OF CONNECTION-DEF
+                  CHANGEUSRID   OF CONNECTION-DEF
+                  CHANGEAGENT   OF CONNECTION-DEF
+                  CHANGEAGREL   OF CONNECTION-DEF
+                  DEF-PADDING   OF CONNECTION-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a CONNECTION.                     *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < CONNECTION-KEYWORD-COUNT OR
+              DEF-PADDING OF CONNECTION-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'CONN' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO CONNECTION-F
+                WRITE CONNECTION-F.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *        F O R M A T  A  M A P S E T   D E F I N I T I O N       *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-MAPSET-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF MAPSET-DEF
+                  RESIDENT      OF MAPSET-DEF
+                  RDO-USAGE     OF MAPSET-DEF
+                  USELPACOPY    OF MAPSET-DEF
+                  STATUZ        OF MAPSET-DEF
+                  DEFINETIME    OF MAPSET-DEF
+                  CHANGETIME    OF MAPSET-DEF
+                  CHANGEUSRID   OF MAPSET-DEF
+                  CHANGEAGENT   OF MAPSET-DEF
+                  CHANGEAGREL   OF MAPSET-DEF
+                  DEF-PADDING   OF MAPSET-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a MAPSET.                         *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < MAPSET-KEYWORD-COUNT OR
+              DEF-PADDING OF MAPSET-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'MAPS' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO MAPSET-F
+                WRITE MAPSET-F.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *  F O R M A T  A  P A R T I T I O N S E T  D E F I N I T I O N  *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-PARTITION-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF PARTITIONSET-DEF
+                  RESIDENT      OF PARTITIONSET-DEF
+                  RDO-USAGE     OF PARTITIONSET-DEF
+                  USELPACOPY    OF PARTITIONSET-DEF
+                  STATUZ        OF PARTITIONSET-DEF
+                  DEFINETIME    OF PARTITIONSET-DEF
+                  CHANGETIME    OF PARTITIONSET-DEF
+                  CHANGEUSRID   OF PARTITIONSET-DEF
+                  CHANGEAGENT   OF PARTITIONSET-DEF
+                  CHANGEAGREL   OF PARTITIONSET-DEF
+                  DEF-PADDING   OF PARTITIONSET-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a PARTITIONSET.                   *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < PARTITIONSET-KEYWORD-COUNT OR
+              DEF-PADDING OF PARTITIONSET-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'PART' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO PARTITIONSET-F
+                WRITE PARTITIONSET-F.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  P R O F I L E  D E F I N I T I O N       *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-PROFILE-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF PROFILE-DEF
+                  SCRNSIZE      OF PROFILE-DEF
+                  UCTRAN        OF PROFILE-DEF
+                  MODENAME      OF PROFILE-DEF
+                  FACILITYLIKE  OF PROFILE-DEF
+                  PRINTERCOMP   OF PROFILE-DEF
+                  JOURNAL       OF PROFILE-DEF
+                  MSGJRNL       OF PROFILE-DEF
+                  MSGINTEG      OF PROFILE-DEF
+                  ONEWTE        OF PROFILE-DEF
+                  CHAINCONTROL  OF PROFILE-DEF
+                  DVSUPRT       OF PROFILE-DEF
+                  INBFMH        OF PROFILE-DEF
+                  RAQ           OF PROFILE-DEF
+                  LOGREC        OF PROFILE-DEF
+                  NEPCLASS      OF PROFILE-DEF
+                  RTIMOUT       OF PROFILE-DEF
+                  DEFINETIME    OF PROFILE-DEF
+                  CHANGETIME    OF PROFILE-DEF
+                  CHANGEUSRID   OF PROFILE-DEF
+                  CHANGEAGENT   OF PROFILE-DEF
+                  CHANGEAGREL   OF PROFILE-DEF
+                  DEF-PADDING   OF PROFILE-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a PROFILE.                        *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < PROFILE-KEYWORD-COUNT OR
+              DEF-PADDING OF PROFILE-DEF IS NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'PROF' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO PROFILE-F
+                WRITE PROFILE-F.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  S E S S I O N  D E F I N I T I O N       *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-SESSIONS-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF SESSIONS-DEF
+                  CONNECTION    OF SESSIONS-DEF
+                  SESSNAME      OF SESSIONS-DEF
+                  NETNAMEQ      OF SESSIONS-DEF
+                  MODENAME      OF SESSIONS-DEF
+                  PROTOCOL      OF SESSIONS-DEF
+                  MAXIMUM       OF SESSIONS-DEF
+                  RECEIVEPFX    OF SESSIONS-DEF
+                  RECEIVECOUNT  OF SESSIONS-DEF
+                  SENDPFX       OF SESSIONS-DEF
+                  SENDCOUNT     OF SESSIONS-DEF
+                  SENDSIZE      OF SESSIONS-DEF
+                  RECEIVESIZE   OF SESSIONS-DEF
+                  SESSPRIORITY  OF SESSIONS-DEF
+                  USERID        OF SESSIONS-DEF
+                  AUTOCONNECT   OF SESSIONS-DEF
+                  BUILDCHAIN    OF SESSIONS-DEF
+                  USERAREALEN   OF SESSIONS-DEF
+                  IOAREALEN     OF SESSIONS-DEF
+                  RELREQ        OF SESSIONS-DEF
+                  DISCREQ       OF SESSIONS-DEF
+                  NEPCLASS      OF SESSIONS-DEF
+                  RECOVOPTION   OF SESSIONS-DEF
+                  DEFINETIME    OF SESSIONS-DEF
+                  CHANGETIME    OF SESSIONS-DEF
+                  CHANGEUSRID   OF SESSIONS-DEF
+                  CHANGEAGENT   OF SESSIONS-DEF
+                  CHANGEAGREL   OF SESSIONS-DEF
+                  DEF-PADDING   OF SESSIONS-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a SESSION.                        *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < SESSIONS-KEYWORD-COUNT OR
+              DEF-PADDING OF SESSIONS-DEF IS NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'SESS' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO SESSIONS-F
+                WRITE SESSIONS-F.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *      F O R M A T  A  T E R M I N A L  D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-TERMINAL-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF RDO-TERMINAL-DEF
+                  AUTINSTMODEL  OF RDO-TERMINAL-DEF
+                  AUTINSTNAME   OF RDO-TERMINAL-DEF
+                  TYPETERM      OF RDO-TERMINAL-DEF
+                  NETNAME       OF RDO-TERMINAL-DEF
+                  RDO-CONSNAME  OF RDO-TERMINAL-DEF
+                  REMOTESYSTEM  OF RDO-TERMINAL-DEF
+                  REMOTENAME    OF RDO-TERMINAL-DEF
+                  REMOTESYSNET  OF RDO-TERMINAL-DEF
+                  MODENAME      OF RDO-TERMINAL-DEF
+                  PRINTER       OF RDO-TERMINAL-DEF
+                  PRINTERCOPY   OF RDO-TERMINAL-DEF
+                  ALTPRINTER    OF RDO-TERMINAL-DEF
+                  ALTPRINTCOPY  OF RDO-TERMINAL-DEF
+                  POOL          OF RDO-TERMINAL-DEF
+                  TASKLIMIT     OF RDO-TERMINAL-DEF
+                  USERID        OF RDO-TERMINAL-DEF
+                  NATLANG       OF RDO-TERMINAL-DEF
+                  TRANSACTION   OF RDO-TERMINAL-DEF
+                  TERMPRIORITY  OF RDO-TERMINAL-DEF
+                  INSERVICE     OF RDO-TERMINAL-DEF
+                  SOLICITED     OF RDO-TERMINAL-DEF
+                  SECURITYNAME  OF RDO-TERMINAL-DEF
+                  ATTACHSEC     OF RDO-TERMINAL-DEF
+                  BINDSECURITY  OF RDO-TERMINAL-DEF
+                  USEDFLTUSER   OF RDO-TERMINAL-DEF
+                  DEFINETIME    OF RDO-TERMINAL-DEF
+                  CHANGETIME    OF RDO-TERMINAL-DEF
+                  CHANGEUSRID   OF RDO-TERMINAL-DEF
+                  CHANGEAGENT   OF RDO-TERMINAL-DEF
+                  CHANGEAGREL   OF RDO-TERMINAL-DEF
+                  DEF-PADDING   OF RDO-TERMINAL-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a TERMINAL.                       *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < TERMINAL-KEYWORD-COUNT OR
+              DEF-PADDING OF RDO-TERMINAL-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'TERM' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO RDO-TERMINAL-F
+                WRITE RDO-TERMINAL-F.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *      F O R M A T  A  T Y P E T E R M  D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-TYPETERM-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF TYPETERM-DEF
+                  DEVICE        OF TYPETERM-DEF
+                  TERMMODEL     OF TYPETERM-DEF
+                  SESSIONTYPE   OF TYPETERM-DEF
+                  LDCLIST       OF TYPETERM-DEF
+                  SHIPPABLE     OF TYPETERM-DEF
+                  PAGESIZE      OF TYPETERM-DEF
+                  ALTPAGE       OF TYPETERM-DEF
+                  ALTSUFFIX     OF TYPETERM-DEF
+                  FMHPARM       OF TYPETERM-DEF
+                  OBOPERID      OF TYPETERM-DEF
+                  AUTOPAGE      OF TYPETERM-DEF
+                  DEFSCREEN     OF TYPETERM-DEF
+                  ALTSCREEN     OF TYPETERM-DEF
+                  APLKYBD       OF TYPETERM-DEF
+                  APLTEXT       OF TYPETERM-DEF
+                  AUDIBLEALARM  OF TYPETERM-DEF
+                  COLOR         OF TYPETERM-DEF
+                  RDO-COPY      OF TYPETERM-DEF
+                  DUALCASEKYBD  OF TYPETERM-DEF
+                  EXTENDEDDS    OF TYPETERM-DEF
+                  HILIGHT       OF TYPETERM-DEF
+                  KATAKANA      OF TYPETERM-DEF
+                  LIGHTPEN      OF TYPETERM-DEF
+                  MSRCONTROL    OF TYPETERM-DEF
+                  OBFORMAT      OF TYPETERM-DEF
+                  PARTITIONS    OF TYPETERM-DEF
+                  PRINTADAPTER  OF TYPETERM-DEF
+                  PROGSYMBOLS   OF TYPETERM-DEF
+                  VALIDATION    OF TYPETERM-DEF
+                  FORMFEED      OF TYPETERM-DEF
+                  HORIZFORM     OF TYPETERM-DEF
+                  VERTICALFORM  OF TYPETERM-DEF
+                  TEXTKYBD      OF TYPETERM-DEF
+                  TEXTPRINT     OF TYPETERM-DEF
+                  QUERY         OF TYPETERM-DEF
+                  OUTLINE       OF TYPETERM-DEF
+                  SOSI          OF TYPETERM-DEF
+                  BACKTRANS     OF TYPETERM-DEF
+                  CGCSGID       OF TYPETERM-DEF
+                  ASCII         OF TYPETERM-DEF
+                  SENDSIZE      OF TYPETERM-DEF
+                  RECEIVESIZE   OF TYPETERM-DEF
+                  BRACKET       OF TYPETERM-DEF
+                  LOGMODE       OF TYPETERM-DEF
+                  ERRLASTLINE   OF TYPETERM-DEF
+                  ERRINTENSIFY  OF TYPETERM-DEF
+                  ERRCOLOR      OF TYPETERM-DEF
+                  ERRHILIGHT    OF TYPETERM-DEF
+                  AUTOCONNECT   OF TYPETERM-DEF
+                  ATI           OF TYPETERM-DEF
+                  TTI           OF TYPETERM-DEF
+                  CREATESESS    OF TYPETERM-DEF
+                  RELREQ        OF TYPETERM-DEF
+                  DISCREQ       OF TYPETERM-DEF
+                  NEPCLASS      OF TYPETERM-DEF
+                  SIGNOFF       OF TYPETERM-DEF
+                  RSTSIGNOFF    OF TYPETERM-DEF
+                  ROUTEDMSGS    OF TYPETERM-DEF
+                  LOGONMSG      OF TYPETERM-DEF
+                  BUILDCHAIN    OF TYPETERM-DEF
+                  USERAREALEN   OF TYPETERM-DEF
+                  IOAREALEN     OF TYPETERM-DEF
+                  UCTRAN        OF TYPETERM-DEF
+                  RECOVOPTION   OF TYPETERM-DEF
+                  RECOVNOTIFY   OF TYPETERM-DEF
+                  DEFINETIME    OF TYPETERM-DEF
+                  CHANGETIME    OF TYPETERM-DEF
+                  CHANGEUSRID   OF TYPETERM-DEF
+                  CHANGEAGENT   OF TYPETERM-DEF
+                  CHANGEAGREL   OF TYPETERM-DEF
+                  DEF-PADDING   OF TYPETERM-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a TYPETERM.                       *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < TYPETERM-KEYWORD-COUNT OR
+              DEF-PADDING OF TYPETERM-W IS NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'TYPE' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO RDO-TYPETERM-F
+                WRITE RDO-TYPETERM-F.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  F I L E  D E F I N I T I O N             *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-FILE-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF FILE-DEF
+                  DSNAME        OF FILE-DEF
+      *           FI-PASSWORD   OF FILE-DEF                 @PI59763D  *
+                  RLSACCESS     OF FILE-DEF
+                  LSRPOOLNUM    OF FILE-DEF
+                  READINTEG     OF FILE-DEF
+                  DSNSHARING    OF FILE-DEF
+                  STRINGS       OF FILE-DEF
+                  NSRGROUP      OF FILE-DEF
+                  REMOTESYSTEM  OF FILE-DEF
+                  REMOTENAME    OF FILE-DEF
+                  RECORDSIZE    OF FILE-DEF
+                  KEYLENGTH     OF FILE-DEF
+                  FI-STATUS     OF FILE-DEF
+                  OPENTIME      OF FILE-DEF
+                  DISPOSITION   OF FILE-DEF
+                  DATABUFFERS   OF FILE-DEF
+                  INDEXBUFFERS  OF FILE-DEF
+                  FI-TABLE      OF FILE-DEF
+                  MAXNUMRECS    OF FILE-DEF
+                  CFDTPOOL      OF FILE-DEF
+                  TABLENAME     OF FILE-DEF
+                  UPDATEMODEL   OF FILE-DEF
+                  LOAD          OF FILE-DEF
+                  RECORDFORMAT  OF FILE-DEF
+                  FI-ADD        OF FILE-DEF
+                  FI-BROWSE     OF FILE-DEF
+                  FI-DELETE     OF FILE-DEF
+                  FI-READ       OF FILE-DEF
+                  FI-UPDATE     OF FILE-DEF
+                  JOURNAL       OF FILE-DEF
+                  JNLREAD       OF FILE-DEF
+                  JNLSYNCREAD   OF FILE-DEF
+                  JNLUPDATE     OF FILE-DEF
+                  JNLADD        OF FILE-DEF
+                  JNLSYNCWRITE  OF FILE-DEF
+                  RECOVERY      OF FILE-DEF
+                  FWDRECOVLOG   OF FILE-DEF
+                  BACKUPTYPE    OF FILE-DEF
+                  DEFINETIME    OF FILE-DEF
+                  CHANGETIME    OF FILE-DEF
+                  CHANGEUSRID   OF FILE-DEF
+                  CHANGEAGENT   OF FILE-DEF
+                  CHANGEAGREL   OF FILE-DEF
+                  DEF-PADDING   OF FILE-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a FILE.                           *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < FILE-KEYWORD-COUNT OR
+              DEF-PADDING OF FILE-DEF IS NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'FILE' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO RDO-FILE-F
+                WRITE RDO-FILE-F.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  L S R P O O L  D E F I N I T I O N       *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-LSRPOOL-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF LSRPOOL-DEF
+                  LSRPOOLNUM    OF LSRPOOL-DEF
+                  MAXKEYLENGTH  OF LSRPOOL-DEF
+                  SHARELIMIT    OF LSRPOOL-DEF
+                  STRINGS       OF LSRPOOL-DEF
+                  DATA512       OF LSRPOOL-DEF
+                  DATA1K        OF LSRPOOL-DEF
+                  DATA2K        OF LSRPOOL-DEF
+                  DATA4K        OF LSRPOOL-DEF
+                  DATA8K        OF LSRPOOL-DEF
+                  DATA12K       OF LSRPOOL-DEF
+                  DATA16K       OF LSRPOOL-DEF
+                  DATA20K       OF LSRPOOL-DEF
+                  DATA24K       OF LSRPOOL-DEF
+                  DATA28K       OF LSRPOOL-DEF
+                  DATA32K       OF LSRPOOL-DEF
+                  INDEX512      OF LSRPOOL-DEF
+                  INDEX1K       OF LSRPOOL-DEF
+                  INDEX2K       OF LSRPOOL-DEF
+                  INDEX4K       OF LSRPOOL-DEF
+                  INDEX8K       OF LSRPOOL-DEF
+                  INDEX12K      OF LSRPOOL-DEF
+                  INDEX16K      OF LSRPOOL-DEF
+                  INDEX20K      OF LSRPOOL-DEF
+                  INDEX24K      OF LSRPOOL-DEF
+                  INDEX28K      OF LSRPOOL-DEF
+                  INDEX32K      OF LSRPOOL-DEF
+                  HSDATA4K      OF LSRPOOL-DEF
+                  HSDATA8K      OF LSRPOOL-DEF
+                  HSDATA12K     OF LSRPOOL-DEF
+                  HSDATA16K     OF LSRPOOL-DEF
+                  HSDATA20K     OF LSRPOOL-DEF
+                  HSDATA24K     OF LSRPOOL-DEF
+                  HSDATA28K     OF LSRPOOL-DEF
+                  HSDATA32K     OF LSRPOOL-DEF
+                  HSINDEX4K     OF LSRPOOL-DEF
+                  HSINDEX8K     OF LSRPOOL-DEF
+                  HSINDEX12K    OF LSRPOOL-DEF
+                  HSINDEX16K    OF LSRPOOL-DEF
+                  HSINDEX20K    OF LSRPOOL-DEF
+                  HSINDEX24K    OF LSRPOOL-DEF
+                  HSINDEX28K    OF LSRPOOL-DEF
+                  HSINDEX32K    OF LSRPOOL-DEF
+                  DEFINETIME    OF LSRPOOL-DEF
+                  CHANGETIME    OF LSRPOOL-DEF
+                  CHANGEUSRID   OF LSRPOOL-DEF
+                  CHANGEAGENT   OF LSRPOOL-DEF
+                  CHANGEAGREL   OF LSRPOOL-DEF
+                  DEF-PADDING   OF LSRPOOL-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of an LSRPOOL.                       *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < LSRPOOL-KEYWORD-COUNT OR
+              DEF-PADDING OF LSRPOOL-DEF IS NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'LSRP' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO RDO-LSRPOOL-F
+                WRITE RDO-LSRPOOL-F.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  P A R T N E R  D E F I N I T I O N       *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-PARTNER-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF PARTNER-DEF
+                  NETNAME       OF PARTNER-DEF
+                  NETWORK       OF PARTNER-DEF
+                  PROFILE       OF PARTNER-DEF
+                  TPNAME        OF PARTNER-DEF
+                  XTPNAME       OF PARTNER-DEF
+                  DEFINETIME    OF PARTNER-DEF
+                  CHANGETIME    OF PARTNER-DEF
+                  CHANGEUSRID   OF PARTNER-DEF
+                  CHANGEAGENT   OF PARTNER-DEF
+                  CHANGEAGREL   OF PARTNER-DEF
+                  DEF-PADDING   OF PARTNER-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a PARTNER.                        *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < PARTNER-KEYWORD-COUNT OR
+              DEF-PADDING OF PARTNER-DEF IS NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'PTNR' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO RDO-PARTNER-F
+                WRITE RDO-PARTNER-F.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  T R A N C L A S S  D E F I N I T I O N   *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-TRANCLASS-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF TRANCLASS-DEF
+                  MAXACTIVE     OF TRANCLASS-DEF
+                  PURGETHRESH   OF TRANCLASS-DEF
+                  DEFINETIME    OF TRANCLASS-DEF
+                  CHANGETIME    OF TRANCLASS-DEF
+                  CHANGEUSRID   OF TRANCLASS-DEF
+                  CHANGEAGENT   OF TRANCLASS-DEF
+                  CHANGEAGREL   OF TRANCLASS-DEF
+                  DEF-PADDING   OF TRANCLASS-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a TRANCLASS.                      *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < TRANCLASS-KEYWORD-COUNT OR
+              DEF-PADDING OF TRANCLASS-DEF IS NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'TRCL' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO RDO-TRANCLASS-F
+                WRITE RDO-TRANCLASS-F.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  T D Q U E U E   D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-TDQUEUE-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF TDQUEUE-DEF
+                  RDO-TYPE      OF TDQUEUE-DEF
+                  DATABUFFERS   OF TDQUEUE-DEF
+                  DDNAME        OF TDQUEUE-DEF
+                  DSNAME        OF TDQUEUE-DEF
+                  SYSOUTCLASS   OF TDQUEUE-DEF
+                  ERROROPTION   OF TDQUEUE-DEF
+                  OPENTIME      OF TDQUEUE-DEF
+                  RDO-REWIND    OF TDQUEUE-DEF
+                  TYPEFILE      OF TDQUEUE-DEF
+                  RECORDSIZE    OF TDQUEUE-DEF
+                  BLOCKSIZE     OF TDQUEUE-DEF
+                  RECORDFORMAT  OF TDQUEUE-DEF
+                  BLOCKFORMAT   OF TDQUEUE-DEF
+                  PRINTCONTROL  OF TDQUEUE-DEF
+                  DISPOSITION   OF TDQUEUE-DEF
+                  JOBUSERID     OF TDQUEUE-DEF
+                  ATIFACILITY   OF TDQUEUE-DEF
+                  RECOVSTATUS   OF TDQUEUE-DEF
+                  FACILITYID    OF TDQUEUE-DEF
+                  TRANSID       OF TDQUEUE-DEF
+                  TRIGGERLEVEL  OF TDQUEUE-DEF
+                  USERID        OF TDQUEUE-DEF
+                  RDO-WAIT      OF TDQUEUE-DEF
+                  WAITACTION    OF TDQUEUE-DEF
+                  INDIRECTNAME  OF TDQUEUE-DEF
+                  REMOTENAME    OF TDQUEUE-DEF
+                  REMOTESYSTEM  OF TDQUEUE-DEF
+                  REMOTELENGTH  OF TDQUEUE-DEF
+                  DEFINETIME    OF TDQUEUE-DEF
+                  CHANGETIME    OF TDQUEUE-DEF
+                  CHANGEUSRID   OF TDQUEUE-DEF
+                  CHANGEAGENT   OF TDQUEUE-DEF
+                  CHANGEAGREL   OF TDQUEUE-DEF
+                  DEF-PADDING   OF TDQUEUE-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a TDQUEUE.                        *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < TDQUEUE-KEYWORD-COUNT OR
+              DEF-PADDING OF TDQUEUE-DEF IS NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'TDQU' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO TDQUEUE-F
+                WRITE TDQUEUE-F.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  JOURNALMODEL    D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-JOURNALM-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF JOURNALMODEL-DEF
+                  JOURNALNAME   OF JOURNALMODEL-DEF
+                  RDO-TYPE      OF JOURNALMODEL-DEF
+                  STREAMNAME    OF JOURNALMODEL-DEF
+                  DEFINETIME    OF JOURNALMODEL-DEF
+                  CHANGETIME    OF JOURNALMODEL-DEF
+                  CHANGEUSRID   OF JOURNALMODEL-DEF
+                  CHANGEAGENT   OF JOURNALMODEL-DEF
+                  CHANGEAGREL   OF JOURNALMODEL-DEF
+                  DEF-PADDING   OF JOURNALMODEL-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a JOURNALMODEL.                   *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < JOURNALMODEL-KEYWORD-COUNT OR
+              DEF-PADDING OF JOURNALMODEL-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'JOUR' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO JOURNALMODEL-F
+                WRITE JOURNALMODEL-F.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  DB2CONN         D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-DB2CONN-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF DB2CONN-DEF
+                  CONNECTERROR  OF DB2CONN-DEF
+                  DB2GROUPID    OF DB2CONN-DEF
+                  DB2ID         OF DB2CONN-DEF
+                  MSGQUEUE1     OF DB2CONN-DEF
+                  MSGQUEUE2     OF DB2CONN-DEF
+                  MSGQUEUE3     OF DB2CONN-DEF
+                  NONTERMREL    OF DB2CONN-DEF
+                  PURGECYCLE    OF DB2CONN-DEF
+                  RESYNCMEMBER  OF DB2CONN-DEF
+                  REUSELIMIT    OF DB2CONN-DEF
+                  SIGNID        OF DB2CONN-DEF
+                  STANDBYMODE   OF DB2CONN-DEF
+                  STATSQUEUE    OF DB2CONN-DEF
+                  TCBLIMIT      OF DB2CONN-DEF
+                  THREADERROR   OF DB2CONN-DEF
+                  ACCOUNTREC    OF DB2CONN-DEF
+                  AUTHID        OF DB2CONN-DEF
+                  AUTHTYPE      OF DB2CONN-DEF
+                  DROLLBACK     OF DB2CONN-DEF
+                  PLAN          OF DB2CONN-DEF
+                  PLANEXITNAME  OF DB2CONN-DEF
+                  PRIORITY      OF DB2CONN-DEF
+                  THREADLIMIT   OF DB2CONN-DEF
+                  THREADWAIT    OF DB2CONN-DEF
+                  COMAUTHID     OF DB2CONN-DEF
+                  COMAUTHTYPE   OF DB2CONN-DEF
+                  COMTHREADLIM  OF DB2CONN-DEF
+                  DEFINETIME    OF DB2CONN-DEF
+                  CHANGETIME    OF DB2CONN-DEF
+                  CHANGEUSRID   OF DB2CONN-DEF
+                  CHANGEAGENT   OF DB2CONN-DEF
+                  CHANGEAGREL   OF DB2CONN-DEF
+                  DEF-PADDING   OF DB2CONN-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a DB2CONN.                        *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < DB2CONN-KEYWORD-COUNT OR
+              DEF-PADDING OF DB2CONN-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'DB2C' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO DB2CONN-F
+                WRITE DB2CONN-F.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  DB2ENTRY        D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-DB2ENTRY-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF DB2ENTRY-DEF
+                  TRANSID       OF DB2ENTRY-DEF
+                  ACCOUNTREC    OF DB2ENTRY-DEF
+                  AUTHID        OF DB2ENTRY-DEF
+                  AUTHTYPE      OF DB2ENTRY-DEF
+                  DROLLBACK     OF DB2ENTRY-DEF
+                  PLAN          OF DB2ENTRY-DEF
+                  PLANEXITNAME  OF DB2ENTRY-DEF
+                  PRIORITY      OF DB2ENTRY-DEF
+                  PROTECTNUM    OF DB2ENTRY-DEF
+                  THREADLIMIT   OF DB2ENTRY-DEF
+                  THREADWAIT    OF DB2ENTRY-DEF
+                  DEFINETIME    OF DB2ENTRY-DEF
+                  CHANGETIME    OF DB2ENTRY-DEF
+                  CHANGEUSRID   OF DB2ENTRY-DEF
+                  CHANGEAGENT   OF DB2ENTRY-DEF
+                  CHANGEAGREL   OF DB2ENTRY-DEF
+                  DEF-PADDING   OF DB2ENTRY-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a DB2ENTRY.                       *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < DB2ENTRY-KEYWORD-COUNT OR
+              DEF-PADDING OF DB2ENTRY-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'DB2E' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO DB2ENTRY-F
+                WRITE DB2ENTRY-F.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  DB2TRAN         D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-DB2TRAN-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF DB2TRAN-DEF
+                  RDO-ENTRY     OF DB2TRAN-DEF
+                  TRANSID       OF DB2TRAN-DEF
+                  DEFINETIME    OF DB2TRAN-DEF
+                  CHANGETIME    OF DB2TRAN-DEF
+                  CHANGEUSRID   OF DB2TRAN-DEF
+                  CHANGEAGENT   OF DB2TRAN-DEF
+                  CHANGEAGREL   OF DB2TRAN-DEF
+                  DEF-PADDING   OF DB2TRAN-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a DB2TRAN.                        *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < DB2TRAN-KEYWORD-COUNT OR
+              DEF-PADDING OF DB2TRAN-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'DB2T' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO DB2TRAN-F
+                WRITE DB2TRAN-F.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A N  ENQMODEL      D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-ENQMODEL-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF ENQMODEL-DEF
+                  NQSCOPE       OF ENQMODEL-DEF
+                  STATUZ        OF ENQMODEL-DEF
+                  ENQNAME       OF ENQMODEL-DEF
+                  DEFINETIME    OF ENQMODEL-DEF
+                  CHANGETIME    OF ENQMODEL-DEF
+                  CHANGEUSRID   OF ENQMODEL-DEF
+                  CHANGEAGENT   OF ENQMODEL-DEF
+                  CHANGEAGREL   OF ENQMODEL-DEF
+                  DEF-PADDING   OF ENQMODEL-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of an ENQMODEL.                      *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < ENQMODEL-KEYWORD-COUNT OR
+              DEF-PADDING OF ENQMODEL-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'ENQM' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO ENQMODEL-F
+                WRITE ENQMODEL-F.
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  PROCESSTYPE     D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-PROCESSTYPE-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF PROCESSTYPE-DEF
+                  STATUZ        OF PROCESSTYPE-DEF
+                  PTYPE-FILE    OF PROCESSTYPE-DEF
+                  AUDITLOG      OF PROCESSTYPE-DEF
+                  AUDITLEVEL    OF PROCESSTYPE-DEF
+                  DEFINETIME    OF PROCESSTYPE-DEF
+                  CHANGETIME    OF PROCESSTYPE-DEF
+                  CHANGEUSRID   OF PROCESSTYPE-DEF
+                  CHANGEAGENT   OF PROCESSTYPE-DEF
+                  CHANGEAGREL   OF PROCESSTYPE-DEF
+                  DEF-PADDING   OF PROCESSTYPE-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a PROCESSTYPE.                    *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < PROCESSTYPE-KEYWORD-COUNT OR
+              DEF-PADDING OF PROCESSTYPE-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'PROC' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO PROCESSTYPE-F
+                WRITE PROCESSTYPE-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  TSMODEL         D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-TSMODEL-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF TSMODEL-DEF
+                  PREFIX        OF TSMODEL-DEF
+                  XPREFIX       OF TSMODEL-DEF
+                  LOCATION      OF TSMODEL-DEF
+                  EXPIRYINTMIN  OF TSMODEL-DEF
+                  RECOVERY      OF TSMODEL-DEF
+                  RDO-SECURITY  OF TSMODEL-DEF
+                  POOLNAME      OF TSMODEL-DEF
+                  REMOTESYSTEM  OF TSMODEL-DEF
+                  REMOTEPREFIX  OF TSMODEL-DEF
+                  XREMOTEPFX    OF TSMODEL-DEF
+                  DEFINETIME    OF TSMODEL-DEF
+                  CHANGETIME    OF TSMODEL-DEF
+                  CHANGEUSRID   OF TSMODEL-DEF
+                  CHANGEAGENT   OF TSMODEL-DEF
+                  CHANGEAGREL   OF TSMODEL-DEF
+                  DEF-PADDING   OF TSMODEL-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a TSMODEL.                        *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < TSMODEL-KEYWORD-COUNT OR
+              DEF-PADDING OF TSMODEL-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'TSMO' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO TSMODEL-F
+                WRITE TSMODEL-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  DOCTEMPLATE     D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-DOCTEMPLATE-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION     OF DOCTEMPLATE-DEF
+                  TEMPLATE-NAME   OF DOCTEMPLATE-DEF
+                  TEMPLATE-FILE   OF DOCTEMPLATE-DEF
+                  TEMPLATE-TSQ    OF DOCTEMPLATE-DEF
+                  TEMPLATE-TDQ    OF DOCTEMPLATE-DEF
+                  TEMPLATE-PROG   OF DOCTEMPLATE-DEF
+                  TEMPLATE-EXIT   OF DOCTEMPLATE-DEF
+                  TEMPLATE-DDNAME OF DOCTEMPLATE-DEF
+                  TEMPLATE-MEMBER OF DOCTEMPLATE-DEF
+                  HFSFILE         OF DOCTEMPLATE-DEF
+                  APPENDCRLF      OF DOCTEMPLATE-DEF
+                  TEMPLATE-TYPE   OF DOCTEMPLATE-DEF
+                  DEFINETIME      OF DOCTEMPLATE-DEF
+                  CHANGETIME      OF DOCTEMPLATE-DEF
+                  CHANGEUSRID     OF DOCTEMPLATE-DEF
+                  CHANGEAGENT     OF DOCTEMPLATE-DEF
+                  CHANGEAGREL     OF DOCTEMPLATE-DEF
+                  DEF-PADDING     OF DOCTEMPLATE-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a DOCTEMPLATE.                    *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < DOCTEMPLATE-KEYWORD-COUNT OR
+              DEF-PADDING OF DOCTEMPLATE-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'DOCT' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO DOCTEMPLATE-F
+                WRITE DOCTEMPLATE-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  REQUESTMODEL    D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-REQUESTM-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF REQUESTMODEL-DEF
+                  CORBASERVER   OF REQUESTMODEL-DEF
+                  REQMODEL-TYPE OF REQUESTMODEL-DEF
+                  BEANNAME      OF REQUESTMODEL-DEF
+                  INTFACETYPE   OF REQUESTMODEL-DEF
+                  MODULE        OF REQUESTMODEL-DEF
+                  INTERFACE     OF REQUESTMODEL-DEF
+                  OPERATION     OF REQUESTMODEL-DEF
+                  TRANSID       OF REQUESTMODEL-DEF
+                  DEFINETIME    OF REQUESTMODEL-DEF
+                  CHANGETIME    OF REQUESTMODEL-DEF
+                  CHANGEUSRID   OF REQUESTMODEL-DEF
+                  CHANGEAGENT   OF REQUESTMODEL-DEF
+                  CHANGEAGREL   OF REQUESTMODEL-DEF
+                  DEF-PADDING   OF REQUESTMODEL-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a REQUESTMODEL.                   *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < REQUESTMODEL-KEYWORD-COUNT OR
+              DEF-PADDING OF REQUESTMODEL-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'REQU' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO REQUESTMODEL-F
+                WRITE REQUESTMODEL-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  TCPIPSERVICE    D E F I N I T I O N      *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-TCPIPSER-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF TCPIPSERVICE-DEF
+                  URM           OF TCPIPSERVICE-DEF
+                  PORTNUMBER    OF TCPIPSERVICE-DEF
+                  STATUZ        OF TCPIPSERVICE-DEF
+                  PROTOCOL      OF TCPIPSERVICE-DEF
+                  TRANSACTION   OF TCPIPSERVICE-DEF
+                  BACKLOG       OF TCPIPSERVICE-DEF
+      *           TSQPREFIX     OF TCPIPSERVICE-DEF     @PI59763D      *
+                  HOST          OF TCPIPSERVICE-DEF
+                  IPADDRESS     OF TCPIPSERVICE-DEF
+                  SPECIFTCPS    OF TCPIPSERVICE-DEF
+                  SOCKETCLOSE   OF TCPIPSERVICE-DEF
+                  MAXPERSIST    OF TCPIPSERVICE-DEF
+                  MAXDATALEN    OF TCPIPSERVICE-DEF
+                  SSL           OF TCPIPSERVICE-DEF
+                  CERTIFICATE   OF TCPIPSERVICE-DEF
+                  CIPHERS       OF TCPIPSERVICE-DEF
+                  AUTHENTICATE  OF TCPIPSERVICE-DEF
+                  TCPIP-REALM   OF TCPIPSERVICE-DEF
+                  ATTACHSEC     OF TCPIPSERVICE-DEF
+      *           DNSGROUP      OF TCPIPSERVICE-DEF     @PI67594D      *
+      *           GRPCRITICAL   OF TCPIPSERVICE-DEF     @PI67594D      *
+                  DEFINETIME    OF TCPIPSERVICE-DEF
+                  CHANGETIME    OF TCPIPSERVICE-DEF
+                  CHANGEUSRID   OF TCPIPSERVICE-DEF
+                  CHANGEAGENT   OF TCPIPSERVICE-DEF
+                  CHANGEAGREL   OF TCPIPSERVICE-DEF
+                  DEF-PADDING   OF TCPIPSERVICE-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a TCPIPSERVICE.                   *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < TCPIPSERVICE-KEYWORD-COUNT OR
+              DEF-PADDING OF TCPIPSERVICE-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'TCPI' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO TCPIPSERVICE-F
+                WRITE TCPIPSERVICE-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  CORBASERVER D E F I N I T I O N          *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-CORBASERVER-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF CORBASERVER-DEF
+                  JNDIPREFIX    OF CORBASERVER-DEF
+                  AUTOPUBLISH   OF CORBASERVER-DEF
+                  SESSBEANTIME  OF CORBASERVER-DEF
+                  SHELF         OF CORBASERVER-DEF
+                  DJARDIR       OF CORBASERVER-DEF
+                  STATUZ        OF CORBASERVER-DEF
+                  HOST          OF CORBASERVER-DEF
+                  CERTIFICATE   OF CORBASERVER-DEF
+                  UNAUTH        OF CORBASERVER-DEF
+                  CLIENTCERT    OF CORBASERVER-DEF
+                  SSLUNAUTH     OF CORBASERVER-DEF
+                  ASSERTED      OF CORBASERVER-DEF
+                  CIPHERS       OF CORBASERVER-DEF
+                  DEFINETIME    OF CORBASERVER-DEF
+                  CHANGETIME    OF CORBASERVER-DEF
+                  CHANGEUSRID   OF CORBASERVER-DEF
+                  CHANGEAGENT   OF CORBASERVER-DEF
+                  CHANGEAGREL   OF CORBASERVER-DEF
+                  DEF-PADDING   OF CORBASERVER-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a CORBASERVER.                    *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < CORBASERVER-KEYWORD-COUNT OR
+              DEF-PADDING OF CORBASERVER-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'CORB' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO CORBASERVER-F
+                WRITE CORBASERVER-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  DJAR  D E F I N I T I O N                *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-DJAR-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION  OF DJAR-DEF
+                  CORBASERVER  OF DJAR-DEF
+                  HFSFILE      OF DJAR-DEF
+                  DEFINETIME   OF DJAR-DEF
+                  CHANGETIME   OF DJAR-DEF
+                  CHANGEUSRID  OF DJAR-DEF
+                  CHANGEAGENT  OF DJAR-DEF
+                  CHANGEAGREL  OF DJAR-DEF
+                  DEF-PADDING  OF DJAR-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a DJAR.                           *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < DJAR-KEYWORD-COUNT OR
+              DEF-PADDING OF DJAR-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'DJAR' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO DJAR-F
+                WRITE DJAR-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  P I P E L I N E   D E F I N I T I O N    *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-PIPELINE-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF PIPELINE-DEF
+                  STATUZ        OF PIPELINE-DEF
+                  RESPWAIT      OF PIPELINE-DEF
+                  CONFIGFILE    OF PIPELINE-DEF
+                  SHELF         OF PIPELINE-DEF
+                  WSDIR         OF PIPELINE-DEF
+                  DEFINETIME    OF PIPELINE-DEF
+                  CHANGETIME    OF PIPELINE-DEF
+                  CHANGEUSRID   OF PIPELINE-DEF
+                  CHANGEAGENT   OF PIPELINE-DEF
+                  CHANGEAGREL   OF PIPELINE-DEF
+                  DEF-PADDING   OF PIPELINE-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a PIPELINE.                       *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < PIPELINE-KEYWORD-COUNT OR
+              DEF-PADDING OF PIPELINE-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'PIPE' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO PIPELINE-F
+                WRITE PIPELINE-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  U R I M A P   D E F I N I T I O N        *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-URIMAP-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF URIMAP-DEF
+                  STATUZ        OF URIMAP-DEF
+                  RDO-USAGE     OF URIMAP-DEF
+                  SCHEME        OF URIMAP-DEF
+                  PORT          OF URIMAP-DEF
+                  HOST          OF URIMAP-DEF
+                  PATH          OF URIMAP-DEF
+                  SOCKETCLOSE   OF URIMAP-DEF
+                  TCPIPSERVICE  OF URIMAP-DEF
+                  ANALYZER      OF URIMAP-DEF
+                  CONVERTER     OF URIMAP-DEF
+                  TRANSACTION   OF URIMAP-DEF
+                  URI-PROGRAM   OF URIMAP-DEF
+                  PIPELINE      OF URIMAP-DEF
+                  WEBSERVICE    OF URIMAP-DEF
+                  ATOMSERVICE   OF URIMAP-DEF
+                  USERID        OF URIMAP-DEF
+                  CIPHERS       OF URIMAP-DEF
+                  CERTIFICATE   OF URIMAP-DEF
+                  AUTHENTICATE  OF URIMAP-DEF
+                  MEDIATYPE     OF URIMAP-DEF
+                  CHARACTERSET  OF URIMAP-DEF
+                  HOSTCODEPAGE  OF URIMAP-DEF
+                  TEMPLATENAME  OF URIMAP-DEF
+                  HFSFILE       OF URIMAP-DEF
+                  REDIRECTTYPE  OF URIMAP-DEF
+                  LOCATION      OF URIMAP-DEF
+                  DEFINETIME    OF URIMAP-DEF
+                  CHANGETIME    OF URIMAP-DEF
+                  CHANGEUSRID   OF URIMAP-DEF
+                  CHANGEAGENT   OF URIMAP-DEF
+                  CHANGEAGREL   OF URIMAP-DEF
+                  DEF-PADDING   OF URIMAP-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a URIMAP.                         *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < URIMAP-KEYWORD-COUNT OR
+              DEF-PADDING OF URIMAP-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'URIM' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO URIMAP-F
+                WRITE URIMAP-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  WEBSERVICE  D E F I N I T I O N          *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-WEBSERVICE-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION  OF WEBSERVICE-DEF
+                  PIPELINE     OF WEBSERVICE-DEF
+                  VALIDATION   OF WEBSERVICE-DEF
+                  WSBIND       OF WEBSERVICE-DEF
+                  WSDLFILE     OF WEBSERVICE-DEF
+                  ARCHIVEFILE  OF WEBSERVICE-DEF
+                  DEFINETIME   OF WEBSERVICE-DEF
+                  CHANGETIME   OF WEBSERVICE-DEF
+                  CHANGEUSRID  OF WEBSERVICE-DEF
+                  CHANGEAGENT  OF WEBSERVICE-DEF
+                  CHANGEAGREL  OF WEBSERVICE-DEF
+                  DEF-PADDING  OF WEBSERVICE-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a WEBSERVICE.                     *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < WEBSERVICE-KEYWORD-COUNT OR
+              DEF-PADDING OF WEBSERVICE-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'WEBS' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO WEBSERVICE-F
+                WRITE WEBSERVICE-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  AN IPCONN  D E F I N I T I O N              *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-IPCONN-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION  OF IPCONN-DEF
+                  APPLID       OF IPCONN-DEF
+                  NETWORKID    OF IPCONN-DEF
+                  HOST         OF IPCONN-DEF
+                  PORT         OF IPCONN-DEF
+                  TCPIPSERVICE OF IPCONN-DEF
+      *                                         following line @PI42229A
+                  HA           OF IPCONN-DEF
+                  RECEIVECOUNT OF IPCONN-DEF
+                  SENDCOUNT    OF IPCONN-DEF
+                  QUEUELIMIT   OF IPCONN-DEF
+                  MAXQTIME     OF IPCONN-DEF
+                  AUTOCONNECT  OF IPCONN-DEF
+                  INSERVICE    OF IPCONN-DEF
+                  SSL          OF IPCONN-DEF
+                  CERTIFICATE  OF IPCONN-DEF
+                  CIPHERS      OF IPCONN-DEF
+                  LINKAUTH     OF IPCONN-DEF
+                  SECURITYNAME OF IPCONN-DEF
+                  USERAUTH     OF IPCONN-DEF
+                  IDPROP       OF IPCONN-DEF
+                  XLNACTION    OF IPCONN-DEF
+                  MIRRORLIFE   OF IPCONN-DEF
+                  DEFINETIME   OF IPCONN-DEF
+                  CHANGETIME   OF IPCONN-DEF
+                  CHANGEUSRID  OF IPCONN-DEF
+                  CHANGEAGENT  OF IPCONN-DEF
+                  CHANGEAGREL  OF IPCONN-DEF
+                  DEF-PADDING  OF IPCONN-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a IPCONN.                         *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < IPCONN-KEYWORD-COUNT OR
+              DEF-PADDING OF IPCONN-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'IPCO' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO IPCONN-F
+                WRITE IPCONN-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  JVMSERVER  D E F I N I T I O N           *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-JVMSERVER-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF JVMSERVER-DEF
+                  STATUZ        OF JVMSERVER-DEF
+                  JVMPROFILE    OF JVMSERVER-DEF
+                  LERUNOPTS     OF JVMSERVER-DEF
+                  THREADLIMIT   OF JVMSERVER-DEF
+                  DEFINETIME    OF JVMSERVER-DEF
+                  CHANGETIME    OF JVMSERVER-DEF
+                  CHANGEUSRID   OF JVMSERVER-DEF
+                  CHANGEAGENT   OF JVMSERVER-DEF
+                  CHANGEAGREL   OF JVMSERVER-DEF
+                  DEF-PADDING   OF JVMSERVER-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a JVMSERVER.                      *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < JVMSERVER-KEYWORD-COUNT OR
+              DEF-PADDING OF JVMSERVER-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'JVMS' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO JVMSERVER-F
+                WRITE JVMSERVER-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A LIBRARY  D E F I N I T I O N              *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-LIBRARY-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION  OF LIBRARY-DEF
+                  RANKING      OF LIBRARY-DEF
+                  CRITICAL     OF LIBRARY-DEF
+                  STATUZ       OF LIBRARY-DEF
+                  DSNAME01     OF LIBRARY-DEF
+                  DSNAME02     OF LIBRARY-DEF
+                  DSNAME03     OF LIBRARY-DEF
+                  DSNAME04     OF LIBRARY-DEF
+                  DSNAME05     OF LIBRARY-DEF
+                  DSNAME06     OF LIBRARY-DEF
+                  DSNAME07     OF LIBRARY-DEF
+                  DSNAME08     OF LIBRARY-DEF
+                  DSNAME09     OF LIBRARY-DEF
+                  DSNAME10     OF LIBRARY-DEF
+                  DSNAME11     OF LIBRARY-DEF
+                  DSNAME12     OF LIBRARY-DEF
+                  DSNAME13     OF LIBRARY-DEF
+                  DSNAME14     OF LIBRARY-DEF
+                  DSNAME15     OF LIBRARY-DEF
+                  DSNAME16     OF LIBRARY-DEF
+                  DEFINETIME   OF LIBRARY-DEF
+                  CHANGETIME   OF LIBRARY-DEF
+                  CHANGEUSRID  OF LIBRARY-DEF
+                  CHANGEAGENT  OF LIBRARY-DEF
+                  CHANGEAGREL  OF LIBRARY-DEF
+                  DEF-PADDING  OF LIBRARY-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a LIBRARY.                        *
+      * ************************************************************** *
+
+           IF KEYWORD-COUNT < LIBRARY-KEYWORD-COUNT OR
+              DEF-PADDING OF LIBRARY-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'LIBR' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO LIBRARY-F
+                WRITE LIBRARY-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  MQCONN  D E F I N I T I O N              *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-MQCONN-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF MQCONN-DEF
+                  MQNAME        OF MQCONN-DEF
+                  RESYNCMEMBER  OF MQCONN-DEF
+                  INITQNAME     OF MQCONN-DEF
+                  DEFINETIME    OF MQCONN-DEF
+                  CHANGETIME    OF MQCONN-DEF
+                  CHANGEUSRID   OF MQCONN-DEF
+                  CHANGEAGENT   OF MQCONN-DEF
+                  CHANGEAGREL   OF MQCONN-DEF
+                  DEF-PADDING   OF MQCONN-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a MQCONN.                         *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < MQCONN-KEYWORD-COUNT OR
+              DEF-PADDING OF MQCONN-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'MQCO' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO MQCONN-F
+                WRITE MQCONN-F.
+
+      * ************************************************************** *
+      *                                                                *
+      *       F O R M A T  A  MQMON  D E F I N I T I O N               *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-MQMON-DEFINITION.
+
+           UNSTRING RESOURCE-KEYWORD-VALUES DELIMITED BY LOW-VALUES
+             INTO DESCRIPTION   OF MQMON-DEF
+                  STATUSM       OF MQMON-DEF
+                  AUTOSTART     OF MQMON-DEF
+                  MONDATA       OF MQMON-DEF
+                  MONUSERID     OF MQMON-DEF
+                  QNAME         OF MQMON-DEF
+                  USERID        OF MQMON-DEF
+                  TRANSACTION   OF MQMON-DEF
+                  DEFINETIME    OF MQMON-DEF
+                  CHANGETIME    OF MQMON-DEF
+                  CHANGEUSRID   OF MQMON-DEF
+                  CHANGEAGENT   OF MQMON-DEF
+                  CHANGEAGREL   OF MQMON-DEF
+                  DEF-PADDING   OF MQMON-DEF
+             TALLYING IN KEYWORD-COUNT.
+
+      * ************************************************************** *
+      * Were all keywords in UNSTRING operation assigned a value and   *
+      * were all characters in RESOURCE-KEYWORD-VALUES processed. The  *
+      * failure of either of these tests indicates a change in the CEDA*
+      * language has occured that has not been reflected by changes to *
+      * this program's definition of a MQMONITOR.                      *
+      * ************************************************************** *
+           IF KEYWORD-COUNT < MQMON-KEYWORD-COUNT OR
+              DEF-PADDING OF MQMON-DEF NOT EQUAL TO SPACES THEN
+                MOVE KEYWORD-TABLE-ERROR TO RETURN-CODE
+           ELSE
+                MOVE 'MQMO' TO RESOURCE-TYPE-F
+                MOVE  FORMATTED-AREA TO MQMON-F
+                WRITE MQMON-F.
+       END PROGRAM FORMCSD.

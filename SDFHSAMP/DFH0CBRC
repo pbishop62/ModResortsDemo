@@ -1,0 +1,142 @@
+       CBL CICS('COBOL3') APOST MAP XREF
+       Identification Division.
+       Program-id. DFH0CBRC.
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CBRC                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (BR) Sample LINK Business Client  *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *      Licensed Materials - Property of IBM                     *
+      *                                                               *
+      *      "Restricted Materials of IBM"                            *
+      *                                                               *
+      *      5655-Y04                                                 *
+      *                                                               *
+      *      (C) Copyright IBM Corp. 2001"                            *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * FUNCTION = CICS LINK to 3270 Bridge Client                    *
+      *                                                               *
+      *    DFH0CBRC is a simple client which calls the bridge client  *
+      *    program DFH0CBRL with a commarea mapped by DFH0CBRA.       *
+      *    The commarea contains the business data for the bridge     *
+      *    client to wrapper functionality in the NACT transaction.   *
+      *                                                               *
+      *    This program is invoked from the transaction BRCO.         *
+      *                                                               *
+      *    DFH0CBRC performs the following functions.                 *
+      *    1. Run the search function to get the account number       *
+      *       from a surname.                                         *
+      *    2. Run the display function to get account details from    *
+      *       the account number.                                     *
+      *    3. Display the information in TS QUEUE BRCO.               *
+      *                                                               *
+      * NOTES :                                                       *
+      *  DEPENDENCIES = S/390                                         *
+      *  RESTRICTIONS = Same as Link3270                              *
+      *  REGISTER CONVENTIONS = Normal                                *
+      *  MODULE TYPE = Executable                                     *
+      *  PROCESSOR = COBOL                                            *
+      *  ATTRIBUTES = Read only, Serially Reusable                    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * ENTRY POINT = DFH0CBRC                                        *
+      *                                                               *
+      *   PURPOSE = All functions                                     *
+      *                                                               *
+      *   LINKAGE = Normal CICS program                               *
+      *                                                               *
+      *   INPUT = None                                                *
+      *                                                               *
+      *   OUTPUT = Messages on TS QUEUE BRCO                          *
+      *                                                               *
+      *   EXIT-NORMAL = None                                          *
+      *                                                               *
+      *   EXIT-ERROR =  BRC0 abend                                    *
+      *                                                               *
+      *-------------------------------------------------------------- *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *    $MOD(DFH0CBRC),COMP(BRIDGE),PROD(CICS TS ):                *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $L0= 775    620 010809 HDDLCRP : Created                      *
+      * $L2= 775    620 010817 HDDLCRP : Bridge samples review        *
+      * $P1= D02653 620 011030 HDDLCRP : Review of Link3270 bridge sa *
+      *                                                               *
+      *****************************************************************
+
+       Environment Division.
+      *****************************************************************
+       Data Division.
+      *****************************************************************
+       Working-Storage Section.
+      * Saved account number
+       01 acctnum     pic x(5).
+      * Business client interface with bridge client
+       01 iodata-area.
+         copy DFH0CBRA.
+      *****************************************************************
+       Procedure Division.
+      *****************************************************************
+       Main-Processing Section.
+           initialize iodata-area.
+
+      *****************************************************************
+      * 1. Run the search function to get the account number          *
+      *    from a customer name.                                      *
+      *****************************************************************
+           set  srch-req of input-data to true.
+           move 'JONES' to surname   of srch-inputdata.
+           move 'JACOB' to firstname of srch-inputdata.
+           perform run-bridge-client.
+           move acct-no of srch-outputdata to acctnum.
+
+      *****************************************************************
+      * 2. Run the display function to get account details from       *
+      *    the account number.                                        *
+      *****************************************************************
+           set  disp-req of input-data to true.
+           move acctnum to acct-no of disp-inputdata.
+           perform run-bridge-client.
+
+      *****************************************************************
+      * 3. Output the information to TS QUEUE BRCO.                   *
+      *****************************************************************
+           EXEC CICS WRITEQ TS QUEUE('BRCO')
+                FROM(disp-line1) LENGTH(length of disp-line1) END-EXEC.
+           EXEC CICS WRITEQ TS QUEUE('BRCO')
+                FROM(disp-line2) LENGTH(length of disp-line2) END-EXEC.
+           EXEC CICS WRITEQ TS QUEUE('BRCO')
+                FROM(disp-line3) LENGTH(length of disp-line3) END-EXEC.
+           EXEC CICS WRITEQ TS QUEUE('BRCO')
+                FROM(disp-line4) LENGTH(length of disp-line4) END-EXEC.
+           goback.
+
+      *****************************************************************
+      * Run NACT using the 3270 bridge wrapper program                *
+      *****************************************************************
+       run-bridge-client section.
+           EXEC CICS LINK PROGRAM('DFH0CBRL')
+                          COMMAREA(iodata-area)
+                          LENGTH(length of iodata-area)
+                          DATALENGTH(length of input-data)
+                          END-EXEC.
+           if error-returncode not = 0
+              EXEC CICS WRITEQ TS QUEUE('BRCO')
+                               FROM(error-outputdata)
+                               LENGTH(length of error-outputdata)
+                               END-EXEC
+              EXEC CICS ABEND ABCODE('BRC0') END-EXEC
+              goback
+           end-if.
+           exit.

@@ -1,0 +1,477 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CPLA                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Lookaside Query for Sample Application     *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 2002"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      *    CICS/VS BMS PARTITION SUPPORT SAMPLE PROGRAM               *
+      *                                                               *
+      *    THIS PROGRAM DEMONSTRATES THE IMPLEMENTATION OF A POSSIBLE *
+      *    APPLICATION OF PARTITIONS  IN A CICS/VS TRANSACTION.  THE  *
+      *    PROGRAM  USES  A PARTITION SET  CONTAINING A PARTITION FOR *
+      *    DATA-ENTRY  AND A PARTITION FOR LOOK-ASIDE QUERIES, EITHER *
+      *    OF WHICH CAN BE ENTERED AT ANY TIME.                       *
+      *                                                               *
+      *    PARTITION 'A' IS USED FOR ORDER ENTRY. IT CONTAINS A       *
+      *    SINGLE INOUT MAP 'MAPDE'. THE TERMINAL OPERATOR NORMALLY   *
+      *    WORKS WITH THIS PARTITION, BUT OCCASIONALLY NEEDS TO MAKE A*
+      *    'LOOK ASIDE' QUERY (E.G. ON PART AVAILABILITY OR PRICE) IN *
+      *    THE QUERY PARTITION, B. THIS CONTAINS A SINGLE INOUT MAP   *
+      *    'MAPQU'. THE DATA SO FAR ENTERED IN THE ORDER ENTRY PARTN  *
+      *    REMAINS UNCHANGED, WHILE THE QUERY IS ANSWERED. AFTER EACH *
+      *    QUERY, THE CURSOR IS POSITIONED IN THE ORDER ENTRY         *
+      *    PARTITION, FOR ORDER COMPLETION.                           *
+      *                                                               *
+      *                                                               *
+      *                               PARTNSET: DFH0PS                *
+      *                       PARTN: A    PARTN: B    PARTN: P5       *
+      *                                                               *
+      *    MAPSET: DFH0CGP                                            *
+      *       MAP: MAPDE         X           -           -            *
+      *       MAP: MAPQU         -           X           -            *
+      *       MAP: MAPQC1        -           X           -            *
+      *       MAP: MAPQC2        -           X           -            *
+      *       MAP: PM01          -           -           X            *
+      *                                                               *
+      *                                                               *
+      *                                                    DATA ENTRY.*
+      *                                                    """" """"""*
+      *    TO MAKE THE NEED FOR THIS FACILITY MORE APPARENT, THE      *
+      *    ORDER-ENTRY MAP ALLOWS THE OPERATOR TO ENTER SEVERAL LINES *
+      *    OF ORDERS FOR ONE CUSTOMER ACCOUNT BEFORE SAVING ANYTHING. *
+      *    THE CUSTOMER ACCOUNT INFORMATION AND THE FOLLOWING LINE    *
+      *    ORDER-ITEMS ARE SAVED IN A TEMPORARY STORAGE QUEUE.        *
+      *                                                               *
+      *                                                    QUERY MAP. *
+      *                                                    """"" """" *
+      *    ON THE ABOVE MENU, THE ITEMS ORDERED ARE IDENTIFIED BY A   *
+      *    PART-NUMBER ONLY. FURTHER DETAILS ABOUT ITEMS AND CUSTOMERS*
+      *    MUST BE CHECKED BY REFERENCE TO THE QUERY PARTITION. (THE  *
+      *    INFORMATION COMES FROM A BOGUS DATA-BASE IN THE FORM OF    *
+      *    STATIC VARIABLES IN THIS PROGRAM).                         *
+      *                                                               *
+      *    OUTPUT = TEMPORARY STORAGE QUEUE 'DFH0CPQ'                 *
+      *                                                               *
+      *    EXTERNAL REFERENCES = PARTITION-SET 'DFH0PS'               *
+      *                            AND MAP-SET 'DFH0CGP'              *
+      *                                                               *
+      *    EXIT = RETURN TO CICS/VS                                   *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $SEG(DFH0CPLA),COMP(SAMPLES),PROD(CICS TS ):                  *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900320        : CREATED.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *    $P2= D04031 630 020523 HD2WPGK: Prevent RC4                *
+      *                                                               *
+      *****************************************************************
+
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CPLA.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  ABCD       COMP PICTURE S9(4) VALUE +0.
+       77  QNUMBER    COMP PICTURE S9(4).
+       77  LENG       COMP PICTURE S9(2) VALUE +26.
+       77  YNUM            PICTURE 9(6).
+       77  ZNUM            PICTURE  X(6).
+       77  WOCODE          PICTURE  X(5).
+       77  LENGER     COMP PICTURE S9(4) VALUE +4095.
+       77  AIP             PICTURE  X(2).
+       77  A1              PICTURE  X(4095).
+       77  A1L        COMP PICTURE S9(4).
+       77  ANUMBER         PICTURE  X(6).
+       77  QNAME           PICTURE  X(8) VALUE 'DFH0CPQ'.
+       77  COMP7      COMP PICTURE S9(7).
+       77  RESPNUM    COMP PICTURE S9(9).
+       77  ERR-FLAG        PICTURE  X(1) VALUE '0'.
+       01  OUTREC.
+           04  ONUM PICTURE  9(6).
+           04  CNUM PICTURE  X(6).
+           04  PNUM PICTURE  X(6).
+           04  AMNT PICTURE  X(6).
+           04  WNUM PICTURE  X(6).
+
+
+           COPY DFH0CGP.
+
+       PROCEDURE DIVISION.
+
+      *LOAD PARTITION SET.
+
+           EXEC CICS SEND PARTNSET('DFH0PS') END-EXEC.
+
+      *SEND THE ORDER ENTRY MAP TO THE 'A' PARTITION & ACTIVATE IT.
+
+           MOVE LOW-VALUES TO MAPDEO.
+           PERFORM ALLOCNUM.
+           MOVE ONUM OF OUTREC TO DEORDRNO.
+           EXEC CICS SEND MAP('MAPDE') MAPSET('DFH0CGP') ERASE
+                          OUTPARTN('A')
+                          ACTPARTN('A')
+                          END-EXEC.
+
+      *SEND THE QUERY MAP TO THE 'B' PARTITION.
+      *THE 'A' PARTN IS STILL THE ACTIVE PARTITION.
+
+           MOVE LOW-VALUES TO MAPQUO.
+           EXEC CICS SEND MAP('MAPQU') MAPSET('DFH0CGP') ERASE
+                          OUTPARTN('B')
+                          END-EXEC.
+
+
+      *THE CURSOR IS POSITIONED IN THE ORDER ENTRY PARTITION.THE
+      *APPROPRIATE MAPS ARE DISPLAYED IN EACH PARTITION.  NOW ISSUE
+      *A RECEIVE PARTITION TO DETERMINE IN WHICH PARTITION THE
+      *TERMINAL OPERATOR ENTERED DATA.
+
+
+           PERFORM MAINLOOP UNTIL ABCD NOT = 0.
+       NEVERENDING. STOP RUN.
+
+
+       MAINLOOP.
+           MOVE LOW-VALUES TO A1.
+           MOVE +4095 TO A1L.
+
+           EXEC CICS HANDLE AID PF3(PF3LABL) END-EXEC.
+           EXEC CICS RECEIVE PARTN(AIP) INTO(A1) LENGTH(A1L)
+                     END-EXEC.
+
+      *TEST THE ACTUAL INPUT PARTITION . IF IT WAS THE ORDER ENTRY
+      *PARTITION THEN PROCESS THE ORDER , AND RESEND THE ORDER
+      *ENTRY MAP.
+
+           IF AIP = 'A' THEN PERFORM PROCESSO
+                        ELSE PERFORM NOPROCESS THRU JUMPER.
+
+       PROCESSO.
+      *PROCESS DATA ENTRY.
+
+           EXEC CICS RECEIVE MAP('MAPDE') MAPSET('DFH0CGP')
+                     FROM(A1)
+                     LENGTH(LENGER)
+                     RESP(RESPNUM)
+                     END-EXEC.
+
+      *CLEAR ERROR PARTITION IF AN ERROR HAS BEEN SENT
+           IF ERR-FLAG = '1' THEN
+              MOVE '0' TO ERR-FLAG
+              EXEC CICS SEND CONTROL ERASE OUTPARTN('P5') END-EXEC.
+
+           IF RESPNUM = DFHRESP(MAPFAIL) THEN
+              MOVE 'ENTER DATA OR PF3 TO QUIT' TO PMM1O
+              EXEC CICS SEND MAP('PM01') MAPSET('DFH0CGP')
+                        OUTPARTN('P5') END-EXEC
+              MOVE '1' TO ERR-FLAG
+           ELSE PERFORM WRITEOUT THRU FINITO
+              PERFORM ALLOCNUM.
+
+      *REINITIALISE THE ORDER ENTRY PARTITION AND ACTIVATE IT.
+
+           MOVE LOW-VALUES TO MAPDEO.
+           MOVE ONUM OF OUTREC TO DEORDRNO.
+           EXEC CICS SEND MAP('MAPDE') MAPSET('DFH0CGP')
+                          OUTPARTN('A')
+                          ACTPARTN('A')
+                          ERASE
+                          FREEKB
+                          END-EXEC.
+
+
+       NOPROCESS.
+
+      *OBTAIN THE DATA ENTERED IN THE QUERY PARTITION AND REACTIVATE
+      *THE DATA ENTRY PARTITION.
+
+           EXEC CICS RECEIVE MAP('MAPQU') MAPSET('DFH0CGP')
+                     RESP(RESPNUM)
+                     LENGTH(LENGER) FROM(A1) END-EXEC.
+
+      *CLEAR ERROR PARTITION IF AN ERROR HAS BEEN SENT
+           IF ERR-FLAG = '1' THEN
+              MOVE '0' TO ERR-FLAG
+              EXEC CICS SEND CONTROL ERASE OUTPARTN('P5') END-EXEC.
+
+           EXEC CICS SEND CONTROL WAIT FREEKB OUTPARTN(AIP)
+                                              ACTPARTN('A') END-EXEC.
+
+
+      *PROCESS QUERY:
+      *SEND QUERY RESPONSE AND ACTIVATE THE DATA ENTRY PARTITION
+      *TO ALLOW THE OPERATOR TO COMPLETE THE ORDER . THE OPERATOR
+      *MAY , OF COURSE , JUMP BACK TO THE QUERY PARTITION , AND ENTER
+      *ANOTHER QUERY.
+
+           IF QUTYPEI = 'CUST'
+           THEN PERFORM QCUST
+           ELSE IF QUTYPEI = 'PART'
+                THEN PERFORM QPART
+                ELSE MOVE
+                'INVALID QUERY TYPE - ENTER ''PART'' OR ''CUST'''
+                TO PMM1O
+                MOVE '1' TO ERR-FLAG
+                EXEC CICS SEND MAP('PM01') MAPSET('DFH0CGP')
+                      OUTPARTN('P5') END-EXEC.
+
+       JUMPER.
+           MOVE LOW-VALUES TO MAPQUO.
+           MOVE -1 TO QUTYPEL.
+           EXEC CICS SEND MAP('MAPQU') MAPSET('DFH0CGP')
+                          OUTPARTN('B')
+                          END-EXEC.
+
+
+
+       PF3LABL.
+           EXEC CICS SEND CONTROL FREEKB ERASE OUTPARTN('A') END-EXEC.
+           EXEC CICS SEND CONTROL FREEKB ERASE OUTPARTN('B') END-EXEC.
+
+      * Prevent compile return code 4 by redundant setting of ABCD @P2A
+           MOVE +1 TO ABCD
+           EXEC CICS RETURN END-EXEC.
+
+
+
+
+       QPART.
+           MOVE QUNUMBI TO ANUMBER.
+           MOVE LOW-VALUES TO MAPQC2O.
+           MOVE '987987' TO QC2PNO.
+           MOVE '22' TO QC2WLO.
+           MOVE '678876' TO QC2SU1O OF DFHMS1(1).
+           MOVE '765765' TO QC2SU1O OF DFHMS1(2).
+           MOVE '465768' TO QC2SU1O OF DFHMS1(3).
+           MOVE '876678' TO QC2SU2O OF DFHMS2(1).
+           MOVE '567567' TO QC2SU2O OF DFHMS2(2).
+           MOVE '867564' TO QC2SU2O OF DFHMS2(3).
+           MOVE '100' TO QC2QUA1O.
+           MOVE '50' TO QC2PRI1O.
+           MOVE '1000' TO QC2QUA2O.
+           MOVE '45' TO QC2PRI2O.
+           EXEC CICS SEND MAP('MAPQC2') MAPSET('DFH0CGP')
+                          OUTPARTN('B')
+                          ERASE END-EXEC.
+
+
+
+       QCUST.
+           MOVE QUNUMBI TO ANUMBER.
+           MOVE LOW-VALUES TO MAPQC1O.
+           MOVE '926537' TO QC1NUMO.
+           MOVE 'SMITHS INVESTMENTS.' TO QC1NAMEO.
+           MOVE 'SMITHS HOUSE,' TO QC1ADD1O.
+           MOVE 'SMITHS SQUARE,' TO QC1ADD2O.
+           MOVE 'SMITHAM,' TO QC1ADD3O.
+           MOVE 'HANTS.' TO QC1ADD4O.
+           MOVE 'PD' TO QC1STATO.
+           EXEC CICS SEND MAP('MAPQC1') MAPSET('DFH0CGP')
+                          OUTPARTN('B')
+                          ERASE END-EXEC.
+
+
+
+      */* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+      */* ALLOCNUM ALLOCATES AN ORDER NUMBER
+      */* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+       ALLOCNUM.
+           MOVE 1 TO QNUMBER.
+
+           EXEC CICS READQ TS QUEUE(QNAME)
+                              INTO(OUTREC)
+                              LENGTH(LENG)
+                              ITEM(QNUMBER)
+                              RESP(RESPNUM)
+                              END-EXEC.
+
+           IF RESPNUM = DFHRESP(QIDERR) THEN PERFORM INITQ
+                                       ELSE PERFORM ADDQ.
+
+       ADDQ.
+      * ADD ORDER TO TEMPORARY STORAGE QUEUE
+           MOVE ONUM OF OUTREC TO COMP7.
+           COMPUTE COMP7 = COMP7 + 1.
+           MOVE COMP7 TO ONUM OF OUTREC.
+
+           EXEC CICS WRITEQ TS QUEUE(QNAME)
+                               FROM(OUTREC)
+                               LENGTH(LENG)
+                               ITEM(QNUMBER)
+                               MAIN REWRITE
+                               END-EXEC.
+
+       INITQ.
+      * CREATE TEMPORARY STORAGE QUEUE
+           MOVE '000001' TO ONUM OF OUTREC.
+
+           EXEC CICS WRITEQ TS QUEUE(QNAME)
+                               FROM(OUTREC)
+                               LENGTH(LENG)
+                               ITEM(QNUMBER)
+                               MAIN
+                               END-EXEC.
+
+
+
+       WRITEOUT.
+           MOVE 0 TO WOCODE.
+           IF DEPNUM1L = 0 THEN GO TO FINITO.
+           IF DENUMB1L = 0 THEN GO TO FINITO.
+           IF DEWKNM1L = 0 THEN GO TO FINITO.
+           IF DEPNUM1I = '555555' THEN GO TO ENDNOTOK.
+
+           MOVE YNUM TO ONUM OF OUTREC.
+           MOVE ZNUM TO CNUM OF OUTREC.
+           MOVE DEPNUM1I TO PNUM OF OUTREC.
+           MOVE DENUMB1I TO AMNT OF OUTREC.
+           MOVE DEWKNM1I TO WNUM OF OUTREC.
+
+           EXEC CICS WRITEQ TS QUEUE(QNAME)
+                               FROM(OUTREC)
+                               LENGTH(LENG)
+                               MAIN END-EXEC.
+
+           IF DEPNUM2L = 0 THEN GO TO FINITO.
+           IF DENUMB2L = 0 THEN GO TO FINITO.
+           IF DEWKNM2L = 0 THEN GO TO FINITO.
+           IF DEPNUM2I = '555555' THEN GO TO ENDNOTOK.
+
+           MOVE YNUM TO ONUM OF OUTREC.
+           MOVE ZNUM TO CNUM OF OUTREC.
+           MOVE DEPNUM2I TO PNUM OF OUTREC.
+           MOVE DENUMB2I TO AMNT OF OUTREC.
+           MOVE DEWKNM2I TO WNUM OF OUTREC.
+
+           EXEC CICS WRITEQ TS QUEUE(QNAME)
+                               FROM(OUTREC)
+                               LENGTH(LENG)
+                               MAIN END-EXEC.
+
+           IF DEPNUM3L = 0 THEN GO TO FINITO.
+           IF DENUMB3L = 0 THEN GO TO FINITO.
+           IF DEWKNM3L = 0 THEN GO TO FINITO.
+           IF DEPNUM3I = '555555' THEN GO TO ENDNOTOK.
+
+           MOVE YNUM TO ONUM OF OUTREC.
+           MOVE ZNUM TO CNUM OF OUTREC.
+           MOVE DEPNUM3I TO PNUM OF OUTREC.
+           MOVE DENUMB3I TO AMNT OF OUTREC.
+           MOVE DEWKNM3I TO WNUM OF OUTREC.
+
+           EXEC CICS WRITEQ TS QUEUE(QNAME)
+                               FROM(OUTREC)
+                               LENGTH(LENG)
+                               MAIN END-EXEC.
+
+           IF DEPNUM4L = 0 THEN GO TO FINITO.
+           IF DENUMB4L = 0 THEN GO TO FINITO.
+           IF DEWKNM4L = 0 THEN GO TO FINITO.
+           IF DEPNUM4I = '555555' THEN GO TO ENDNOTOK.
+
+           MOVE YNUM TO ONUM OF OUTREC.
+           MOVE ZNUM TO CNUM OF OUTREC.
+           MOVE DEPNUM4I TO PNUM OF OUTREC.
+           MOVE DENUMB4I TO AMNT OF OUTREC.
+           MOVE DEWKNM4I TO WNUM OF OUTREC.
+
+           EXEC CICS WRITEQ TS QUEUE(QNAME)
+                               FROM(OUTREC)
+                               LENGTH(LENG)
+                               MAIN END-EXEC.
+
+           IF DEPNUM5L = 0 THEN GO TO FINITO.
+           IF DENUMB5L = 0 THEN GO TO FINITO.
+           IF DEWKNM5L = 0 THEN GO TO FINITO.
+           IF DEPNUM5I = '555555' THEN GO TO ENDNOTOK.
+
+           MOVE YNUM TO ONUM OF OUTREC.
+           MOVE ZNUM TO CNUM OF OUTREC.
+           MOVE DEPNUM5I TO PNUM OF OUTREC.
+           MOVE DENUMB5I TO AMNT OF OUTREC.
+           MOVE DEWKNM5I TO WNUM OF OUTREC.
+
+           EXEC CICS WRITEQ TS QUEUE(QNAME)
+                               FROM(OUTREC)
+                               LENGTH(LENG)
+                               MAIN END-EXEC.
+
+           IF DEPNUM6L = 0 THEN GO TO FINITO.
+           IF DENUMB6L = 0 THEN GO TO FINITO.
+           IF DEWKNM6L = 0 THEN GO TO FINITO.
+           IF DEPNUM6I = '555555' THEN GO TO ENDNOTOK.
+
+           MOVE YNUM TO ONUM OF OUTREC.
+           MOVE ZNUM TO CNUM OF OUTREC.
+           MOVE DEPNUM6I TO PNUM OF OUTREC.
+           MOVE DENUMB6I TO AMNT OF OUTREC.
+           MOVE DEWKNM6I TO WNUM OF OUTREC.
+
+           EXEC CICS WRITEQ TS QUEUE(QNAME)
+                               FROM(OUTREC)
+                               LENGTH(LENG)
+                               MAIN END-EXEC.
+
+           IF DEPNUM7L = 0 THEN GO TO FINITO.
+           IF DENUMB7L = 0 THEN GO TO FINITO.
+           IF DEWKNM7L = 0 THEN GO TO FINITO.
+           IF DEPNUM7I = '555555' THEN GO TO ENDNOTOK.
+
+           MOVE YNUM TO ONUM OF OUTREC.
+           MOVE ZNUM TO CNUM OF OUTREC.
+           MOVE DEPNUM7I TO PNUM OF OUTREC.
+           MOVE DENUMB7I TO AMNT OF OUTREC.
+           MOVE DEWKNM7I TO WNUM OF OUTREC.
+
+           EXEC CICS WRITEQ TS QUEUE(QNAME)
+                               FROM(OUTREC)
+                               LENGTH(LENG)
+                               MAIN END-EXEC.
+
+           IF DEPNUM8L = 0 THEN GO TO FINITO.
+           IF DENUMB8L = 0 THEN GO TO FINITO.
+           IF DEWKNM8L = 0 THEN GO TO FINITO.
+           IF DEPNUM8I = '555555' THEN GO TO ENDNOTOK.
+
+           MOVE YNUM TO ONUM OF OUTREC.
+           MOVE ZNUM TO CNUM OF OUTREC.
+           MOVE DEPNUM8I TO PNUM OF OUTREC.
+           MOVE DENUMB8I TO AMNT OF OUTREC.
+           MOVE DEWKNM8I TO WNUM OF OUTREC.
+
+           EXEC CICS WRITEQ TS QUEUE(QNAME)
+                               FROM(OUTREC)
+                               LENGTH(LENG)
+                               MAIN END-EXEC.
+
+       ENDINGOK.
+           MOVE ZERO TO WOCODE.
+           GO TO FINITO.
+
+       ENDNOTOK.
+           MOVE 1 TO WOCODE.
+
+       FINITO.
+           EXIT.

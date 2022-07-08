@@ -1,0 +1,265 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CREN                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Order Inquiry for Sample Application       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $SEG(DFH0CREN),COMP(SAMPLES),PROD(CICS TS ):                  *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900320        : CREATED.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FILECREN.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  ERROR-FLAG PIC 9.
+       77  PRESMSG PICTURE X(20) VALUE 'PROCESSING COMPLETED'.
+       77  RESPONSE PIC S9(8) COMP.
+                    COPY DFH0CGK.
+       01  FILEA.   COPY DFH0CFIL.
+       01  L86O.    COPY DFH0CL86.
+                    COPY DFHBMSCA.
+                    COPY DFHAID.
+      *
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           02 DUMMY-FLAG PIC 9.
+       PROCEDURE DIVISION.
+      *
+      *    AN ERROR EXIT IS SET UP TO TRAP ANY UNEXPECTED ERRORS.
+      *    ALL OTHER ERRORS ARE EXPLICITLY TESTED FOR BY THE PROGRAM,
+      *    USING THE "RESP" OPTION ON CICS COMMANDS.
+      *
+           EXEC CICS HANDLE CONDITION ERROR(ERRORS) END-EXEC.
+      *
+      *    THE LENGTH OF THE "COMMAREA" IS TESTED. IF NOT ZERO THEN
+      *    THIS IS THE VALIDATION STAGE OF AN ORDER ENTRY.
+      *
+           IF EIBCALEN NOT = 0 THEN GO TO RECEIVM.
+      *
+      *    CLEAR MAP
+      *
+           MOVE LOW-VALUES TO ORDERO.
+      *
+      *    THE SCREEN IS ERASED AND THE ORDER ENTRY MAP IS DISPLAYED
+      *    AT THE TERMINAL. THE PROGRAM RETURNS CONTROL TO CICS ALONG
+      *    WITH A "COMMAREA" AND A TRANSACTION IDENTIFIER FOR THE NEXT
+      *    TRANSACTION TO BE RUN AT THIS TERMINAL. NOTE THAT THE
+      *    "COMMAREA" DOES NOT CONTAIN ANY INFORMATION THAT IS USED
+      *    BY SUBSEQUENT INVOCATIONS OF THE PROGRAM, BUT IS USED BY
+      *    SUBSEQUENT INVOCATIONS TO DETERMINE THAT AN ORDER ENTRY
+      *    VALIDATION IS REQUIRED
+      *
+           EXEC CICS SEND MAP('ORDER') MAPSET('DFH0CGK')
+                ERASE END-EXEC.
+      *
+      *    RETURN WITH COMM. AREA
+      *
+           EXEC CICS RETURN TRANSID(EIBTRNID)
+                            COMMAREA(ERROR-FLAG)
+                            LENGTH(1)
+                            END-EXEC.
+      *
+      *    PROCESS INPUT
+      *
+       RECEIVM.
+      *
+      *    THIS "RECEIVE MAP" CAUSES A READ FROM THE TERMINAL AND MAPS
+      *    IN THE CUSTOMER NUMBER, PART NUMBER AND QUANTITY.
+      *    THE PROGRAM EXPLICITLY TESTS THE RESPONSE TO THE "RECEIVE"
+      *    COMMAND AND THE OPERATOR RESPONSE.
+      *
+      *
+      *    CLEAR KEY PRESSED, TERMINATE THE PROGRAM.
+      *
+           IF EIBAID = DFHCLEAR THEN GO TO ENDA.
+      *
+      *    ENTER KEY PRESSED, RECEIVE THE MAP.
+      *
+           IF EIBAID = DFHENTER THEN GO TO RECMAP.
+      *
+      *    ANY OTHER KEY WILL CAUSE AN ERROR MESSAGE AND THE SCREEN
+      *    WILL BE REDISPLAYED.
+      *
+           MOVE DFHBMASB TO MSG2A.
+           MOVE 'PRESS ENTER OR CLEAR' TO MSG2O.
+           EXEC CICS SEND MAP('ORDER') MAPSET('DFH0CGK') END-EXEC.
+      *
+      *    RETURN WITH COMM. AREA
+      *
+           EXEC CICS RETURN TRANSID(EIBTRNID)
+                            COMMAREA(ERROR-FLAG)
+                            LENGTH(1)
+                            END-EXEC.
+       RECMAP.
+           EXEC CICS RECEIVE MAP('ORDER') MAPSET('DFH0CGK')
+            RESP(RESPONSE) END-EXEC.
+      *
+      *    CHECK USER RESPONSE AND RESPONSE TO COMMAND.
+      *
+           IF RESPONSE = DFHRESP(MAPFAIL) THEN GO TO MAPFAIL.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+           MOVE 0 TO ERROR-FLAG.
+           MOVE DFHBMFSE TO CUSTNOA, PARTNOA, QUANTA.
+      *
+      *    THE ORDER DETAILS ARE CHECKED, INVALID ORDERS ARE REDISPLAYED
+      *    FOR CORRECTION. ERROR FIELDS ARE HIGHLIGHTED AND HAVE "MDT"
+      *    SET ON. THE USER SHOULD ADD FURTHER EDITING STEPS NECESSARY
+      *    TO ENSURE ONLY VALID ORDERS ARE ACCEPTED.
+      *
+           IF CUSTNOI NOT NUMERIC THEN
+              MOVE DFHUNINT TO CUSTNOA MOVE 1 TO ERROR-FLAG.
+      *
+           IF PARTNOI NOT NUMERIC THEN
+              MOVE DFHUNINT TO PARTNOA MOVE 1 TO ERROR-FLAG.
+      *
+           IF QUANTI NOT NUMERIC THEN
+              MOVE DFHUNINT TO QUANTA MOVE 1 TO ERROR-FLAG.
+      *
+      *    THE ERROR MESSAGE "DATA ERROR-REENTER" IS A CONSTANT IN THE
+      *    MAP LOAD MODULE AND IS SENT TO THE TERMINAL, WITH ANY OTHER
+      *    CONSTANT INFORMATION, UNLESS "DATAONLY" IS SPECIFIED ON THE
+      *    "SEND MAP". THE MESSAGE IS NORMALLY DARK (NON-DISPLAY).
+      *    THIS INSTRUCTION OVERRIDES THE DARK ATTRIBUTE AND THE MESSAGE
+      *    APPEARS IN HIGH INTENSITY WHEN THE "SEND MAP" IS EXECUTED.
+      *
+           IF ERROR-FLAG = 1 THEN
+              MOVE DFHBMASB TO MSG2A
+              EXEC CICS SEND MAP('ORDER') MAPSET('DFH0CGK') END-EXEC
+      *
+      *       RETURN WITH COMM. AREA
+      *
+              EXEC CICS RETURN TRANSID(EIBTRNID)
+                               COMMAREA(ERROR-FLAG)
+                               LENGTH(1)
+                               END-EXEC.
+      *
+      *    THE FILE CONTROL "READ" COMMAND ATTEMPTS TO READ THE CUSTOMER
+      *    RECORD FROM "FILEA".
+      *    IF THE PROGRAM DETECTS THAT NO RECORD EXISTS FOR THE CUSTOMER
+      *    THEN CONTROL BRANCHES TO THE ROUTINE "NOTFOUND".
+      *
+           EXEC CICS READ FILE('FILEA') INTO(FILEA) RIDFLD(CUSTNOI)
+                RESP(RESPONSE) END-EXEC.
+      *
+      *    CHECK RESPONSE
+      *
+           IF RESPONSE = DFHRESP(NOTFND) THEN GO TO NOTFOUND.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+           MOVE CUSTNOI  TO CUSTNO.
+      *
+      *    THE ORDER DETAILS ARE MOVED FROM THE INPUT MAP TO THE QUEUE
+      *    AREA.
+      *
+           MOVE PARTNOI  TO PARTNO.
+           MOVE QUANTI   TO QUANTITY.
+           MOVE EIBTRMID TO TERMID.
+      *
+      *    THE "WRITEQ TD" COMMAND WRITES THE ORDER RECORD TO A
+      *    SEQUENTIAL FILE, A TRANSIENT DATA QUEUE.
+      *
+           EXEC CICS WRITEQ TD QUEUE('L86O') FROM(L86O) LENGTH(22)
+                END-EXEC.
+      *
+      *    THE ORDER ENTRY MAP IS REDISPLAYED READY FOR THE NEXT ORDER.
+      *    ONLY THE MAP LOAD MODULE IS USED TO BUILD THE SCREEN DISPLAY,
+      *    "MAPONLY" CAUSES THE DATA IN THE MAP DSECT AREA TO BE IGNORED
+      *    "ERASEAUP" ERASES ALL THE UNPROTECTED DATA ON THE SCREEN,
+      *    THAT IS, THE CUSTOMER NUMBER, PART NUMBER AND QUANTITY.
+      *    CONTROL IS RETURNED TO CICS TO AWAIT THE NEXT ORDER ENTRY.
+      *
+           EXEC CICS SEND MAP('ORDER') MAPSET('DFH0CGK')
+                MAPONLY ERASEAUP END-EXEC.
+      *
+      *    RETURN WITH COMM. AREA
+      *
+           EXEC CICS RETURN TRANSID(EIBTRNID)
+                            COMMAREA(ERROR-FLAG)
+                            LENGTH(1)
+                            END-EXEC.
+      *
+      *    IF THE PROGRAM DETECTS THAT THERE IS NO RECORD ON "FILEA",
+      *    THE "NOTFND" CONDITION IS RAISED AND THE PROGRAM BRANCHES
+      *    TO THIS ROUTINE.
+      *    THE ATTRIBUTE FOR THE CUSTOMER NUMBER FIELD IS SET TO HIGH
+      *    INTENSITY WITH "MDT" ON AND AN ERROR MESSAGE "NUMBER NOT
+      *    FOUND - REENTER" IS SET TO DISPLAY IN HIGH INTENSITY.
+      *    THE ORDER IS REDISPLAYED FOR CORRECTION. CONTROL IS RETURNED
+      *    TO CICS TO AWAIT THE ENTRY OF THE CORRECTED ORDER.
+      *
+       NOTFOUND.
+           MOVE DFHBMASB TO MSG1A.
+           EXEC CICS SEND MAP('ORDER') MAPSET('DFH0CGK') END-EXEC.
+      *
+      *    RETURN WITH COMM. AREA
+      *
+           EXEC CICS RETURN TRANSID(EIBTRNID)
+                            COMMAREA(ERROR-FLAG)
+                            LENGTH(1)
+                            END-EXEC.
+      *
+      *    IF NO FIELDS ARE ENTERED, THE "MAPFAIL" CONDITION OCCURS.
+      *    THE MESSAGE "DATA ERROR - REENTER" IS DISPLAYED IN HIGH
+      *    INTENSITY.
+      *
+       MAPFAIL.
+           MOVE LOW-VALUES TO ORDERO.
+           MOVE DFHBMASB TO MSG2A.
+           EXEC CICS SEND MAP('ORDER') MAPSET('DFH0CGK')
+                END-EXEC.
+      *
+      *    RETURN WITH COMM. AREA
+      *
+           EXEC CICS RETURN TRANSID(EIBTRNID)
+                            COMMAREA(ERROR-FLAG)
+                            LENGTH(1)
+                            END-EXEC.
+      *
+      *    IF AN ERROR OCCURS A DUMP IS TAKEN, AND THE MESSAGE
+      *    "TRANSACTION TERMINATED" IS DISPLAYED IN HIGH INTENSITY
+      *    IN THE DATA ERROR MESSAGE AREA. THE PROGRAM TERMINATES
+      *    LEAVING THE ORDER ENTRY SCREEN DISPLAYED.
+      *
+       ERRORS.
+           MOVE 'TRANSACTION TERMINATED' TO MSG2O.
+           MOVE DFHBMASB TO MSG2A.
+           EXEC CICS SEND MAP('ORDER') MAPSET('DFH0CGK')
+                NOHANDLE END-EXEC.
+           EXEC CICS DUMP DUMPCODE('ERRS') END-EXEC.
+           EXEC CICS RETURN END-EXEC.
+      *
+      *    WHEN THE "CLEAR" KEY IS PRESSED THE PROGRAM TERMINATES.
+      *    THE MESSAGE "PROCESSING COMPLETED" IS DISPLAYED ON A BLANK
+      *    SCREEN, THE KEYBOARD IS FREED AND CONTROL IS RETURNED TO
+      *    CICS.
+      *
+       ENDA.
+           EXEC CICS SEND TEXT FROM(PRESMSG) LENGTH(20) ERASE
+                END-EXEC.
+           EXEC CICS SEND CONTROL FREEKB END-EXEC.
+           EXEC CICS RETURN END-EXEC.
+           GOBACK.

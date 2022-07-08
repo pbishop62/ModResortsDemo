@@ -1,0 +1,2475 @@
+      CBL CICS('COBOL3') APOST
+PROCESS MAP,XREF
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CNA1                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (NACT) NACT SAMPLE                *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 2001"                             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * TRANSACTION NAME = NACT                                       *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      * This program provides the front-end interface (presentation   *
+      * logic) for 3270 terminals for the CICS Application Design and *
+      * programming book sample application. It employs Basic Mapping *
+      * Support (BMS) services to perform its function.               *
+      *                                                               *
+      * DFH0CNA1 is the first program that is executed when the       *
+      * transaction NACT is entered.  It handles the processing flow  *
+      * of the new Account application, performing the following      *
+      * functions -                                                   *
+      *                                                               *
+      *   -   display the menu screen                                 *
+      *   -   validate the user input                                 *
+      *   -   determine the action required such as displaying        *
+      *       further screens, starting the print transaction etc     *
+      *   -   validate any input data before calling the CRUD or      *
+      *       Browse program                                          *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      * $MOD(DFH0CNA1),COMP(SAMPLES),PROD(CICS TS ):                  *
+      *                                                               *
+      * PN= REASON REL YYMMDD HDXXIII : REMARKS                       *
+      * $P0= D02652 620 011003 HDFXAB  : Install Nact                 *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID.   DFH0CNA1.
+       AUTHOR.       A PROGRAMMER.
+       INSTALLATION. IBM HURSLEY.
+       DATE-WRITTEN. AUGUST 1999.
+       DATE-COMPILED.
+      *
+      ***************************************************************
+      *     FILES
+      *
+      ***************************************************************
+      *     CICS RESOURCES
+      *
+      ***************************************************************
+      *     UTILITIES
+      *
+      ***************************************************************
+      *     COPYBOOKS
+      *
+      *     DFH0CNAU  - Working storage layout of the data passed
+      *                 to the CRUD program.
+      *     DFH0CNAB  - Working storage layout of the data passed
+      *                 to the Browse program.
+      *     DFH0CNAR  - Working storage layout of the data passed
+      *                 to the Error Handler program.
+      *     DFH0CNAC  - Common working storage.
+      *     DFH0CNAM  - The mapsets.
+      *     DFHAID    - Standard attention identifier constants
+      *                 list supplied by CICS.  It contains a list
+      *                 of hexidecimal values that correspond to
+      *                 the various attention keys and is used to
+      *                 interpret user input.
+      *     DFHBMSCA  - Defines all of the commonly used values for
+      *                 all attributes and assigns meaningful names
+      *                 to each combination.  Supplied by CICS.
+      *
+      ***************************************************************
+      *
+      *
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+      *
+       WORKING-STORAGE SECTION.
+      *
+      *    Store eye catcher details to aid dump reading
+      *
+       01  WS-DEBUG-DETAILS.
+           05  FILLER                        PIC X(32)
+                 VALUE 'DFH0CNA1-----WORKING STORAGE  '.
+           05  DEBUG-EYE.
+               10  DEBUG-TRANID              PIC X(4) VALUE SPACES.
+               10  DEBUG-TERMID              PIC X(4) VALUE SPACES.
+               10  DEBUG-TASKNO              PIC 9(7) VALUE ZERO.
+           05  FILLER                        PIC X    VALUE SPACE.
+           05  DEBUG-COMMAREA-ADDR           USAGE IS POINTER.
+      *
+       01  FILLER.
+      *
+      * These fields are used for interfacing with other
+      * programs in the suite.
+      *
+           05  WS-PROGRAM-NAME               PIC X(8) VALUE SPACES.
+           05  CRUD-PROGRAM.
+               10  WS-CRUD-PROGRAM-PREFIX    PIC X(7) VALUE SPACES.
+               10  FILLER                    PIC X(1) VALUE '2'.
+           05  PRINT-PROGRAM.
+               10  WS-PRINT-PROGRAM-PREFIX   PIC X(7) VALUE SPACES.
+               10  FILLER                    PIC X(1) VALUE '3'.
+           05  ABEND-PROGRAM.
+               10  WS-ABEND-PROGRAM-PREFIX   PIC X(7) VALUE SPACES.
+               10  FILLER                    PIC X(1) VALUE '4'.
+           05  BROWSE-PROGRAM.
+               10  WS-BROWSE-PROGRAM-PREFIX  PIC X(7) VALUE SPACES.
+               10  FILLER                    PIC X(1) VALUE '5'.
+      *
+      * The program generally uses techniques to prevent name
+      * dependencies. This field is used for STARTing printing.
+      *
+           05  PRINT-TRANSID                 PIC X(4) VALUE SPACES.
+      *
+      * Store of EIBRESP and EIBRESP2 set up in each EXEC CICS statement
+      *
+           05  RESPONSE                      PIC S9(8) COMP-4 VALUE 0.
+           05  REASON-CODE                   PIC S9(8) COMP-4 VALUE 0.
+      *
+      * The EIBFN is defined as character but the error interface
+      * expects a numeric value.
+      *
+           05  WORK-FN                       PIC 9(4) COMP VALUE ZERO.
+           05  WORK-FN-X REDEFINES WORK-FN   PIC X(2).
+      *
+      * General indexes.
+      *
+           05  IX1                           PIC 9(4) COMP VALUE ZERO.
+           05  IX2                           PIC 9(4) COMP VALUE ZERO.
+      *
+      * The program provides look up via account or name
+      *
+           05  NAME-INDICATOR                PIC X VALUE SPACES.
+               88  GOT-NAME                  VALUE 'Y'.
+               88  NEED-ACCT                 VALUE 'N'.
+      *
+      * The STARS will be shown on the ? screen after validation.
+      * They will be used to highlight mandatory fill fields that
+      * the user has left blank
+      *
+           05  ERROR-STARS                   PIC X     VALUE '*'.
+      *
+      * Each line satisfying the name look up is built here
+      * in SUM-LINE following the title line SUM-TITLE-LINE
+      *
+           05  SUM-TITLE-LINE.
+               10  FILLER                    PIC X(40)
+                   VALUE 'ACCT    SURNAME       FIRST   MI  TTL   '.
+               10  FILLER                    PIC X(39)
+                   VALUE 'ADDRESS                   ST      LIMIT'.
+           05  SUM-LINE.
+               10  ACCTDO                    PIC X(5)  VALUE SPACES.
+               10  FILLER                    PIC X(3)  VALUE SPACES.
+               10  SNAMEDO                   PIC X(12) VALUE SPACES.
+               10  FILLER                    PIC X(2)  VALUE SPACES.
+               10  FNAMEDO                   PIC X(7)  VALUE SPACES.
+               10  FILLER                    PIC X(2)  VALUE SPACES.
+               10  MIDO                      PIC X(1)  VALUE SPACES.
+               10  FILLER                    PIC X(2)  VALUE SPACES.
+               10  TTLDO                     PIC X(4)  VALUE SPACES.
+               10  FILLER                    PIC X(2)  VALUE SPACES.
+               10  ADDR1DO                   PIC X(24) VALUE SPACES.
+               10  FILLER                    PIC X(2)  VALUE SPACES.
+               10  STATDO                    PIC X(2)  VALUE SPACES.
+               10  FILLER                    PIC X(3)  VALUE SPACES.
+               10  LIMITDO                   PIC X(8)  VALUE SPACES.
+      *
+      * An array containing the number of days in each month to be
+      * used to validate the date issued input field.
+      *
+           05  DAYS-IN-MONTH.
+               10  JANUARY                   PIC 99  VALUE 31.
+               10  FEBRUARY                  PIC 99  VALUE 29.
+               10  MARCH                     PIC 99  VALUE 31.
+               10  APRIL                     PIC 99  VALUE 30.
+               10  MAY                       PIC 99  VALUE 31.
+               10  JUNE                      PIC 99  VALUE 30.
+               10  JULY                      PIC 99  VALUE 31.
+               10  AUGUST                    PIC 99  VALUE 31.
+               10  SEPTEMBER                 PIC 99  VALUE 30.
+               10  OCTOBER                   PIC 99  VALUE 31.
+               10  NOVEMBER                  PIC 99  VALUE 30.
+               10  DECEMBER                  PIC 99  VALUE 31.
+           05 FILLER REDEFINES DAYS-IN-MONTH.
+               10  MAX-DAYS-IN-MONTH         PIC 99  OCCURS 12.
+      *
+      * Various numeric fields to be used to determine the validity
+      * of the date issued field
+      *
+           05  NUMERIC-CA-DAY                PIC 99  VALUE ZERO.
+           05  NUMERIC-CA-MONTH              PIC 99  VALUE ZERO.
+           05  NUMERIC-CA-YEAR               PIC 99  VALUE ZERO.
+           05  DATE-CHECK-REMAINDER          PIC 99  VALUE ZERO.
+           05  DATE-CHECK-ANSWER             PIC 99  VALUE ZERO.
+      *
+      * There are several messages which can be output. They are
+      * placed in an array here for ease of changing without
+      * having multiple literals in the program code itself.
+      *
+       01  MSG-LIST.
+           05  FILLER                        PIC X(60) VALUE
+               'NAMES MUST BE ALPHABETIC AND SURNAME IS REQUIRED.'.
+           05  FILLER                        PIC X(60) VALUE
+           'MISMATCH BETWEEN INPUT OF REQUEST TYPE AND PRINTER ID'.
+           05  FILLER                        PIC X(60) VALUE
+           'REQUEST TYPE REQUIRED; MUST BE D, P, A, M OR X'.
+           05  FILLER                        PIC X(60) VALUE
+               'PRINTER NAME REQUIRED ON PRINT REQUESTS'.
+           05  FILLER                        PIC X(60) VALUE
+               'ACCOUNT NUMBER REQUIRED (BETWEEN 10000 AND 79999)'.
+           05  FILLER                        PIC X(60) VALUE
+               'ACCOUNT NO. MUST BE NUMERIC AND FROM 10000 TO 79999'.
+           05  FILLER                        PIC X(60) VALUE
+               'NO NAMES ON FILE MATCHING YOUR REQUEST'.
+           05  FILLER                        PIC X(60) VALUE
+               'ENTER EITHER NAME OR A REQUEST TYPE AND ACCOUNT NUMBER'.
+           05  FILLER                        PIC X(60) VALUE
+               'THIS ACCOUNT NUMBER ALREADY EXISTS'.
+           05  FILLER                        PIC X(60) VALUE
+               'NO RECORD OF THIS ACCOUNT NUMBER'.
+           05  FILLER                        PIC X(60) VALUE
+               'THIS ACCOUNT NUMBER ALREADY IN USE'.
+           05  FILLER                        PIC X(60) VALUE
+               'PRINT REQUEST SCHEDULED'.
+           05  FILLER                        PIC X(60) VALUE
+               'PRINTER NAME NOT RECOGNIZED'.
+           05  FILLER                        PIC X(60) VALUE
+           'INVALID KEY PRESSED - USE ONLY "CLEAR" OR "ENTER" KEY'.
+           05  FILLER                        PIC X(60) VALUE
+              'THERE ARE MORE MATCHING NAMES. PRESS PF8 TO CONTINUE.'.
+           05  FILLER                        PIC X(60) VALUE
+               'PREVIOUS REQUEST CANCELLED AS REQUESTED'.
+           05  FILLER                        PIC X(15) VALUE
+               'ACCOUNT NUMBER '.
+           05  ADD-ACCOUNT-NO                PIC X(05) VALUE SPACES.
+           05  FILLER                        PIC X(40) VALUE
+               ' ADDED'.
+           05  FILLER                        PIC X(15) VALUE
+               'ACCOUNT NUMBER '.
+           05  MOD-ACCOUNT-NO                PIC X(05) VALUE SPACES.
+           05  FILLER                        PIC X(40) VALUE
+               ' MODIFIED'.
+           05  FILLER                        PIC X(15) VALUE
+               'ACCOUNT NUMBER '.
+           05  DEL-ACCOUNT-NO                PIC X(05) VALUE SPACES.
+           05  FILLER                        PIC X(40) VALUE
+               ' DELETED'.
+           05  FILLER                        PIC X(60) VALUE
+               'EITHER ENTER Y TO CONFIRM, OR "CLEAR" TO CANCEL'.
+           05  FILLER                        PIC X(60) VALUE
+               'YOUR REQUEST WAS INTERRUPTED; PLEASE RETRY'.
+           05  FILLER                        PIC X(60) VALUE
+               'CORRECT HIGHLIGHTED ITEMS (STAR MEANS ITEM REQUIRED)'.
+           05  FILLER                        PIC X(60) VALUE
+               'USE ONLY "ENTER" (TO PROCEED) OR "CLEAR" (TO CANCEL)'.
+           05  FILLER                        PIC X(60) VALUE
+           'MAKE SOME ENTRIES AND PRESS "ENTER", OR "CLEAR" TO CANCEL'.
+       01  FILLER REDEFINES MSG-LIST.
+           05  MSG-TEXT                      PIC X(60) OCCURS 24.
+      *
+      * The messages are referred to by a type to make the program
+      * more 'readable'.
+      *
+       01  FILLER.
+           05  MSG-NO                        PIC S9(4) COMP VALUE +0.
+               88  MSG-ALL-OK                               VALUE  0.
+               88  MSG-NAMES                                VALUE  1.
+               88  MSG-PRTR-MISMATCH                        VALUE  2.
+               88  MSG-REQUEST                              VALUE  3.
+               88  MSG-PRTR-REQ                             VALUE  4.
+               88  MSG-ACCT-REQ                             VALUE  5.
+               88  MSG-ACCT-NUM                             VALUE  6.
+               88  MSG-NOMATCH                              VALUE  7.
+               88  MSG-CONFLICT                             VALUE  8.
+               88  MSG-DUPLICATE                            VALUE  9.
+               88  MSG-NO-REC                               VALUE 10.
+               88  MSG-IN-USE                               VALUE 11.
+               88  MSG-PRINT-SCHED                          VALUE 12.
+               88  MSG-PRTR-UNKNOWN                         VALUE 13.
+               88  MSG-BAD-KEY                              VALUE 14.
+               88  MSG-MORE                                 VALUE 15.
+               88  MSG-REQ-CANC                             VALUE 16.
+               88  MSG-ADD-DONE                             VALUE 17.
+               88  MSG-MOD-DONE                             VALUE 18.
+               88  MSG-DEL-DONE                             VALUE 19.
+               88  MSG-TO-CANCEL                            VALUE 20.
+               88  MSG-REQ-INT                              VALUE 21.
+               88  MSG-CORRECT                              VALUE 22.
+               88  MSG-ACT-KEY                              VALUE 23.
+               88  MSG-NEED-DATA                            VALUE 24.
+      *
+       01  FILLER.
+           05  WS-BB-ERROR                   PIC X VALUE SPACES.
+               88  WS-BB-ERROR-PRESENT       VALUE 'Y'.
+      *
+      * The interfaces to the CRUD, Browse and error handler programs
+      * are described in copy books in order to ensure consistency.
+      *
+       01  FILLER .
+           05  FILLER                        PIC X(36) VALUE
+               '********  DFH0CNAU COPYBOOK  *******'.
+           COPY DFH0CNAU.
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+               '********  DFH0CNAW COPYBOOK  *******'.
+           COPY DFH0CNAW.
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+               '********  DFH0CNAR COPYBOOK  *******'.
+           COPY DFH0CNAR.
+      *
+      * Various values which you might wish to modify are placed in one
+      * copy book in order to make those sorts of changes more easily.
+      *
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+               '********  DFH0CNAC COPYBOOK  *******'.
+           COPY DFH0CNAC.
+      *
+      * The generated symbolic map must be included in the program.
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+               '********  DFH0CNAM COPYBOOK  *******'.
+       COPY DFH0CNAM.
+      *
+      * The CICS supplied values for interfacing with a 3270 must
+      * be available for testing and setting keys and attributes.
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+               '********  DFHAID  COPYBOOK  ********'.
+       COPY DFHAID.
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+               '********  DFHBMSCA COPYBOOK  *******'.
+       COPY DFHBMSCA.
+      *
+      * There is one desired value (ASKIP DARK) which the
+      * standard copy book does not provide.
+      *
+           02  DFHBMASD                      PIC X VALUE '@'.
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+               '********  LINKAGE SECTION   ********'.
+      *
+       EJECT.
+      *
+      * Between pseudo-conversational tasks various data needs to
+      * be saved. This area describes that data.
+      *
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           05  CA-LAST-MAP                     PIC X.
+               88  CA-SENT-MENU                VALUE 'M'.
+               88  CA-SENT-DETAIL              VALUE 'D'.
+               88  CA-SENT-NAMES               VALUE 'N'.
+      *
+      * This field only has meaning when CA-SENT-DETAIL is true.
+      *
+           05  CA-MODE                         PIC X.
+               88  CA-DISPLAYING               VALUE 'D'.
+               88  CA-MODIFYING                VALUE 'M'.
+               88  CA-DELETING                 VALUE 'X'.
+               88  CA-ADDING                   VALUE 'A'.
+           05  CA-COMMON-DATA.
+               10  CA-ACCOUNT                  PIC X(5).
+               10  CA-SURNAME                  PIC X(18).
+               10  CA-FIRSTNAME                PIC X(12).
+           05  CA-MENU-DATA.
+               10  CA-REQUEST-TYPE             PIC X.
+                   88  CA-REQUEST-DISPLAY      VALUE 'D'.
+                   88  CA-REQUEST-MODIFY       VALUE 'M'.
+                   88  CA-REQUEST-ADD          VALUE 'A'.
+                   88  CA-REQUEST-DELETE       VALUE 'X'.
+                   88  CA-REQUEST-PRINT        VALUE 'P'.
+                   88  CA-REQUEST-TYPE-OK      VALUE 'D' 'M' 'A'
+                                                     'X' 'P'.
+               10  CA-PRINTER                  PIC X(4).
+               10  CA-CONT-SURNAME             PIC X(18).
+               10  CA-CONT-FIRSTNAME           PIC X(12).
+               10  CA-CONT-MORE                PIC 9(4).
+               10  FILLER                      PIC X(191).
+           05  CA-DETAIL-DATA REDEFINES CA-MENU-DATA.
+               10  CA-MIDDLE-INITIAL           PIC X.
+               10  CA-TITLE                    PIC X(4).
+               10  CA-TELEPHONE-NO             PIC X(10).
+               10  CA-ADDRESS-LINE1            PIC X(24).
+               10  CA-ADDRESS-LINE2            PIC X(24).
+               10  CA-ADDRESS-LINE3            PIC X(24).
+               10  CA-AUTH1D                   PIC X(32).
+               10  CA-AUTH2D                   PIC X(32).
+               10  CA-AUTH3D                   PIC X(32).
+               10  CA-AUTH4D                   PIC X(32).
+               10  CA-NUMBER-CARDS-ISSUED      PIC X.
+               10  CA-MONTH-ISSUED             PIC X(2).
+               10  CA-DAY-ISSUED               PIC X(2).
+               10  CA-YEAR-ISSUED              PIC X(2).
+               10  CA-REASON-CODE              PIC X.
+               10  CA-CARD-CODE                PIC X.
+               10  CA-APPROVED                 PIC X(3).
+               10  CA-SPECIAL-CODE1            PIC X.
+               10  CA-SPECIAL-CODE2            PIC X.
+               10  CA-SPECIAL-CODE3            PIC X.
+      *
+       EJECT.
+      *
+      *
+       PROCEDURE DIVISION.
+      *
+       NACT01-MAIN SECTION.
+      *
+      * First we establish the ABEND handler in case unexpected
+      * errors arise, such as program interrupts. The technique
+      * used here assumes a naming convention where the variable
+      * part of the program names is in the 8th positions.
+      * This allows for changes to the names in case the provided
+      * names conflict with existing applications.
+      *
+      * The logic flow is then determined
+      *
+       NACT01-010.
+      *
+      *  Assign returns system information to the program.
+      *  This example returns the name of the current program to
+      *  WS-PROGRAM-NAME.
+      *
+           EXEC CICS ASSIGN
+                     PROGRAM(WS-PROGRAM-NAME)
+                     NOHANDLE
+           END-EXEC.
+      *
+       NACT01-020.
+      *
+      *  Set the up the names of the programs that are linked and
+      *  xctl'd.
+      *
+           MOVE WS-PROGRAM-NAME TO WS-CRUD-PROGRAM-PREFIX
+                                   WS-PRINT-PROGRAM-PREFIX
+                                   WS-ABEND-PROGRAM-PREFIX
+                                   WS-BROWSE-PROGRAM-PREFIX.
+      *
+       NACT01-030.
+      *
+      *  Establish the abend handler program.
+      *
+           EXEC CICS HANDLE ABEND
+                     PROGRAM(ABEND-PROGRAM)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+               EXEC CICS ABEND
+                         ABCODE(WS-LITS-ABEND-ERROR-ABEND)
+               END-EXEC
+           END-IF.
+      *
+       NACT01-040.
+      *
+      *  Set up values in the eye-catcher
+      *
+           MOVE EIBTRNID TO DEBUG-TRANID.
+           MOVE EIBTRMID TO DEBUG-TERMID.
+           MOVE EIBTASKN TO DEBUG-TASKNO.
+      *
+      *  Set up the commarea address
+      *
+           SET DEBUG-COMMAREA-ADDR TO ADDRESS OF DFHCOMMAREA.
+      *
+       NACT01-050.
+      *
+      *  Initialise all maps
+      *
+           PERFORM A-INITIALIZE-MENU-SCREEN.
+      *
+       NACT01-060.
+      *
+      * The first time we need to obtain an area for saving data
+      * between pseudo-conversational tasks as well as send the
+      * initial menu map.
+      * The logic must now take action depending on what happened last.
+      *
+           IF  EIBCALEN = 0
+               EXEC CICS GETMAIN
+                         LENGTH(LENGTH OF DFHCOMMAREA)
+                         SET   (ADDRESS OF DFHCOMMAREA)
+               END-EXEC
+               PERFORM U-SEND-EMPTY-MENU
+           ELSE
+               EVALUATE TRUE
+                  WHEN CA-SENT-MENU
+                       PERFORM B-GET-MENU-DATA
+                  WHEN CA-SENT-NAMES
+                       EVALUATE EIBAID
+                           WHEN DFHPF8
+                           WHEN DFHPA2
+                                PERFORM C-GO-FORWARD
+                           WHEN OTHER
+                                SET CA-SENT-MENU TO TRUE
+                                PERFORM B-GET-MENU-DATA
+                       END-EVALUATE
+                  WHEN CA-SENT-DETAIL
+                       PERFORM D-GET-DETAIL-DATA
+                  WHEN OTHER
+                       PERFORM Y-UNEXPECTED-ERROR
+               END-EVALUATE
+           END-IF.
+      *
+       NACT01-070.
+      *
+      * End the task without saving any data.
+      *
+           EXEC CICS RETURN
+           END-EXEC.
+      *
+       END-DO-MAIN-LOGIC.
+           EXIT.
+           EJECT.
+      *
+       A-INITIALIZE-MENU-SCREEN SECTION.
+      *
+      * Initialize acctmnu, the menu output map.
+      * Initialize msgmo, the output error line on the map
+      * to remove all previously displayed error messages.
+      * Initialize the summary title and lines to remove
+      * all previously displayed summary information.
+      * Initialize the acctdtl, the detail output map.
+      *
+       A-010.
+           MOVE LOW-VALUES TO ACCTMNUO
+           MOVE SPACES     TO MSGMO.
+      *
+           MOVE SPACES     TO SUMTTLMO.
+           PERFORM TEST BEFORE VARYING IX1 FROM 1 BY 1 UNTIL IX1 > 6
+               MOVE SPACES TO SUMLNMO (IX1)
+           END-PERFORM.
+      *
+           MOVE LOW-VALUES TO ACCTDTLO.
+      *
+       END-A-INITIALIZE-MENU-SCREEN.
+           EXIT.
+           EJECT.
+      *
+       B-GET-MENU-DATA SECTION.
+      *
+      * Processing is dependant upon the key that was pressed and
+      * field EIBAID contains this information.  EIBAID is set to
+      * dfhpf3 when function key 3 has been pressed, DFHCLEAR for
+      * the clear/pause key and DFHENTER for the enter key.
+      * key testing is necessary to determine the action required.
+      *
+       B-010.
+           EVALUATE EIBAID
+               WHEN DFHPF3
+               WHEN DFHCLEAR
+                   PERFORM BA-SEND-CONTROL
+               WHEN DFHENTER
+                   MOVE SPACE TO WS-BB-ERROR
+                   PERFORM BB-MENU-DATA-ENTERED
+                   IF WS-BB-ERROR-PRESENT
+                      PERFORM BD-MENU-ERROR-OUT
+                      SET CA-SENT-MENU TO TRUE
+                      PERFORM X-RETURN-COM-AREA
+                   ELSE
+                      PERFORM BE-FALL-THROUGH
+                      SET CA-SENT-DETAIL TO TRUE
+                      PERFORM X-RETURN-COM-AREA
+                   END-IF
+               WHEN OTHER
+                   SET MSG-BAD-KEY TO TRUE
+                   PERFORM BC-MENU-ERR-OUT-WTH-CURSOR
+                   SET CA-SENT-MENU TO TRUE
+                   PERFORM X-RETURN-COM-AREA
+           END-EVALUATE.
+      *
+       END-B-GET-MENU-DATA.
+           EXIT.
+           EJECT.
+      *
+       BA-SEND-CONTROL SECTION.
+      *
+      * End the pseudo-conversational series of tasks.
+      * Free the user's keyboard and end without saving
+      * any data.
+      *
+       BA-010.
+           EXEC CICS SEND CONTROL
+                     FREEKB
+                     ERASE
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+               PERFORM Y-UNEXPECTED-ERROR
+           END-IF.
+      *
+       END-BA-SEND-CONTROL.
+           EXIT.
+           EJECT.
+      *
+       BB-MENU-DATA-ENTERED SECTION.
+      *
+      * Obtain the input (if any) from the user.
+      *
+       BB-010.
+           MOVE LOW-VALUES TO ACCTMNUI.
+      *
+           EXEC CICS RECEIVE
+                     MAP('ACCTMNU')
+                     MAPSET(WS-LITS-MAPSET)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  (RESPONSE NOT = DFHRESP(NORMAL) )
+           AND (RESPONSE NOT = DFHRESP(MAPFAIL))
+                PERFORM Y-UNEXPECTED-ERROR
+           END-IF.
+      *
+       BB-020.
+      *
+      * This routine examines each possible input field from the menu
+      * map to see if it has been entered or erased. The Length suffix
+      * field will be non-zero if the field has been entered. The Flag
+      * suffixed field will contain a special value if the field has
+      * been entirely erased. In both cases we can move the Input
+      * suffixed field to the area where we save data between pseudo-
+      * conversational tasks since it will contain the input or
+      * LOW-VALUES (nulls).
+      *
+           IF  SNAMEML NOT = 0
+               MOVE SNAMEMI TO CA-SURNAME
+           ELSE
+               IF  SNAMEMF = DFHBMEOF
+                   MOVE SPACES TO CA-SURNAME
+               END-IF
+           END-IF.
+      *
+           IF  FNAMEML NOT = 0
+               MOVE FNAMEMI TO CA-FIRSTNAME
+           ELSE
+               IF  FNAMEMF = DFHBMEOF
+                   MOVE SPACES TO CA-FIRSTNAME
+               END-IF
+           END-IF.
+      *
+           IF  REQMF = DFHBMEOF
+               MOVE LOW-VALUE TO CA-REQUEST-TYPE
+           ELSE
+               IF  REQML NOT = 0
+                   MOVE REQMI TO CA-REQUEST-TYPE
+                   IF CA-REQUEST-TYPE = SPACE
+                       MOVE LOW-VALUE TO CA-REQUEST-TYPE
+                   END-IF
+               END-IF
+           END-IF.
+      *
+           IF  ACCTMF = DFHBMEOF
+               MOVE LOW-VALUES TO CA-ACCOUNT
+           ELSE
+               IF  ACCTML NOT = 0
+                   MOVE ACCTMI TO CA-ACCOUNT
+                   IF  CA-ACCOUNT = SPACES
+                       MOVE LOW-VALUES TO CA-ACCOUNT
+                   END-IF
+               END-IF
+           END-IF.
+      *
+           IF  PRTRMF = DFHBMEOF
+               MOVE LOW-VALUES TO CA-PRINTER
+           ELSE
+               IF  PRTRML NOT = 0
+                   MOVE PRTRMI TO CA-PRINTER
+                   IF  CA-PRINTER = SPACES
+                       MOVE LOW-VALUES TO CA-PRINTER
+                   END-IF
+               END-IF
+           END-IF.
+      *
+       BB-030.
+           MOVE LOW-VALUES TO ACCTMNUO.
+           MOVE SPACES     TO MSGMO.
+      *
+           MOVE SPACES     TO SUMTTLMO.
+           PERFORM TEST BEFORE VARYING IX1 FROM 1 BY 1 UNTIL IX1 > 6
+               MOVE SPACES TO SUMLNMO (IX1)
+           END-PERFORM.
+      *
+       BB-040.
+      *
+      * The validation rules for input are applied here. The technique
+      * sets attributes in the output map area. If the field is in
+      * error, it is highlighted and a request to put the cursor at
+      * the beginning of that field is made. (Setting the
+      * input Length field to a special value of -1 tells BMS of our
+      * desire to place the cursor on the screen at the beginning of
+      * that field. BMS ignores all but the first such request.) If
+      * the field is valid, its attribute is set to normal intensity
+      * in case it had been in error (highlighted) previously.
+      *
+      *
+      * Initialise the msg-all-ok flag and replace all low values
+      * in both the first and surname with spaces.
+      *
+           SET MSG-ALL-OK TO TRUE.
+      *
+           INSPECT CA-SURNAME REPLACING ALL LOW-VALUES BY SPACES.
+           INSPECT CA-FIRSTNAME REPLACING ALL LOW-VALUES BY SPACES.
+      *
+       BB-050.
+      *
+      * The forename must contain alphabetic characters only.
+      *
+           IF  CA-FIRSTNAME NOT ALPHABETIC
+               SET MSG-NAMES TO TRUE
+               MOVE -1 TO FNAMEML
+               MOVE DFHBMBRY TO FNAMEMA
+           ELSE
+               MOVE DFHBMUNP TO FNAMEMA
+           END-IF.
+      *
+      * The surname must contain alphabetic characters only.
+      *
+           IF  CA-SURNAME NOT ALPHABETIC
+               SET MSG-NAMES TO TRUE
+               MOVE -1 TO SNAMEML
+               MOVE DFHBMBRY TO SNAMEMA
+           ELSE
+               MOVE DFHBMUNP TO SNAMEMA
+           END-IF.
+      *
+      * Determine if a name search or a specific function
+      * has been requested.
+      *
+           IF  CA-SURNAME = SPACES
+           AND CA-FIRSTNAME = SPACES
+               SET NEED-ACCT TO TRUE
+           ELSE
+               SET GOT-NAME  TO TRUE
+      *
+      * Something must be entered into the surname for a name search.
+      *
+               IF  CA-SURNAME = SPACES
+                   SET MSG-NAMES TO TRUE
+                   MOVE -1 TO SNAMEML
+                   MOVE DFHBMBRY TO SNAMEMA
+               END-IF
+           END-IF.
+      *
+           IF  MSG-ALL-OK
+      *
+      * If a specific function was requested, then an account must
+      * be present and in the acceptable range of '10000' to '79999',
+      * as well as a valid request type of D, A, M, X or P.
+      *
+               IF  NEED-ACCT
+                   IF  CA-ACCOUNT = LOW-VALUES
+                       SET MSG-ACCT-REQ TO TRUE
+                       MOVE -1 TO ACCTML
+                       MOVE DFHBMBRY TO ACCTMA
+                   ELSE
+                       IF (CA-ACCOUNT NOT NUMERIC)
+                       OR  CA-ACCOUNT < '10000'
+                       OR  CA-ACCOUNT > '79999'
+                           SET MSG-ACCT-NUM TO TRUE
+                           MOVE -1 TO ACCTML
+                           MOVE DFHBMBRY TO ACCTMA
+                       ELSE
+                           MOVE DFHBMUNP TO ACCTMA
+                       END-IF
+                   END-IF
+                   IF  CA-REQUEST-TYPE-OK
+                       MOVE DFHBMUNP TO REQMA
+                   ELSE
+                       SET MSG-REQUEST TO TRUE
+                       MOVE -1 TO REQML
+                       MOVE DFHBMBRY TO REQMA
+                   END-IF
+      *
+      * Also, a check is made between request type and printer id
+      * that if request-type is P for PRINT, a printer id is input
+      * and conversely, if request-type is NOT P, that a printer id
+      * has not been input.
+      *
+                   IF  (CA-REQUEST-PRINT AND CA-PRINTER = LOW-VALUES)
+                                     OR (CA-PRINTER NOT = LOW-VALUES
+                                         AND NOT CA-REQUEST-PRINT)
+                       SET MSG-PRTR-MISMATCH TO TRUE
+                       MOVE -1 TO REQML
+                       MOVE DFHBMBRY TO REQMA
+                   ELSE
+                       MOVE DFHBMUNP TO PRTRMA
+                   END-IF
+      *
+      * If a name search was requested, then neither an account,
+      * nor request type, nor printer id should be present.
+      *
+               ELSE
+                   IF  CA-PRINTER = LOW-VALUES
+                       MOVE DFHBMUNP TO PRTRMA
+                   ELSE
+                       SET MSG-CONFLICT TO TRUE
+                       MOVE -1 TO PRTRML
+                       MOVE DFHBMBRY TO PRTRMA
+                   END-IF
+                   IF  CA-ACCOUNT = LOW-VALUES
+                       MOVE DFHBMUNP TO ACCTMA
+                   ELSE
+                       SET MSG-CONFLICT TO TRUE
+                       MOVE -1 TO ACCTML
+                       MOVE DFHBMBRY TO ACCTMA
+                   END-IF
+                   IF  CA-REQUEST-TYPE = LOW-VALUES
+                       MOVE DFHBMUNP TO REQMA
+                   ELSE
+                       SET MSG-CONFLICT TO TRUE
+                       MOVE -1 TO REQML
+                       MOVE DFHBMBRY TO REQMA
+                   END-IF
+               END-IF
+           END-IF.
+      *
+       BB-060.
+      *
+      * When the input data is valid, further processing is required
+      * else set the error flag to true and return to B-GET-MENU-DATA
+      * to prepare the menu screen highlighting the error.
+      *
+           IF  MSG-ALL-OK
+               PERFORM BBA-PROCESS-VALID-MENU
+           ELSE
+               SET WS-BB-ERROR-PRESENT TO TRUE
+           END-IF.
+      *
+       END-BB-MENU-DATA-ENTERED.
+           EXIT.
+           EJECT.
+      *
+       BBA-PROCESS-VALID-MENU SECTION.
+      *
+      * When the input data valid, we need to process the request.
+      *
+       BBA-010.
+      *
+      * If a name search is requested, then the menu must be changed.
+      *
+           MOVE LOW-VALUES TO ACCTDTLO.
+      *
+           IF  GOT-NAME
+               MOVE LOW-VALUES     TO ACCTMNUO
+               MOVE SPACES         TO MSGINVMO
+               MOVE SPACES         TO MSGMO
+               MOVE DFHBMUNP       TO REQMA
+               MOVE DFHBMUNP       TO ACCTMA
+               MOVE DFHBMUNP       TO PRTRMA
+               MOVE SUM-TITLE-LINE TO SUMTTLMO
+               PERFORM BBAA-SEARCH-NAMES
+           END-IF.
+      *
+       BBA-020.
+      *
+      * The action taken when an account is entered depends on the
+      * function requested. All of these call the back-end CRUD
+      * program. Various errors may arise, and those must be handled.
+      *
+           EVALUATE TRUE
+      *
+      * A simple Display only requires obtaining the data and
+      * setting up the map to prevent modification.
+      *
+               WHEN CA-REQUEST-DISPLAY
+                   MOVE LOW-VALUES TO NACTREC-DATA
+                   MOVE CA-ACCOUNT TO ACCTDO IN NACTREC-DATA
+                   SET WS-CRUD-REQ-ENQUIRE TO TRUE
+                   PERFORM T-CALL-CRUD
+                   IF  WS-CRUD-NO-ERROR
+                       PERFORM BBAB-MOVE-TO-DETAIL-MAP
+                       MOVE -1 TO SNAMEDL
+                       MOVE 'PRESS "CLEAR" OR "ENTER" TO RETURN TO THE M
+      -                     'ENU WHEN FINISHED' TO MSGDO
+                       PERFORM BBAC-PROTECT-DETAILS
+                       SET CA-DISPLAYING TO TRUE
+      *
+      * The user must be told when no such account exists.
+      *
+                   ELSE
+                       SET MSG-NO-REC TO TRUE
+                       MOVE -1       TO ACCTML
+                       MOVE DFHBMBRY TO ACCTMA
+                       SET WS-BB-ERROR-PRESENT TO TRUE
+                   END-IF
+      *
+      * A Modification requires locking the account as well as
+      * obtaining the data.
+      *
+               WHEN CA-REQUEST-MODIFY
+                   MOVE LOW-VALUES TO NACTREC-DATA
+                   MOVE CA-ACCOUNT TO ACCTDO IN NACTREC-DATA
+                   SET WS-CRUD-REQ-READ TO TRUE
+                   PERFORM T-CALL-CRUD
+                   EVALUATE TRUE
+                       WHEN WS-CRUD-NO-ERROR
+                           PERFORM BBAB-MOVE-TO-DETAIL-MAP
+                           PERFORM BBAD-SAVE-DETAILS
+                           SET CA-MODIFYING TO TRUE
+      *
+      * The user must be told when the account is already in use.
+      *
+                       WHEN WS-CRUD-BAD-LOCK
+                           SET MSG-IN-USE TO TRUE
+                           MOVE -1       TO ACCTML
+                           MOVE DFHBMBRY TO ACCTMA
+                           SET WS-BB-ERROR-PRESENT TO TRUE
+      *
+      * The user must be told when no such account exists.
+      *
+                       WHEN OTHER
+                           SET MSG-NO-REC TO TRUE
+                           MOVE -1       TO ACCTML
+                           MOVE DFHBMBRY TO ACCTMA
+                           SET WS-BB-ERROR-PRESENT TO TRUE
+                   END-EVALUATE
+      *
+      * An Add requires ensuring the record does not exists as well as
+      * locking the account.
+      *
+               WHEN CA-REQUEST-ADD
+                   MOVE LOW-VALUES TO NACTREC-DATA
+                   MOVE CA-ACCOUNT TO ACCTDO IN NACTREC-DATA
+                   SET WS-CRUD-REQ-ENQUIRE TO TRUE
+                   PERFORM T-CALL-CRUD
+                   EVALUATE TRUE
+      *
+      * When the account already exists, the user must be informed.
+      *
+                       WHEN WS-CRUD-NO-ERROR
+                           SET MSG-DUPLICATE TO TRUE
+                           MOVE -1       TO ACCTML
+                           MOVE DFHBMBRY TO ACCTMA
+                           SET WS-BB-ERROR-PRESENT TO TRUE
+                       WHEN OTHER
+                           SET WS-CRUD-REQ-LOCK TO TRUE
+                           PERFORM T-CALL-CRUD
+      *
+      * If the account is already in use, the user must be informed.
+      *
+                           IF  WS-CRUD-BAD-LOCK
+                               SET MSG-DUPLICATE TO TRUE
+                               MOVE -1       TO ACCTML
+                               MOVE DFHBMBRY TO ACCTMA
+                               SET WS-BB-ERROR-PRESENT TO TRUE
+                           END-IF
+      *
+      * Otherwise the output map must allow for entry of all of
+      * the required data.
+      *
+                           MOVE -1 TO SNAMEDL
+                           MOVE '       ADD' TO TITLEDO
+                           MOVE CA-ACCOUNT   TO ACCTDO IN ACCTDTLO
+      *                    MOVE LOW-VALUES   TO VFYTLDO IN ACCTDTLO
+                           MOVE
+                      'FILL IN AND PRESS "ENTER," OR "CLEAR" TO CANCEL'
+                            TO  MSGDO
+                           SET CA-ADDING TO TRUE
+                   END-EVALUATE
+      *
+      * A Delete requires locking the account as well as
+      * obtaining the data.
+      *
+               WHEN CA-REQUEST-DELETE
+                   MOVE LOW-VALUES TO NACTREC-DATA
+                   MOVE CA-ACCOUNT TO ACCTDO IN NACTREC-DATA
+                   SET WS-CRUD-REQ-READ TO TRUE
+                   PERFORM T-CALL-CRUD
+                   EVALUATE TRUE
+      *
+      * The data must all be protected but confirmation of the
+      * delete must be solicited from the user.
+      *
+                       WHEN WS-CRUD-NO-ERROR
+                           PERFORM BBAB-MOVE-TO-DETAIL-MAP
+                           MOVE '    DELETE' TO TITLEDO
+                           MOVE 'ENTER Y TO CONFIRM DELETE:' TO VFYTLDO
+                           MOVE -1           TO VFYDL
+                           MOVE DFHBMUNP     TO VFYDA
+                           MOVE 'CONFIRM DELETION AND PRESS "ENTER", OR
+      -                         '"CLEAR" TO CANCEL' TO MSGDO
+                           PERFORM BBAC-PROTECT-DETAILS
+                           SET CA-DELETING TO TRUE
+      *
+      * The user must be told when the account is already in use.
+      *
+                       WHEN WS-CRUD-BAD-LOCK
+                           SET MSG-IN-USE TO TRUE
+                           MOVE -1       TO ACCTML
+                           MOVE DFHBMBRY TO ACCTMA
+                           SET WS-BB-ERROR-PRESENT TO TRUE
+      *
+      * The user must be told when no such account exists.
+      *
+                       WHEN OTHER
+                           SET MSG-NO-REC TO TRUE
+                           MOVE -1       TO ACCTML
+                           MOVE DFHBMBRY TO ACCTMA
+                           SET WS-BB-ERROR-PRESENT TO TRUE
+                   END-EVALUATE
+      *
+      * A Print request must ensure a terminal identifer was entered.
+      *
+               WHEN CA-REQUEST-PRINT
+                   IF  CA-PRINTER = LOW-VALUES
+                       SET MSG-PRTR-REQ TO TRUE
+                       MOVE -1 TO PRTRML
+                       MOVE DFHBMBRY TO PRTRMA
+                       SET WS-BB-ERROR-PRESENT TO TRUE
+      *
+      * We must obtain the data and initiate the printer transaction.
+      *
+                   ELSE
+                       MOVE LOW-VALUES TO NACTREC-DATA
+                       MOVE CA-ACCOUNT TO ACCTDO IN NACTREC-DATA
+                       SET WS-CRUD-REQ-ENQUIRE TO TRUE
+                       PERFORM T-CALL-CRUD
+                       IF  WS-CRUD-NO-ERROR
+                           PERFORM BBAB-MOVE-TO-DETAIL-MAP
+                           MOVE EIBTRNID TO PRINT-TRANSID
+                           MOVE WS-LITS-TRANS-PRINT
+                                 TO PRINT-TRANSID(4:1)
+                           EXEC CICS START
+                                     TRANSID(PRINT-TRANSID)
+                                     TERMID(CA-PRINTER)
+                                     FROM(ACCTDTLO)
+                                     RESP(RESPONSE)
+                                     RESP2(REASON-CODE)
+                           END-EXEC
+                           EVALUATE RESPONSE
+      *
+      * We must inform the user when printing
+      * has been successfully scheduled.
+      *
+                               WHEN DFHRESP(NORMAL)
+                                   SET MSG-PRINT-SCHED TO TRUE
+                                   MOVE -1 TO SNAMEML
+                                   SET WS-BB-ERROR-PRESENT TO TRUE
+      *
+      * We must inform the user when the terminal
+      * used is not known to CICS.
+      *
+                               WHEN DFHRESP(TERMIDERR)
+                                   SET MSG-PRTR-UNKNOWN TO TRUE
+                                   MOVE -1 TO SNAMEML
+                                   SET WS-BB-ERROR-PRESENT TO TRUE
+      *
+      * Unexpected conditions must always be anticipated.
+      *
+                               WHEN OTHER
+                                   PERFORM Y-UNEXPECTED-ERROR
+                           END-EVALUATE
+      *
+      * The user must be told when no such account exists.
+      *
+                       ELSE
+                           SET MSG-NO-REC TO TRUE
+                           MOVE -1       TO ACCTML
+                           MOVE DFHBMBRY TO ACCTMA
+                           SET WS-BB-ERROR-PRESENT TO TRUE
+                       END-IF
+                   END-IF
+           END-EVALUATE.
+      *
+       END-BBA-PROCESS-VALID-MENU.
+           EXIT.
+           EJECT.
+      *
+       BBAA-SEARCH-NAMES SECTION.
+      *
+      * This routine initiates a Browse process.
+      *
+       BBAA-010.
+           PERFORM V-SET-UP-FOR-BROWSE.
+      *
+           SET WS-BRWS-REQ-BROWSE TO TRUE.
+           MOVE CA-SURNAME   TO SNAMEDO IN WS-BRWS-ENTRY (1).
+           MOVE CA-FIRSTNAME TO FNAMEDO IN WS-BRWS-ENTRY (1).
+      *
+           PERFORM W-LINK-FOR-BROWSE.
+      *
+       END-BBAA-SEARCH-NAMES.
+           EXIT.
+           EJECT.
+      *
+       BBAB-MOVE-TO-DETAIL-MAP SECTION.
+      *
+      * This routine populates the detail map from the data obtained.
+      *
+       BBAB-010.
+           MOVE ACCTDO   IN NACTREC-DATA TO ACCTDO   IN ACCTDTLO.
+           MOVE SNAMEDO  IN NACTREC-DATA TO SNAMEDO  IN ACCTDTLO.
+           MOVE FNAMEDO  IN NACTREC-DATA TO FNAMEDO  IN ACCTDTLO.
+           MOVE MIDO     IN NACTREC-DATA TO MIDO     IN ACCTDTLO.
+           MOVE TTLDO    IN NACTREC-DATA TO TTLDO    IN ACCTDTLO.
+           MOVE TELDO    IN NACTREC-DATA TO TELDO    IN ACCTDTLO.
+           MOVE ADDR1DO  IN NACTREC-DATA TO ADDR1DO  IN ACCTDTLO.
+           MOVE ADDR2DO  IN NACTREC-DATA TO ADDR2DO  IN ACCTDTLO.
+           MOVE ADDR3DO  IN NACTREC-DATA TO ADDR3DO  IN ACCTDTLO.
+           MOVE AUTH1DO  IN NACTREC-DATA TO AUTH1DO  IN ACCTDTLO.
+           MOVE AUTH2DO  IN NACTREC-DATA TO AUTH2DO  IN ACCTDTLO.
+           MOVE AUTH3DO  IN NACTREC-DATA TO AUTH3DO  IN ACCTDTLO.
+           MOVE AUTH4DO  IN NACTREC-DATA TO AUTH4DO  IN ACCTDTLO.
+           MOVE CARDSDO  IN NACTREC-DATA TO CARDSDO  IN ACCTDTLO.
+           MOVE IMODO    IN NACTREC-DATA TO IMODO    IN ACCTDTLO.
+           MOVE IDAYDO   IN NACTREC-DATA TO IDAYDO   IN ACCTDTLO.
+           MOVE IYRDO    IN NACTREC-DATA TO IYRDO    IN ACCTDTLO.
+           MOVE RSNDO    IN NACTREC-DATA TO RSNDO    IN ACCTDTLO.
+           MOVE CCODEDO  IN NACTREC-DATA TO CCODEDO  IN ACCTDTLO.
+           MOVE APPRDO   IN NACTREC-DATA TO APPRDO   IN ACCTDTLO.
+           MOVE SCODE1DO IN NACTREC-DATA TO SCODE1DO IN ACCTDTLO.
+           MOVE SCODE2DO IN NACTREC-DATA TO SCODE2DO IN ACCTDTLO.
+           MOVE SCODE3DO IN NACTREC-DATA TO SCODE3DO IN ACCTDTLO.
+           MOVE STATDO   IN NACTREC-DATA TO STATDO   IN ACCTDTLO.
+           MOVE LIMITDO  IN NACTREC-DATA TO LIMITDO  IN ACCTDTLO.
+      *
+       END-BBAB-MOVE-TO-DETAIL-MAP.
+           EXIT.
+           EJECT.
+      *
+       BBAC-PROTECT-DETAILS SECTION.
+      *
+      * This routine protects the detail data fields from modification.
+      *
+       BBAC-010.
+           MOVE DFHBMASK TO SNAMEDA
+                            FNAMEDA
+                            MIDA
+                            TTLDA
+                            TELDA
+                            ADDR1DA
+                            ADDR2DA
+                            ADDR3DA
+                            AUTH1DA
+                            AUTH2DA
+                            AUTH3DA
+                            AUTH4DA
+                            CARDSDA
+                            IMODA
+                            IDAYDA
+                            IYRDA
+                            RSNDA
+                            CCODEDA
+                            APPRDA
+                            SCODE1DA
+                            SCODE2DA
+                            SCODE3DA.
+      *
+       END-BBAC-PROTECT-DETAILS.
+           EXIT.
+           EJECT.
+      *
+       BBAD-SAVE-DETAILS SECTION.
+      *
+      * This routine saves the Account details in the commarea
+      * before an modify takes place.
+      *
+       BBAD-010.
+           MOVE SNAMEDO  IN NACTREC-DATA TO CA-SURNAME.
+           MOVE FNAMEDO  IN NACTREC-DATA TO CA-FIRSTNAME.
+           MOVE MIDO     IN NACTREC-DATA TO CA-MIDDLE-INITIAL.
+           MOVE TTLDO    IN NACTREC-DATA TO CA-TITLE.
+           MOVE TELDO    IN NACTREC-DATA TO CA-TELEPHONE-NO.
+           MOVE ADDR1DO  IN NACTREC-DATA TO CA-ADDRESS-LINE1.
+           MOVE ADDR2DO  IN NACTREC-DATA TO CA-ADDRESS-LINE2.
+           MOVE ADDR3DO  IN NACTREC-DATA TO CA-ADDRESS-LINE3.
+           MOVE AUTH1DO  IN NACTREC-DATA TO CA-AUTH1D.
+           MOVE AUTH2DO  IN NACTREC-DATA TO CA-AUTH2D.
+           MOVE AUTH3DO  IN NACTREC-DATA TO CA-AUTH3D.
+           MOVE AUTH4DO  IN NACTREC-DATA TO CA-AUTH4D.
+           MOVE CARDSDO  IN NACTREC-DATA TO CA-NUMBER-CARDS-ISSUED.
+           MOVE IMODO    IN NACTREC-DATA TO CA-MONTH-ISSUED.
+           MOVE IDAYDO   IN NACTREC-DATA TO CA-DAY-ISSUED.
+           MOVE IYRDO    IN NACTREC-DATA TO CA-YEAR-ISSUED.
+           MOVE RSNDO    IN NACTREC-DATA TO CA-REASON-CODE.
+           MOVE CCODEDO  IN NACTREC-DATA TO CA-CARD-CODE.
+           MOVE APPRDO   IN NACTREC-DATA TO CA-APPROVED.
+           MOVE SCODE1DO IN NACTREC-DATA TO CA-SPECIAL-CODE1.
+           MOVE SCODE2DO IN NACTREC-DATA TO CA-SPECIAL-CODE2.
+           MOVE SCODE3DO IN NACTREC-DATA TO CA-SPECIAL-CODE3.
+      *
+           MOVE '    MODIFY'     TO TITLEDO
+           MOVE -1 TO SNAMEDL
+           MOVE 'MAKE CHANGES AND PRESS "ENTER", OR "CLEAR" TO CANCEL'
+                 TO  MSGDO.
+      *
+       END-BBAD-SAVE-DETAILS.
+           EXIT.
+           EJECT.
+      *
+       BC-MENU-ERR-OUT-WTH-CURSOR SECTION.
+      *
+      * This routine simply completes the menu map with a
+      * message and sends it to the user's terminal but
+      * retains the current cursor position on the screen.
+      *
+       BC-010.
+           MOVE MSG-TEXT (MSG-NO) TO MSGMO.
+      *
+           EXEC CICS SEND
+                     MAP('ACCTMNU')
+                     MAPSET(WS-LITS-MAPSET)
+                     CURSOR(EIBCPOSN)
+                     DATAONLY
+                     FRSET
+                     FREEKB
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+               PERFORM Y-UNEXPECTED-ERROR
+           END-IF.
+      *
+       END-BC-MENU-ERR-OUT-WTH-CURSOR.
+           EXIT.
+           EJECT.
+      *
+       BD-MENU-ERROR-OUT SECTION.
+      *
+      * Complete the menu map with a message and send it
+      * to the user's terminal.
+      *
+       BD-010.
+           MOVE 'HIGHLIGHTED FIELDS INVALID - CAN BE MORE ERRORS THAN LI
+      -         'STED BELOW' TO MSGINVMO.
+           MOVE MSG-TEXT (MSG-NO) TO MSGMO.
+      *
+           EXEC CICS SEND
+                     MAP('ACCTMNU')
+                     MAPSET(WS-LITS-MAPSET)
+                     CURSOR
+                     DATAONLY
+                     FRSET
+                     FREEKB
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+               PERFORM Y-UNEXPECTED-ERROR
+           END-IF.
+      *
+       END-BD-MENU-ERROR-OUT.
+           EXIT.
+           EJECT.
+      *
+       BE-FALL-THROUGH SECTION.
+      *
+      * The results of our processing must be shown to the user
+      * and the transaction terminated.
+      *
+       BE-010.
+           EXEC CICS SEND
+                     MAP('ACCTDTL')
+                     MAPSET(WS-LITS-MAPSET)
+                     ERASE
+                     FREEKB
+                     CURSOR
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+               PERFORM Y-UNEXPECTED-ERROR
+           END-IF.
+      *
+       END-BE-FALL-THROUGH.
+           EXIT.
+           EJECT.
+      *
+       C-GO-FORWARD SECTION.
+      *
+      * This routine handles the case when
+      * 6 name matches have been displayed.
+      *
+      * The user may decide to view the next list of surnames.
+      * The maximum number of surnames output is 6.  The call to the
+      * the browse program is set up for a continuation request.
+      *
+       C-010.
+           PERFORM V-SET-UP-FOR-BROWSE.
+      *
+           SET WS-BRWS-REQ-CONTINUE TO TRUE.
+           MOVE CA-CONT-SURNAME   TO CA-SURNAME
+                              SNAMEDO IN WS-BRWS-ENTRY (1).
+           MOVE CA-CONT-FIRSTNAME TO CA-FIRSTNAME
+                              FNAMEDO IN WS-BRWS-ENTRY (1).
+           MOVE CA-CONT-MORE      TO WS-BRWS-MORE.
+      *
+           PERFORM W-LINK-FOR-BROWSE.
+      *
+       END-C-GO-FORWARD.
+           EXIT.
+           EJECT.
+      *
+       D-GET-DETAIL-DATA SECTION.
+      *
+      * This routine is invoked after a detail map has been displayed.
+      *
+       D-010.
+           EVALUATE TRUE
+      *
+      * If the previous request was to Display an account,
+      * then we simply go back to an empty menu.
+      *
+               WHEN CA-DISPLAYING
+                   PERFORM U-SEND-EMPTY-MENU
+      *
+      * If the previous request was to Modify an account, then
+      * we need to check which key was pressed.
+      *
+               WHEN CA-MODIFYING
+                   EVALUATE EIBAID
+      *
+      * We need to get the changes and validate the input.
+      *
+                       WHEN DFHENTER
+                           PERFORM DA-RECEIVE-DETAIL
+                           IF  NOT MSG-ALL-OK
+                               MOVE -1 TO SNAMEDL
+                               PERFORM DB-SEND-DETAIL-WTH-MESSAGE
+                           END-IF
+                           PERFORM DC-VALIDATE-DETAIL
+      *
+      * If the data is valid, we need to update the account.
+      *
+                           IF  MSG-ALL-OK
+                               PERFORM DD-MOVE-DETAIL-MAP-TO-REC
+                               SET WS-CRUD-REQ-UPDATE TO TRUE
+                               PERFORM T-CALL-CRUD
+      *
+      * There is a possibility that the user took too much time
+      * and someone else obtained the lock in the meantime.
+      *
+                               IF  WS-CRUD-BAD-LOCK
+                                   SET MSG-REQ-INT TO TRUE
+                                   PERFORM DE-SEND-MENU-WITH-MESSAGE
+      *
+      * If all is OK then we need to inform the user it was done.
+      *
+                               ELSE
+                                   MOVE CA-ACCOUNT TO MOD-ACCOUNT-NO
+                                   SET MSG-MOD-DONE TO TRUE
+                                   PERFORM DE-SEND-MENU-WITH-MESSAGE
+                               END-IF
+      *
+      * If the data is not valid, we need to tell the user.
+      *
+                           ELSE
+                               PERFORM DB-SEND-DETAIL-WTH-MESSAGE
+                           END-IF
+      *
+      * Pressing <Clear> causes the request to be cancelled.
+      * This requires that the previous lock be released.
+      *
+                       WHEN DFHCLEAR
+                           SET WS-CRUD-REQ-FREE TO TRUE
+                           MOVE CA-ACCOUNT TO ACCTDO IN NACTREC-DATA
+                           PERFORM T-CALL-CRUD
+                           SET MSG-REQ-CANC TO TRUE
+                           PERFORM DE-SEND-MENU-WITH-MESSAGE
+      *
+      * Other keys are invalid.
+      *
+                       WHEN OTHER
+                           SET MSG-ACT-KEY TO TRUE
+                           PERFORM DB-SEND-DETAIL-WTH-MESSAGE
+                   END-EVALUATE
+      *
+      * If the previous request was to Delete an account, then
+      * we need to check which key was pressed.
+      *
+               WHEN CA-DELETING
+                   MOVE LOW-VALUES TO NACTREC-DATA
+                   MOVE CA-ACCOUNT TO ACCTDO IN NACTREC-DATA
+                   EVALUATE EIBAID
+      *
+      * We need to see if the user has correctly confirmed the delete.
+      *
+                       WHEN DFHENTER
+                           PERFORM DA-RECEIVE-DETAIL
+                           IF  VFYDI = 'Y'
+                               SET WS-CRUD-REQ-DELETE TO TRUE
+                               PERFORM T-CALL-CRUD
+                               IF  WS-CRUD-BAD-LOCK
+      *
+      * There is a possibility that the user took too much time
+      * and someone else obtained the lock in the meantime.
+      *
+                                   SET MSG-REQ-INT TO TRUE
+                                   PERFORM DE-SEND-MENU-WITH-MESSAGE
+      *
+      * If all is OK then we need to inform the user it was done.
+      *
+                               ELSE
+                                   MOVE CA-ACCOUNT TO DEL-ACCOUNT-NO
+                                   SET MSG-DEL-DONE TO TRUE
+                                   PERFORM DE-SEND-MENU-WITH-MESSAGE
+                               END-IF
+      *
+      * Only 'Y' is a valid response to confirm the Delete.
+      *
+                           ELSE
+                               MOVE -1 TO VFYDL
+                               MOVE DFHBMBRY TO VFYDA
+                               SET MSG-TO-CANCEL TO TRUE
+                               PERFORM DB-SEND-DETAIL-WTH-MESSAGE
+                           END-IF
+      *
+      * Pressing <Clear> causes the request to be cancelled.
+      * This requires that the previous lock be released.
+      *
+                       WHEN DFHCLEAR
+                           SET WS-CRUD-REQ-FREE TO TRUE
+                           PERFORM T-CALL-CRUD
+                           SET MSG-REQ-CANC TO TRUE
+                           PERFORM DE-SEND-MENU-WITH-MESSAGE
+      *
+      * Other keys are invalid.
+      *
+                       WHEN OTHER
+                           SET MSG-ACT-KEY TO TRUE
+                           PERFORM DB-SEND-DETAIL-WTH-MESSAGE
+                   END-EVALUATE
+      *
+      * If the previous request was to Add an account, then
+      * we need to check which key was pressed.
+      *
+               WHEN CA-ADDING
+                   EVALUATE EIBAID
+      *
+      * We need to get and validate the input.
+      *
+                       WHEN DFHENTER
+                           PERFORM DA-RECEIVE-DETAIL
+                           IF  NOT MSG-ALL-OK
+                               MOVE -1 TO SNAMEDL
+                               PERFORM DB-SEND-DETAIL-WTH-MESSAGE
+                           END-IF
+                           PERFORM DC-VALIDATE-DETAIL
+      *
+      * If the data is valid, we need to create the account.
+      *
+                           IF  MSG-ALL-OK
+                               PERFORM DD-MOVE-DETAIL-MAP-TO-REC
+                               SET WS-CRUD-REQ-CREATE TO TRUE
+                               PERFORM T-CALL-CRUD
+      *
+      * There is a possibility that the user took too much time
+      * and someone else obtained the lock in the meantime.
+      *
+                               IF  WS-CRUD-BAD-LOCK
+                                   SET MSG-REQ-INT TO TRUE
+                                   PERFORM DE-SEND-MENU-WITH-MESSAGE
+      *
+      * If all is OK then we need to inform the user it was done.
+      *
+                               ELSE
+                                   MOVE CA-ACCOUNT TO ADD-ACCOUNT-NO
+                                   SET MSG-ADD-DONE TO TRUE
+                                   PERFORM DE-SEND-MENU-WITH-MESSAGE
+                               END-IF
+      *
+      * If the data is not valid, we need to tell the user.
+      *
+                           ELSE
+                               PERFORM DB-SEND-DETAIL-WTH-MESSAGE
+                           END-IF
+      *
+      * Pressing <Clear> causes the request to be cancelled.
+      * This requires that the previous lock be released.
+      *
+                       WHEN DFHCLEAR
+                           SET WS-CRUD-REQ-FREE TO TRUE
+                           MOVE CA-ACCOUNT TO ACCTDO IN NACTREC-DATA
+                           PERFORM T-CALL-CRUD
+                           SET MSG-REQ-CANC TO TRUE
+                           PERFORM DE-SEND-MENU-WITH-MESSAGE
+      *
+      * Other keys are invalid.
+      *
+                       WHEN OTHER
+                           SET MSG-ACT-KEY TO TRUE
+                           PERFORM DB-SEND-DETAIL-WTH-MESSAGE
+                   END-EVALUATE
+           END-EVALUATE.
+      *
+       END-D-GET-DETAIL-DATA.
+           EXIT.
+           EJECT.
+      *
+       DA-RECEIVE-DETAIL SECTION.
+      *
+      * This routine get the detail input from the user.
+      *
+       DA-010.
+           MOVE LOW-VALUES TO ACCTDTLI
+      *
+           EXEC CICS RECEIVE
+                     MAP('ACCTDTL')
+                     MAPSET(WS-LITS-MAPSET)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  (RESPONSE NOT = DFHRESP(NORMAL) )
+           AND (RESPONSE NOT = DFHRESP(MAPFAIL))
+                PERFORM Y-UNEXPECTED-ERROR
+           END-IF.
+      *
+       DA-020.
+      *
+      * The new data (if any) must be merged with any previously
+      * entered data before validating it. We examine each possible
+      * input field from the detail map to see if it has been entered
+      * or erased. The Length suffix field will be non-zero if the
+      * field has been entered. The Flag suffixed field will contain
+      * a special value if the field has been entirely erased. In both
+      * cases we can move the Input suffixed field to the area where
+      * we save data between pseudo-conversational tasks since it will
+      * contain the input or LOW-VALUES (nulls).
+      *
+           IF  SNAMEDL NOT = 0
+               MOVE SNAMEDI TO CA-SURNAME
+           ELSE
+               IF  SNAMEDF = DFHBMEOF
+                   MOVE SPACES TO CA-SURNAME
+               END-IF
+           END-IF.
+      *
+           IF  FNAMEDL NOT = 0
+               MOVE FNAMEDI TO CA-FIRSTNAME
+           ELSE
+               IF  FNAMEDF = DFHBMEOF
+                   MOVE SPACES TO CA-FIRSTNAME
+               END-IF
+           END-IF.
+      *
+           IF  MIDL NOT = 0
+               MOVE MIDI TO CA-MIDDLE-INITIAL
+           ELSE
+               IF  MIDF = DFHBMEOF
+                   MOVE SPACES TO CA-MIDDLE-INITIAL
+               END-IF
+           END-IF.
+      *
+           IF  TTLDL NOT = 0
+               MOVE TTLDI TO CA-TITLE
+           ELSE
+               IF  TTLDF = DFHBMEOF
+                   MOVE SPACES TO CA-TITLE
+               END-IF
+           END-IF.
+      *
+           IF  TELDL NOT = 0
+               MOVE TELDI TO CA-TELEPHONE-NO
+           ELSE
+               IF  TELDF = DFHBMEOF
+                   MOVE SPACES TO CA-TELEPHONE-NO
+               END-IF
+           END-IF.
+      *
+           IF  ADDR1DL NOT = 0
+               MOVE ADDR1DI TO CA-ADDRESS-LINE1
+           ELSE
+               IF  ADDR1DF = DFHBMEOF
+                   MOVE SPACES TO CA-ADDRESS-LINE1
+               END-IF
+           END-IF.
+      *
+           IF  ADDR2DL NOT = 0
+               MOVE ADDR2DI TO CA-ADDRESS-LINE2
+           ELSE
+               IF  ADDR2DF = DFHBMEOF
+                   MOVE SPACES TO CA-ADDRESS-LINE2
+               END-IF
+           END-IF.
+      *
+           IF  ADDR3DL NOT = 0
+               MOVE ADDR3DI TO CA-ADDRESS-LINE3
+           ELSE
+               IF  ADDR3DF = DFHBMEOF
+                   MOVE SPACES TO CA-ADDRESS-LINE3
+               END-IF
+           END-IF.
+      *
+           IF  AUTH1DL NOT = 0
+               MOVE AUTH1DI TO CA-AUTH1D
+           ELSE
+               IF  AUTH1DF = DFHBMEOF
+                   MOVE SPACES TO CA-AUTH1D
+               END-IF
+           END-IF.
+      *
+           IF  AUTH2DL NOT = 0
+               MOVE AUTH2DI TO CA-AUTH2D
+           ELSE
+               IF  AUTH2DF = DFHBMEOF
+                   MOVE SPACES TO CA-AUTH2D
+               END-IF
+           END-IF.
+      *
+           IF  AUTH3DL NOT = 0
+               MOVE AUTH3DI TO CA-AUTH3D
+           ELSE
+               IF  AUTH3DF = DFHBMEOF
+                   MOVE SPACES TO CA-AUTH3D
+               END-IF
+           END-IF.
+      *
+           IF  AUTH4DL NOT = 0
+               MOVE AUTH4DI TO CA-AUTH4D
+           ELSE
+               IF  AUTH4DF = DFHBMEOF
+                   MOVE SPACES TO CA-AUTH4D
+               END-IF
+           END-IF.
+      *
+           IF  CARDSDL NOT = 0
+               MOVE CARDSDI TO CA-NUMBER-CARDS-ISSUED
+           ELSE
+               IF  CARDSDF = DFHBMEOF
+                   MOVE SPACES TO CA-NUMBER-CARDS-ISSUED
+               END-IF
+           END-IF.
+      *
+           IF  IMODL NOT = 0
+               MOVE IMODI TO CA-MONTH-ISSUED
+           ELSE
+               IF  IMODF = DFHBMEOF
+                   MOVE SPACES TO CA-MONTH-ISSUED
+               END-IF
+           END-IF.
+      *
+           IF  IDAYDL NOT = 0
+               MOVE IDAYDI TO CA-DAY-ISSUED
+           ELSE
+               IF  IDAYDF = DFHBMEOF
+                   MOVE SPACES TO CA-DAY-ISSUED
+               END-IF
+           END-IF.
+      *
+           IF  IYRDL NOT = 0
+               MOVE IYRDI TO CA-YEAR-ISSUED
+           ELSE
+               IF  IYRDF = DFHBMEOF
+                   MOVE SPACES TO CA-YEAR-ISSUED
+               END-IF
+           END-IF.
+      *
+           IF  RSNDL NOT = 0
+               MOVE RSNDI TO CA-REASON-CODE
+           ELSE
+               IF  RSNDF = DFHBMEOF
+                   MOVE SPACES TO CA-REASON-CODE
+               END-IF
+           END-IF.
+      *
+           IF  CCODEDL NOT = 0
+               MOVE CCODEDI TO CA-CARD-CODE
+           ELSE
+               IF  CCODEDF = DFHBMEOF
+                   MOVE SPACES TO CA-CARD-CODE
+               END-IF
+           END-IF.
+      *
+           IF  APPRDL NOT = 0
+               MOVE APPRDI TO CA-APPROVED
+           ELSE
+               IF  APPRDF = DFHBMEOF
+                   MOVE SPACES TO CA-APPROVED
+               END-IF
+           END-IF.
+      *
+           IF  SCODE1DL NOT = 0
+               MOVE SCODE1DI TO CA-SPECIAL-CODE1
+           ELSE
+               IF  SCODE1DF = DFHBMEOF
+                   MOVE SPACES TO CA-SPECIAL-CODE1
+               END-IF
+           END-IF.
+      *
+           IF  SCODE2DL NOT = 0
+               MOVE SCODE2DI TO CA-SPECIAL-CODE2
+           ELSE
+               IF  SCODE2DF = DFHBMEOF
+                   MOVE SPACES TO CA-SPECIAL-CODE2
+               END-IF
+           END-IF.
+      *
+           IF  SCODE3DL NOT = 0
+               MOVE SCODE3DI TO CA-SPECIAL-CODE3
+           ELSE
+               IF  SCODE3DF = DFHBMEOF
+                   MOVE SPACES TO CA-SPECIAL-CODE3
+               END-IF
+           END-IF.
+      *
+           IF  EIBRESP = DFHRESP(NORMAL)
+               SET MSG-ALL-OK TO TRUE
+           ELSE
+               SET MSG-NEED-DATA TO TRUE
+           END-IF.
+      *
+       DA-030.
+      *
+      * We want to ensure that only spaces rather than LOW-VALUES
+      * (nulls) are stored on the file.
+      *
+           INSPECT CA-DETAIL-DATA REPLACING ALL LOW-VALUES BY SPACES.
+           INSPECT CA-SURNAME REPLACING ALL LOW-VALUES BY SPACES.
+           INSPECT CA-FIRSTNAME REPLACING ALL LOW-VALUES BY SPACES.
+      *
+       END-DA-RECEIVE-DETAIL.
+           EXIT.
+           EJECT.
+      *
+       DB-SEND-DETAIL-WTH-MESSAGE SECTION.
+      *
+      * This routine simply completes the detail map with a
+      * message and sends it to the user's terminal.
+      *
+       DB-010.
+           MOVE MSG-TEXT (MSG-NO) TO MSGDO.
+           EXEC CICS SEND
+                     MAP('ACCTDTL')
+                     MAPSET(WS-LITS-MAPSET)
+                     DATAONLY
+                     FREEKB
+                     CURSOR
+                     NOHANDLE
+           END-EXEC.
+      *
+       DB-020.
+           PERFORM X-RETURN-COM-AREA.
+      *
+       END-DB-SEND-DETAIL-WTH-MESSAGE.
+           EXIT.
+           EJECT.
+      *
+       DC-VALIDATE-DETAIL SECTION.
+      *
+      * The validation rules for input are applied here. The technique
+      * sets attributes in the output map area. If the field is in
+      * error, it is highlighted and a request to put the cursor at
+      * the beginning of that field is made. (Setting the normally
+      * input Length field to a special value of -1 tells BMS of our
+      * desire to place the cursor on the screen at the beginning of
+      * that field. BMS ignores all but the first such request.) If
+      * the field is valid, its attribute is set to normal intensity
+      * in case it had been in error (highlighted) previously.
+      *
+      *
+      * Prepare the output map area so only the required
+      * data is transmitted.
+      *
+       DC-010.
+           MOVE LOW-VALUES TO ACCTDTLO.
+      *
+       DC-020.
+      *
+      * The surname is mandatory and must be alphabetic.
+      *
+           IF  CA-SURNAME = SPACES
+           OR (CA-SURNAME NOT ALPHABETIC)
+               MOVE -1         TO SNAMEDL
+               MOVE DFHBMBRY   TO SNAMEDA
+               SET MSG-CORRECT TO TRUE
+           ELSE
+               MOVE DFHBMUNP TO SNAMEDA
+           END-IF.
+      *
+           IF  CA-SURNAME = SPACES
+               MOVE ERROR-STARS TO SNAMEDO IN ACCTDTLO
+           END-IF.
+      *
+       DC-030.
+      *
+      * The forename is mandatory and must be alphabetic.
+      *
+           IF  CA-FIRSTNAME = SPACES
+           OR (CA-FIRSTNAME NOT ALPHABETIC)
+               MOVE -1         TO FNAMEDL
+               MOVE DFHBMBRY   TO FNAMEDA
+               SET MSG-CORRECT TO TRUE
+           ELSE
+               MOVE DFHBMUNP TO FNAMEDA
+           END-IF.
+      *
+           IF  CA-FIRSTNAME = SPACES
+               MOVE ERROR-STARS TO FNAMEDO IN ACCTDTLO
+           END-IF.
+      *
+       DC-040.
+      *
+      * The middle initial is optional but must be an
+      * alphabetic character if it is entered.
+      *
+           IF  CA-MIDDLE-INITIAL NOT ALPHABETIC
+               MOVE -1         TO MIDL
+               MOVE DFHBMBRY   TO MIDA
+               SET MSG-CORRECT TO TRUE
+           ELSE
+               MOVE DFHBMUNP TO MIDA
+           END-IF.
+      *
+       DC-050.
+      *
+      * The title is optional but must contain
+      * alphabetic characters if it is entered.
+      *
+           IF  CA-TITLE NOT ALPHABETIC
+               MOVE -1         TO TTLDL
+               MOVE DFHBMBRY   TO TTLDA
+               SET MSG-CORRECT TO TRUE
+           ELSE
+               MOVE DFHBMUNP TO TTLDA
+           END-IF.
+      *
+       DC-060.
+      *
+      * The telephone number is mandatory and must be numeric.
+      *
+           IF  (CA-TELEPHONE-NO = SPACES OR ZEROS)
+           OR  (CA-TELEPHONE-NO NOT NUMERIC)
+               MOVE -1         TO TELDL
+               MOVE DFHBMBRY   TO TELDA
+               SET MSG-CORRECT TO TRUE
+           ELSE
+               MOVE DFHBMUNP TO TELDA
+           END-IF.
+      *
+           IF  CA-TELEPHONE-NO = SPACES OR ZEROS
+               MOVE ERROR-STARS TO TELDO IN ACCTDTLO
+           END-IF.
+      *
+       DC-070.
+      *
+      * The first 2 address lines are mandatory and must not be spaces.
+      *
+           IF  CA-ADDRESS-LINE1 = SPACES
+               MOVE -1          TO ADDR1DL
+               MOVE DFHBMBRY    TO ADDR1DA
+               MOVE ERROR-STARS TO ADDR1DO IN ACCTDTLO
+               SET MSG-CORRECT  TO TRUE
+           ELSE
+               MOVE DFHBMUNP TO ADDR1DA
+           END-IF.
+      *
+           IF  CA-ADDRESS-LINE2 = SPACES
+               MOVE -1          TO ADDR2DL
+               MOVE DFHBMBRY    TO ADDR2DA
+               MOVE ERROR-STARS TO ADDR2DO IN ACCTDTLO
+               SET MSG-CORRECT  TO TRUE
+           ELSE
+               MOVE DFHBMUNP TO ADDR2DA
+           END-IF.
+      *
+       DC-080.
+      *
+      * The number of cards issued is mandatory
+      * and must be in the range of '1' to '9'.
+      *
+           IF  CA-NUMBER-CARDS-ISSUED = SPACES
+           OR (CA-NUMBER-CARDS-ISSUED <= '0'
+           OR  CA-NUMBER-CARDS-ISSUED > '9')
+               MOVE -1         TO CARDSDL
+               MOVE DFHBMBRY   TO CARDSDA
+               SET MSG-CORRECT TO TRUE
+           ELSE
+               MOVE DFHBMUNP TO CARDSDA
+           END-IF.
+      *
+           IF  CA-NUMBER-CARDS-ISSUED = SPACES
+               MOVE ERROR-STARS TO CARDSDO IN ACCTDTLO
+           END-IF.
+      *
+       DC-090.
+      *
+      * The date fields are mandatory and must
+      * be a valid date.
+      *
+      * The month field must contain a value between 1 and 12.
+      *
+           IF (CA-MONTH-ISSUED NOT NUMERIC)
+           OR (CA-MONTH-ISSUED <= '00'
+           OR  CA-MONTH-ISSUED > '12')
+               MOVE -1         TO IMODL
+               MOVE DFHBMBRY   TO IMODA
+               SET MSG-CORRECT TO TRUE
+               MOVE ZERO       TO NUMERIC-CA-MONTH
+           ELSE
+               MOVE DFHBMUNP        TO IMODA
+               MOVE CA-MONTH-ISSUED TO NUMERIC-CA-MONTH
+           END-IF.
+      *
+           IF  CA-MONTH-ISSUED = SPACES
+               MOVE ERROR-STARS TO IMODO IN ACCTDTLO
+           END-IF.
+      *
+      * The day field must contain a numeric value not greater
+      * than the maximum-days-in-month value for the relevant month.
+      *
+           IF (CA-DAY-ISSUED NOT NUMERIC)
+           OR (CA-DAY-ISSUED <= '00'
+           OR  CA-DAY-ISSUED > '31')
+               MOVE -1         TO IDAYDL
+               MOVE DFHBMBRY   TO IDAYDA
+               SET MSG-CORRECT TO TRUE
+               MOVE 0          TO NUMERIC-CA-DAY
+           ELSE
+               IF NUMERIC-CA-MONTH > 0
+                  MOVE CA-DAY-ISSUED TO NUMERIC-CA-DAY
+                  IF NUMERIC-CA-DAY >
+                             MAX-DAYS-IN-MONTH (NUMERIC-CA-MONTH)
+                     MOVE -1         TO IDAYDL
+                     MOVE DFHBMBRY   TO IDAYDA
+                     SET MSG-CORRECT TO TRUE
+                     MOVE 0          TO NUMERIC-CA-DAY
+                  ELSE
+                     MOVE DFHBMUNP TO IDAYDA
+                  END-IF
+               ELSE
+                  MOVE DFHBMUNP TO IDAYDA
+               END-IF
+           END-IF.
+      *
+           IF  CA-DAY-ISSUED = SPACES
+               MOVE ERROR-STARS TO IDAYDO IN ACCTDTLO
+           END-IF.
+      *
+      * The year field must contain a numeric value.  The only
+      * complication being that a check for leap year needs to be
+      * performed. For simplicity we are only using a 2 digit year
+      * field, and are assuming the year value 00 refers to 2000
+      * ie the program is valid for the date window 1901 to 2099.
+      * Therefore when the year is divisible by 4 without remainder
+      * or when year value is 00, then a February date of 29 days is
+      * When a day of 29, month of 2 and a non leap year value is
+      * entered, the whole date field is highlighted in error.
+      *
+           IF  CA-YEAR-ISSUED NOT NUMERIC
+               MOVE -1         TO IYRDL
+               MOVE DFHBMBRY   TO IYRDA
+               SET MSG-CORRECT TO TRUE
+           ELSE
+               MOVE CA-YEAR-ISSUED TO NUMERIC-CA-YEAR
+               IF NUMERIC-CA-MONTH = 2
+               AND NUMERIC-CA-DAY = 29
+               AND NUMERIC-CA-YEAR > 0
+                   DIVIDE 4 INTO NUMERIC-CA-YEAR
+                            GIVING DATE-CHECK-ANSWER
+                            REMAINDER DATE-CHECK-REMAINDER
+                   IF DATE-CHECK-REMAINDER = 0
+                      MOVE DFHBMUNP       TO IYRDA
+                   ELSE
+                      MOVE DFHBMBRY   TO IDAYDA
+                                         IMODA
+                                         IYRDA
+                      MOVE -1         TO IDAYDL
+                                         IMODL
+                                         IYRDL
+                      SET MSG-CORRECT TO TRUE
+                   END-IF
+               ELSE
+                    MOVE DFHBMUNP       TO IYRDA
+           END-IF.
+      *
+           IF  CA-YEAR-ISSUED = SPACES
+               MOVE ERROR-STARS TO IYRDO IN ACCTDTLO
+           END-IF.
+      *
+       DC-100.
+      *
+      * The reason code is mandatory and must be one
+      * of the following acceptable values, 'N', 'L', 'S', 'R'.
+      *
+           IF  CA-REASON-CODE = SPACES
+           OR  NOT (CA-REASON-CODE = 'N'
+                OR  CA-REASON-CODE = 'L'
+                OR  CA-REASON-CODE = 'S'
+                OR  CA-REASON-CODE = 'R')
+               MOVE -1         TO RSNDL
+               MOVE DFHBMBRY   TO RSNDA
+               SET MSG-CORRECT TO TRUE
+           ELSE
+               MOVE DFHBMUNP TO RSNDA
+           END-IF.
+      *
+           IF  CA-REASON-CODE = SPACES
+               MOVE ERROR-STARS TO RSNDO IN ACCTDTLO
+           END-IF.
+      *
+       DC-110.
+      *
+      * The card code is mandatory but can be any value.
+      *
+           IF  CA-CARD-CODE = SPACES
+               MOVE -1          TO CCODEDL
+               MOVE DFHBMBRY    TO CCODEDA
+               MOVE ERROR-STARS TO CCODEDO IN ACCTDTLO
+               SET MSG-CORRECT  TO TRUE
+           ELSE
+               MOVE DFHBMUNP TO CCODEDA
+           END-IF.
+      *
+       DC-120.
+      *
+      * The approved field is mandatory but can be any value.
+      *
+           IF  CA-APPROVED = SPACES
+               MOVE -1          TO APPRDL
+               MOVE DFHBMBRY    TO APPRDA
+               MOVE ERROR-STARS TO APPRDO IN ACCTDTLO
+               SET MSG-CORRECT  TO TRUE
+           ELSE
+               MOVE DFHBMUNP TO APPRDA
+           END-IF.
+      *
+       END-DC-VALIDATE-DETAIL.
+           EXIT.
+           EJECT.
+      *
+       DD-MOVE-DETAIL-MAP-TO-REC SECTION.
+      *
+      * This routine populates the record area from the data input.
+      *
+       DD-010.
+           MOVE CA-ACCOUNT        TO ACCTDO   IN NACTREC-DATA.
+           MOVE CA-SURNAME        TO SNAMEDO  IN NACTREC-DATA.
+           MOVE CA-FIRSTNAME      TO FNAMEDO  IN NACTREC-DATA.
+           MOVE CA-MIDDLE-INITIAL TO MIDO     IN NACTREC-DATA.
+           MOVE CA-TITLE          TO TTLDO    IN NACTREC-DATA.
+           MOVE CA-TELEPHONE-NO   TO TELDO    IN NACTREC-DATA.
+      *
+           MOVE CA-ADDRESS-LINE1 TO ADDR1DO IN NACTREC-DATA.
+           MOVE CA-ADDRESS-LINE2 TO ADDR2DO IN NACTREC-DATA.
+           MOVE CA-ADDRESS-LINE3 TO ADDR3DO IN NACTREC-DATA.
+      *
+           MOVE CA-AUTH1D TO AUTH1DO IN NACTREC-DATA.
+           MOVE CA-AUTH2D TO AUTH2DO IN NACTREC-DATA.
+           MOVE CA-AUTH3D TO AUTH3DO IN NACTREC-DATA.
+           MOVE CA-AUTH4D TO AUTH4DO IN NACTREC-DATA.
+      *
+           MOVE CA-NUMBER-CARDS-ISSUED TO CARDSDO IN NACTREC-DATA.
+      *
+           MOVE CA-MONTH-ISSUED TO IMODO  IN NACTREC-DATA.
+           MOVE CA-DAY-ISSUED   TO IDAYDO IN NACTREC-DATA.
+           MOVE CA-YEAR-ISSUED  TO IYRDO  IN NACTREC-DATA.
+      *
+           MOVE CA-REASON-CODE TO RSNDO   IN NACTREC-DATA.
+           MOVE CA-CARD-CODE   TO CCODEDO IN NACTREC-DATA.
+           MOVE CA-APPROVED    TO APPRDO  IN NACTREC-DATA.
+      *
+           MOVE CA-SPECIAL-CODE1 TO SCODE1DO IN NACTREC-DATA.
+           MOVE CA-SPECIAL-CODE2 TO SCODE2DO IN NACTREC-DATA.
+           MOVE CA-SPECIAL-CODE3 TO SCODE3DO IN NACTREC-DATA.
+      *
+       END-DD-MOVE-DETAIL-MAP-TO-REC.
+           EXIT.
+           EJECT.
+      *
+       DE-SEND-MENU-WITH-MESSAGE SECTION.
+      *
+      * This routine simply sends a menu screen with a
+      * message to the user and initializes the saved
+      * data for the 'first time' scenario.
+      *
+       DE-010.
+           MOVE LOW-VALUES TO ACCTMNUO.
+      *
+           MOVE MSG-TEXT (MSG-NO) TO MSGMO.
+      *
+           EXEC CICS SEND
+                     MAP('ACCTMNU')
+                     MAPSET(WS-LITS-MAPSET)
+                     ERASE
+                     FRSET
+                     FREEKB
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+               PERFORM Y-UNEXPECTED-ERROR
+           END-IF.
+      *
+           MOVE LOW-VALUES  TO DFHCOMMAREA.
+           SET CA-SENT-MENU TO TRUE.
+      *
+           PERFORM X-RETURN-COM-AREA.
+      *
+       END-DE-SEND-MENU-WITH-MESSAGE.
+           EXIT.
+           EJECT.
+      *
+       T-CALL-CRUD SECTION.
+      *
+      * This routine completes the set up of the interface area to
+      * the CRUD program and calls it. It includes error handling
+      * apppropriate to the functions and acceptable exceptional
+      * conditions.
+      *
+      * This section is performed from the following sections -
+      *      BBA-PROCESS-VALID-MENU
+      *      D-GET-DETAIL-DATA
+      *
+       T-010.
+           SET WS-CRUD-CORRECT-VERSION TO TRUE.
+      *
+           EXEC CICS LINK
+                     PROGRAM(CRUD-PROGRAM)
+                     COMMAREA(WS-CRUD-COMMAREA)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+               PERFORM Y-UNEXPECTED-ERROR
+           END-IF.
+      *
+           IF  (WS-CRUD-RESP-X NOT NUMERIC)
+           AND (NOT WS-CRUD-BAD-LOCK)
+               PERFORM TA-BAD-CRUD-RESPONSE
+           END-IF.
+      *
+           IF  NOT WS-CRUD-BAD-LOCK
+               EVALUATE WS-CRUD-RESP
+                   WHEN DFHRESP(NORMAL)
+                       CONTINUE
+                   WHEN DFHRESP(NOTFND)
+                       IF  NOT CA-SENT-MENU
+                           PERFORM TA-BAD-CRUD-RESPONSE
+                       END-IF
+                   WHEN OTHER
+                       PERFORM TA-BAD-CRUD-RESPONSE
+               END-EVALUATE
+           END-IF.
+      *
+       END-T-CALL-CRUD.
+           EXIT.
+           EJECT.
+      *
+       TA-BAD-CRUD-RESPONSE SECTION.
+      *
+      * This routine handles unexpected responses from the CRUD logic.
+      *
+       TA-010.
+           MOVE WS-CRUD-RESP-X          TO WS-ERRH-ERROR-X.
+           MOVE WS-CRUD-REAS-X          TO WS-ERRH-REASON-X.
+           MOVE WS-CRUD-CICS-FUNCTION-X TO WS-ERRH-CICS-FUNCTION-X.
+      *
+           PERFORM Z-XCTL-TO-ERROR-HANDLER.
+      *
+       END-TA-BAD-CRUD-RESPONSE.
+           EXIT.
+           EJECT.
+      *
+       U-SEND-EMPTY-MENU SECTION.
+      *
+      * This routine simply sends an empty menu screen to the user
+      * and initializes the saved data for the 'first time' scenario.
+      *
+      * This section is performed from the following sections -
+      *      NACT01-MAIN
+      *      D-GET-DETAIL-DATA
+      *
+       U-010.
+           EXEC CICS SEND
+                     MAP('ACCTMNU')
+                     MAPSET(WS-LITS-MAPSET)
+                     MAPONLY
+                     ERASE
+                     FREEKB
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+               PERFORM Y-UNEXPECTED-ERROR
+           END-IF.
+      *
+       U-020.
+           MOVE LOW-VALUES TO DFHCOMMAREA.
+           SET CA-SENT-MENU TO TRUE.
+      *
+           PERFORM X-RETURN-COM-AREA.
+      *
+       END-U-SEND-EMPTY-MENU.
+           EXIT.
+           EJECT.
+      *
+      *
+       V-SET-UP-FOR-BROWSE SECTION.
+      *
+      * This routine completes the interface to the Browse program
+      * and sets up program name to call.
+      *
+      * This section is performed from the following sections -
+      *      BBAA-SEARCH-NAMES
+      *      C-GO-FORWARD
+      *
+       V-010.
+           SET WS-BRWS-CORRECT-VERSION TO TRUE.
+           MOVE 6                      TO WS-BRWS-LIMIT-TO-GET.
+      *
+       END-V-SET-UP-FOR-BROWSE.
+           EXIT.
+           EJECT.
+      *
+       W-LINK-FOR-BROWSE SECTION.
+      *
+      * This routine calls the Browse program. It includes error
+      * handling and the logic to complete the data areas for
+      * successful matches.
+      *
+      * This section is performed from the following sections -
+      *      BBAA-SEARCH-NAMES
+      *      C-GO-FORWARD
+      *
+       W-010.
+           EXEC CICS LINK
+                     PROGRAM(BROWSE-PROGRAM)
+                     COMMAREA(WS-BRWS-COMMAREA)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+           OR  (NOT WS-BRWS-NO-ERROR)
+               PERFORM Y-UNEXPECTED-ERROR
+           END-IF.
+      *
+       W-020.
+      *
+      * If there are no matches then the user must be informed
+      * and the summary title and lines initialized to remove all
+      * previously displayed summary information and the cursor
+      * positioned at the surname.
+      *
+           IF  WS-BRWS-NONE-FOUND
+               SET MSG-NOMATCH TO TRUE
+               MOVE -1         TO SNAMEML
+               MOVE DFHBMBRY   TO SNAMEMA
+                                  FNAMEMA
+               MOVE SPACES     TO SUMTTLMO
+               PERFORM TEST BEFORE
+                 VARYING IX1 FROM 1 BY 1 UNTIL IX1 > 6
+                   MOVE SPACES TO SUMLNMO (IX1)
+               END-PERFORM
+      *
+      * If there are  matches then the summary lines must be built
+      * and the cursor positioned at the request field.
+      *
+           ELSE
+               MOVE DFHBMUNP       TO SNAMEMA
+                                      FNAMEMA
+               MOVE SUM-TITLE-LINE TO SUMTTLMO
+               PERFORM TEST BEFORE
+                 VARYING IX1 FROM 1 BY 1 UNTIL IX1 > WS-BRWS-FOUND
+                   MOVE ACCTDO  IN WS-BRWS-ENTRY (IX1)
+                        TO ACCTDO  IN SUM-LINE
+                   MOVE SNAMEDO IN WS-BRWS-ENTRY (IX1)
+                        TO SNAMEDO IN SUM-LINE
+                   MOVE FNAMEDO IN WS-BRWS-ENTRY (IX1)
+                        TO FNAMEDO IN SUM-LINE
+                   MOVE MIDO    IN WS-BRWS-ENTRY (IX1)
+                        TO MIDO    IN SUM-LINE
+                   MOVE TTLDO   IN WS-BRWS-ENTRY (IX1)
+                        TO TTLDO   IN SUM-LINE
+                   MOVE ADDR1DO IN WS-BRWS-ENTRY (IX1)
+                        TO ADDR1DO IN SUM-LINE
+                   MOVE STATDO  IN WS-BRWS-ENTRY (IX1)
+                        TO STATDO  IN SUM-LINE
+                   MOVE LIMITDO IN WS-BRWS-ENTRY (IX1)
+                        TO LIMITDO IN SUM-LINE
+                   MOVE SUM-LINE TO SUMLNMO (IX1)
+               END-PERFORM
+      *
+      * If all possible matches have been displayed, then any
+      * excess summary lines must be initialized to remove
+      * previously displayed summary information.
+      *
+               IF  WS-BRWS-NO-MORE
+                   IF  IX1 <= 6
+                       PERFORM TEST BEFORE
+                         VARYING IX2 FROM IX1 BY 1 UNTIL IX2 > 6
+                           MOVE SPACES TO SUMLNMO (IX2)
+                       END-PERFORM
+                   END-IF
+      *
+      * If there are more than can be (or have been till now) displayed,
+      * then the continuation data must be saved for the next pseudo-
+      * conversational task.
+      *
+               ELSE
+                   SET MSG-MORE      TO TRUE
+                   SET CA-SENT-NAMES TO TRUE
+                   MOVE CA-SURNAME   TO CA-CONT-SURNAME
+                   MOVE CA-FIRSTNAME TO CA-CONT-FIRSTNAME
+                   MOVE WS-BRWS-MORE TO CA-CONT-MORE
+               END-IF
+               MOVE LOW-VALUES TO CA-SURNAME
+                                  CA-FIRSTNAME
+               MOVE -1         TO REQML
+           END-IF.
+      *
+       W-030.
+      *
+      * Ensure any message is included in the output.
+      *
+           IF  NOT MSG-ALL-OK
+               MOVE MSG-TEXT (MSG-NO) TO MSGMO
+           END-IF.
+      *
+       W-040.
+      *
+      * If there were no matches then we leave the input data as it is.
+      *
+           IF  MSG-NOMATCH
+               EXEC CICS SEND
+                         MAP('ACCTMNU')
+                         MAPSET(WS-LITS-MAPSET)
+                         DATAONLY
+                         CURSOR
+                         FRSET
+                         FREEKB
+                         NOHANDLE
+               END-EXEC
+      *
+      * If there were matches then we erase the input data.
+      *
+           ELSE
+               EXEC CICS SEND
+                         MAP('ACCTMNU')
+                         MAPSET(WS-LITS-MAPSET)
+                         DATAONLY
+                         ERASEAUP
+                         CURSOR
+                         FRSET
+                         FREEKB
+                         RESP(RESPONSE)
+                         RESP2(REASON-CODE)
+               END-EXEC
+           END-IF.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+               PERFORM Y-UNEXPECTED-ERROR
+           END-IF.
+      *
+       W-050.
+           PERFORM X-RETURN-COM-AREA.
+      *
+       END-W-LINK-FOR-BROWSE.
+           EXIT.
+           EJECT.
+      *
+       X-RETURN-COM-AREA SECTION.
+      *
+      * This routine saves data and ends the task
+      *
+      * This section is performed from the following sections -
+      *      B-GET-MENU-DATA
+      *      DB-SEND-DETAIL-WTH-MESSAGE
+      *      DE-SEND-MENU-WITH-MESSAGE
+      *      U-SEND-EMPTY-MENU
+      *      W-LINK-FOR-BROWSE
+      *
+       X-010.
+           EXEC CICS RETURN
+                     TRANSID(EIBTRNID)
+                     COMMAREA(DFHCOMMAREA)
+           END-EXEC.
+      *
+       END-X-RETURN-COM-AREA.
+           EXIT.
+           EJECT.
+      *
+       Y-UNEXPECTED-ERROR SECTION.
+      *
+      * This routine handles unexpected conditions from CICS.
+      *
+      * This section is performed from the following sections -
+      *      BA-SEND-CONTROL
+      *      BB-MENU-DATA-ENTERED
+      *      BBA-PROCESS-VALID-MENU
+      *      BC-MENU-ERR-OUT-WTH-CURSOR
+      *      BD-MENU-ERROR-OUT
+      *      BE-FALL-THROUGH
+      *      DA-RECEIVE-DETAIL
+      *      DE-SEND-MENU-WITH-MESSAGE
+      *      T-CALL-CRUD
+      *      U-SEND-EMPTY-MENU
+      *      W-LINK-FOR-BROWSE
+      *
+       Y-010.
+           MOVE RESPONSE    TO WS-ERRH-ERROR.
+           MOVE REASON-CODE TO WS-ERRH-REASON.
+           MOVE EIBFN       TO WORK-FN-X.
+           MOVE WORK-FN     TO WS-ERRH-CICS-FUNCTION.
+      *
+       Y-020.
+           PERFORM Z-XCTL-TO-ERROR-HANDLER.
+      *
+       END-Y-UNEXPECTED-ERROR.
+           EXIT.
+           EJECT.
+      *
+       Z-XCTL-TO-ERROR-HANDLER SECTION.
+      *
+      * This routine invokes the error handler for unexpected
+      * responses from the CRUD and Browse programs as well
+      * as unexpected conditions from CICS.
+      *
+      * This section is performed from the following sections -
+      *      TA-BAD-CRUD-RESPONSE
+      *      Y-UNEXPECTED-ERROR
+      *
+       Z-010.
+           SET WS-ERRH-CORRECT-VERSION TO TRUE.
+           MOVE WS-PROGRAM-NAME        TO WS-ERRH-PROGRAM.
+      *
+           EXEC CICS XCTL
+                     PROGRAM(ABEND-PROGRAM)
+                     COMMAREA(WS-ERRH-ERROR-COMMAREA)
+                     NOHANDLE
+           END-EXEC.
+      *
+       Z-020.
+      *
+      * The following will only be executed if the XCTL fails.
+      * The primary reason that might happen is if the error
+      * handling program has become unavailable for some reason.
+      *
+           EXEC CICS ABEND
+                     ABCODE(WS-LITS-ABEND-ERROR-ABEND)
+           END-EXEC.
+      *
+       END-Z-XCTL-TO-ERROR-HANDLER.
+           EXIT.
+      *

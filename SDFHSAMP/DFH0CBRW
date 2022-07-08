@@ -1,0 +1,521 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CBRW                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = File Browse for SAmple Application         *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $SEG(DFH0CBRW),COMP(SAMPLES),PROD(CICS TS ):                  *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900320        : Created.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FILECBRW.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  COMMAREA.
+           02  STATS  PIC X(1).
+      *                                          BUILDS PREV BACK PAGE
+           02  RIDB   PIC 9(6).
+      *                                          BUILDS NEXT FWD PAGE
+           02  RIDF   PIC 9(6).
+      *
+       77  MESSAGES PIC X(39) VALUE ' '.
+      *
+       77  RESPONSE PIC S9(8)  COMP.
+      *                                          BMS STD ATTRIBUTES
+                    COPY DFHBMSCA.
+      *
+                    COPY DFHAID.
+      *                                          FILEA RECORD DESCRIPT'N
+       01  FILEA.   COPY DFH0CFIL.
+      *                                          GENERAL MENU MAP
+                    COPY DFH0CGA.
+      *                                          BROWSE FILEA MAP
+                    COPY DFH0CGC.
+      *
+       LINKAGE SECTION.
+        01 DFHCOMMAREA.
+           02  STATS  PIC X(1).
+           02  RIDB   PIC 9(6).
+           02  RIDF   PIC 9(6).
+      *
+       PROCEDURE DIVISION.
+      *
+      *    AN EXIT IS SET UP TO TRAP ANY UNEXPECTED ERRORS. ALL OTHER
+      *    ERRORS ARE DETECTED EXPLICITLY IN THE PROGRAM BY USING THE
+      *    "RESP" OPTION ON THE CICS COMMAND.
+      *
+           EXEC CICS HANDLE CONDITION ERROR(ERRORS) END-EXEC.
+      *
+      *    THE LENGTH OF THE "COMMAREA" IS TESTED. IF NOT ZERO THEN
+      *    THE NEXT OPERATOR COMMAND MUST BE RECEIVED FROM THE TERMINAL.
+      *
+      *    IF IT HAS A LENGTH THE "COMMAREA"  RETRUNED IS MOVED TO
+      *    WORKING STORAGE IN THE PROGRAM.
+      *
+           IF EIBCALEN NOT = 0 THEN
+              MOVE DFHCOMMAREA TO COMMAREA
+              GO TO PROMPT.
+      *
+      *    THIS COMMAND MAPS IN THE ACCOUNT NUMBER FROM THE OPERATOR
+      *    INSTRUCTION MENU. NOTE THE EXPLICIT TESTING OF THE RESPONSE
+      *    TO THE COMMAND.
+      *
+           EXEC CICS RECEIVE MAP('MENU') MAPSET('DFH0CGA')
+                RESP(RESPONSE) END-EXEC.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(MAPFAIL) THEN
+              MOVE 'PRESS CLEAR TO EXIT' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+      *    IF THE FORMAT OF THE ACCOUNT NUMBER IS VALID, THE NUMBER IS
+      *    USED TO SET UP THE PROGRAM'S BROWSE POINTERS. IF NO ACCOUNT
+      *    NUMBER IS ENTERED, BROWSING BEGINS AT THE START OF THE FILE.
+      *
+           IF KEYL NOT = ZERO THEN
+              IF KEYI IS NUMERIC THEN
+      *
+      *          VALID INPUT
+      *
+                 MOVE KEYI TO RIDF IN COMMAREA
+                 MOVE KEYI TO RIDB IN COMMAREA
+              ELSE
+      *
+      *          NOT NUMERIC
+      *
+                 MOVE
+                 'ACCOUNT NUMBER MUST BE NUMERIC'
+                 TO MESSAGES
+                 GO TO MENU
+           ELSE
+      *
+      *       ACCOUNT NUMBER OMITTED
+      *
+              MOVE '000000' TO RIDF IN COMMAREA.
+      *
+      *    THE "STARTBR" COMMAND ESTABLISHES THE BROWSE STARTING POINT.
+      *
+           EXEC CICS STARTBR FILE('FILEA') RIDFLD(RIDF IN COMMAREA)
+                RESP(RESPONSE) END-EXEC.
+      *
+      *    IF THE "NOTFND" CONDITION OCCURS AT THE START BROWSE THE
+      *    MESSAGE "END OF FILE - PLEASE RESTART" IS MOVED TO "MESSAGES"
+      *    FOR DISPLAY ON THE OPERATOR INSTRUCTION SCREEN.
+      *
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+      *    ENTERING THE MAXIMUM VALUE (999999) FOR THE ACCOUNT NUMBER
+      *    BEGINS A BACKWARD BROWSE FROM THE END OF FILE.
+      *
+           IF RIDF IN COMMAREA NOT EQUAL '999999' THEN
+              GO TO PAGE-FORWARD.
+           MOVE 'H' TO STATS IN COMMAREA.
+           GO TO PAGE-BACKWARD.
+      *
+      *    BUILD NEXT FORWARD PAGE
+      *
+       PAGE-FORWARD.
+      *
+      *    TOP END OF FILE
+      *    RESET MAP 'C'
+      *
+           MOVE LOW-VALUES TO BROWSEO.
+      *
+      *    IF THE PROGRAM HAS BEEN PASSED A "COMMAREA", THEN THE BROWSE
+      *    MUST BE RESTARTED AT THE POINT THAT THE BROWSE FINISHED
+      *    PREVIOUSLY. THE KEY CONTAINED IN "RIDF" IS USED TO START
+      *    THE BROWSE.
+      *
+           IF EIBCALEN = 0 THEN GO TO NEXT-LINE.
+           EXEC CICS STARTBR FILE('FILEA') RIDFLD(RIDF IN COMMAREA)
+                RESP(RESPONSE) END-EXEC.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+      *    READ AND DISCARD THE RECORD POINTED TO BY RIDF ONLY IF
+      *    THE LO END OF THE FILE HAS NOT BEEN REACHED
+      *
+           IF RIDF IN COMMAREA = '000000' THEN GO TO NEXT-LINE.
+      *
+      *    AN EXTRA CALL TO THE "READ-NEXT" ROUTINE IS NEEDED WHEN THE
+      *    PROGRAM ATTEMPTS TO BROWSE FORWARD FROM A POSITION THAT IS
+      *    NOT AT THE LOW END OF THE FILE. THE "READ-NEXT" ROUTINE READS
+      *    THE NEXT RECORD FROM THE FILE.
+      *
+           PERFORM READ-NEXT.
+       NEXT-LINE.
+      *
+      *    THE ROUTINE "READ-NEXT" READS THE FIRST RECORD INTO THE FILE
+      *    AREA
+      *
+           PERFORM READ-NEXT.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(ENDFILE) THEN GO TO TOOHIGH.
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+      *    THE SCREEN IS BUILT WITH FOUR RECORDS.
+      *
+           MOVE NUMB TO NUMBER1O.
+           MOVE NAME TO NAME1O.
+           MOVE AMOUNT TO AMOUNT1O.
+      *
+      *    RIDB NEEDS EXISTING A/C
+      *
+           MOVE RIDF IN COMMAREA TO RIDB IN COMMAREA.
+      *
+      *    READ 2ND RECORD.
+      *
+           PERFORM READ-NEXT.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(ENDFILE) THEN GO TO TOOHIGH.
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+      *    MOVE FIELDS ---> MAP
+      *
+           MOVE NUMB TO NUMBER2O.
+           MOVE NAME TO NAME2O.
+           MOVE AMOUNT TO AMOUNT2O.
+      *
+      *    READ 3RD RECORD.
+      *
+           PERFORM READ-NEXT.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(ENDFILE) THEN GO TO TOOHIGH.
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+      *    MOVE FIELDS ---> MAP
+      *
+           MOVE NUMB TO NUMBER3O.
+           MOVE NAME TO NAME3O.
+           MOVE AMOUNT TO AMOUNT3O.
+      *
+      *    READ 4TH RECORD.
+      *
+           PERFORM READ-NEXT.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(ENDFILE) THEN GO TO TOOHIGH.
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+      *    MOVE FIELDS ---> MAP
+      *
+           MOVE NUMB TO NUMBER4O.
+           MOVE NAME TO NAME4O.
+           MOVE AMOUNT TO AMOUNT4O.
+      *
+      *    THE SCREEN IS ERASED AND THE PAGE IS DISPLAYED AT THE
+      *    TERMINAL.
+      *
+           EXEC CICS SEND MAP('BROWSE') MAPSET('DFH0CGC')
+                ERASE END-EXEC.
+      *
+      *    CONTROL IS RETURNED TO CICS, ALONG WITH A "COMMAREA" AND A
+      *    TRANSACTION IDENTIFIER NAMING THE NEXT TRANSACTION. THE
+      *    "COMMAREA" CONTAINS THE PROGRAM'S FILE POINTERS (RECORD KEYS)
+      *    TO ENABLE SUBSEQUENT INVOCATIONS OF THE PROGRAM TO CONTINUE
+      *    BROWSING BY USING THESE POINTERS AS A REFERENCE.
+      *
+           EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)
+                LENGTH(13) END-EXEC.
+      *
+      *    THE BACKWARD BROWSE IS SIMILAR TO THE FORWARD BROWSE.
+      *    NOTE THAT  AN EXTRA CALL TO THE "READ-PREV" ROUTINE IS NOT
+      *    REQUIRED WHEN BROWSING BACK FROM THE HIGH END OF THE FILE.
+      *
+       PAGE-BACKWARD.
+      *
+      *    LOW END OF FILE
+      *    RESET MAP 'C'
+      *
+           MOVE LOW-VALUES TO BROWSEO.
+      *
+      *    RIDF ---> NEXT FPAGE
+      *
+           IF EIBCALEN = 0 THEN GO TO TEST-STATS.
+      *
+      *    START BROWSE WHERE WE LEFT OFF LAST TIME.
+      *
+           EXEC CICS STARTBR FILE('FILEA') RIDFLD(RIDB IN COMMAREA)
+                RESP(RESPONSE) END-EXEC.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+       TEST-STATS.
+      *
+           IF STATS IN COMMAREA = 'H' THEN GO TO PREV-LINE.
+      *
+      *    READ AND DISCARD THE RECORD POINTED TO BY RIDB ONLY
+      *    IF THE HI END OF THE FILE HAS NOT BEEN REACHED
+      *
+           PERFORM READ-PREV.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(ENDFILE) THEN GO TO TOOLOW.
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN
+              GO TO ERRORS.
+       PREV-LINE.
+      *
+      *    READ FOUR RECORDS IN DESCENDING ORDER.
+      *
+           MOVE ' ' TO STATS IN COMMAREA.
+           PERFORM READ-PREV.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(ENDFILE) THEN GO TO TOOLOW.
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+      *    MOVE FIELDS ---> MAP
+      *
+           MOVE NUMB TO NUMBER4O.
+           MOVE NAME TO NAME4O.
+           MOVE AMOUNT TO AMOUNT4O.
+           MOVE RIDB IN COMMAREA TO RIDF IN COMMAREA
+      *
+      *    READ 2ND RECORD.
+      *
+           PERFORM READ-PREV.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(ENDFILE) THEN GO TO TOOLOW.
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+      *    MOVE FIELDS ---> MAP
+      *
+           MOVE NUMB TO NUMBER3O.
+           MOVE NAME TO NAME3O.
+           MOVE AMOUNT TO AMOUNT3O.
+      *
+      *    READ 3RD RECORD.
+      *
+           PERFORM READ-PREV.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(ENDFILE) THEN GO TO TOOLOW.
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+      *
+      *    MOVE FIELDS ---> MAP
+      *
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+           MOVE NUMB TO NUMBER2O.
+           MOVE NAME TO NAME2O.
+           MOVE AMOUNT TO AMOUNT2O.
+      *
+      *    READ 4TH RECORD.
+      *
+           PERFORM READ-PREV.
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(ENDFILE) THEN GO TO TOOLOW.
+           IF RESPONSE = DFHRESP(NOTFND) THEN
+              MOVE 'END OF FILE - PLEASE RESTART' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+      *    MOVE FIELDS ---> MAP
+      *
+           MOVE NUMB TO NUMBER1O.
+           MOVE NAME TO NAME1O.
+           MOVE AMOUNT TO AMOUNT1O.
+      *
+      *    DISPLAY MAP
+      *
+           EXEC CICS SEND MAP('BROWSE') MAPSET('DFH0CGC')
+                ERASE END-EXEC.
+      *
+      *    RETURN WITH A COMM. AREA.
+      *
+           EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)
+                LENGTH(13) END-EXEC.
+      *
+      *    AFTER THE "RECEIVE" COMMAND EXECUTES, THE PROGRAM TESTS THE
+      *    OPERATORS RESPONSE. ONLY "CLEAR", "PF1", "PF2", "F" OR "B"
+      *    KEYS ARE TAKEN AS VALID INPUT.
+      *    ALL OTHER RESPONSES ARE IGNORED.
+      *
+       PROMPT.
+           EXEC CICS RECEIVE MAP('BROWSE') MAPSET('DFH0CGC')
+                RESP(RESPONSE) END-EXEC.
+      *
+      *    CHECK CLEAR KEY.
+      *
+           IF EIBAID = DFHCLEAR THEN
+              MOVE 'PRESS CLEAR TO EXIT' TO MESSAGES
+              GO TO MENU.
+      *
+      *    CHECK PF KEYS.
+      *
+           IF EIBAID = DFHPF1 OR DIRI = 'F' THEN GO TO PAGE-FORWARD.
+           IF EIBAID = DFHPF2 OR DIRI = 'B' THEN GO TO PAGE-BACKWARD.
+      *
+      *    CHECK RESPONSES.
+      *
+           IF RESPONSE = DFHRESP(MAPFAIL) THEN
+              MOVE 'PRESS CLEAR TO EXIT' TO MESSAGES
+              GO TO MENU.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+      *
+      *    INVALID-RESEND
+      *
+           EXEC CICS SEND MAP('BROWSE') MAPSET('DFH0CGC') END-EXEC.
+      *
+      *    RETURN WITH A COMM. AREA.
+      *
+           EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)
+                LENGTH(13) END-EXEC.
+      *
+      *    IF THE END OF FILE IS REACHED ON A "READNEXT", ANY RECORDS
+      *    READ TO THAT POINT ARE DISPLAYED, TOGETHER WITH A HIGHLIGHTED
+      *    MESSAGE "HI-END OF FILE".
+      *
+       TOOHIGH.
+           MOVE 'H' TO STATS IN COMMAREA.
+           MOVE RIDF IN COMMAREA TO RIDB IN COMMAREA.
+           MOVE ' ' TO DIRO.
+           MOVE 'HI-END OF FILE' TO MSG1O.
+      *
+      *    BRT+PROT ATTR
+      *
+           MOVE DFHBMASB TO MSG1A.
+           EXEC CICS SEND MAP('BROWSE') MAPSET('DFH0CGC')
+                ERASE END-EXEC.
+      *
+      *    RETURN WITH A COMM. AREA.
+      *
+           EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)
+                LENGTH(13) END-EXEC.
+      *
+      *    IF THE START OF FILE IS REACHED ON A "READPREV" (BACKWARD
+      *    BROWSE) THEN THE "ENDFILE" CONDITION OCCURS AND "TOOLOW"
+      *    GETS CONTROL. ANY RECORDS READ UP TO THAT POINT ARE DISPLAYED
+      *    TOGETHER WITH A HIGHLIGHTED MESSAGE "LO-END OF FILE".
+      *
+       TOOLOW.
+           MOVE '000000' TO RIDF IN COMMAREA.
+           MOVE '000000' TO RIDB IN COMMAREA.
+           MOVE ' ' TO DIRO.
+           MOVE 'LO-END OF FILE' TO MSG2O.
+      *
+      *    BRT+PROT ATTR
+      *
+           MOVE DFHBMASB TO MSG2A.
+           EXEC CICS SEND MAP('BROWSE') MAPSET('DFH0CGC')
+                ERASE END-EXEC.
+           EXEC CICS RETURN TRANSID(EIBTRNID) COMMAREA(COMMAREA)
+                LENGTH(13) END-EXEC.
+      *
+      *    THIS ROUTINE EXECUTES A "READNEXT" COMMAND TO READ THE NEXT
+      *    RECORD FROM THE FILE INTO THE FILE AREA, WITH RESPECT TO THE
+      *    KEY IN "RIDF".
+      *
+       READ-NEXT.
+           EXEC CICS READNEXT INTO(FILEA) FILE('FILEA')
+                RIDFLD(RIDF IN COMMAREA) RESP(RESPONSE) END-EXEC.
+      *
+      *    THIS ROUTINE EXECUTES A "READPREV" COMMAND TO READ THE NEXT
+      *    RECORD INTO THE FILE AREA, WITH RESPECT TO THE KEY IN "RIDB".
+      *
+       READ-PREV.
+           EXEC CICS READPREV INTO(FILEA) FILE('FILEA')
+                RIDFLD(RIDB IN COMMAREA) RESP(RESPONSE) END-EXEC.
+      *
+      *    IN SOME ERROR SITUATIONS A DUMP IS TAKEN AND THE MESSAGE
+      *    "TRANSACTION TERMINATED" IS MOVED TO "MESSAGES" FOR DISPLAY
+      *    ON THE OPERATOR INSTRUCTION SCREEN.
+      *
+       ERRORS.
+           EXEC CICS DUMP DUMPCODE('ERRS') END-EXEC.
+           MOVE 'TRANSACTION TERMINATED' TO MESSAGES.
+      *
+      *    DISPLAY GENERAL MENU THEN EXIT.
+      *
+       MENU.
+      *
+      *    RESET MAP 'A'
+      *
+           MOVE LOW-VALUE TO MENUO.
+           MOVE DFHBMASB TO MSGA.
+           MOVE MESSAGES TO MSGO.
+      *
+      *    THIS CODE DISPLAYS THE OPERATOR INSTRUCTION MENU WITH A
+      *    MESSAGE WHICH HAS BEEN STORED IN "MESSAGES".
+      *
+           EXEC CICS SEND MAP('MENU') MAPSET('DFH0CGA') ERASE END-EXEC.
+      *
+      *    THE PROGRAM TERMINATES BY RETURNING TO CICS.
+      *
+           EXEC CICS RETURN END-EXEC.
+           GOBACK.

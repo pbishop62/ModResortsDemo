@@ -1,0 +1,352 @@
+       PROCESS CICS('APOST')
+       PROCESS APOST TRUNC(BIN) NOSSRANGE
+       Identification Division.
+       Program-id. DFH0CBRM
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CBRM                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Migration Link3270 Bridge using MQCIH      *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 2001"                             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * This program runs the Link3270 bridge using MQCIH messages.   *
+      * The message structure for building MQCIH messages is          *
+      * described in the CICS TS 1.3 External Interfaces Guide.       *
+      * The input to the program is a commarea containing an MQCIH    *
+      * message. This is converted to a BRIH message and run using    *
+      * the program DFHL3270. On return the BRIH message is converted *
+      * back to a MQCIH message, and returned to the caller.          *
+      * Session mode is used for all requests.                        *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * Restrictions                                                  *
+      * MQSeries specific fields are ignored.                         *
+      * MQCIH-ADSDESCRIPTOR only YES or NO supported.                 *
+      * MQCIH-FACILITYKEEPTIME non zero values ignored after 1st tran.*
+      * MQCIH-TASKENDSTATUS must be set to the previous output value. *
+      * Commarea length must be large enough for output message.      *
+      * Message length determined by scanning vectors so ensure that  *
+      * commarea is initialised to low values.                        *
+      *****************************************************************
+      *                                                               *
+      * This program is divided into the following sections.          *
+      *   main-processing                                             *
+      *   convert-mqcih-to-brih                                       *
+      *   convert-brih-to-mqcih                                       *
+      *   remove-briv-sync                                            *
+      *   convert-briv-to-brmq                                        *
+      *   allocate-facility                                           *
+      *   delete-facility                                             *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $SEG(DFH0CBRM),COMP(SAMPLES),PROD(CICS TS ):                  *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      * $L0= 775    520 010731 HDDDLCRP: Written                      *
+      * $P1= D02663 620 010918 HDDLCRP : Change eyecatcher CIH to BRI *
+      *****************************************************************
+       Environment Division.
+       Data Division.
+      *****************************************************************
+       Working-storage section.
+      *****************************************************************
+       01 program-working-storage.
+        03 filler                 pic x(16) value '>WORKING STORAGE'.
+        03 imsglen                pic s9(4) comp.
+        03 omsglen                pic s9(4) comp.
+        03 ilen                   pic s9(4) comp.
+        03 olen                   pic s9(4) comp.
+        03 len                    pic s9(4) comp.
+        03 msg-flag1              pic s9(8) comp.
+          88 briv-found               value 0.
+          88 end-of-msg               value 1.
+        03 msg-flag2              pic s9(8) comp.
+          88 no-sync                  value 0.
+          88 sync-commit              value 1.
+          88 sync-backout             value 2.
+        03 msg-flag3              pic s9(8) comp.
+          88 existing-session         value 0.
+          88 new-session              value 1.
+        03 saved-version          pic s9(8) comp.
+        03 saved-facilitykeeptime pic s9(8) comp.
+        03 saved-adsdescriptor    pic s9(8) comp.
+        03 saved-startcode        pic x(4).
+        03 facility               pic x(8).
+        03 brih-cmd.
+        copy DFHBRIHO.
+        03 filler                 pic x(16) value '>END WORKING STG'.
+      *****************************************************************
+      * MQCIH Constants                                               *
+      *****************************************************************
+       01 mqcih-constants.
+       copy DFHBRMCO REPLACING ==77== BY ==10==.
+       01 brih-constants.
+       copy DFHBRICO.
+      *****************************************************************
+       Linkage section.
+      *****************************************************************
+      * brih  message header
+       01 brih-msg REDEFINES DFHCOMMAREA.
+       copy DFHBRIHO.
+      * mqcih message header
+       copy DFHBRMHO.
+      * brmq vectors
+       copy DFHBRMQO.
+      * briv vectors
+       01 briv-in.
+       copy DFHBRIIO.
+       01 briv-out.
+       copy DFHBRIOO.
+      *****************************************************************
+       Procedure Division.
+      *****************************************************************
+       main-processing section.
+           set address of MQCIH to address of DFHCOMMAREA
+           move eibcalen to omsglen
+
+           if MQCIH-FACILITY = LOW-VALUES
+              set new-session      to TRUE
+              perform allocate-facility
+              move BRIH-FACILITY in brih-cmd to MQCIH-FACILITY
+           else
+              set existing-session to TRUE
+           end-if
+
+           perform convert-mqcih-to-brih
+
+           EXEC CICS LINK PROGRAM('DFHL3270') COMMAREA(brih-msg)
+                          LENGTH(omsglen) DATALENGTH(imsglen) END-EXEC
+
+           perform remove-briv-sync
+           perform convert-brih-to-mqcih
+           perform convert-briv-to-brmq
+
+      *    Delete facility if requested by client
+           if MQCIH-FACILITY not = LOW-VALUES and
+              saved-facilitykeeptime = 0
+              perform delete-facility
+              move LOW-VALUES to MQCIH-FACILITY
+           end-if
+
+           EXEC CICS RETURN END-EXEC
+           goback.
+
+      *****************************************************************
+      * CONVERT-MQCIH-TO-BRIH                                         *
+      *****************************************************************
+       convert-mqcih-to-brih section.
+
+      *    Save input values
+           move MQCIH-VERSION          to saved-version
+           move MQCIH-FACILITYKEEPTIME to saved-facilitykeeptime
+           move MQCIH-ADSDESCRIPTOR    to saved-adsdescriptor
+           move MQCIH-STARTCODE        to saved-startcode
+
+      *    New message version
+           set BRIH-STRUC-ID        in brih-msg to TRUE
+           set BRIH-CURRENT-VERSION in brih-msg to TRUE
+
+      *    ADSD descriptor is on for all or nothing
+           if MQCIH-ADSDESCRIPTOR NOT = 0
+              set BRIHADSD-YES in brih-msg to TRUE
+           end-if
+
+      *    START with data is the same as START
+           if MQCIH-STARTCODE = 'SD  '
+              set BRIHSC-START in brih-msg to TRUE
+           end-if
+
+      *    if prev task did not end change to a continue conversation
+           if existing-session and
+              MQCIH-TASKENDSTATUS not = MQCTES-ENDTASK
+              set BRIHT-CONTINUE-CONVERSATION in brih-msg to TRUE
+           end-if
+
+      *    Following MQCIH fields do not have to be converted
+      *       MQCIH-STRUCID
+      *       MQCIH-STRUCLENGTH
+      *       MQCIH-TRANSACTIONID
+      *       MQCIH-FACILITY (unless new)
+      *       MQCIH-GETWAITINTERVAL
+      *       MQCIH-CONVERSATIONALTASK
+      *       MQCIH-ATTENTIONID
+      *       MQCIH-CURSORPOSITION
+      *       MQCIH-CANCELCODE
+
+      *    Calculate msglen by scanning through BRIVs (if any)
+           move 181 to imsglen
+           perform test after until end-of-msg or imsglen > omsglen
+              set address of briv-in to
+                  address of brih-msg(imsglen : 1)
+              if BRIVDSC-CONVERSE    or
+                 BRIVDSC-RECEIVE     or
+                 BRIVDSC-RECEIVE-MAP or
+                 BRIVDSC-RETRIEVE
+                 set briv-found to TRUE
+                 add BRIV-INPUT-VECTOR-LENGTH to imsglen
+              else
+                 set end-of-msg to TRUE
+              end-if
+           end-perform
+           subtract 1 from imsglen
+           move imsglen to BRIH-DATALENGTH in brih-msg
+           exit.
+
+      *****************************************************************
+      * CONVERT-BRIH-TO-MQCIH                                         *
+      *****************************************************************
+       convert-brih-to-mqcih section.
+      *    Check for commarea too small for output
+           if not BRIHRDL-NO-MORE-DATA in brih-msg
+              MOVE 'BRM0' to MQCIH-ABENDCODE
+           end-if
+
+      *    Convert return code to abend code
+           evaluate TRUE
+              when BRIHRC-OK in brih-msg
+                 continue
+              when BRIHRC-INVALID-FACILITYTOKEN in brih-msg
+                 move 'ABRG' to MQCIH-ABENDCODE
+              when BRIHRC-TRANSACTION-NOT-FOUND in brih-msg
+                 move 'ABRB' to MQCIH-ABENDCODE
+              when other
+                 move 'BRM1' to MQCIH-ABENDCODE
+           end-evaluate
+
+      *    Convert Task End Status
+           if BRIHTES-CONVERSATION in brih-msg
+              evaluate TRUE
+                 when no-sync
+                    move MQCTES-NOSYNC  to MQCIH-TASKENDSTATUS
+                 when sync-commit
+                    move MQCTES-COMMIT  to MQCIH-TASKENDSTATUS
+                 when sync-backout
+                    move MQCTES-BACKOUT to MQCIH-TASKENDSTATUS
+              end-evaluate
+           else
+              move MQCTES-ENDTASK to MQCIH-TASKENDSTATUS
+           end-if
+
+      *    Fields cleared
+           move 0          to BRIH-RETURNCODE in brih-msg
+           move 0          to BRIH-COMPCODE   in brih-msg
+           move 0          to BRIH-REASON     in brih-msg
+           move SPACES     to BRIH-FUNCTION   in brih-msg
+
+      *    Fields restored to input values
+           move MQCIH-STRUC-ID         to MQCIH-STRUCID
+           move saved-version          to MQCIH-VERSION
+           move saved-facilitykeeptime to MQCIH-FACILITYKEEPTIME
+           move saved-adsdescriptor    to MQCIH-ADSDESCRIPTOR
+           move saved-startcode        to MQCIH-STARTCODE
+
+      *    Following BRIH fields do not have to be converted
+      *       BRIH-NEXTTRANSACTIONID
+      *       BRIH-ERROROFFSET
+      *       BRIH-ABENDCODE
+           exit.
+
+      *****************************************************************
+      * REMOVE-BRIV-SYNC                                              *
+      *   Remove BRIV-SYNCPOINT vectors from the output message.      *
+      *                                                               *
+      *   Look through all the BRIV vectors (if any).                 *
+      *   Copy all vectors from the input area to the output area.    *
+      *   Note that the input area and output area are the same       *
+      *   therefore until a sync vector is found no need to copy.     *
+      *   If a sync vector is found save its type as we use this      *
+      *   to update MQCIH-TASKENDSTATUS.                              *
+      *   Finally update BRIH-DATALENGTH.                             *
+      *****************************************************************
+       remove-briv-sync section.
+           move 181 to ilen
+           move 181 to olen
+           set no-sync to TRUE
+           perform test before until ilen > BRIH-DATALENGTH in brih-msg
+              set address of briv-out to address of brih-msg(ilen : 1)
+              move BRIV-OUTPUT-VECTOR-LENGTH to len
+
+              if BRIVDSC-SYNCPOINT
+                 if BRIVSPR-NO then
+                    set sync-commit to TRUE
+                 else
+                    set sync-backout to TRUE
+                 end-if
+              else
+                 if sync-commit or sync-backout
+                    move brih-msg(ilen : len) to brih-msg(olen : len)
+                 end-if
+                 add len to olen
+              end-if
+
+              add len to ilen
+           end-perform
+           subtract 1 from olen giving BRIH-DATALENGTH in brih-msg
+           exit.
+      *****************************************************************
+      * CONVERT-BRIV-TO-BRMQ                                          *
+      *   Set BRMQ-VECTOR-VERSION to '0000' for all vectors.          *
+      *****************************************************************
+       convert-briv-to-brmq section.
+           move 181 to ilen
+           perform test before until ilen > BRIH-DATALENGTH in brih-msg
+              set address of BRMQ-VECTOR-HEADER to
+                  address of brih-msg(ilen : 1)
+              move '0000' to BRMQ-VECTOR-VERSION
+              add BRMQ-VECTOR-LENGTH to ilen
+           end-perform
+           exit.
+
+      *****************************************************************
+      * ALLOCATE-FACILITY                                             *
+      *****************************************************************
+       allocate-facility section.
+           move BRIH-DEFAULT to BRIH in brih-cmd
+           set  BRIHT-ALLOCATE-FACILITY in brih-cmd to TRUE
+           move MQCIH-FACILITYLIKE     to
+                BRIH-FACILITYLIKE      in brih-cmd
+           move MQCIH-FACILITYKEEPTIME to
+                BRIH-FACILITYKEEPTIME  in brih-cmd
+
+           EXEC CICS LINK PROGRAM('DFHL3270') COMMAREA(brih-cmd)
+                          LENGTH(180) END-EXEC
+           evaluate TRUE
+              when BRIHRC-OK in brih-cmd
+                 move SPACES to MQCIH-ABENDCODE
+              when BRIHRC-FACILITYLIKE-INVALID in brih-cmd
+                 move 'ABRJ' to MQCIH-ABENDCODE
+                 EXEC CICS RETURN END-EXEC
+              when other
+                 move 'BRM2' to MQCIH-ABENDCODE
+                 EXEC CICS RETURN END-EXEC
+           end-evaluate
+           move BRIH-FACILITY in brih-cmd to facility
+           exit.
+
+      *****************************************************************
+      * DELETE-FACILITY                                               *
+      *****************************************************************
+       delete-facility section.
+           move BRIH-DEFAULT to BRIH in brih-cmd
+           set  BRIHT-DELETE-FACILITY in brih-cmd   to TRUE
+           move MQCIH-FACILITY to BRIH-FACILITY in brih-cmd
+           EXEC CICS LINK PROGRAM('DFHL3270')
+                          COMMAREA(brih-cmd) LENGTH(180) END-EXEC
+           exit.

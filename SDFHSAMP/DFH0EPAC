@@ -1,0 +1,649 @@
+       Process cics('cobol3,sp')
+       Process arith(extend) trunc(bin) list map xref rent
+       Identification Division.
+       Program-id. DFH0EPAC.
+      *****************************************************************
+      * MODULE NAME = DFH0EPAC                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (EP) Sample Custom Adapter        *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *      Licensed Materials - Property of IBM                     *
+      *                                                               *
+      *      "Restricted Materials of IBM"                            *
+      *                                                               *
+      *      5655-Y04                                                 *
+      *                                                               *
+      *      (C) Copyright IBM Corp. 2009, 2012"                      *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * FUNCTION = Sample Custom Event Processing Adapter             *
+      *                                                               *
+      *     This program will be passed a CICS event channel. It      *
+      *     will format the event data into an event record           *
+      *     according to formatting information in the                *
+      *     DFHEP.DESCRIPTOR container and write the record to a      *
+      *     CICS TS queue. The name of the queue will be up to 16     *
+      *     bytes long taken from the DFHEP.ADAPTER container, or,    *
+      *     if that is not present default to <userid>.<program>      *
+      *     (e.g.  "JHERROD.TEST1") constructed from the information  *
+      *     in the DFHEP.CONTEXT container. The maximum length of     *
+      *     the TS queue record will be 32000 bytes. Longer records   *
+      *     will be truncated.                                        *
+      *                                                               *
+      *     In order to keep this sample short and easy to understand *
+      *     the recommended testing of CICS return codes has been     *
+      *     omitted wherever the default CICS exception handling has  *
+      *     a suitable effect.                                        *
+      *                                                               *
+      *     Note that this program is unable to format binary and     *
+      *     decimal floating point numbers.                           *
+      *                                                               *
+      * NOTES :                                                       *
+      *  DEPENDENCIES = S/390                                         *
+      *  RESTRICTIONS = None                                          *
+      *  REGISTER CONVENTIONS = Normal                                *
+      *  MODULE TYPE = Executable                                     *
+      *  PROCESSOR = COBOL                                            *
+      *  ATTRIBUTES = Read only, Reentrant                            *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *    $MOD(DFH0EPAC),COMP(EP),PROD(CICS TS ):                    *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $L0= 927    660 090127 HDIMJAH : Created                      *
+      * $L1= R00230 670 091223 HDIMJAH : Assured events               *
+      * $L2= R00571 670 100219 HDIMJAH : Additional data types        *
+      * $L3= R00256 670 100711 HD4IAEC : Create EP adapter            *
+      * $L4= R00246 670 101222 HD3BADW : Fix def TSQ name for sys even*
+      * $P1= D25853 660 090407 HDIMJAH : Support for formatLength=0   *
+      *      D56214 680 120726 HD3BADW : Stop AEIV if no payload      *
+      *                                                               *
+      *****************************************************************
+       Environment division.
+       Data division.
+      ******************************************************************
+       Working-storage section.
+      ******************************************************************
+       01 Program-working-storage.
+          03 EPContextLength    pic s9(8) comp.
+          03 EPDescriptorLength pic s9(8) comp.
+          03 EPAdaptparmLength  pic s9(8) comp.
+          03 EPAdapterLength    pic s9(8) comp.
+          03 EPDataLength       pic s9(8) comp.
+          03 Resp               pic s9(8) comp.
+          03 Resp2              pic s9(8) comp.
+          03 Recoverability     pic s9(8) comp.
+             88 Recoverability-yes  value dfhvalue(recoverable).
+             88 Recoverability-no   value dfhvalue(notrecovable).
+          03 ItemNum            pic 9(5).
+          03 TSQName            pic x(16).
+          03 ContainerName      pic x(16).
+          03 ModelName          pic x(8).
+          03 ModelPrefix        pic x(16).
+          03 TSQData            pic x(32000).
+          03 TSQDataLength      pic s9(4) comp.
+          03 TSQFieldIndex      pic s9(4) comp.
+          03 TSQFieldLength     pic s9(4) comp.
+          03 TSQItemLength      pic s9(4) comp.
+          03 chars              pic s9(4) comp.
+          03 datap              pic s9(4) comp.
+          03 formatp            pic s9(4) comp.
+          03 i                  pic s9(4) comp.
+          03 packed.
+             05 packed-dec      pic s9(31) packed-decimal.
+          03 zoned.
+             05 zoned-dec       pic s9(31) sign trailing separate.
+          03 edited             pic -09(31).
+          03 short-pic-float    pic +9.9(6)E+99.
+          03 long-pic-float     pic +9.9(15)E+99.
+          03 short-pic          pic +9(7)VE+99.
+          03 short-pic-map      redefines short-pic.
+             05 short-mantissa  pic s9(7) sign leading separate.
+             05                 pic x.
+             05 short-exp       pic s99 sign leading separate.
+          03 long-pic           pic +9(16)VE+99.
+          03 long-pic-map       redefines long-pic.
+             05 long-mantissa   pic s9(16) sign leading separate.
+             05                 pic x.
+             05 long-exp        pic s99 sign leading separate.
+          03 signtab            pic x(5) value '+-+-+'.
+          03 hexdata            pic x(32000).
+          03 hextab.
+             05 pic X(32) value '000102030405060708090A0B0C0D0E0F'.
+             05 pic X(32) value '101112131415161718191A1B1C1D1E1F'.
+             05 pic X(32) value '202122232425262728292A2B2C2D2E2F'.
+             05 pic X(32) value '303132333435363738393A3B3C3D3E3F'.
+             05 pic X(32) value '404142434445464748494A4B4C4D4E4F'.
+             05 pic X(32) value '505152535455565758595A5B5C5D5E5F'.
+             05 pic X(32) value '606162636465666768696A6B6C6D6E6F'.
+             05 pic X(32) value '707172737475767778797A7B7C7D7E7F'.
+             05 pic X(32) value '808182838485868788898A8B8C8D8E8F'.
+             05 pic X(32) value '909192939495969798999A9B9C9D9E9F'.
+             05 pic X(32) value 'A0A1A2A3A4A5A6A7A8A9AAABACADAEAF'.
+             05 pic X(32) value 'B0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF'.
+             05 pic X(32) value 'C0C1C2C3C4C5C6C7C8C9CACBCCCDCECF'.
+             05 pic X(32) value 'D0D1D2D3D4D5D6D7D8D9DADBDCDDDEDF'.
+             05 pic X(32) value 'E0E1E2E3E4E5E6E7E8E9EAEBECEDEEEF'.
+             05 pic X(32) value 'F0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF'.
+       77  NO-PAYLOAD    PIC X(15) VALUE 'NO PAYLOAD DATA'.
+      ******************************************************************
+       Linkage section.
+      ******************************************************************
+       01 EPContext.
+          copy dfhepcxo.
+       01 EPDescriptor.
+          copy dfhepdeo.
+       01 EPAdaptparm.
+          copy dfhepapo.
+       01 EPAdapter          pic x(16).
+       01 EPData             pic x(32000).
+       01 EPData-ufword      redefines EPData pic 9(8) comp.
+       01 EPData-sfword      redefines EPData pic s9(8) comp.
+       01 EPData-uhword      redefines EPData pic 9(4) comp.
+       01 EPData-shword      redefines EPData pic s9(4) comp.
+       01 EPData-short-hfp   redefines EPData comp-1.
+       01 EPData-long-hfp    redefines EPData comp-2.
+       01 TSQDataItem        pic x(32000).
+      *
+       Procedure division.
+      ******************************************************************
+       Main-program section.
+      ******************************************************************
+      *
+           perform Initial-processing.
+      *
+      *    Process the data items creating TSQ record fields for each
+           perform Process-data-item
+                   varying ItemNum from 1 by 1
+                   until ItemNum > epde-itemcount.
+      *
+      *    Write to TSQ
+           compute TSQDataLength = TSQFieldIndex - 1
+
+           if TSQDataLength <= 0 then
+             move NO-PAYLOAD to TSQData
+             move length of NO-PAYLOAD to TSQDataLength
+           end-if.
+      *
+           EXEC CICS WRITEQ TS QNAME(TSQName) FROM(TSQData)
+                               LENGTH(TSQDataLength)
+           END-EXEC.
+      *
+      *    Return to caller
+           EXEC CICS RETURN END-EXEC.
+      *
+       Main-program-exit.
+           exit.
+      *
+      ******************************************************************
+       Initial-processing section.
+      ******************************************************************
+      *
+      *    Obtain the DFHEP.CONTEXT container
+           EXEC CICS GET CONTAINER('DFHEP.CONTEXT')
+                         SET(address of EPContext)
+                         FLENGTH(EPContextLength)
+           END-EXEC.
+      *
+      *    Obtain the DFHEP.DESCRIPTOR container
+           EXEC CICS GET CONTAINER('DFHEP.DESCRIPTOR')
+                         SET(address of EPDescriptor)
+                         FLENGTH(EPDescriptorLength)
+           END-EXEC.
+      *
+      *    Obtain the DFHEP.ADAPTPARM container
+           EXEC CICS GET CONTAINER('DFHEP.ADAPTPARM')
+                         SET(address of EPAdaptparm)
+                         FLENGTH(EPAdaptparmLength)
+           END-EXEC.
+      *
+      *    Obtain the DFHEP.ADAPTER container - if present
+           EXEC CICS GET CONTAINER('DFHEP.ADAPTER')
+                         SET(address of EPAdapter)
+                         FLENGTH(EPAdapterLength)
+                         RESP(Resp) RESP2(Resp2)
+           END-EXEC.
+      *
+      *    Determine the TSQ name to use
+           if Resp = dfhresp(normal) and EPAdapterLength > 0
+             move EPAdapter(1:EPAdapterLength) to TSQName
+           else
+             initialize TSQName
+             if epcx-application
+               string epcx-userid  delimited by spaces
+                      epcx-program delimited by size
+                      into TSQName
+               end-string
+             else
+               string epcx-userid  delimited by spaces
+                      '.SYSTEM'    delimited by size
+                      into TSQName
+               end-string
+           end-if.
+      *
+      *    Check the recoverability of the TSQ is right for the event
+           if not epap-any-recoverable
+             perform Check-recoverability.
+      *
+      *    Start the first field in column 1.
+           move 1 to TSQFieldIndex.
+      *
+       Initial-processing-exit.
+           exit.
+      *
+      ******************************************************************
+       Check-recoverability section.
+      ******************************************************************
+      *
+      *    Check that the TSQ meets the recoverability requirement
+      *    of the event as specified in the DFHEP.CONTEXT container
+      *
+      *    Use INQUIRE TSQNAME to check any existing TSQ
+           EXEC CICS INQUIRE TSQNAME(TSQName)
+                         RECOVSTATUS(Recoverability)
+                         RESP(Resp) RESP2(Resp2)
+           END-EXEC.
+      *
+      *    If no existing TSQ use INQUIRE TSMODEL to browse through
+      *    all TSQ models looking for a match
+           if Resp not = dfhresp(normal)
+             EXEC CICS INQUIRE TSMODEL START END-EXEC
+             perform with test after until Resp = dfhresp(end) or i = 0
+               EXEC CICS INQUIRE TSMODEL(ModelName) NEXT
+                         RECOVSTATUS(Recoverability)
+                         PREFIX(ModelPrefix)
+                         RESP(Resp) RESP2(Resp2)
+               END-EXEC
+               perform varying i from 16 by -1
+                 until i = 0 or not (
+                 ModelPrefix(i:1) = spaces or
+                 ModelPrefix(i:1) = '+' and TSQName(i:1) not = spaces or
+                 ModelPrefix(i:1) = TSQName(i:1) )
+               end-perform
+             end-perform
+             if Resp = dfhresp(end)
+               set Recoverability-no to true
+             end-if
+             EXEC CICS INQUIRE TSMODEL END END-EXEC
+           end-if.
+      *
+      *    Check the recoverability and abend if not correct
+           if epap-recoverable and Recoverability-no or
+              epap-non-recoverable and Recoverability-yes
+             EXEC CICS ABEND ABCODE('EPAT') END-EXEC.
+      *
+       Check-recoverability-exit.
+           exit.
+      *
+      ******************************************************************
+       Process-data-item section.
+      ******************************************************************
+      *
+      *    Process a data descriptor item creating a TSQ record field
+      *
+      *    Build the data container name: DFHEP.DATA.nnnnn
+           string 'DFHEP.DATA.' delimited by size
+                  ItemNum         delimited by size
+                  into ContainerName
+           end-string.
+      *
+      *    Obtain the DFHEP.DATA.nnnnn container - if present
+           EXEC CICS GET CONTAINER(ContainerName)
+                         SET(address of EPData)
+                         FLENGTH(EPDataLength)
+                         RESP(Resp) RESP2(Resp2)
+           END-EXEC.
+      *
+      *    Convert the data according to epde-datatype
+           perform Convert-data.
+      *
+      *    Calculate the target field length
+           perform Calculate-length.
+      *
+      *    Format the data according to epde-formattype
+           perform Format-data.
+      *
+      *    Move over the data item ready for the next one
+           add TSQFieldLength to TSQFieldIndex.
+      *
+       Process-data-item-exit.
+           exit.
+      *
+      ******************************************************************
+       Convert-data section.
+      ******************************************************************
+      *
+      *    Convert the data according to epde-datatype
+           evaluate true
+      *
+      *      If there is no data set item length to zero
+             when Resp not = dfhresp(normal) OR EPDataLength = 0
+               move 0 to TSQItemLength
+      *
+      *      If type packed convert to character
+             when EPDE-PACKED(ItemNum)
+               initialize packed-dec
+               move EPData(1:EPDataLength)
+                 to packed(17 - EPDataLength:)
+               perform Edit-number
+      *
+      *      If type zoned convert to character via packed decimal
+             when EPDE-ZONED(ItemNum)
+               initialize zoned-dec
+               evaluate true
+                 when EPData(EPDataLength:1) = '+' or '-'
+                   move EPData(1:EPDataLength)
+                     to zoned(33 - EPDataLength:EPDatalength)
+                 when EPData(1:1) = '+' or '-' or
+                      EPDataLength = 32
+                   move EPData(2:EPDataLength - 1)
+                     to zoned(33 - EPDataLength:EPDatalength - 1)
+                   move EPData(1:1) to zoned(32:1)
+                 when other
+                   move EPData(1:EPDataLength)
+                     to zoned(32 - EPDataLength:EPDatalength)
+                   if EPData(1:1) < '0' and > x'9F' then
+                     move signtab((function
+                                   ord(EPData(1:1)) - 1) / 16 - 9:1)
+                       to zoned(32:1)
+                   end-if
+                   if EPData(EPDataLength:1) < '0' and > x'9F' then
+                     move signtab((function
+                                   ord(zoned(31:1)) - 1) / 16 - 9:1)
+                       to zoned(32:1)
+                   end-if
+               end-evaluate
+               move zoned-dec to packed-dec
+               perform Edit-number
+      *
+      *      If type signed halfword convert to character
+             when EPDE-SHWORD(ItemNum)
+               move EPData-shword to packed-dec
+               perform Edit-number
+      *
+      *      If type unsigned halfword convert to character
+             when EPDE-UHWORD(ItemNum)
+               move EPData-uhword to packed-dec
+               perform Edit-number
+      *
+      *      If type signed fullword convert to character
+             when EPDE-SFWORD(ItemNum)
+               move EPData-sfword to packed-dec
+               perform Edit-number
+      *
+      *      If type unsigned fullword convert to character
+             when EPDE-UFWORD(ItemNum)
+               move EPData-ufword to packed-dec
+               perform Edit-number
+      *
+      *      If type hex convert into the hex buffer
+             when EPDE-HEX(ItemNum)
+             when EPDE-HEXZ(ItemNum)
+               perform varying chars from 1 by 1
+                 until chars > 16000 or > EPDataLength
+                 move hextab(function ord(EPData(chars:1)) * 2 - 1:2)
+                   to hexdata(chars * 2 - 1:2)
+               end-perform
+               set address of TSQDataItem to address of hexdata
+               compute TSQItemLength = chars * 2 - 2
+      *
+      *      If type hexfloat convert to character
+             when EPDE-HEXFLOAT(ItemNum)
+               if EPDE-SCIENTIFIC(ItemNum) then
+                 perform Edit-scientific
+               else
+                 if EPDataLength = 4 then
+                   move EPData-short-hfp to short-pic
+                   move short-mantissa to packed-dec
+                   compute epde-dataprecision(ItemNum) = - short-exp
+                 else
+                   move EPData-long-hfp to long-pic
+                   move long-mantissa to packed-dec
+                   compute epde-dataprecision(ItemNum) = - long-exp
+                 end-if
+                 perform Edit-number
+               end-if
+      *
+      *      If type char (or unsupported type) use the data unchanged
+      *      Types binfloat and decfloat are not supported by COBOL
+             when other
+               set address of TSQDataItem to address of EPData
+               move EPDataLength to TSQItemLength
+           end-evaluate.
+      *
+       Convert-data-exit.
+           exit.
+      *
+      ******************************************************************
+       Calculate-length section.
+      ******************************************************************
+      *
+      *    Calculate the target field length
+           evaluate true
+      *
+      *      If the length is specified then use it
+             when epde-formatlen(ItemNum) not zero
+               move epde-formatlen(ItemNum) to TSQFieldLength
+      *
+      *      If CHAR or HEX use length of converted item
+             when EPDE-CHAR(ItemNum)
+             when EPDE-CHARZ(ItemNum)
+             when EPDE-HEX(ItemNum)
+             when EPDE-HEXZ(ItemNum)
+               move TSQItemLength to TSQFieldLength
+      *
+      *      If HEXFLOAT it needs 13(short) or 22(long). Do the same for
+      *      BINFLOAT and DECFLOAT although not formatted
+             when EPDE-HEXFLOAT(ItemNum)
+             when EPDE-BINFLOAT(ItemNum)
+             when EPDE-DECFLOAT(ItemNum)
+               compute TSQFieldLength = EPDataLength * 9 / 4 + 4
+      *
+      *      If numeric more work required
+             when other
+               evaluate true
+      *
+      *          If PACKED it needs 2 times length - 1 digits
+                 when EPDE-PACKED(ItemNum)
+                   compute TSQFieldLength = EPDataLength * 2 - 1
+      *
+      *          If ZONED it needs length digits unless sign separate
+                 when EPDE-ZONED(ItemNum)
+                   move EPDataLength to TSQFieldLength
+                   if EPData(EPDataLength:1) = '+' or '-' or
+                      EPData(1:1) = '+' or '-' or
+                      EPDataLength = 32
+                     subtract 1 from TSQFieldLength
+                   end-if
+      *
+      *          If HWORD it needs 5 digits
+                 when EPDE-SHWORD(ItemNum)
+                 when EPDE-UHWORD(ItemNum)
+                   move 5 to TSQFieldLength
+      *
+      *          If FWORD it needs 10 digits
+                 when EPDE-SFWORD(ItemNum)
+                 when EPDE-UFWORD(ItemNum)
+                   move 10 to TSQFieldLength
+               end-evaluate
+      *
+      *        Add 1 for numbers needing a leading zero
+               if epde-dataprecision(ItemNum) >= TSQFieldLength
+                 add 1 to TSQFieldLength
+               end-if
+      *
+      *        Add 1 for numbers needing a decimal point
+               if epde-formatprecision(ItemNum) > 0
+                 add 1 to TSQFieldLength
+               end-if
+      *
+      *        Adjust for format and data precisions and sign
+               add epde-formatprecision(ItemNum) to TSQFieldLength
+               subtract epde-dataprecision(ItemNum) from TSQFieldLength
+               add 1 to TSQFieldLength
+           end-evaluate
+      *
+      *    Make it shorter if too long for the buffer
+           if TSQFieldLength > 32001 - TSQFieldIndex
+             compute TSQFieldLength = 32001 - TSQFieldIndex
+           end-if.
+      *
+       Calculate-length-exit.
+           exit.
+      *
+      ******************************************************************
+       Format-data section.
+      ******************************************************************
+      *
+      *    Format the data according to epde-formattype
+           evaluate true
+      *
+      *      If there is no data fill the field with aserisks
+             when Resp not = dfhresp(normal)
+               inspect TSQData(TSQFieldIndex:TSQFieldLength)
+                       replacing characters by '*'
+      *
+      *      If type text or scientific left justify and pad with blanks
+             when EPDE-TEXT(ItemNum)
+             when EPDE-SCIENTIFIC(ItemNum)
+               move TSQDataItem(1:TSQItemLength)
+                 to TSQData(TSQFieldIndex:TSQFieldLength)
+      *
+      *      If type numeric then right justify and pad with blanks
+             when other
+               if TSQItemLength > TSQFieldLength then
+                 compute i = TSQItemLength - TSQFieldLength + 1
+                 compute TSQItemLength = TSQFieldLength
+               else
+                 move 1 to i
+               end-if
+               initialize TSQData(TSQFieldIndex:TSQFieldLength)
+               move TSQDataItem(i:TSQItemLength)
+                 to TSQData(TSQFieldIndex + TSQFieldLength -
+                            TSQItemLength: TSQItemLength)
+           end-evaluate.
+      *
+       Format-data-exit.
+           exit.
+      *
+      ******************************************************************
+       Edit-number section.
+      ******************************************************************
+      * The following if clause was added by apar PI75648.
+      * If the OUTPUT FORMAT PRECISION  (epde-formatprecision) is set
+      * to AUTOMATIC (-1) in the emitted business event then reset it
+      * to the INPUT PRECISION (epde-dataprecision).
+      ******************************************************************
+           if epde-numeric(ItemNum) then
+            if epde-formatprecision(itemNum) = -1 then
+                move epde-dataprecision(ItemNum) to
+                     epde-formatprecision(ItemNum)
+             end-if
+           end-if.
+      *
+      *    Get data precision and format precision
+           move epde-dataprecision(ItemNum) to datap
+           move epde-formatprecision(ItemNum) to formatp.
+      *
+      *    If data precision greater then lose trailing digits
+           perform until datap <= formatp
+             divide 10 into packed-dec
+             subtract 1 from datap
+           end-perform.
+      *
+      *    If format precision greater then add trailing zeros
+           perform until datap >= formatp
+             multiply 10 by packed-dec
+             add 1 to datap
+           end-perform.
+      *
+      *    Convert to character and add decimal point if required
+           move packed-dec to edited
+           if formatp > 0 and < 32
+             move edited(3:32 - formatp) to edited(2:32 - formatp)
+             move '.' to edited(33 - formatp:1)
+           end-if.
+      *
+      *    Skip over unwanted leading zeros
+           move 2 to chars
+           inspect edited(2:) tallying chars for leading '0'
+           if edited(chars:1) = '.'
+             subtract 1 from chars
+           end-if.
+      *
+      *    Include a minus sign if required
+           if edited(1:1) = '-'
+             subtract 1 from chars
+             move '-' to edited(chars:1)
+           end-if.
+      *
+      *    That's it!
+           set address of TSQDataItem to address of edited(chars:)
+           compute TSQItemLength = 34 - chars.
+      *
+       Edit-number-exit.
+           exit.
+      *
+      ******************************************************************
+       Edit-scientific section.
+      ******************************************************************
+      *
+      *    Convert short hfp to the format +1.234567E+12
+      *    Convert long  hfp to the format +1.234567890123456E+12
+           if EPDataLength = 4 then
+             move EPData-short-hfp to short-pic-float
+             set address of TSQDataItem to address of short-pic-float
+             move 6 to datap
+           else
+             move EPData-long-hfp to long-pic-float
+             set address of TSQDataItem to address of long-pic-float
+             move 15 to datap
+           end-if.
+      *
+      *    If format precision < data precision shorten the mantissa
+      *    also removing the decimal point if not required
+      *    If format precision <0 or >data precision, use data precision
+           evaluate true
+             when epde-formatprecision(ItemNum) >= datap
+             when epde-formatprecision(ItemNum) < 0
+               compute TSQItemLength = datap + 7
+             when epde-formatprecision(ItemNum) = 0
+               move 6 to TSQItemLength
+             when other
+               compute TSQItemLength = epde-formatprecision(ItemNum) + 7
+           end-evaluate
+           move TSQDataItem(datap + 4:4)
+             to TSQDataItem(TSQItemLength - 3:4).
+      *
+      *    If leading '+' sign on mantissa then remove it
+           if TSQDataItem(1:1) = '+' then
+             subtract 1 from TSQItemLength
+             move TSQDataItem(2:TSQItemLength)
+               to TSQDataItem(1:TSQItemLength)
+           end-if.
+      *
+      *    If leading '+' sign on exponent then remove it
+           if TSQDataItem(TSQItemLength - 2:1) = '+' then
+             subtract 1 from TSQItemLength
+             move TSQDataItem(TSQItemLength:2)
+               to TSQDataItem(TSQItemLength - 1:2)
+           end-if.
+      *
+      *    If leading '0' digit on exponent then remove it
+           if TSQDataItem(TSQItemLength - 1:1) = '0' then
+             subtract 1 from TSQItemLength
+             move TSQDataItem(TSQItemLength + 1:1)
+               to TSQDataItem(TSQItemLength:1)
+           end-if.
+      *
+       Edit-scientific-exit.
+           exit.

@@ -1,0 +1,622 @@
+      CBL CICS('COBOL3') APOST
+PROCESS MAP,XREF,TRUNC(BIN)
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CNA5                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (NACT) NACT SAMPLE                *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 2001, 2002"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      *    This program provides the Name Search (Browse) function    *
+      *    for the CICS Application Design and Programming book       *
+      *    sample application. It is designed to be LINKed to in      *
+      *    order to allow any number of front-ends to use its         *
+      *    services, e.g., BMS front-end (DFH0CNA1), VB, etc.         *
+      *                                                               *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      * $MOD(DFH0CNA5),COMP(SAMPLES),PROD(CICS TS ):                  *
+      *                                                               *
+      * PN= REASON REL YYMMDD HDXXIII : REMARKS                       *
+      * $D1= I07267 630 020409 HDHYJB  : Compile all samples          *
+      * $P0= D02652 620 011003 HDFXAB  : Install Nact                 *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0CNA5.
+       AUTHOR.       A PROGRAMMER.
+       INSTALLATION. IBM HURSLEY.
+       DATE-WRITTEN. AUGUST 1999.
+       DATE-COMPILED.
+      *
+      ***************************************************************
+      *     FILES
+      *
+      *     ACCTNAM - WS-LITS-FILES-NAME
+      *         STARTBR
+      *         ENDBR
+      *         READNEXT
+      *
+      ***************************************************************
+      *     CICS RESOURCES
+      *
+      ***************************************************************
+      *     UTILITIES
+      *
+      ***************************************************************
+      *     COPYBOOKS
+      *
+      *     DFH0CNAR - Working storage layout of the data passed to
+      *                the Error Handler program.
+      *     DFH0CNAC - Common working storage.
+      *     DFH0CNAG - Working storage layout of the Account record.
+      *     DFH0CNAB - Commarea layout of the data passed to this
+      *                program from the calling program.
+      *
+      ***************************************************************
+      *
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+      *
+       WORKING-STORAGE SECTION.
+      *
+      *    STORE EYE CATCHER DETAILS TO AID DUMP READING
+      *
+       01  WS-DEBUG-DETAILS.
+           05  FILLER                        PIC X(32)
+                 VALUE 'DFH0CNA5-----WORKING STORAGE  '.
+           05  WS-DEBUG-EYE.
+               10  WS-DEBUG-TRANID           PIC X(4) VALUE SPACES.
+               10  WS-DEBUG-TERMID           PIC X(4) VALUE SPACES.
+               10  WS-DEBUG-TASKNO           PIC 9(7) VALUE ZERO.
+           05  FILLER                        PIC X    VALUE SPACE.
+           05  WS-DEBUG-COMMAREA-ADDR        USAGE IS POINTER.
+      *
+       01  FILLER.
+      *
+      * This field is used for interfacing with the
+      * ABEND/Error Handler program in the suite.
+      *
+           05  WS-PROGRAM-NAME               PIC X(8) VALUE SPACES.
+           05  ABEND-PROGRAM.
+               10  WS-ABEND-PROGRAM-PREFIX   PIC X(7) VALUE SPACES.
+               10  FILLER                    PIC X(1) VALUE '4'.
+      *
+      * Store of EIBRESP and EIBRESP2 set up in each EXEC CICS statement
+      *
+           05  RESPONSE                      PIC S9(8) COMP-4 VALUE 0.
+           05  REASON-CODE                   PIC S9(8) COMP-4 VALUE 0.
+      *
+      * The EIBFN is defined as character but the error interface
+      * expects a numeric value.
+      *
+           05  WS-WORK-EIBFN                   PIC 9(4) COMP VALUE ZERO.
+           05  WS-WORK-EIBFN-X REDEFINES WS-WORK-EIBFN PIC X(2).
+      *
+      * This field is used to keep track of the results of the search.
+      *
+           05  WS-AVAILABILITY-IND             PIC X.
+               88  SOME-AVAILABLE              VALUE 'Y'.
+               88  NONE-AVAILABLE              VALUE 'N'.
+      *
+      * These fields are used to keep track of the search
+      * criteria and for setting the bounds of the search
+      * against both surname and forename.
+      *
+           05  WS-PASSED-NAMES.
+               10  WS-PASSED-SNAME             PIC X(18) VALUE SPACES.
+               10  WS-PASSED-FNAME             PIC X(12) VALUE SPACES.
+           05  WS-LIMIT-NAMES.
+               10  WS-BROWSE-SNAME             PIC X(18) VALUE SPACES.
+               10  WS-MAX-SNAME                PIC X(18) VALUE SPACES.
+               10  WS-MIN-FNAME                PIC X(12) VALUE SPACES.
+               10  WS-MAX-FNAME                PIC X(12) VALUE SPACES.
+      *
+      * This field is used to keep track of the number of
+      * records found which match the search criteria.
+      *
+           05  WS-RECORDS-READ                 PIC 9(4) COMP VALUE ZERO.
+      *
+      * This field is used to indicate whether input data is valid or
+      * invalid
+      *
+           05  WS-REQUEST-VALIDITY             PIC X.
+               88  VALID-REQUEST               VALUE 'Y'.
+               88  INVALID-REQUEST             VALUE 'N'.
+      *
+      * The interface to the error handler program is described
+      * in a copy book in order to ensure correctness.
+      *
+       01  FILLER.
+           05  FILLER                          PIC X(36) VALUE
+               '********  DFH0CNAR COPYBOOK  *******'.
+           COPY DFH0CNAR.
+      *
+      * Various values which you might wish to modify are placed in one
+      * copy book in order to make those sorts of changes more easily.
+      *
+       01  FILLER.
+           05  FILLER                          PIC X(36) VALUE
+               '********  DFH0CNAC COPYBOOK  *******'.
+           COPY DFH0CNAC.
+      *
+      * The description of the account record is placed in a copy book.
+      * This area is used to read a record before placing it into the
+      * next available slot in the interface area.
+      *
+       01  FILLER                              PIC X(36) VALUE
+               '********  DFH0CNAG COPYBOOK  *******'.
+      *
+       01  AN-ACCTREC.
+           COPY DFH0CNAG.
+      *
+       01  FILLER                              PIC X(36) VALUE
+              '********  LINKAGE SECTION   ********'.
+      *
+       EJECT.
+      *
+       LINKAGE SECTION.
+      *
+      * The interface to this program is described in
+      * a copy book in order to ensure consistency.
+      *
+       01  DFHCOMMAREA.
+           COPY DFH0CNAB.
+      *
+       EJECT.
+      *
+       PROCEDURE DIVISION.
+      *
+      *
+       NACT05-MAIN SECTION.
+      *
+      *
+       NACT05-010.
+      *
+      * First we establish the ABEND handler in case unexpected
+      * errors arise, such as program interrupts. The technique
+      * used here assumes a naming convention where the variable
+      * part of the program names is in the 8th position.
+      * This allows for changes to the names in case the provided
+      * names conflict with existing applications.
+      *
+      * ASSIGN returns system information to the program.
+      * This example returns the name of the current program
+      * to WS-PROGRAM-NAME.
+      *
+           EXEC CICS ASSIGN
+                     PROGRAM(WS-PROGRAM-NAME)
+                     NOHANDLE
+           END-EXEC.
+      *
+           MOVE WS-PROGRAM-NAME TO WS-ABEND-PROGRAM-PREFIX.
+      *
+           EXEC CICS HANDLE ABEND
+                     PROGRAM(ABEND-PROGRAM)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+               EXEC CICS ABEND
+                         ABCODE(WS-LITS-ABEND-ERROR-ABEND)
+               END-EXEC
+           END-IF.
+      *
+       NACT05-020.
+      *
+      *  Set up values in the eye-catcher
+      *
+           MOVE EIBTRNID TO WS-DEBUG-TRANID.
+           MOVE EIBTRMID TO WS-DEBUG-TERMID.
+           MOVE EIBTASKN TO WS-DEBUG-TASKNO.
+      *
+      *  Set up the commarea address
+      *
+           SET WS-DEBUG-COMMAREA-ADDR TO ADDRESS OF DFHCOMMAREA.
+      *
+       NACT05-030.
+      *
+      * When correct length COMMAREA has been passed and the
+      * browse request is valid, move the commarea name data
+      * to the working storage name data and start the browse.
+      * When a relevant name record is present and the request
+      * is a new browse, the relevant account records are read
+      * and moves to the commarea.
+      * When a relevant name record is present and the request
+      * is to continue a browse, reposition the account file at
+      * the last record that was read in the previous browse and
+      * read the following relevant name records moving them to
+      * the commarea.
+      * Note that an ABEND must be forced if the passed commarea is
+      * too small to be able to indicate an error in the normal way.
+      *
+           IF  EIBCALEN >= LENGTH OF DFHCOMMAREA
+               SET VALID-REQUEST TO TRUE
+               PERFORM A-VALIDATE-REQUEST
+               IF  VALID-REQUEST
+                   PERFORM B-INITIALISE-WS
+                   PERFORM C-START-BROWSE
+                   IF SOME-AVAILABLE
+                      EVALUATE TRUE
+                          WHEN CA-BRWS-REQ-BROWSE
+                            PERFORM D-FILL-IN-MATCHES
+                          WHEN CA-BRWS-REQ-CONTINUE
+                            PERFORM E-CONTINUE-BROWSE
+                            IF NONE-AVAILABLE
+                               PERFORM Z-ERROR-HANDLER
+                            ELSE
+                               ADD 1 TO CA-BRWS-FOUND
+                               MOVE AN-ACCTREC
+                                       TO CA-BRWS-ENTRY (CA-BRWS-FOUND)
+                               PERFORM D-FILL-IN-MATCHES
+                            END-IF
+                      END-EVALUATE
+                   END-IF
+                   PERFORM F-TERMINATE-BROWSE
+               ELSE
+                   SET CA-BRWS-BAD-FORMAT TO TRUE
+               END-IF
+           ELSE
+               IF  EIBCALEN > 11
+                   SET CA-BRWS-BAD-FORMAT   TO TRUE
+                   SET CA-BRWS-LENGTH-ERROR TO TRUE
+               ELSE
+                   EXEC CICS ABEND
+                             ABCODE(WS-LITS-ABEND-BRWS-IF)
+                   END-EXEC
+               END-IF
+           END-IF.
+      *
+       NACT05-040.
+           EXEC CICS RETURN
+           END-EXEC.
+      *
+       END-NACT05-MAIN.
+           EXIT.
+           EJECT.
+      *
+       A-VALIDATE-REQUEST SECTION.
+      *
+      * Check the the data passed to ths program is correct and
+      * generate appropriate error responses where needed.
+      *
+       A-010.
+      *
+      * Check that the CA-BRWS-limit-to-get passed to this program is
+      * numeric and in the range of 0 to WS-LITS-MAX-MATCHES which is
+      * the maximum number of name matches deliverable by the browsing
+      * function and is specified in the NACLITS copy library.
+      *
+           IF  CA-BRWS-LIMIT-TO-GET NUMERIC
+           AND (CA-BRWS-LIMIT-TO-GET < 0
+                OR  CA-BRWS-LIMIT-TO-GET > WS-LITS-MAX-MATCHES)
+                    SET CA-BRWS-LIMIT-ERROR TO TRUE
+                    SET INVALID-REQUEST     TO TRUE
+           END-IF.
+      *
+           IF  CA-BRWS-LIMIT-TO-GET-X NOT NUMERIC
+               SET CA-BRWS-LIMIT-ERROR TO TRUE
+               SET INVALID-REQUEST     TO TRUE
+           END-IF.
+      *
+       A-020.
+      *
+      * When the request is to continue and obtain the next set of
+      * records by name, ensure CA-BRWS-MORE contains a valid number.
+      *
+           IF CA-BRWS-REQ-CONTINUE
+              AND (CA-BRWS-NO-MORE
+                   OR CA-BRWS-MORE-X NOT NUMERIC)
+                      SET CA-BRWS-MORE-ERROR TO TRUE
+                      SET INVALID-REQUEST    TO TRUE
+           END-IF.
+      *
+       A-030.
+      *
+      * Check that the request to this browse program is correct
+      * i.e. 'B' or 'C'.
+      *
+           IF  NOT CA-BRWS-VALID-REQUEST
+               SET CA-BRWS-REQUEST-ERROR TO TRUE
+               SET INVALID-REQUEST       TO TRUE
+           END-IF.
+      *
+       A-040.
+      *
+      * Check that the version of the browse program is correct.
+      *
+           IF  NOT CA-BRWS-CORRECT-VERSION
+               SET CA-BRWS-VERSION-ERROR TO TRUE
+               SET INVALID-REQUEST       TO TRUE
+           END-IF.
+      *
+       END-A-VALIDATE-REQUEST.
+           EXIT.
+           EJECT.
+      *
+       B-INITIALISE-WS SECTION.
+      *
+      * Once the input parameters have been vetted for correct format,
+      * then working storage is initialised with commarea fields.
+      *
+       B-010.
+           MOVE SNAMEDO IN CA-BRWS-ENTRY (1) TO WS-PASSED-SNAME
+                                                WS-BROWSE-SNAME
+                                                WS-MAX-SNAME.
+      *
+           INSPECT WS-MAX-SNAME REPLACING ALL SPACES BY HIGH-VALUES.
+      *
+           MOVE FNAMEDO IN CA-BRWS-ENTRY (1) TO WS-PASSED-FNAME
+                                                WS-MAX-FNAME
+                                                WS-MIN-FNAME.
+      *
+           INSPECT WS-MAX-FNAME REPLACING ALL SPACES BY HIGH-VALUES.
+           INSPECT WS-MIN-FNAME REPLACING ALL SPACES BY LOW-VALUES.
+      *
+           SET CA-BRWS-NONE-FOUND TO TRUE.
+           SET CA-BRWS-NO-ERROR   TO TRUE.
+      *
+       END-B-INITIALISE-WS SECTION.
+           EXIT.
+           EJECT.
+      *
+       C-START-BROWSE SECTION.
+      *
+      *
+      * This routine initializes the browse of the file via the
+      * STARTBR command and sets the availability indicator based
+      * on the possibility of a match.
+      *
+           SET CA-BRWS-NONE-FOUND TO TRUE.
+      *
+           EXEC CICS STARTBR
+                     FILE(WS-LITS-FILES-NAME)
+                     RIDFLD(WS-BROWSE-SNAME)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           EVALUATE RESPONSE
+               WHEN DFHRESP(NORMAL)
+                   SET SOME-AVAILABLE  TO TRUE
+               WHEN DFHRESP(NOTFND)
+                   SET NONE-AVAILABLE  TO TRUE
+                   SET CA-BRWS-NO-MORE TO TRUE
+      *
+      * If any other condition other than success or NOTFND
+      * occurs, then a serious problem has occurred, so the
+      * error handler is invoked.
+      *
+               WHEN OTHER
+                   PERFORM Z-ERROR-HANDLER
+           END-EVALUATE.
+      *
+       END-C-START-BROWSE.
+           EXIT.
+           EJECT.
+      *
+       D-FILL-IN-MATCHES SECTION.
+      *
+      * This routine finds matches until either the maximum number
+      * requested is reached or until it determines there are no
+      * more matches on file. When it finds a match it moves it to
+      * the interface area for the front-end.
+      *
+       D-010.
+           PERFORM UNTIL NONE-AVAILABLE
+                    OR  (CA-BRWS-FOUND = CA-BRWS-LIMIT-TO-GET)
+               PERFORM Y-READ-ONE
+               IF  SOME-AVAILABLE
+                   IF  FNAMEDO IN AN-ACCTREC >= WS-MIN-FNAME
+                   AND FNAMEDO IN AN-ACCTREC <= WS-MAX-FNAME
+                       ADD 1           TO CA-BRWS-FOUND
+                       MOVE AN-ACCTREC TO CA-BRWS-ENTRY (CA-BRWS-FOUND)
+                   END-IF
+               END-IF
+           END-PERFORM.
+      *
+       D-020.
+      *
+      * If we have filled up the area with the maximum requested,
+      * we need to see if a continuation of the browse is possible
+      * in case the end user desires to see more.
+      *
+           IF  CA-BRWS-FOUND = CA-BRWS-LIMIT-TO-GET
+               PERFORM Y-READ-ONE
+      *
+      * This condition will be true if the number of matches exactly
+      * fills the interface area with the maximum requested.
+      *
+               IF  NONE-AVAILABLE
+                   SET CA-BRWS-NO-MORE TO TRUE
+      *
+      * If there are more than the maximum number requested, the data
+      * area is set to indicate where we need to reposition to in the
+      * event of a subsequent continuation request.
+      *
+               ELSE
+                   IF  FNAMEDO IN AN-ACCTREC > WS-MIN-FNAME
+                   AND FNAMEDO IN AN-ACCTREC < WS-MAX-FNAME
+                       MOVE WS-RECORDS-READ TO CA-BRWS-MORE
+                   ELSE
+                       SET CA-BRWS-NO-MORE TO TRUE
+                   END-IF
+               END-IF
+      *
+      * If there are less than the maximum number requested,
+      * we need to indicate a continuation is not possible.
+      *
+           ELSE
+               SET CA-BRWS-NO-MORE TO TRUE
+           END-IF.
+      *
+       END-D-FILL-IN-MATCHES.
+           EXIT.
+           EJECT.
+      *
+       E-CONTINUE-BROWSE SECTION.
+      *
+      * This routine continues a browse by checking to see if there is
+      * at least one match. If there is it repositions to where it had
+      * left off previously.
+      *
+       E-010.
+           PERFORM Y-READ-ONE UNTIL WS-RECORDS-READ = CA-BRWS-MORE
+                              OR   NONE-AVAILABLE.
+      *
+      * If it cannot reposition correctly, then a serious problem
+      * has occurred, so the error handler is invoked.
+      *
+      *
+      * On a successful repositioning operation, it fills in the
+      * passed area up to the maximum number of matches requested.
+      *
+       END-E-CONTINUE-BROWSE.
+           EXIT.
+           EJECT.
+      *
+       F-TERMINATE-BROWSE SECTION.
+      *
+      * This routine terminates the browsing operation against the file.
+      *
+       F-010.
+           EXEC CICS ENDBR
+                     FILE(WS-LITS-FILES-NAME)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           EVALUATE RESPONSE
+               WHEN DFHRESP(NORMAL)
+                   CONTINUE
+      *
+      * An invalid request response is allowed since a STARTBR
+      * may not have been successfully completed previously.
+      * This is verified by testing the sub-reason found in
+      * the EIBRESP2 (REASON-CODE) field where the value of 35
+      * indicates this specific condition which is acceptable here.
+      *
+               WHEN DFHRESP(INVREQ)
+      *
+      * If any other condition occurs, then a serious problem
+      * has occurred, so the error handler is invoked.
+      *
+                   IF  REASON-CODE NOT = 35
+                       PERFORM Z-ERROR-HANDLER
+                   END-IF
+               WHEN OTHER
+                   PERFORM Z-ERROR-HANDLER
+           END-EVALUATE.
+      *
+       END-F-TERMINATE-BROWSE.
+           EXIT.
+           EJECT.
+      *
+       Y-READ-ONE SECTION.
+      *
+      * This routine attempts to read a record from the file and
+      * sets the availability indicator based on its success.
+      *
+      * This section is performed from the following sections -
+      *      D-FILL-IN-MATCHES
+      *      E-CONTINUE-BROWSE
+      *
+       Y-010.
+           EXEC CICS READNEXT
+                     FILE(WS-LITS-FILES-NAME)
+                     RIDFLD(WS-BROWSE-SNAME)
+                     INTO(AN-ACCTREC)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           EVALUATE RESPONSE
+      *
+      * If either condition occurs, it means a record was read.
+      *
+               WHEN DFHRESP(NORMAL)
+               WHEN DFHRESP(DUPKEY)
+      *
+      * But it may not match the full criteria.
+      *
+                   IF  SNAMEDO IN AN-ACCTREC > WS-MAX-SNAME
+                       SET NONE-AVAILABLE TO TRUE
+                   ELSE
+                       SET SOME-AVAILABLE TO TRUE
+                       ADD 1 TO WS-RECORDS-READ
+                   END-IF
+      *
+      * If we have exhausted the file, then there
+      * are obviously no more matches.
+      *
+               WHEN DFHRESP(ENDFILE)
+                   SET NONE-AVAILABLE TO TRUE
+      *
+      * If any other condition occurs, then a serious problem
+      * has occurred, so the error handler is invoked.
+      *
+               WHEN OTHER
+                   PERFORM Z-ERROR-HANDLER
+           END-EVALUATE.
+      *
+       END-Y-READ-ONE.
+           EXIT.
+           EJECT.
+      *
+       Z-ERROR-HANDLER SECTION.
+      *
+      * This routine invokes the error handler for unexpected
+      * conditions from CICS.
+      *
+      * This section is performed from the following sections -
+      *      NACT05-MAIN
+      *      C-START-BROWSE
+      *      F-TERMINATE-BROWSE
+      *      Y-READ-ONE
+      *
+       Z-010.
+           SET WS-ERRH-CORRECT-VERSION TO TRUE.
+           MOVE RESPONSE            TO WS-ERRH-ERROR.
+           MOVE REASON-CODE         TO WS-ERRH-REASON.
+           MOVE EIBFN               TO WS-WORK-EIBFN-X.
+           MOVE WS-WORK-EIBFN       TO WS-ERRH-CICS-FUNCTION.
+           MOVE WS-PROGRAM-NAME     TO WS-ERRH-PROGRAM.
+      *
+           EXEC CICS XCTL
+                     PROGRAM(ABEND-PROGRAM)
+                     COMMAREA(WS-ERRH-ERROR-COMMAREA)
+                     NOHANDLE
+           END-EXEC.
+      *
+       Z-020.
+      *
+      * The following will only be executed if the XCTL fails.
+      * The primary reason that might happen is if the error
+      * handling program has become unavailable for some reason.
+      *
+           EXEC CICS ABEND
+                     ABCODE(WS-LITS-ABEND-ERROR-ABEND)
+           END-EXEC.
+      *
+       END-Z-ERROR-HANDLER.
+           EXIT.

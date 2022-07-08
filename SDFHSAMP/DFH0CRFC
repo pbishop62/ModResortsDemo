@@ -1,0 +1,1211 @@
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CRFC                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CSD Cross-referencing Sample Program       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * The function of this program is to produce a cross reference  *
+      * listing of objects or keywords on the CICS system definition  *
+      * file (DFHCSD). The program is driven by a user exit in the CSD*
+      * off-line utility DFHCSDUP. Data describing resource definition*
+      * on the CSD is passed to this exit in a standard parameter list*
+      * format, and the pertinent data saved in a cross reference     *
+      * table which is built in store .                               *
+      *                                                               *
+      * After all the data passed to the exit has been processed,     *
+      * that is on the FINAL call to the exit, the contents of the    *
+      * cross reference table are printed out in collating sequence.  *
+      *                                                               *
+      * This program  assumes that it is run via a CSD utility        *
+      * EXTRACT command of the form:                                  *
+      *        EXTRACT GROUP(<group name>) OBJECTS                    *
+      *          where <group name> may be generic                    *
+      *     or                                                        *
+      *        EXTRACT LIST(<list name>)   OBJECTS                    *
+      *          where <list name> is NOT generic                     *
+      *                                                               *
+      * N.B This program must be link edited with the stub DFHEXLE.   *
+      *     AMODE(31) RMODE(24) must be specified.                    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *     $MAC(DFH0CRFC),COMP(SPI),PROD(CICS TS ):                  *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900320        : Created.                   *
+      *    $P1= M90474 330 910808 HDBWSH : Prologue Fixed.            *
+      *    $P2= D03353 620 011113 HD4PALS: Removed DFHEXCI reference  *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CREFCSD.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT DATA-IN
+                  ASSIGN TO SYS002-DA-3380-S-CRFINPT
+                  ORGANIZATION IS SEQUENTIAL
+                  FILE STATUS IS INPUT-FILE-STATUS
+                  ACCESS IS SEQUENTIAL.
+           SELECT DATA-OUT
+                  ASSIGN TO SYS002-DA-3380-S-CRFOUT
+                  ORGANIZATION IS SEQUENTIAL
+                  FILE STATUS IS OUTPUT-FILE-STATUS
+                  ACCESS IS SEQUENTIAL.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *  D E F I N E  T H E  I N P U T  A N D  O U T P U T  F I L E S  *
+      *                                                                *
+      * This program requires two QSAM files to be defined for its     *
+      * use:                                                           *
+      *                                                                *
+      *    1) DATA-IN: This is the input file to the cross referencing *
+      *                program and its contents define the objects and *
+      *                keywords to be cross-referenced (the program    *
+      *                allows for up to a maximum of 10 in any one run)*
+      *                The file should be defined as a file of fixed   *
+      *                length records of 80 characters each, with one  *
+      *                record for each object or keyword to be  cross  *
+      *                referenced.                                     *
+      *                Only the characters in columns 1-12 of a record *
+      *                will be considered to be significant.           *
+      *              e.g To cross reference PROGRAMs with TRANSACTIONs *
+      *                  TYPETERMs with TERMINALs the input would be:  *
+      *                                                                *
+      *                   PROGRAM                                      *
+      *                   TYPETERM                                     *
+      *                                                                *
+      *    2) DATA_OUT:This is the output file to contain the cross    *
+      *                reference report. It should be defined as a     *
+      *                file of fixed length records of length 132      *
+      *                characters.                                     *
+      *                                                                *
+      * ************************************************************** *
+       DATA DIVISION.
+       FILE SECTION.
+       FD  DATA-IN
+           RECORD CONTAINS 80 CHARACTERS
+           BLOCK CONTAINS 0 RECORDS
+           RECORDING MODE IS F
+           LABEL RECORDS ARE OMITTED.
+      * ************************************************************** *
+      * Define the input record. Only the first 12 characters are      *
+      * significant, the maximum length of a keyword name or object    *
+      * type with RDO.                                                 *
+      * ************************************************************** *
+       01  XREF-INPUT-REC.
+           05  XREF-TYPE-NAME             PIC X(12).
+           05  FILLER                     PIC X(68).
+       FD  DATA-OUT
+           RECORD CONTAINS 132 CHARACTERS
+           BLOCK CONTAINS 0 RECORDS
+           RECORDING MODE IS F
+           LABEL RECORDS ARE OMITTED.
+       01  PRINT-REC                      PIC X(132).
+       EJECT.
+      * ************************************************************** *
+      *  Define the flags and constants used by this program           *
+      * ************************************************************** *
+       WORKING-STORAGE SECTION.
+       77  CMD-PART-1                     PIC X(100).
+       77  OBJECTS-OPTION                 PIC X(7).
+           88  OBJECTS-NOT-SPECIFIED      VALUE IS SPACES.
+       77  INPUT-FILE-FLAG                PIC X.
+           88  INPUT-FILE-OPEN            VALUE IS '1'.
+       77  OUTPUT-FILE-FLAG               PIC X.
+           88  OUTPUT-FILE-OPEN           VALUE IS '1'.
+       77  FILE-OPEN                      PIC X VALUE '1'.
+       77  RESOURCE-DEFINITION-PTR        PIC 999.
+       77  INPUT-FILE-STATUS              PIC XX.
+           88 END-OF-INPUT-FILE           VALUE IS '10'.
+           88 ERROR-ON-INPUT-FILE         VALUES ARE '11' THRU '99'.
+       77  OUTPUT-FILE-STATUS             PIC XX.
+           88 ERROR-ON-OUTPUT-FILE        VALUES ARE '01' THRU '99'.
+       77  INSUFFICIENT-STORAGE-FLAG      PIC X VALUE IS '0'.
+           88  INSUFFICIENT-STORAGE       VALUE IS '1'.
+           88  SUFFICIENT-STORAGE         VALUE IS '0'.
+       77  OBJECTS-OPTION-MISSING         PIC S9999 COMP VALUE IS 1.
+       77  INPUT-FILE-OPEN-ERROR          PIC S9999 COMP VALUE IS 2.
+       77  INPUT-FILE-CLOSE-ERROR         PIC S9999 COMP VALUE IS 3.
+       77  INPUT-FILE-READ-ERROR          PIC S9999 COMP VALUE IS 4.
+       77  OUTPUT-FILE-OPEN-ERROR         PIC S9999 COMP VALUE IS 5.
+       77  OUTPUT-FILE-CLOSE-ERROR        PIC S9999 COMP VALUE IS 6.
+       77  OUTPUT-FILE-WRITE-ERROR        PIC S9999 COMP VALUE IS 7.
+       77  INSUFFICIENT-TYPE-ELEMENTS     PIC S9999 COMP VALUE IS 8.
+       77  INSUFFICIENT-NAME-ELEMENTS     PIC S9999 COMP VALUE IS 9.
+       77  INSUFFICIENT-DEFINED-ELEMENTS  PIC S9999 COMP VALUE IS 10.
+       77  INSUFFICIENT-USED-ELEMENTS     PIC S9999 COMP VALUE IS 11.
+       77  SPACE-REQUIREMENTS             PIC X.
+           88  NO-SPACE                   VALUE IS 'N'.
+           88  SPACE-LINES                VALUE IS 'S'.
+           88  PAGE-EJECT                 VALUE IS 'P'.
+
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *  D E F I N E  T H E  C R O S S - R E F E R E N C E  T A B L E  *
+      *                                                                *
+      *  The table consists of 4 different elements. They are:         *
+      *                                                                *
+      *   1) Type Elements   -  These define the objects or keywords   *
+      *                         which are to be cross referenced.      *
+      *                         The values are those read from the     *
+      *                         input file. Each type element has a    *
+      *                         chain of 'name' elements associated with
+      *                         it.                                    *
+      *                                                                *
+      *   2) Name Elements   -  These define the different values found*
+      *                         on the CSD for a particular object or  *
+      *                         keyword name. Each name element has a  *
+      *                         chain of 'defined' elements and a chain*
+      *                         of 'used' elements associated with it. *
+      *                                                                *
+      *   3) Defined Elements-  These define where a object of a given *
+      *                         name is defined (keywords can not be   *
+      *                         defined). As no two objects in a given *
+      *                         group can have the same name all that  *
+      *                         it is necessary to record is the RDO   *
+      *                         group name.                            *
+      *                                                                *
+      *   4) Used Elements   -  These define in which resource         *
+      *                         definitions a particular value of a    *
+      *                         object name or a keyword name is used. *
+      *                         The object type, name and group must   *
+      *                         recorded to uniquely define a use.     *
+      *                                                                *
+      * ************************************************************** *
+
+       01  TYPE-ELEMENT-POOL.
+           05  TYPE-ELEMENT            OCCURS 10 TIMES INDEXED BY
+                                       NEXT-AVAILABLE-TYPE-ELEMENT
+                                       TYPE-ELEMENT-PTR
+                                       CURRENT-TYPE-ELEMENT-PTR.
+               10  TYPE-KEY.
+                   15  XREF-TYPE          PIC X(12).
+               10  NAME-CHAIN-START       USAGE IS INDEX.
+               10  NAME-CHAIN-COUNT       PIC 999.
+       77  TYPE-ELEMENTS-ALLOCATED        PIC 99 VALUE IS 0.
+           88  TYPE-ELEMENT-FREE          VALUES ARE 0 THRU 9.
+       77  TYPE-NUMBER                    PIC 99.
+       77  TYPE-CHAIN-SEARCH-FLAG         PIC X VALUE '0'.
+           88 TYPE-ELEMENT-FOUND          VALUE IS '1'.
+           88 TYPE-ELEMENT-NOT-FOUND      VALUE IS '0'.
+
+       01  NAME-ELEMENT-POOL.
+           05  NAME-ELEMENT            OCCURS 1000 TIMES INDEXED BY
+                                       NEXT-AVAILABLE-NAME-ELEMENT
+                                       NAME-ELEMENT-PTR
+                                       CURRENT-NAME-ELEMENT-PTR
+                                       PREVIOUS-NAME-ELEMENT-PTR.
+               10  NAME-KEY.
+                   15  XREF-NAME          PIC X(44).
+               10  NEXT-NAME-PTR          USAGE IS INDEX.
+               10  DEFINED-CHAIN-START    USAGE IS INDEX.
+               10  DEFINED-CHAIN-COUNT    PIC 999.
+               10  USED-CHAIN-START       USAGE IS INDEX.
+               10  USED-CHAIN-COUNT       PIC 999.
+       77  NAME-ELEMENTS-ALLOCATED        PIC 9999 VALUE IS 0.
+           88  NAME-ELEMENT-FREE          VALUES ARE 0 THRU 999.
+
+       01  DEFINED-ELEMENT-POOL.
+           05  DEFINED-ELEMENT         OCCURS 1000 TIMES INDEXED BY
+                                       NEXT-AVAILABLE-DEFINED-ELEMENT
+                                       DEFINED-ELEMENT-PTR
+                                       CURRENT-DEFINED-ELEMENT-PTR
+                                       PREVIOUS-DEFINED-ELEMENT-PTR.
+               10  DEFINED-KEY.
+                   15  RDO-GROUP-NAME     PIC X(8).
+               10  NEXT-DEFINED-PTR       USAGE IS INDEX.
+       77  DEFINED-ELEMENTS-ALLOCATED     PIC 9999 VALUE IS 0.
+           88  DEFINED-ELEMENT-FREE       VALUES ARE 0 THRU 999.
+
+       01  USED-ELEMENT-POOL.
+           05  USED-ELEMENT            OCCURS 1000 TIMES INDEXED BY
+                                       NEXT-AVAILABLE-USED-ELEMENT
+                                       USED-ELEMENT-PTR
+                                       CURRENT-USED-ELEMENT-PTR
+                                       PREVIOUS-USED-ELEMENT-PTR.
+               10  USED-KEY.
+                   15  OBJECT-TYPE        PIC X(12).
+                   15  OBJECT-NAME        PIC X(8).
+                   15  RDO-GROUP-NAME     PIC X(8).
+               10  NEXT-USED-PTR          USAGE IS INDEX.
+       77  USED-ELEMENTS-ALLOCATED        PIC 9999 VALUE IS 0.
+           88  USED-ELEMENT-FREE          VALUES ARE 0 THRU 999.
+       EJECT.
+      * ************************************************************** *
+      * Define the temporary variables used in this program.           *
+      * ************************************************************** *
+
+       01  EXIT-KEYWORD-VALUE-W.
+           05 KEYWORD-VALUE-CHAR          PIC X OCCURS 80 TIMES.
+
+       01  WORK-TYPE.
+           05  OBJECT-TYPE                PIC X(12).
+           05  KEYWORD-NAME               REDEFINES
+               OBJECT-TYPE                PIC X(12).
+
+       01  WORK-NAME.
+           05  KEYWORD-VALUE              PIC X(44).
+           05  OBJECT-NAME-DEFINITION    REDEFINES
+               KEYWORD-VALUE.
+               10  OBJECT-NAME.
+                   15  OBJECT-NAME-VALUE  PIC X(12).
+                   15  FILLER             PIC X(32).
+       77  MAX-KEYWORD-VALUE-LENGTH       PIC 9(2) VALUE 44.
+
+       01  WORK-DEFINED.
+           05  RDO-GROUP-NAME             PIC X(8).
+
+       01  WORK-USED.
+           05  OBJECT-TYPE                PIC X(12).
+           05  OBJECT-NAME                PIC X(8).
+           05  RDO-GROUP-NAME             PIC X(8).
+       EJECT.
+      * ************************************************************** *
+      * Define the output record structures used by this program.      *
+      * ************************************************************** *
+       01  NEW-XREF-OBJECT-HEADER-LINE    PIC X(75).
+
+
+       01  CROSS-REFERENCE-OBJECT-LINE.
+           05  FILLER                     PIC X(8)
+               VALUE IS '* * * * '.
+           05  FILLER                     PIC X(19)
+               VALUE IS 'CROSS REFERENCE OF '.
+           05  TYPE-NAME                  PIC X(12).
+           05  FILLER                     PIC X(8)
+               VALUE IS ' * * * *'.
+
+       01  EMPTY-NAME-CHAIN-LINE.
+           05  FILLER                     PIC X(33)
+               VALUE IS 'THERE ARE NO DEFINITIONS/USES OF'.
+           05  EMPTY-NAME                 PIC X(12).
+           05  FILLER                     PIC X(30)
+               VALUE IS ' IN THE SPECIFIED GROUP/LISTS.'.
+
+       01  DEFINED-MSG-LINE.
+           05  NUMBER-TIMES-DEFINED       PIC ZZZ9.
+           05  FILLER                     PIC X(33)
+               VALUE IS ' GROUP(S) CONTAIN DEFINITIONS OF '.
+           05  DEFINED-NAME               PIC X(12).
+       01  WHERE-DEFINED-LINE.
+           05  FILLER                     PIC X(14) VALUE SPACES.
+           05  RDO-GROUP-NAME             PIC X(8).
+
+       01  USED-MSG-LINE.
+           05  NUMBER-TIMES-USED          PIC ZZZ9.
+           05  FILLER                     PIC X(18)
+               VALUE IS ' USES ARE MADE OF '.
+           05  USED-NAME                  PIC X(44).
+       01  WHERE-USED-LINE.
+           05  FILLER                     PIC X(14) VALUE SPACES.
+           05  OBJECT-TYPE                PIC X(12).
+           05  FILLER                     PIC X VALUE SPACE.
+           05  OBJECT-NAME                PIC X(8).
+           05  FILLER                     PIC X(4)
+               VALUE IS ' IN '.
+           05  RDO-GROUP-NAME             PIC X(8).
+
+       01  THEY-ARE-LINE.
+           05  FILLER                     PIC X(5) VALUE SPACES.
+           05  FILLER                     PIC X(9) VALUE 'THEY ARE:'.
+       EJECT.
+      * ************************************************************** *
+      * Define the linkage between this program and the CSD off-line   *
+      * utility program. The addressability to the values addressed by *
+      * the parameter list passed from DFHCSDUP is established         *
+      * automatically by the COBOL compiler so all we  need to define  *
+      * here are the actual formats of the values themselves.          *
+      * ************************************************************** *
+       LINKAGE SECTION.
+       01  EXIT-FUNCTION-CODE      PIC 99 COMP.
+             88 INITIAL-CALL         VALUE IS 0.
+             88 LIST-START-CALL      VALUE IS 2.
+             88 GROUP-START-CALL     VALUE IS 4.
+             88 OBJECT-START-CALL    VALUE IS 6.
+             88 DETAIL-CALL          VALUE IS 8.
+             88 OBJECT-END-CALL      VALUE IS 10.
+             88 GROUP-END-CALL       VALUE IS 12.
+             88 LIST-END-CALL        VALUE IS 14.
+             88 FINAL-CALL           VALUE IS 16.
+       01  EXIT-WORK-AREA-PTR      POINTER.
+       01  EXIT-BACK-TRANS-CMD-PTR POINTER.
+       01  EXIT-LIST-NAME          PIC X(8).
+       01  EXIT-GROUP-NAME         PIC X(8).
+       01  EXIT-OBJECT-TYPE        PIC X(12).
+       01  EXIT-OBJECT-NAME        PIC X(8).
+       01  EXIT-KEYWORD-NAME       PIC X(12).
+       01  EXIT-KEYWORD-LENGTH     PIC 999 COMP.
+       01  EXIT-KEYWORD-VALUE.
+           03 EXIT-KEYWORD-CHAR    PIC X OCCURS 1 TO 183
+                                     DEPENDING ON EXIT-KEYWORD-LENGTH.
+       01  BACK-TRANSLATED-COMMAND        PIC X(100).
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *          M A I N L I N E  C O D E  S T A R T S  H E R E        *
+      *          ----------------------------------------------        *
+      *                                                                *
+      * ************************************************************** *
+       PROCEDURE DIVISION USING EXIT-FUNCTION-CODE
+                                EXIT-WORK-AREA-PTR
+                                EXIT-BACK-TRANS-CMD-PTR
+                                EXIT-LIST-NAME
+                                EXIT-GROUP-NAME
+                                EXIT-OBJECT-TYPE
+                                EXIT-OBJECT-NAME
+                                EXIT-KEYWORD-NAME
+                                EXIT-KEYWORD-LENGTH
+                                EXIT-KEYWORD-VALUE.
+      * ************************************************************** *
+      * Determine the type of call being made to this program and      *
+      * process it accordingly. The only types of call of any interest *
+      * in this instance are                                           *
+      *                      INITIAL call                              *
+      *                      OBJECT START calls                        *
+      *                      DETAIL calls                              *
+      *                      FINAL call                                *
+      * All other call types are ignored.                              *
+      *                                                                *
+      * ************************************************************** *
+       MAIN-CONTROL.
+           IF INITIAL-CALL THEN
+             PERFORM PROCESS-INITIAL-CALL
+           ELSE
+                IF OBJECT-START-CALL THEN
+                  PERFORM PROCESS-OBJECT-START-CALL
+                ELSE
+                     IF DETAIL-CALL THEN
+                       PERFORM PROCESS-KEYWORD-DETAIL-CALL
+                     ELSE
+                          IF FINAL-CALL THEN
+                            PERFORM PROCESS-FINAL-CALL
+                            PERFORM CHECK-RETURN-CODE
+                            STOP RUN.
+      * ************************************************************** *
+      * If the value in the 'RETURN-CODE' special register at this     *
+      * point is non-zero then the current EXTRACT command will        *
+      * be terminated. Return must be made via a GOBACK in order to    *
+      * prevent STOP RUN processing.                                   *
+      * ************************************************************** *
+           PERFORM CHECK-RETURN-CODE.
+           GOBACK.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *          P R O C E S S  A  I N I T I A L  C A L L              *
+      *                                                                *
+      *  This procedure:                                               *
+      *      1) Checks specified command to see if OBJECTS option was  *
+      *         specified.
+      *      2) Controls the opening of the input and output files.    *
+      *      3) Initialises the pointers to the free element pools.    *
+      *      4) Controls the reading of the input records into type    *
+      *         elements of the cross reference table.                 *
+      *      5) Saves a copy of the back-translated command issued     *
+      *         which caused this program to be loaded and invoked.    *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-INITIAL-CALL.
+           MOVE SPACES TO OBJECTS-OPTION.
+           MOVE ZERO TO INPUT-FILE-FLAG.
+           MOVE ZERO TO OUTPUT-FILE-FLAG.
+
+           SET ADDRESS OF BACK-TRANSLATED-COMMAND TO
+                          EXIT-BACK-TRANS-CMD-PTR.
+           UNSTRING BACK-TRANSLATED-COMMAND DELIMITED BY 'OBJECTS'
+                    INTO CMD-PART-1 DELIMITER IN OBJECTS-OPTION.
+           IF OBJECTS-NOT-SPECIFIED THEN
+             MOVE OBJECTS-OPTION-MISSING TO RETURN-CODE
+           ELSE
+               PERFORM OPEN-FILES
+               IF NOT ERROR-ON-INPUT-FILE AND
+                  NOT ERROR-ON-OUTPUT-FILE THEN
+                    SET NEXT-AVAILABLE-TYPE-ELEMENT TO 1
+                    SET NEXT-AVAILABLE-NAME-ELEMENT TO 1
+                    SET NEXT-AVAILABLE-DEFINED-ELEMENT TO 1
+                    SET NEXT-AVAILABLE-USED-ELEMENT TO 1
+                    PERFORM WITH TEST AFTER
+                            UNTIL END-OF-INPUT-FILE   OR
+                                  ERROR-ON-INPUT-FILE OR
+                                  INSUFFICIENT-STORAGE
+                            READ DATA-IN
+                            IF NOT ERROR-ON-INPUT-FILE AND
+                               NOT END-OF-INPUT-FILE   THEN
+                                 PERFORM ADD-TYPE-TO-TYPE-CHAIN
+                            ELSE
+                                 IF ERROR-ON-INPUT-FILE THEN
+                                      MOVE INPUT-FILE-READ-ERROR TO
+                                           RETURN-CODE
+                                 END-IF
+                            END-IF
+                    END-PERFORM
+                    IF NOT ERROR-ON-INPUT-FILE THEN
+                         SET ADDRESS OF BACK-TRANSLATED-COMMAND TO
+                             EXIT-BACK-TRANS-CMD-PTR
+                         MOVE SPACES TO NEW-XREF-OBJECT-HEADER-LINE
+                         MOVE BACK-TRANSLATED-COMMAND TO
+                             NEW-XREF-OBJECT-HEADER-LINE
+                    END-IF
+               END-IF
+           END-IF.
+      * ************************************************************** *
+      *                                                                *
+      *                 O P E N  T H E  F I L E S                      *
+      *                                                                *
+      *   This subroutine opens the input and output files to be used  *
+      *   by this program. A open failure will result in the setting   *
+      *   of the appropriate file status flag and consequently the     *
+      *   'RETURN-CODE' special register will be set to identify the   *
+      *   error.                                                       *
+      *                                                                *
+      * ************************************************************** *
+       OPEN-FILES.
+           OPEN INPUT DATA-IN.
+           IF ERROR-ON-INPUT-FILE THEN
+                MOVE INPUT-FILE-OPEN-ERROR TO RETURN-CODE
+           ELSE
+                MOVE FILE-OPEN TO INPUT-FILE-FLAG
+                OPEN OUTPUT DATA-OUT
+                IF ERROR-ON-OUTPUT-FILE THEN
+                     MOVE OUTPUT-FILE-OPEN-ERROR TO RETURN-CODE
+                ELSE
+                     MOVE FILE-OPEN TO OUTPUT-FILE-FLAG
+                END-IF
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *       A D D  A  T Y P E  T O  T H E  T Y P E  C H A I N        *
+      *                                                                *
+      *  This procedure adds a new element to the type chain in the    *
+      *  order in which they occur in the input file XREFIN. As a new  *
+      *  type element is defined the associated name chain is          *
+      *  initialised, dummy head and tail elements area added so as    *
+      *  to make the algorithm for adding a new name element much      *
+      *  easier.                                                       *
+      *                                                                *
+      * ************************************************************** *
+       ADD-TYPE-TO-TYPE-CHAIN.
+           PERFORM ALLOCATE-A-TYPE-ELEMENT.
+           IF SUFFICIENT-STORAGE THEN
+                MOVE XREF-TYPE-NAME TO XREF-TYPE (TYPE-ELEMENT-PTR)
+                MOVE ZEROES TO NAME-CHAIN-COUNT (TYPE-ELEMENT-PTR)
+                PERFORM ALLOCATE-A-NAME-ELEMENT
+           END-IF.
+
+           IF SUFFICIENT-STORAGE THEN
+                SET NAME-CHAIN-START (TYPE-ELEMENT-PTR) TO
+                    NAME-ELEMENT-PTR
+      *         * **************************************************** *
+      *         * Ensure no elements will need to be inserted in front *
+      *         * of the dummy 'head' element                          *
+      *         * **************************************************** *
+                MOVE LOW-VALUES TO NAME-KEY (NAME-ELEMENT-PTR)
+                SET PREVIOUS-NAME-ELEMENT-PTR TO
+                    NAME-ELEMENT-PTR
+                PERFORM ALLOCATE-A-NAME-ELEMENT
+           END-IF.
+           IF SUFFICIENT-STORAGE THEN
+      *         * **************************************************** *
+      *         * Ensure no elements will need to be inserted after    *
+      *         * the dummy 'tail' element                             *
+      *         * **************************************************** *
+                MOVE HIGH-VALUES TO
+                     NAME-KEY (NAME-ELEMENT-PTR)
+                SET NEXT-NAME-PTR (PREVIOUS-NAME-ELEMENT-PTR)
+                    TO NAME-ELEMENT-PTR
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *         P R O C E S S  A  O B J E C T  S T A R T  C A L L      *
+      *                                                                *
+      *  This subroutine performs the following:                       *
+      *                                                                *
+      *    1) Searches the 'type' chain to see if the new object is a  *
+      *       object in which we are interested i.e one specified in   *
+      *       the input file XREFIN.                                   *
+      *    2) If it is then:                                           *
+      *       a) Search the name chain associated with the appropriate *
+      *          type element to see if a object with the same name    *
+      *          has already been encountered. If not then a new name  *
+      *          element is added in collating sequence, and the       *
+      *          associated defined and used chains are initialised.   *
+      *       b) The definition of the name is then added to the       *
+      *          'defined' chain associated with the name.             *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-OBJECT-START-CALL.
+           MOVE EXIT-OBJECT-TYPE TO OBJECT-TYPE OF WORK-TYPE.
+           PERFORM FIND-TYPE-IN-CHAIN.
+           IF TYPE-ELEMENT-FOUND THEN
+                 MOVE EXIT-OBJECT-NAME TO
+                      OBJECT-NAME OF WORK-NAME
+                 PERFORM FIND-NAME-IN-CHAIN
+                 IF SUFFICIENT-STORAGE THEN
+                      MOVE EXIT-GROUP-NAME TO
+                           RDO-GROUP-NAME OF WORK-DEFINED
+                      PERFORM FIND-DEFINITION-IN-CHAIN
+                 END-IF
+           END-IF.
+
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *      P R O C E S S  A  K E Y W O R D  D E T A I L  C A L L     *
+      *                                                                *
+      *  This subroutine performs the following:                       *
+      *                                                                *
+      *    1) Searches the 'type' chain to see if the keyword is one   *
+      *       in which we are interested i.e one specified in the input*
+      *       file XREFIN.                                             *
+      *    2) If it is then:                                           *
+      *       a) Search the name chain associated with the appropriate *
+      *          type element to see if a keyword or object with the   *
+      *          same name has already been encountered. If it is a    *
+      *          new name then a new element is added in collating     *
+      *          sequence, and the associated defined and used chains  *
+      *          initialised.                                          *
+      *       b) The use of the keyword is then added to the 'used'    *
+      *          chain associated with the name.                       *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-KEYWORD-DETAIL-CALL.
+           MOVE EXIT-KEYWORD-NAME TO KEYWORD-NAME OF WORK-TYPE.
+           PERFORM FIND-TYPE-IN-CHAIN.
+           IF TYPE-ELEMENT-FOUND THEN
+                MOVE EXIT-KEYWORD-VALUE TO KEYWORD-VALUE OF WORK-NAME
+                PERFORM FIND-NAME-IN-CHAIN
+                IF SUFFICIENT-STORAGE THEN
+                     MOVE EXIT-OBJECT-TYPE TO
+                          OBJECT-TYPE OF WORK-USED
+                     MOVE EXIT-OBJECT-NAME TO
+                          OBJECT-NAME OF WORK-USED
+                     MOVE EXIT-GROUP-NAME  TO
+                          RDO-GROUP-NAME OF WORK-USED
+                     PERFORM FIND-USE-IN-CHAIN
+                END-IF
+           END-IF.
+
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *            P R O C E S S  A  F I N A L  C A L L                *
+      *                                                                *
+      *  This subroutine controls the printing out of the contents of  *
+      *  the cross-reference table in the required format. It also     *
+      *  handles the closing of the input and output files.            *
+      *                                                                *
+      * ************************************************************** *
+       PROCESS-FINAL-CALL.
+      *    * ********************************************************* *
+      *    * Scan along the type chain and for each type element       *
+      *    * produce a analysis of the named occurrences of it, where  *
+      *    * these occurrences are defined and in which resource       *
+      *    * definitions they are used.                                *
+      *    * ********************************************************* *
+           SET TYPE-ELEMENT-PTR TO 1.
+           PERFORM LIST-XREF-DETAILS-FOR-TYPE
+                   WITH TEST BEFORE
+                   VARYING TYPE-NUMBER FROM 1 BY 1
+                   UNTIL TYPE-NUMBER GREATER THAN
+                         TYPE-ELEMENTS-ALLOCATED OR
+                         ERROR-ON-OUTPUT-FILE.
+
+           PERFORM CLOSE-FILES.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *           C L O S E  T H E  F I L E S                          *
+      *                                                                *
+      *   This subroutine closes the input and output files used by    *
+      *   this program. A close failure will result in the setting     *
+      *   of the appropriate file status flag and consequently the     *
+      *   'RETURN-CODE' special register will be set to identify the   *
+      *   error.                                                       *
+      *                                                                *
+      * ************************************************************** *
+       CLOSE-FILES.
+           CLOSE DATA-IN.
+           IF ERROR-ON-INPUT-FILE THEN
+                MOVE INPUT-FILE-CLOSE-ERROR TO RETURN-CODE
+           ELSE
+                CLOSE DATA-OUT
+                IF ERROR-ON-OUTPUT-FILE THEN
+                     MOVE OUTPUT-FILE-CLOSE-ERROR TO RETURN-CODE
+                END-IF
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *          C H E C K  R E T U R N  C O D E                       *
+      *                                                                *
+      *  If return code is non zero and any file is still open then    *
+      *  we must close that file to avoid any C03 abends.              *
+      *  Any errors on a CLOSE are ignored as we already have a error. *
+      * ************************************************************** *
+       CHECK-RETURN-CODE.
+           IF RETURN-CODE IS NOT ZERO AND INPUT-FILE-OPEN THEN
+               CLOSE  DATA-IN.
+           IF RETURN-CODE IS NOT ZERO AND OUTPUT-FILE-OPEN THEN
+               CLOSE  DATA-OUT.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *     L I S T  T H E  X R E F  T A B L E  C O N T E N T S        *
+      *                                                                *
+      *  This subroutine is invoked once for each type element in the  *
+      *  type chain. If function is to produce a analysis of the       *
+      *  definition and/or use of the objects and keywords specified   *
+      *  in the input file. Each report on a 'type' is started on a new*
+      *  page and the general format of each report is as follows:     *
+      *                                                                *
+      *              < back translated command line>                   *
+      *                                                                *
+      *              < type name line>                                 *
+      *                                                                *
+      *          |~~ <number times name defined line>                  *
+      *          |           <where defined line>  ~~| once per def    *
+      * once per |           <where defined line>  __| of named type   *
+      * named    |                                                     *
+      *occurrence|   <number times name used>                          *
+      * of a type|           <where used>          ~~| once per use    *
+      *          |           <where used>          __| of named type   *
+      *          |__                                                   *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      * ************************************************************** *
+       LIST-XREF-DETAILS-FOR-TYPE.
+           MOVE NEW-XREF-OBJECT-HEADER-LINE TO PRINT-REC.
+           SET PAGE-EJECT TO TRUE.
+           PERFORM WRITE-PRINT-REC.
+           MOVE XREF-TYPE (TYPE-ELEMENT-PTR) TO
+                TYPE-NAME OF CROSS-REFERENCE-OBJECT-LINE.
+           MOVE CROSS-REFERENCE-OBJECT-LINE TO PRINT-REC.
+           SET SPACE-LINES TO TRUE.
+           PERFORM WRITE-PRINT-REC.
+           SET NAME-ELEMENT-PTR TO
+               NAME-CHAIN-START (TYPE-ELEMENT-PTR).
+           SET NAME-ELEMENT-PTR TO
+               NEXT-NAME-PTR (NAME-ELEMENT-PTR).
+           IF NAME-CHAIN-COUNT (TYPE-ELEMENT-PTR) EQUAL TO ZEROES THEN
+                MOVE XREF-TYPE (TYPE-ELEMENT-PTR) TO
+                     EMPTY-NAME OF EMPTY-NAME-CHAIN-LINE
+                MOVE EMPTY-NAME-CHAIN-LINE TO PRINT-REC
+                SET SPACE-LINES TO TRUE
+                PERFORM WRITE-PRINT-REC
+           ELSE
+
+      *    * ******************************************************
+      *    * SCAN ALONG THE NAME CHAIN PRODUCING AN ANALYSIS OF   *
+      *    * THE DEFINITIONS AND USES OF THE NAME OCCURRENCES OF  *
+      *    * a type.                                              *
+      *    * **************************************************** *
+
+                PERFORM WITH TEST BEFORE
+                        UNTIL NAME-KEY (NAME-ELEMENT-PTR) EQUAL TO
+                              HIGH-VALUES OR
+                              ERROR-ON-OUTPUT-FILE
+
+      *              * ********************************************** *
+      *              * PRODUCE THE ANALYSIS OF THE DEFINITIONS OF A   *
+      *              * NAMED OCCURRENCE.                              *
+      *              * ********************************************** *
+                     IF DEFINED-CHAIN-COUNT (NAME-ELEMENT-PTR) > 0 THEN
+                          MOVE NAME-KEY (NAME-ELEMENT-PTR) TO
+                               DEFINED-NAME OF DEFINED-MSG-LINE
+                          MOVE DEFINED-CHAIN-COUNT (NAME-ELEMENT-PTR) TO
+                               NUMBER-TIMES-DEFINED OF DEFINED-MSG-LINE
+                          MOVE DEFINED-MSG-LINE TO PRINT-REC
+                          SET SPACE-LINES TO TRUE
+                          PERFORM WRITE-PRINT-REC
+                          MOVE THEY-ARE-LINE TO PRINT-REC
+                          SET NO-SPACE TO TRUE
+                          PERFORM WRITE-PRINT-REC
+      *                   * ****************************************** *
+      *                   * SET THE POINTER TO THE FIRST ELEMENT IN THE*
+      *                   * DEFINED CHAIN AFTER THE DUMMY HEAD ELEMENT *
+      *                   * ****************************************** *
+
+                          SET DEFINED-ELEMENT-PTR TO
+                              DEFINED-CHAIN-START (NAME-ELEMENT-PTR)
+                          SET DEFINED-ELEMENT-PTR TO
+                              NEXT-DEFINED-PTR (DEFINED-ELEMENT-PTR)
+
+      *                   * ****************************************** *
+      *                   * LIST THE DEFINITIONS OF A NAMED OCCURRENCE *
+      *                   * BY SCANNING THE DEFINED CHAIN ASSOCIATED   *
+      *                   * WITH THE CURRENT NAMED ELEMENT             *
+      *                   * ****************************************** *
+                          PERFORM WITH TEST BEFORE
+                                  UNTIL DEFINED-KEY(DEFINED-ELEMENT-PTR)
+                                        EQUAL TO HIGH-VALUES OR
+                                        ERROR-ON-OUTPUT-FILE
+                               MOVE DEFINED-KEY (DEFINED-ELEMENT-PTR) TO
+                                    RDO-GROUP-NAME OF WHERE-DEFINED-LINE
+                               MOVE WHERE-DEFINED-LINE TO PRINT-REC
+                               SET NO-SPACE TO TRUE
+                               PERFORM WRITE-PRINT-REC
+      *                        * ************************************* *
+      *                        * SET THE PTR TO THE NEXT DEFINED       *
+      *                        * ELEMENT IN THE DEFINED CHAIN.         *
+      *                        * ************************************* *
+                               SET DEFINED-ELEMENT-PTR TO
+                                  NEXT-DEFINED-PTR (DEFINED-ELEMENT-PTR)
+                          END-PERFORM
+                     ELSE
+                          MOVE SPACES TO PRINT-REC
+                          SET SPACE-LINES TO TRUE
+                          PERFORM WRITE-PRINT-REC
+                     END-IF
+
+      *              * ******************************************* *
+      *              * PRODUCE THE ANALYSIS OF THE USES OF A NAMED *
+      *              * OCCURRENCE                                  *
+      *              * ******************************************* *
+                     IF USED-CHAIN-COUNT (NAME-ELEMENT-PTR) > 0 AND
+                        NOT ERROR-ON-OUTPUT-FILE THEN
+                          MOVE NAME-KEY (NAME-ELEMENT-PTR) TO
+                               USED-NAME OF USED-MSG-LINE
+                          MOVE USED-CHAIN-COUNT (NAME-ELEMENT-PTR) TO
+                               NUMBER-TIMES-USED OF USED-MSG-LINE
+                          MOVE USED-MSG-LINE TO PRINT-REC
+                          SET NO-SPACE TO TRUE
+                          PERFORM WRITE-PRINT-REC
+                          MOVE THEY-ARE-LINE TO PRINT-REC
+                          SET NO-SPACE TO TRUE
+                          PERFORM WRITE-PRINT-REC
+      *                   * ********************************************
+      *                   * SET THE POINTER TO THE FIRST ELEMENT IN THE*
+      *                   * USED CHAIN AFTER THE DUMMY HEAD ELEMENT.   *
+      *                   * ********************************************
+
+                          SET USED-ELEMENT-PTR TO
+                              USED-CHAIN-START (NAME-ELEMENT-PTR)
+                          SET USED-ELEMENT-PTR TO
+                              NEXT-USED-PTR (USED-ELEMENT-PTR)
+
+      *                   * ****************************************** *
+      *                   * LIST THE USES OF OF A NAMED OCCURRENCE BY  *
+      *                   * SCANNING THE USED CHAIN ASSOCIATED WITH    *
+      *                   * THE CURRENT NAMED ELEMENT.                 *
+      *                   * ****************************************** *
+                          PERFORM WITH TEST BEFORE
+                                  UNTIL USED-KEY (USED-ELEMENT-PTR)
+                                        EQUAL TO HIGH-VALUES OR
+                                        ERROR-ON-OUTPUT-FILE
+                               MOVE CORRESPONDING
+                                    USED-KEY (USED-ELEMENT-PTR)
+                                    TO WHERE-USED-LINE
+                               SET NO-SPACE TO TRUE
+                               MOVE WHERE-USED-LINE TO PRINT-REC
+                               SET NO-SPACE TO TRUE
+                               PERFORM WRITE-PRINT-REC
+      *                        * ************************************* *
+      *                        * SET THE PTR TO THE NEXT USED ELEMENT  *
+      *                        * USED CHAIN.                           *
+      *                        * ************************************* *
+                               SET USED-ELEMENT-PTR TO
+                                   NEXT-USED-PTR (USED-ELEMENT-PTR)
+                          END-PERFORM
+                     END-IF
+      *              * *********************************************** *
+      *              * SET PTR TO NEXT NAME ELEMENT IN THE NAME CHAIN  *
+      *              * *********************************************** *
+                     SET NAME-ELEMENT-PTR TO
+                         NEXT-NAME-PTR (NAME-ELEMENT-PTR)
+                END-PERFORM
+           END-IF.
+      *    * *************************************************** *
+      *    * Set ptr to next type element in the type chain      *
+      *    * *************************************************** *
+           SET TYPE-ELEMENT-PTR UP BY 1.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *         W R I T E  O U T  A  P R I N T  R E C O R D            *
+      *                                                                *
+      * This subroutine writes out the current contents of the output  *
+      * file buffer in a manner as described by the current setting of *
+      * the SPACE-REQUIREMENTS flag. If a I/O error is encountered     *
+      * then the RETURN-CODE special register is set.                  *
+      * ************************************************************** *
+       WRITE-PRINT-REC.
+           IF SPACE-LINES THEN
+                WRITE PRINT-REC AFTER 3 LINES
+           ELSE
+                IF PAGE-EJECT THEN
+                     WRITE PRINT-REC AFTER PAGE
+                ELSE
+                     WRITE PRINT-REC
+                END-IF
+           END-IF.
+           IF ERROR-ON-OUTPUT-FILE THEN
+                 MOVE OUTPUT-FILE-WRITE-ERROR TO RETURN-CODE
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *   F I N D  A  T Y P E  E L E M E N T  I N  I T S  C H A I N    *
+      *                                                                *
+      *  This subroutine scans the type chain to see if a given type   *
+      *  (may be a object type or a keyword name) exists in the chain  *
+      *  or not. On return the setting of TYPE-CHAIN-SEARCH-FLAG can   *
+      *  be used to determine the success of the search. If it is      *
+      *  equal to '1' (TRUE) the CURRENT-TYPE-ELEMENT-PTR addresses it.*
+      * ************************************************************** *
+       FIND-TYPE-IN-CHAIN.
+           MOVE ZERO  TO TYPE-CHAIN-SEARCH-FLAG.
+           SET CURRENT-TYPE-ELEMENT-PTR TO 1.
+      *    * ********************************************************* *
+      *    * Scan the type chain for a given type. The search is       *
+      *    * terminated either when all elements have been examined or *
+      *    * when a element is found with the the same name.           *
+      *    * ********************************************************* *
+           PERFORM WITH TEST BEFORE
+                   VARYING TYPE-NUMBER FROM 1 BY 1
+                   UNTIL TYPE-NUMBER GREATER THAN
+                         TYPE-ELEMENTS-ALLOCATED OR
+                         WORK-TYPE IS EQUAL TO
+                         TYPE-KEY (CURRENT-TYPE-ELEMENT-PTR)
+                SET CURRENT-TYPE-ELEMENT-PTR UP BY 1
+           END-PERFORM.
+      *    * *************************** *
+      *    * Was the search successful ? *
+      *    * *************************** *
+           IF TYPE-NUMBER NOT GREATER THAN TYPE-ELEMENTS-ALLOCATED THEN
+                SET TYPE-ELEMENT-FOUND TO TRUE
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *   F I N D  A  N A M E  E L E M E N T  I N  I T S  C H A I N    *
+      *                                                                *
+      *  This subroutine scans the name chain associated with the      *
+      *  currently addressed type element to see if the new named      *
+      *  occurrence of a type as already been recorded. If not then    *
+      *  a new 'name' element is added in collating sequence and       *
+      *  the 'defined' and 'used' chains associated with it are        *
+      *  initialised i.e the dummy head and tail elements are acquired *
+      *  and linked together of the name element.                      *
+      * ************************************************************** *
+       FIND-NAME-IN-CHAIN.
+           SET CURRENT-NAME-ELEMENT-PTR TO
+               NAME-CHAIN-START (CURRENT-TYPE-ELEMENT-PTR)
+      *    * ********************************************************* *
+      *    * Scan the name chain for a particular name. The search is  *
+      *    * terminated  when a name with a value greater to or equal  *
+      *    * to the specified one is found. This test will always      *
+      *    * be successful due to the dummy head element being set to  *
+      *    * HIGH values.                                              *
+      *    * ********************************************************* *
+           PERFORM WITH TEST BEFORE
+                   UNTIL NAME-KEY (CURRENT-NAME-ELEMENT-PTR)
+                         IS NOT LESS THAN WORK-NAME
+                SET PREVIOUS-NAME-ELEMENT-PTR TO
+                    CURRENT-NAME-ELEMENT-PTR
+                SET CURRENT-NAME-ELEMENT-PTR TO
+                    NEXT-NAME-PTR (CURRENT-NAME-ELEMENT-PTR)
+           END-PERFORM.
+
+      *    * ********************************************************* *
+      *    * If the current element after the search does not have a   *
+      *    * value equal to the search argument then a new 'name'      *
+      *    * element must be added 'before' the current one.           *
+      *    * ********************************************************* *
+           IF NAME-KEY (CURRENT-NAME-ELEMENT-PTR) IS GREATER THAN
+              WORK-NAME THEN
+                ADD 1 TO NAME-CHAIN-COUNT (CURRENT-TYPE-ELEMENT-PTR)
+                PERFORM ALLOCATE-A-NAME-ELEMENT
+                IF SUFFICIENT-STORAGE THEN
+                     MOVE WORK-NAME TO NAME-KEY (NAME-ELEMENT-PTR)
+                     MOVE ZEROES TO
+                          DEFINED-CHAIN-COUNT (NAME-ELEMENT-PTR)
+                          USED-CHAIN-COUNT (NAME-ELEMENT-PTR)
+                     SET NEXT-NAME-PTR (PREVIOUS-NAME-ELEMENT-PTR) TO
+                         NAME-ELEMENT-PTR
+                     SET NEXT-NAME-PTR (NAME-ELEMENT-PTR) TO
+                         CURRENT-NAME-ELEMENT-PTR
+                     SET CURRENT-NAME-ELEMENT-PTR TO NAME-ELEMENT-PTR
+                     PERFORM ALLOCATE-A-DEFINED-ELEMENT
+                END-IF
+
+      *         * **************************************************** *
+      *         * If sufficient storage initialise the head defined    *
+      *         * element to LOW values                                *
+      *         * **************************************************** *
+                IF SUFFICIENT-STORAGE THEN
+                     SET DEFINED-CHAIN-START (CURRENT-NAME-ELEMENT-PTR)
+                         TO DEFINED-ELEMENT-PTR
+                     MOVE LOW-VALUES TO
+                          DEFINED-KEY (DEFINED-ELEMENT-PTR)
+                     SET PREVIOUS-DEFINED-ELEMENT-PTR TO
+                         DEFINED-ELEMENT-PTR
+                     PERFORM ALLOCATE-A-DEFINED-ELEMENT
+                END-IF
+      *         * **************************************************** *
+      *         * If sufficient storage initialise the tail defined    *
+      *         * element to HIGH values. Set the next element pointer *
+      *         * in the head element to point to the tail and set the *
+      *         * pointer in the tail to NULL.                         *
+      *         * **************************************************** *
+                IF SUFFICIENT-STORAGE THEN
+                     MOVE HIGH-VALUES TO
+                          DEFINED-KEY (DEFINED-ELEMENT-PTR)
+                     SET NEXT-DEFINED-PTR (PREVIOUS-DEFINED-ELEMENT-PTR)
+                         TO DEFINED-ELEMENT-PTR
+                     PERFORM ALLOCATE-A-USED-ELEMENT
+                END-IF
+      *         * **************************************************** *
+      *         * If sufficient storage initialise the head used       *
+      *         * element to LOW values                                *
+      *         * **************************************************** *
+                IF SUFFICIENT-STORAGE THEN
+                     SET USED-CHAIN-START (CURRENT-NAME-ELEMENT-PTR)
+                         TO USED-ELEMENT-PTR
+                     MOVE LOW-VALUES TO USED-KEY (USED-ELEMENT-PTR)
+                     SET PREVIOUS-USED-ELEMENT-PTR TO
+                         USED-ELEMENT-PTR
+                     PERFORM ALLOCATE-A-USED-ELEMENT
+                END-IF
+      *         * **************************************************** *
+      *         * If sufficient storage initialise the tail used       *
+      *         * element to HIGH values. Set the next element pointer *
+      *         * in the head element to point to the tail and set the *
+      *         * pointer in the tail to NULL.                         *
+      *         * **************************************************** *
+                IF SUFFICIENT-STORAGE THEN
+                     MOVE HIGH-VALUES TO
+                          USED-KEY (USED-ELEMENT-PTR)
+                     SET NEXT-USED-PTR (PREVIOUS-USED-ELEMENT-PTR)
+                         TO USED-ELEMENT-PTR
+                END-IF
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *           F I N D  A  D E F I N E D  E L E M E N T             *
+      *                                                                *
+      *  This subroutine adds a new element to the 'defined' chain     *
+      *  at the correct place in the collating sequence.               *
+      *                                                                *
+      * ************************************************************** *
+       FIND-DEFINITION-IN-CHAIN.
+           SET CURRENT-DEFINED-ELEMENT-PTR TO
+               DEFINED-CHAIN-START (CURRENT-NAME-ELEMENT-PTR)
+      *    * ********************************************************* *
+      *    * Scan the name chain to determine the place in the         *
+      *    * collating sequence for the recording of a definition of   *
+      *    * a named type occurrence. The search is terminated when a
+      *    * element is found with a value greater than the search     *
+      *    * argument. This search will always be successful due to the*
+      *    * dummy tail element being set to HIGH values.              *
+      *    * ********************************************************* *
+           PERFORM WITH TEST BEFORE
+                   UNTIL DEFINED-KEY (CURRENT-DEFINED-ELEMENT-PTR)
+                         IS NOT LESS THAN WORK-DEFINED
+                SET PREVIOUS-DEFINED-ELEMENT-PTR TO
+                    CURRENT-DEFINED-ELEMENT-PTR
+                SET CURRENT-DEFINED-ELEMENT-PTR TO
+                    NEXT-DEFINED-PTR (CURRENT-DEFINED-ELEMENT-PTR)
+           END-PERFORM.
+
+      *    * ********************************************************* *
+      *    * This test should always be true as no two resources of    *
+      *    * the same type can have the same name in any one RDO group.*
+      *    * ********************************************************* *
+           IF DEFINED-KEY (CURRENT-DEFINED-ELEMENT-PTR) IS GREATER THAN
+              WORK-DEFINED THEN
+                ADD 1 TO DEFINED-CHAIN-COUNT (CURRENT-NAME-ELEMENT-PTR)
+                PERFORM ALLOCATE-A-DEFINED-ELEMENT
+                IF SUFFICIENT-STORAGE THEN
+      *              * *************************************************
+      *              * Link the new element into the defined chain by  *
+      *              * setting the 'next element' ptrs in the previous *
+      *              * element and the new element so that:            *
+      *              *       Previous-----> Current--->                *
+      *              *                 becomes                         *
+      *              *       Previous-----> New-------> Current----->  *
+      *              *                                                 *
+      *              * The new element then becomes the current element*
+      *              * *************************************************
+                     MOVE WORK-DEFINED TO
+                          DEFINED-KEY (DEFINED-ELEMENT-PTR)
+                     SET NEXT-DEFINED-PTR (PREVIOUS-DEFINED-ELEMENT-PTR)
+                         TO DEFINED-ELEMENT-PTR
+                     SET NEXT-DEFINED-PTR (DEFINED-ELEMENT-PTR) TO
+                         CURRENT-DEFINED-ELEMENT-PTR
+                     SET CURRENT-DEFINED-ELEMENT-PTR TO
+                         DEFINED-ELEMENT-PTR
+                END-IF
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *   F I N D  A  U S E D  E L E M E N T  I N  I T S  C H A I N    *
+      *                                                                *
+      *  This subroutine adds a new element to the 'used' chain at     *
+      *  the correct place in the collating sequence.                  *
+      *                                                                *
+      * ************************************************************** *
+       FIND-USE-IN-CHAIN.
+           SET CURRENT-USED-ELEMENT-PTR TO
+               USED-CHAIN-START (CURRENT-NAME-ELEMENT-PTR)
+      *    * ********************************************************* *
+      *    * Scan the used chain to determine the place in the         *
+      *    * collating sequence for the recording of a use of a named  *
+      *    * type occurrence. The search is terminated when a element  *
+      *    * is found with a value greater than the search argument.   *
+      *    * This search will always be successful due to the dummy    *
+      *    * tail element being set to HIGH values.                    *
+      *    * ********************************************************* *
+           PERFORM WITH TEST BEFORE
+                   UNTIL USED-KEY (CURRENT-USED-ELEMENT-PTR)
+                         IS NOT LESS THAN WORK-USED
+                SET PREVIOUS-USED-ELEMENT-PTR TO
+                    CURRENT-USED-ELEMENT-PTR
+                SET CURRENT-USED-ELEMENT-PTR TO
+                    NEXT-USED-PTR (CURRENT-USED-ELEMENT-PTR)
+           END-PERFORM.
+
+      *    * ********************************************************* *
+      *    * This test should always be true as no two resources of    *
+      *    * the same type can have the same name in any one RDO group.*
+      *    * and so no combination of resource type, recourse name and *
+      *    * group should ever be the same.                            *
+      *    * ********************************************************* *
+           IF USED-KEY (CURRENT-USED-ELEMENT-PTR) IS GREATER THAN
+              WORK-USED THEN
+                ADD 1 TO USED-CHAIN-COUNT (CURRENT-NAME-ELEMENT-PTR)
+                PERFORM ALLOCATE-A-USED-ELEMENT
+                IF SUFFICIENT-STORAGE THEN
+      *              * *************************************************
+      *              * LINK THE NEW ELEMENT INTO THE USED CHAIN BY     *
+      *              * setting the 'next element' ptrs in the previous *
+      *              * element and the new element so that:            *
+      *              *       Previous-----> Current--->                *
+      *              *                 becomes                         *
+      *              *       Previous-----> New-------> Current----->  *
+      *              *                                                 *
+      *              * The new element then becomes the current element*
+      *              * *************************************************
+                     MOVE WORK-USED TO USED-KEY (USED-ELEMENT-PTR)
+                     SET NEXT-USED-PTR (PREVIOUS-USED-ELEMENT-PTR) TO
+                         USED-ELEMENT-PTR
+                     SET NEXT-USED-PTR (USED-ELEMENT-PTR) TO
+                         CURRENT-USED-ELEMENT-PTR
+                     SET CURRENT-USED-ELEMENT-PTR TO USED-ELEMENT-PTR
+                END-IF
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *         A L L O C A T E  A  T Y P E  E L E M E N T             *
+      *                                                                *
+      *  This subroutine allocates the next available element of TYPE  *
+      *  ELEMENT POOL, if one is available. If not the return code     *
+      *  special register is set. TYPE-ELEMENT-PTR points to the new   *
+      *  element on exit.                                              *
+      * ************************************************************** *
+       ALLOCATE-A-TYPE-ELEMENT.
+           IF NOT TYPE-ELEMENT-FREE THEN
+                MOVE INSUFFICIENT-TYPE-ELEMENTS TO RETURN-CODE
+                SET INSUFFICIENT-STORAGE TO TRUE
+           ELSE
+                SET TYPE-ELEMENT-PTR TO NEXT-AVAILABLE-TYPE-ELEMENT
+      *         * **************************************************** *
+      *         * Point to next available element in pool              *
+      *         * **************************************************** *
+                SET NEXT-AVAILABLE-TYPE-ELEMENT UP BY 1
+                ADD 1 TO TYPE-ELEMENTS-ALLOCATED
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *         A L L O C A T E  A  N A M E  E L E M E N T             *
+      *                                                                *
+      *  This subroutine allocates the next available element of NAME  *
+      *  ELEMENT POOL, if one is available. If not the return code     *
+      *  special register is set. NAME-ELEMENT-PTR points to the new   *
+      *  element on exit.                                              *
+      * ************************************************************** *
+       ALLOCATE-A-NAME-ELEMENT.
+           IF NOT NAME-ELEMENT-FREE THEN
+                MOVE INSUFFICIENT-NAME-ELEMENTS TO RETURN-CODE
+                SET INSUFFICIENT-STORAGE TO TRUE
+           ELSE
+                SET NAME-ELEMENT-PTR TO NEXT-AVAILABLE-NAME-ELEMENT
+      *         * **************************************************** *
+      *         * Point to next available element in pool              *
+      *         * **************************************************** *
+                SET NEXT-AVAILABLE-NAME-ELEMENT UP BY 1
+                ADD 1 TO NAME-ELEMENTS-ALLOCATED
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *      A L L O C A T E  A  D E F I N E D  E L E M E N T          *
+      *                                                                *
+      *  This subroutine allocates the next available element of       *
+      *  DEFINED ELEMENT POOL, if one is available. If not the return  *
+      *  code special register is set. DEFINED-ELEMENT-PTR points to   *
+      *  new element on exit.                                          *
+      * ************************************************************** *
+       ALLOCATE-A-DEFINED-ELEMENT.
+           IF NOT DEFINED-ELEMENT-FREE THEN
+                MOVE INSUFFICIENT-DEFINED-ELEMENTS TO RETURN-CODE
+                SET INSUFFICIENT-STORAGE TO TRUE
+           ELSE
+                SET DEFINED-ELEMENT-PTR TO
+                    NEXT-AVAILABLE-DEFINED-ELEMENT
+      *         * **************************************************** *
+      *         * Point to next available element in pool              *
+      *         * **************************************************** *
+                SET NEXT-AVAILABLE-DEFINED-ELEMENT UP BY 1
+                ADD 1 TO DEFINED-ELEMENTS-ALLOCATED
+           END-IF.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *         A L L O C A T E  A  U S E D  E L E M E N T             *
+      *                                                                *
+      *  This subroutine allocates the next available element of USED  *
+      *  ELEMENT POOL, if one is available. If not the return code     *
+      *  special register is set. USED-ELEMENT-PTR points to the new   *
+      *  element on exit.                                              *
+      * ************************************************************** *
+       ALLOCATE-A-USED-ELEMENT.
+           IF NOT USED-ELEMENT-FREE THEN
+                MOVE INSUFFICIENT-USED-ELEMENTS TO RETURN-CODE
+                SET INSUFFICIENT-STORAGE TO TRUE
+           ELSE
+                SET USED-ELEMENT-PTR TO NEXT-AVAILABLE-USED-ELEMENT
+      *         * **************************************************** *
+      *         * Point to next available element in pool              *
+      *         * **************************************************** *
+                SET NEXT-AVAILABLE-USED-ELEMENT UP BY 1
+                ADD 1 TO USED-ELEMENTS-ALLOCATED
+           END-IF.

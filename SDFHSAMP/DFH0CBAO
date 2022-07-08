@@ -1,0 +1,250 @@
+       PROCESS CICS('COBOL3,APOST,SP')
+       PROCESS APOST TRUNC(BIN) NOSSRANGE
+       Identification Division.
+       Program-id. DFH0CBAO
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CBAO                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Sample output routine for BTS 3270 trans   *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1998, 2005"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * TRANSACTION NAME = CBAC                                       *
+      *                                                               *
+      * FUNCTION = Sample output routine for BTS 3270 trans           *
+      *                                                               *
+      * When running the CICS BTS client sample or the CICS BTS       *
+      * bridge exit sample, it is necessary to output messages to     *
+      * an end user. This sample program allows this to be done.      *
+      * The sample uses TS queues.                                    *
+      *                                                               *
+      * NOTES :                                                       *
+      *  DEPENDENCIES = S/390                                         *
+      *  RESTRICTIONS = Same as CICS BTS and the bridge.              *
+      *  REGISTER CONVENTIONS = Normal                                *
+      *  PATCH LABEL = Standard COBOL patch Area                      *
+      *  MODULE TYPE = Executable                                     *
+      *  PROCESSOR = COBOL                                            *
+      *  ATTRIBUTES = Read only, Serially Reusable                    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * ENTRY POINT = DFH0CBAO                                        *
+      *                                                               *
+      *   PURPOSE = All functions                                     *
+      *                                                               *
+      *   LINKAGE = Normal CICS program                               *
+      *                                                               *
+      *   INPUT = COMMAREA containing MQCIH output message            *
+      *                                                               *
+      *   OUTPUT = None                                               *
+      *                                                               *
+      *   EXIT-NORMAL = EXEC CICS RETURN                              *
+      *                                                               *
+      *   EXIT-ERROR = None                                           *
+      *                                                               *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $MOD(DFH0CBAO),COMP(BAM),PROD(CICS TS ):                      *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      * $01= A27744 610 990625 HDBGNRB : Migrate PQ27744 from SPA R53 *
+      * $D0= I06825 530 981016 HDDLCRP : CBTS 3270 Bridge Samples     *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $P1= M31129 530 990119 HDHAIGG : GETWAIT timeout function     *
+      * $P2= M31155 530 990129 HDDLCRP : CBTS bridge cant cope with > *
+      * $P3= D00650 620 010209 HDDLCRP : Compile option NOSSRANGE     *
+      * $P4= D13283 640 050131 HDDLCRP: Cope with overzealous compiler*
+      *****************************************************************
+       Data Division.
+       Working-Storage Section.
+       01 rc                pic s9(8) comp.
+       01 halfword-len      pic s9(4) comp.
+      * maximum size of message (must be >> length of mqcih)
+       01 max-message-len   pic s9(8) comp value 32763.
+      * copy of message (when long message)
+       01 set-ptr           pointer.
+       01 copy-ptr          pointer.
+       01 copy-len          pic s9(8) comp.
+       01 copy-offset       pic s9(8) comp.
+      * length of segment
+       01 new-calc-len      pic s9(8) comp.
+       01 calc-len          pic s9(8) comp.
+      * Containers                                                    *
+       01 bridge-data       pic x(16) value '3270-BRIDGE-DATA'.
+      * BRSD                                                          *
+       01 tsq-brsd.
+       copy DFHBRSDO REPLACING ==05== BY ==06==
+                               ==04== BY ==05==
+                               ==03== BY ==04==
+                               ==02== BY ==03==
+                               ==01== BY ==02==.
+      * Message constants
+       01 msg-constants.
+       copy DFHBRMCO REPLACING ==77== BY ==10==.
+      * Copy of MQCIH to get round overzealous compiler msg
+       01 temp-mqcih        pic x(180).
+      *****************************************************************
+       Linkage Section.
+      * Message
+       01 msg.
+       copy DFHBRMHO REPLACING ==02== BY ==03==
+                               ==01== BY ==02==.
+
+      * Copy of message
+       01 set-storage       pic x(1).
+
+      * Message vector
+       copy DFHBRMQO.
+
+      * Commarea
+       01 input-output-commarea.
+        02 msg-ptr          pointer.
+        02 msg-len          pic s9(8) comp.
+        02 msg-storage-len  pic s9(8) comp.
+        02 msg-num          pic s9(4) comp.
+        02 i-o-getwaitint   pic s9(8) comp.
+
+       Procedure Division.
+      *****************************************************************
+      **  Main routine                                                *
+      *****************************************************************
+       Main-Routine section.
+           set address of input-output-commarea
+              to address of dfhcommarea
+
+      * Get the names of the input/output TS queues
+           EXEC CICS GET CONTAINER(bridge-data)
+                         PROCESS
+                         INTO(tsq-brsd)
+                         END-EXEC
+
+      * Delete the input queue before creating the output record
+      * to prevent the driving transaction from not producing a first
+      * record for the new transaction
+           if mqcih-taskendstatus = mqctes-endtask
+              EXEC CICS DELETEQ TS
+                        QUEUE(brsd-ts-input-queue)
+                        NOHANDLE
+                        END-EXEC
+           end-if
+
+           set address of msg to msg-ptr
+
+           if msg-len > max-message-len
+              perform Write-Multiple-Messages
+           else
+              move msg-len to halfword-len
+              perform Write-Message
+           end-if
+
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      **  Write Multiple Messages (Message > 32K)                     *
+      *****************************************************************
+       Write-Multiple-Messages section.
+           perform Copy-Message
+           perform with test after until(copy-len <= max-message-len)
+              perform Calc-Segment-Length
+              move calc-len to halfword-len
+              perform Write-Message
+              perform Delete-Segment
+           end-perform
+           move copy-len to halfword-len
+           perform Write-Message
+           perform Free-Copy-of-Message
+           exit.
+
+      *****************************************************************
+      **  Copy Message                                                *
+      *****************************************************************
+       Copy-Message section.
+      * copy message to set storage (save set-ptr for freemain)
+           EXEC CICS GETMAIN FLENGTH(msg-len)
+                     SET(set-ptr)
+                     END-EXEC
+           set address of set-storage to set-ptr
+           move msg(1 : msg-len) to set-storage(1 : msg-len)
+      * address copy of message
+           set copy-ptr to set-ptr
+           set address of msg to copy-ptr
+           move msg-len to copy-len
+           exit.
+
+      *****************************************************************
+      **  Free Copy of Message                                        *
+      *****************************************************************
+       Free-Copy-of-Message section.
+           EXEC CICS FREEMAIN DATAPOINTER(set-ptr) END-EXEC
+           exit.
+
+      *****************************************************************
+      **  Write message                                               *
+      *****************************************************************
+       Write-Message section.
+           EXEC CICS WRITEQ TS
+                     QUEUE(brsd-ts-output-queue)
+                     FROM(msg)
+                     LENGTH(halfword-len)
+                     END-EXEC
+           exit.
+
+      *****************************************************************
+      **  Calc Segment Length                                         *
+      *****************************************************************
+       Calc-Segment-Length section.
+      * address first brmq-vector (assume we can always send 1 vector)
+           move length of mqcih to new-calc-len
+           add 1 to new-calc-len
+
+      * loop until find the first vector which overflows
+           perform test after until new-calc-len > max-message-len
+
+      * save length up to current vector
+              move new-calc-len to calc-len
+      * calculate length including next vector
+              set address of brmq-vector-header to
+                  address of msg(calc-len : 1)
+              add calc-len to brmq-vector-length giving new-calc-len
+           end-perform
+
+      * return the length of the message before the overflow vector
+           subtract 1 from calc-len
+           exit.
+
+      *****************************************************************
+      **  Delete Segment                                              *
+      **  Each time vectors are deleted, add the MQCIH to the start   *
+      **  This assumes that messages >> 180 bytes (always true)       *
+      *****************************************************************
+       Delete-Segment section.
+      * Remaining length of message
+           subtract calc-len from copy-len
+           add length of mqcih to copy-len
+      * Offset to start of next message
+           add calc-len , 1 giving copy-offset
+           subtract length of mqcih from copy-offset
+      * Get round overzealous compiler msg
+           move mqcih to temp-mqcih
+      * Copy MQCIH to the start of the message
+           move temp-mqcih to msg(copy-offset : length of mqcih)
+      * Address new message
+           set copy-ptr to address of msg(copy-offset : 1)
+           set address of msg to copy-ptr
+           exit.

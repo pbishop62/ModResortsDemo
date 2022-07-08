@@ -1,0 +1,462 @@
+CBL CICS('COBOL3 SP') MAP OBJ RENT NODYNAM LIB DATA(31) LIST
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0ISAI.
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0ISAI                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = IPIC autoinstall for duplicate clients     *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *        Licensed Materials - Property of IBM                   *
+      *                                                               *
+      *        "Restricted Materials of IBM"                          *
+      *                                                               *
+      *        5655-Y04                                               *
+      *                                                               *
+      *        (C) Copyright IBM Corp. 2011, 2012"                    *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = %SP00                                                *
+      *                                                               *
+      * FUNCTION =                                                    *
+      *                                                               *
+      * This user replaceable program illustrates a technique of      *
+      * customizing autoinstall of an IPCONN such that the IPCONN     *
+      * name and APPLID are generated according to a template IPCONN  *
+      * previously installed.                                         *
+      *                                                               *
+      * This sample is for illustrative purposes and may be tailored  *
+      * to suit particular requirements.                              *
+      *                                                               *
+      * This sample generates an IPCONN name and APPLID of eight      *
+      * characters composed of the APPLID in the IPCONN template      *
+      * followed by a generated count. For example, if the APPLID is  *
+      * seven characters in length, a one-character count is appended *
+      * to provide the full eight character IPCONN name. The          *
+      * technique is appropriate when using WebSphere Application     *
+      * Server for z/OS which is running in local mode with CICS      *
+      * Transaction Gateway and which is communicating with CICS TS   *
+      * for z/OS using IPIC.                                          *
+      *                                                               *
+      *                                                               *
+      *   INSTALL                                                     *
+      *                                                               *
+      * When the communication area for the autoinstall user          *
+      * replaceable program, DFHISAIC, has isaic_function set to      *
+      * isaic_install, this sample takes the following actions:       *
+      *                                                               *
+      * 1. The value of an APPLID in parameter isaic_applid is        *
+      * checked.  If no value is supplied, the DFHISAIC communication *
+      * area parameter isaic_response is set to a non-zero value so   *
+      * that the IPCONN autoinstall is not allowed.                   *
+      *                                                               *
+      * For values returned by this sample in isaic_response, refer   *
+      * to working storage definitions below.                         *
+      *                                                               *
+      * 2. The template IPCONN with a name equal to isaic_networkid   *
+      * is located using the SPI command INQUIRE IPCONN. If the CICS  *
+      * Transaction Gateway is used in this scenario, isaic_networkid *
+      * is an APPLID qualifier. The template IPCONN would, for        *
+      * example, have both its APPLID attribute and NETWORKID         *
+      * attribute set to a character string value. These values are   *
+      * used by this sample autoinstall user replaceable program. The *
+      * NETWORKID attribute is not set to the value of the network    *
+      * identifier in use by the CICS Transaction Gateway client      *
+      * system. If it was set, there would be an attempt to use the   *
+      * template IPCONN itself for communication and not to invoke    *
+      * the autoinstall process as is required with this sample.      *
+      *                                                               *
+      * 3. If no IPCONN with a name equal to isaic_networkid is       *
+      * installed, the sample logic rejects the request to            *
+      * autoinstall an IPCONN. If a template IPCONN is found, it      *
+      * would typically be expected to have security parameters that  *
+      * are appropriate to the instance of WebSphere Application      *
+      * Server for z/OS in use.                                       *
+      *                                                               *
+      * 4. The DFHISAIC communication area parameter isaic_applid is  *
+      * checked. It must be the same as the APPLID in the IPCONN      *
+      * template. If isaic_host contains an IP address, it is also    *
+      * checked to be the same as defined in the IPCONN template. If  *
+      * either check fails, the DFHISAIC communication area parameter *
+      * isaic_response is set to a non-zero value so that the IPCONN  *
+      * autoinstall is not allowed. The value of isaic_response       *
+      * indicates which check failed. A message to indicate which     *
+      * particular failure occurred is written to TD destination CISL *
+      * to provide further diagnostic information.                    *
+      *                                                               *
+      * 5. There is a maximum number of autoinstalled IPCONNs with    *
+      * IPCONN names composed of the APPLID followed by the count     *
+      * characters.  If this limit is exceeded, isaic_response is set *
+      * to a non-zero value so that the IPCONN autoinstall is not     *
+      * allowed.                                                      *
+      *                                                               *
+      * The value of the IPCONN name and the APPLID is the characters *
+      * of the isaic_applid parameter followed by a generated         *
+      * character suffix. The suffix is generated from the value of a *
+      * count which is maintained by this sample for each template    *
+      * IPCONN. The current value of a count is recorded in a CICS    *
+      * temporary storage element which is accessed using the CICS    *
+      * API. When a new count value is required to generate a suffix, *
+      * the temporary storage element is read to obtain its current   *
+      * value. This value is incremented to generate a new value and  *
+      * the temporary storage element is rewritten. The new value is  *
+      * appended to the APPLID which is supplied in isaic_applid in   *
+      * order to obtain an APPLID which is the full eight characters. *
+      *                                                               *
+      * The temporary storage elements have a 16 character QNAME      *
+      * composed of the character string DFH$IPIC concatenated with   *
+      * the value of isaic_networkid. The API commands ENQ and DEQ    *
+      * are used to serialize updates to the temporary storage        *
+      * elements.                                                     *
+      *                                                               *
+      *                                                               *
+      *   DELETE                                                      *
+      *                                                               *
+      * When the communication area for the autoinstall user          *
+      * replaceable program, DFHISAIC,  has isaic_function set to     *
+      * isaic_delete, this sample takes no action and returns         *
+      * immediately.                                                  *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * ¶SEG(DFH0ISAI),COMP(SAMPLES),PROD(%PRODUCT):                  *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *     ¶P0=       %SP 111011        : Created.                   *
+      *     ¶P1=D40122 %SP 111130 HDLWPW : Variable length applids    *
+      *         D43205 %SP 120308 HD0EGMA: Update prologue            *
+      *                                                               *
+      *****************************************************************
+      *---------------------
+      *---------------------
+       ENVIRONMENT DIVISION.
+      *---------------------                   F
+      *--------------
+       DATA DIVISION.
+      *--------------
+       WORKING-STORAGE SECTION.
+      *------------------------
+       01 RESP                         PIC S9(8) COMP VALUE 0.
+       01 WS-IPCONN-RESP               PIC S9(8) COMP VALUE 0.
+       01 TEMPLATE-HOST                PIC X(116).
+       01 TEMPLATE-APPL                PIC X(8).
+       01 TEMPLATE-APPL-LEN            PIC S9(8) COMP VALUE 0.
+       01 INPUT-APPL-LEN               PIC S9(8) COMP VALUE 0.
+       01 INPUT-NETWORKID-LEN          PIC S9(8) COMP VALUE 0.
+       01 WS-CS-COUNT                  PIC S9(8) COMP VALUE 0.
+       01 WS-CS-COUNT-MX               PIC S9(8) COMP VALUE 9999.
+       01 WS-X                         PIC S9(8) COMP VALUE 0.
+       01 WS-POINT                     PIC S9(9) COMP.
+       01 WS-MAX-CON                   PIC S9(8) COMP.
+       01 WS-SPACE-CNT                 PIC S9(8) COMP VALUE 0.
+       01 WS-COUNT                     PIC 9(8) COMP VALUE 0.
+       01 WS-COUNT-DISP                PIC 9(8) USAGE DISPLAY.
+       01 WS-ITEM                      PIC S9(4) COMP VALUE 1.
+       01 WS-QNAME                     PIC X(16) VALUE SPACES.
+
+      *Errors - Values returned in ISAIC-RESPONSE
+      *
+      *01=Illogic in exit
+      *02=No applid supplied by client
+      *03=No template matches client netid
+      *04=Applid supplied does not match template
+      *05=Client IP address does not match template
+      *06=IPCONN count exceeds WS-MAX-CON
+      *07=Input applid length does not match template
+
+       01 WS-GOOD-RC                   PIC X VALUE X'00'.
+       01 WS-ILLOGIC-RC                PIC 9 COMP VALUE 1.
+       01 WS-NOAPPLID-RC               PIC 9 COMP VALUE 2.
+       01 WS-TEMPLATE-RC               PIC 9 COMP VALUE 3.
+       01 WS-BADAPPLID-RC              PIC 9 COMP VALUE 4.
+       01 WS-BADHOST-RC                PIC 9 COMP VALUE 5.
+       01 WS-COUNT-RC                  PIC 9 COMP VALUE 6.
+       01 WS-LENGTH-RC                 PIC 9 COMP VALUE 7.
+
+       01 WS-MSG.
+          03 MSG-ATTRIB                PIC X(9) VALUE 'DFH0ISAI'.
+          03 MSG-TEXT                  PIC X(123) VALUE SPACES.
+
+      *----------------
+       LINKAGE SECTION.
+      *----------------
+       01  DFHCOMMAREA.
+           COPY DFHISAIC.
+      *-------------------
+       PROCEDURE DIVISION.
+      *-------------------
+      *-------------------
+       A-MAIN SECTION.
+       A000-SETUP.
+      * If no COMMAREA then RETURN.
+           IF EIBCALEN = 0
+             PERFORM X000-FINIS.
+      * Set good return code in expectation of success.
+           MOVE WS-GOOD-RC TO ISAIC-RESPONSE.
+      * Select the required function
+           EVALUATE TRUE
+             WHEN ISAIC-INSTALL
+               PERFORM A010-INSTALL-IPCONN
+             WHEN ISAIC-DELETE
+               PERFORM A020-DELETE-IPCONN
+      * Anything else is treated as an error.
+             WHEN OTHER
+               MOVE WS-ILLOGIC-RC TO ISAIC-RESPONSE
+              PERFORM X000-FAIL
+           END-EVALUATE.
+
+      *-----------------------------------------------
+      * End the program and return to CICS.
+      *-----------------------------------------------
+           EXEC CICS RETURN
+           END-EXEC.
+
+       A-MAIN-EXIT.
+           GOBACK.
+
+      *-----------------------------------------------
+      * Procedures start here.
+      *-----------------------------------------------
+
+      * - - - - - - - - - -
+      * Install processing
+      * - - - - - - - - - -
+       A010-INSTALL-IPCONN SECTION.
+      ********************************************
+      * compute lengths
+           MOVE ZERO TO WS-X.
+           INSPECT ISAIC-APPLID TALLYING
+              WS-X FOR ALL SPACES.
+           COMPUTE INPUT-APPL-LEN = 8 - WS-X.
+           MOVE ZERO TO WS-X.
+           INSPECT ISAIC-NETWORKID TALLYING
+                WS-X FOR ALL SPACES.
+           COMPUTE INPUT-NETWORKID-LEN = 8 - WS-X.
+
+      * Set ipconn template to name supplied netid
+           MOVE ISAIC-NETWORKID TO ISAIC-TEMPLATE.
+
+      * No applid, so error
+           IF ISAIC-APPLID = SPACES
+             MOVE WS-NOAPPLID-RC TO ISAIC-RESPONSE
+             PERFORM X000-FAIL.
+
+
+      * Use client netid to check for name of a template ipconn
+      * Save applid and host name from template for validation
+             EXEC CICS INQUIRE IPCONN(ISAIC-TEMPLATE)
+                   APPLID(TEMPLATE-APPL)
+                   HOST(TEMPLATE-HOST)
+                   RESP(RESP)
+                   END-EXEC.
+
+      * If template ok then compute lengths
+             MOVE ZERO TO WS-X.
+             IF RESP = DFHRESP(NORMAL)
+               MOVE TEMPLATE-APPL TO ISAIC-IPCONN
+               INSPECT TEMPLATE-APPL TALLYING
+                    WS-X FOR ALL SPACES
+               COMPUTE TEMPLATE-APPL-LEN = 8 - WS-X
+
+             ELSE
+               MOVE WS-TEMPLATE-RC TO ISAIC-RESPONSE
+               PERFORM X000-FAIL
+             END-IF
+
+
+           IF TEMPLATE-APPL-LEN = 7 MOVE 9 TO WS-MAX-CON.
+           IF TEMPLATE-APPL-LEN = 6 MOVE 99 TO WS-MAX-CON.
+           IF TEMPLATE-APPL-LEN = 5 MOVE 999 TO WS-MAX-CON.
+           IF TEMPLATE-APPL-LEN = 4 MOVE 9999 TO WS-MAX-CON.
+           IF TEMPLATE-APPL-LEN = 3 MOVE 99999 TO WS-MAX-CON.
+           IF TEMPLATE-APPL-LEN = 3 MOVE 99999 TO WS-MAX-CON.
+           IF TEMPLATE-APPL-LEN = 2 MOVE 999999 TO WS-MAX-CON.
+           IF TEMPLATE-APPL-LEN = 1 MOVE 9999999 TO WS-MAX-CON.
+
+      * If supplied applid len does not match template applid len
+           IF INPUT-APPL-LEN NOT = TEMPLATE-APPL-LEN
+             MOVE WS-LENGTH-RC TO ISAIC-RESPONSE
+             PERFORM X000-FAIL
+           END-IF
+
+      * If supplied applid does not match template applid
+             IF TEMPLATE-APPL NOT = ISAIC-APPLID
+               MOVE WS-BADAPPLID-RC TO ISAIC-RESPONSE
+               PERFORM X000-FAIL
+             END-IF
+
+
+      * If supplied host does not match template host
+             IF TEMPLATE-HOST NOT = SPACES
+               AND TEMPLATE-HOST NOT = ISAIC-HOST
+               MOVE WS-BADHOST-RC TO ISAIC-RESPONSE
+               PERFORM X000-FAIL
+             END-IF
+
+      * If template <8 then generate a suffix
+             IF TEMPLATE-APPL-LEN < 8
+               COMPUTE WS-CS-COUNT = 0
+               PERFORM CREATE-SUFFIX
+                UNTIL WS-IPCONN-RESP = DFHRESP(SYSIDERR)
+             ELSE
+                EXEC CICS INQUIRE IPCONN(ISAIC-IPCONN)
+                     RESP(WS-IPCONN-RESP)
+                     END-EXEC
+             END-IF
+
+      * Final check to see if sysid is unique
+             IF WS-IPCONN-RESP = DFHRESP(SYSIDERR)
+               MOVE ISAIC-IPCONN TO ISAIC-APPLID
+             ELSE
+               MOVE WS-ILLOGIC-RC TO ISAIC-RESPONSE
+               PERFORM X000-FAIL
+             END-IF
+
+            STRING 'Verified IPCONN autoinstall '
+                    ISAIC-IPCONN ' for client '
+                    ISAIC-NETWORKID(1:INPUT-NETWORKID-LEN) '.'
+                    ISAIC-APPLID(1:INPUT-APPL-LEN)
+                    ' from host ' ISAIC-HOST
+                    DELIMITED BY SIZE INTO MSG-TEXT.
+             PERFORM X000-LOGMSG.
+
+             PERFORM X000-FINIS.
+
+
+       A010-INSTALL-IPCONN-EXIT.
+           EXIT.
+
+      * - - - - - - - - - -
+      * Delete processing
+      * - - - - - - - - - -
+       A020-DELETE-IPCONN.
+           PERFORM X000-FINIS.
+       A020-DELETE-IPCONN-EXIT.
+           EXIT.
+
+      * - - - - - - - - - -
+      * Return to CICS
+      * - - - - - - - - - -
+       X000-FINIS.
+           EXEC CICS RETURN
+           END-EXEC.
+
+      * - - - - - - - - - -
+      * Reject install
+      * - - - - - - - - - -
+        X000-FAIL.
+
+           STRING 'Autoinstall Error(' ISAIC-RESPONSE ') for client '
+                  ISAIC-NETWORKID(1:INPUT-NETWORKID-LEN) '.'
+                  ISAIC-APPLID(1:INPUT-APPL-LEN)
+                  ' from host '
+                  ISAIC-HOST
+                  DELIMITED BY SIZE INTO MSG-TEXT.
+           PERFORM X000-LOGMSG.
+           MOVE 4 TO ISAIC-RESPONSE.
+
+           EXEC CICS RETURN
+           END-EXEC.
+
+      * - - - - - - - - - -
+      * Log error msgs
+      * - - - - - - - - - -
+       X000-LOGMSG.
+             EXEC CICS WRITEQ TD
+                     QUEUE('CISL')
+                     FROM(WS-MSG)
+                     LENGTH(LENGTH OF WS-MSG)
+                     RESP(RESP)
+                     END-EXEC.
+             MOVE SPACES TO MSG-TEXT.
+
+      * - - - - - - - - - - - - - - - - - - - - -
+      * Create IPCONN suffix
+      * - - - - - - - - - - - - - - - - - - - - -
+       CREATE-SUFFIX.
+
+      * Check we are not looping
+             COMPUTE WS-CS-COUNT =  WS-CS-COUNT + 1.
+             IF WS-CS-COUNT > WS-CS-COUNT-MX
+                MOVE WS-COUNT-RC TO ISAIC-RESPONSE
+               PERFORM X000-FAIL
+             END-IF.
+             MOVE 'DFH$IPIC' TO WS-QNAME(1:8).
+             MOVE ISAIC-TEMPLATE TO WS-QNAME(9:8).
+
+      * Obtain ENQ to ensure serialisation on TS queue
+             EXEC CICS ENQ
+                     RESOURCE(WS-QNAME)
+                     LENGTH(LENGTH OF WS-QNAME)
+                     TASK
+                     RESP(RESP)
+                     END-EXEC.
+
+
+      * Read the current counter value
+             EXEC CICS READQ TS
+                     QNAME(WS-QNAME)
+                     INTO(WS-COUNT)
+                     ITEM(WS-ITEM)
+                     RESP(RESP)
+                     END-EXEC.
+
+      * If there is no queue then create one.
+             IF RESP = DFHRESP(QIDERR)
+               PERFORM CREATE-TSQUEUE.
+
+      * - - - - - - - - - - - - - - - - - - - - -
+      * Update the count and wrap if reaches
+      * the maximum permitted value
+      * - - - - - - - - - - - - - - - - - - - - -
+             IF WS-COUNT > WS-MAX-CON
+               MOVE 1 TO WS-COUNT
+             ELSE
+               COMPUTE WS-COUNT = WS-COUNT + 1
+             END-IF.
+
+      * Write the new count value back to the queue
+             EXEC CICS WRITEQ TS
+                  QNAME(WS-QNAME)
+                  FROM(WS-COUNT)
+                  ITEM(WS-ITEM)
+                  REWRITE
+                  RESP(RESP)
+                  END-EXEC.
+
+
+      * Build the ipconn name
+             COMPUTE WS-POINT = TEMPLATE-APPL-LEN + 1.
+             MOVE WS-COUNT TO WS-COUNT-DISP.
+             MOVE WS-COUNT-DISP(WS-POINT:8 - TEMPLATE-APPL-LEN)
+              TO ISAIC-IPCONN(WS-POINT:8 - TEMPLATE-APPL-LEN).
+
+             EXEC CICS INQUIRE IPCONN(ISAIC-IPCONN)
+                 RESP(WS-IPCONN-RESP)
+                 END-EXEC.
+
+      * End serialisation of this request against the queue
+             EXEC CICS DEQ
+                     RESOURCE(WS-QNAME)
+                     LENGTH(LENGTH OF WS-QNAME)
+                     RESP(RESP)
+                     END-EXEC.
+
+
+      * - - - - - - - - - - - - - - - - - - - - -
+      * Create TS queue for this IPCONN template
+      * then create IPCONN suffix
+      * - - - - - - - - - - - - - - - - - - - - -
+       CREATE-TSQUEUE.
+             MOVE 0 TO WS-COUNT.
+             EXEC CICS WRITEQ TS
+                     QNAME(WS-QNAME)
+                     FROM(WS-COUNT)
+                     ITEM(WS-ITEM)
+                     RESP(RESP)
+                     END-EXEC.

@@ -1,0 +1,191 @@
+       PROCESS CICS('COBOL3,APOST,SP')
+       PROCESS APOST TRUNC(BIN) NOSSRANGE
+       Identification Division.
+       Program-id. DFH0CBAI
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CBAI                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Sample input routine for BTS 3270 trans    *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1998, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * TRANSACTION NAME = CBAC                                       *
+      *                                                               *
+      * FUNCTION = Sample input routine for BTS 3270 trans            *
+      *                                                               *
+      * When running the CICS BTS client sample or the CICS BTS       *
+      * bridge exit sample, it is necessary to input messages from    *
+      * an end user. This sample program allows this to be done.      *
+      * The sample uses TS queues.                                    *
+      *                                                               *
+      * NOTES :                                                       *
+      *  DEPENDENCIES = S/390                                         *
+      *  RESTRICTIONS = Same as CICS BTS and the bridge.              *
+      *  REGISTER CONVENTIONS = Normal                                *
+      *  PATCH LABEL = Standard COBOL patch Area                      *
+      *  MODULE TYPE = Executable                                     *
+      *  PROCESSOR = COBOL                                            *
+      *  ATTRIBUTES = Read only, Serially Reusable                    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * ENTRY POINT = DFH0CBAI                                        *
+      *                                                               *
+      *   PURPOSE = All functions                                     *
+      *                                                               *
+      *   LINKAGE = Normal CICS program                               *
+      *                                                               *
+      *   INPUT = None                                                *
+      *                                                               *
+      *   OUTPUT = COMMAREA containing MQCIH output message           *
+      *                                                               *
+      *   EXIT-NORMAL = EXEC CICS RETURN                              *
+      *                                                               *
+      *   EXIT-ERROR = ABXF Unable to read input data from TS queue   *
+      *                     before timeout period expired.            *
+      **      List any ABENDs issues by this entry point, and what eac*
+      **      ABENDs mean                                             *
+      **      List any associated error messages as for EXIT NORMAL   *
+      *                                                               *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $MOD(DFH0CBAI),COMP(BAM),PROD(CICS TS ):                      *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      * $01= A27744 610 990625 HDBGNRB : Migrate PQ27744 from SPA R53 *
+      * $D0= I06825 530 981016 HDDLCRP : CBTS 3270 Bridge Samples     *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $P1= M31129 530 990119 HDHAIGG : GETWAIT timeout function     *
+      * $P2= D00650 620 010209 HDDLCRP : Compile option NOSSRANGE     *
+      *****************************************************************
+
+       Data Division.
+       Working-Storage Section.
+       01 program-working-storage.
+        03  filler          pic x(16)
+                              value '>WORKING STORAGE'.
+        03 rc               pic s9(8) comp.
+        03 current-time     pic s9(15) comp-3.
+        03 timeout-time     pic s9(15) comp-3.
+        03 record-flag      pic s9(8) comp.
+          88 record-not-found value 0.
+          88 record-found     value 1.
+          88 record-error     value 2.
+      * Containers                                                    *
+       01 bridge-data       pic x(16) value '3270-BRIDGE-DATA'.
+      * BRSD                                                          *
+       01 tsq-brsd.
+       copy DFHBRSDO REPLACING ==05== BY ==06==
+                               ==04== BY ==05==
+                               ==03== BY ==04==
+                               ==02== BY ==03==
+                               ==01== BY ==02==.
+      * Misc                                                          *
+       01 bridge-monitor    pic x(4).
+       01 ts-msg-ptr        pointer.
+       01 halfword-len      pic s9(4) comp.
+      *****************************************************************
+       Linkage Section.
+       01 msg               pic x(65535).
+       01 ts-msg            pic x(65535).
+      * Commarea                                                      *
+       01 input-output-commarea.
+        02 msg-ptr          pointer.
+        02 msg-len          pic s9(8) comp.
+        02 msg-storage-len  pic s9(8) comp.
+        02 msg-num          pic s9(4) comp.
+        02 i-o-getwaitint   pic s9(8) comp.
+       Procedure Division.
+      *****************************************************************
+      **  Main routine                                                *
+      *****************************************************************
+       Main-Routine section.
+           set address of input-output-commarea
+              to address of dfhcommarea
+
+           EXEC CICS GET CONTAINER(bridge-data)
+                         PROCESS
+                         INTO(tsq-brsd)
+                         END-EXEC
+
+      * Note that this only works for messages < 32K
+           set record-not-found to TRUE
+
+           EXEC CICS ASKTIME ABSTIME(timeout-time) END-EXEC
+           add i-o-getwaitint to timeout-time
+
+           perform with test after until not record-not-found
+              EXEC CICS READQ TS
+                        QNAME(brsd-ts-input-queue)
+                        ITEM(msg-num)
+                        SET(ts-msg-ptr)
+                        LENGTH(halfword-len)
+                        RESP(rc)
+                        END-EXEC
+
+              evaluate rc
+                 when DFHRESP(NORMAL)
+                    set record-found to true
+                 when DFHRESP(QIDERR)
+                 when DFHRESP(ITEMERR)
+                    continue
+                 when other
+                    set record-error to true
+              end-evaluate
+
+              if record-not-found
+                EXEC CICS ASKTIME ABSTIME(current-time) END-EXEC
+                if current-time < timeout-time
+                  EXEC CICS DELAY FOR SECONDS(1)
+                            NOHANDLE
+                            END-EXEC
+                else
+                   set record-error to true
+                end-if
+              end-if
+           end-perform
+
+           if record-error
+             EXEC CICS ABEND ABCODE('ABXF')
+                       CANCEL
+                       END-EXEC
+           end-if
+
+      * Save the content of the TS record
+           move halfword-len to msg-len
+
+           set address of ts-msg to ts-msg-ptr
+
+      * Get copy of storage
+           if msg-len > msg-storage-len
+              if msg-storage-len not = zero
+                 EXEC CICS FREEMAIN
+                           DATAPOINTER(msg-ptr)
+                           NOHANDLE
+                           END-EXEC
+              end-if
+              EXEC CICS GETMAIN FLENGTH(msg-len)
+                        SET(msg-ptr)
+                        END-EXEC
+              move msg-len to msg-storage-len
+           end-if
+           set address of msg    to msg-ptr
+      *
+           move ts-msg(1 : msg-len) to msg(1 : msg-len)
+
+           EXEC CICS RETURN END-EXEC
+           exit.

@@ -1,0 +1,385 @@
+      *****************************************************************
+      *                                                               *
+      * CONTROL BLOCK NAME = DFH0CBRD                                 *
+      *                                                               *
+      * NAME OF MATCHING PL/X CONTROL BLOCK = None                    *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (BR) Bridge Sample Common Code    *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1998, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * This copy book contains common routines used by the           *
+      * bridge exit program DFH0CBRE.                                 *
+      * Code in this copybook does not have EXEC CICS calls.          *
+      * The reason for this copybook is to minimise the code in       *
+      * DFH0CBRE. DFH0CBRE is usually all that users need to          *
+      * change to introduce a new transport mechanism to the bridge.  *
+      * The code in DFH0CBRD is not transport specific.               *
+      *                                                               *
+      *****************************************************************
+      * This program is divided into the following groups of sections.*
+      * Each Group contain related routines.                          *
+      *                                                               *
+      * MAIN PROCESSING                                               *
+      *   main-processing                                             *
+      *   xm-command-check                                            *
+      *   msg-command-check                                           *
+      * TASK MANAGER ROUTINES                                         *
+      *   init-routine                                                *
+      *   bind-routine                                                *
+      *   get-storage                                                 *
+      *   get-brdata                                                  *
+      *   term-routine                                                *
+      *   abend-routine                                               *
+      *   syncpoint-routine                                           *
+      * MESSAGE ROUTINES                                              *
+      *   read-message                                                *
+      *   write-message                                               *
+      *   read-message-error                                          *
+      *   erase-output-vectors                                        *
+      * BRXA VALIDATION ROUTINES                                      *
+      *   validate-brxa                                               *
+      *   validate-brxa-subareas                                      *
+      *   validate-user-data                                          *
+      * ABEND ROUTINES                                                *
+      *   abend-abx1                                                  *
+      *   abend-abx2                                                  *
+      *   abend-abx3                                                  *
+      *   abend-abx5                                                  *
+      *   abend-abx6                                                  *
+      *   abend-abxc                                                  *
+      *   abend-abxd                                                  *
+      *   abend-abxe                                                  *
+      *   abend-abxf                                                  *
+      *   abend-abxg                                                  *
+      *   abend-abxi                                                  *
+      *   abend-abxj                                                  *
+      *   abend-abxk                                                  *
+      *   abend-abxm                                                  *
+      *   abend-abxs                                                  *
+      * TRACE ROUTINES                                                *
+      *   trace-brdata                                                *
+      *   trace-message-input                                         *
+      *   trace-message-output                                        *
+      * MSG-HDR SPECIFIC ROUTINES                                     *
+      *   decode-msg-hdr                                              *
+      *   decode-msg-hdr-next                                         *
+      *   validate-msg-hdr                                            *
+      *   build-msg-hdr                                               *
+      *   update-msg-hdr                                              *
+      *   update-msg-hdr-commit                                       *
+      *   update-msg-hdr-backout                                      *
+      *   update-msg-hdr-end-task                                     *
+      *   update-msg-hdr-end-task                                     *
+      * TRANSPORT MECHANISM SPECIFIC ROUTINES                         *
+      *   tm-validate-brdata                                          *
+      *   tm-decode-brdata                                            *
+      *   tm-open-queues                                              *
+      *   tm-get-message                                              *
+      *   tm-put-message                                              *
+      *   tm-put-message-commit                                       *
+      *   tm-put-message-backout                                      *
+      *   tm-error-handling-routine                                   *
+      *   tm-syncpoint-ok                                             *
+      *   tm-abend-rollback                                           *
+      *                                                               *
+      *****************************************************************
+      * If this sample is updated for other transport mechanisms      *
+      * change the routines in the group                              *
+      * "TRANSPORT MECHANISM SPECIFIC ROUTINES"                       *
+      *****************************************************************
+      * The following input values are used in the MQCIH              *
+      * Default values are listed where the value is outside the      *
+      * range of valid values. n/a means that it is not possible      *
+      * to give an invalid value. Abend means that either the exit    *
+      * or CICS will abend the transaction with the given abend code. *
+      *****************************************************************
+      * Variable                 * Value                   Default    *
+      *****************************************************************
+      * mqcih-strucid            * mqcih-struc-id      * Abend ABXJ   *
+      * mqcih-version            * mqcih-version-2     * Abend ABXJ   *
+      * mqcih-struclength        * mqcih-length-2      * Abend ABXJ   *
+      * mqcih-getwaitinterval    * >=0                 * 0            *
+      * mqcih-facilitykeeptime   * 0 - 604800          * 604800       *
+      * mqcih-adsdescriptor      * any MQCADSD value   * NONE         *
+      * mqcih-conversationaltask * any MQCCT value     * NO           *
+      * mqcih-facility           * Bridge facility     * Abend ABRG   *
+      * mqcih-authenticator      * password or null    * n/a          *
+      * mqcih-transactionid      * transid or blank    * Abend ABRB   *
+      * mqcih-facilitylike       * termid or blank     * Abend ABRJ   *
+      * mqcih-attentionid        * 0 - 255 (hi byte)   * n/a          *
+      * mqcih-startcode          * any MQCSC value     * TERMINPUT    *
+      * mqcih-cancelcode         * abend code or blank * n/a          *
+      * mqcih-cursorposition     * 0 - 65535           * 0            *
+      *****************************************************************
+      * List of Abend Codes                                           *
+      * Some abends do not result in the abend code returned to the   *
+      * to the user due to inconsistancy in the state data.           *
+      * These are indicated by Reply No                               *
+      * Some abends result in an exception trace being issued.        *
+      *****************************************************************
+      * Abend Description of error                        Reply Trace *
+      * ABX1  Invalid BRXA-HEADER                           No   11   *
+      * ABX2  Invalid BRXA-TRANSACTION-AREA                 No   12   *
+      * ABX3  Invalid BRXA-COMMAND-AREA                     No   13   *
+      * ABX5  No user area                                  No   15   *
+      * ABX6  Invalid User area                             No   16   *
+      * ABXC  Error issuing SYNCPOINT request                    23   *
+      * ABXD  Error issuing SYNCPOINT ROLLBACK request           24   *
+      * ABXE  No BRDATA                                     No   25   *
+      * ABXF  Error in tm-get-message routine               No   26   *
+      * ABXG  Error in tm-put-message routine               No   27   *
+      * ABXI  Input message exceeds size of buffer          No   29   *
+      * ABXJ  Invalid MQCIH                                 No   30   *
+      * ABXK  Invalid BRDATA                                No   31   *
+      * ABXM  Invalid BRXA - function or command detected        33   *
+      * ABXS  Error in tm-open-queues                       No   39   *
+      *****************************************************************
+      * Trace point descriptions:                                     *
+      *   Single digit trace points are traced if BR=2.               *
+      *   Double digit trace points are exception traces associated   *
+      *   with abend codes.                                           *
+      *   Up to 4000 bytes of data is traced.                         *
+      *****************************************************************
+      * No.  Data traced                                       Abend  *
+      *****************************************************************
+      *  0 - BRSD                                              n/a    *
+      *  1 - Input message                                     n/a    *
+      *  3 - Output message                                    n/a    *
+      * 11 - BRXA-HEADER                                       ABX1   *
+      * 12 - BRXA-TRANSACTION-AREA                             ABX2   *
+      * 13 - BRXA-COMMAND-AREA                                 ABX3   *
+      * 15 - BRXA-HEADER                                       ABX5   *
+      * 16 - USER-AREA                                         ABX6   *
+      * 23 - EIBRESP,EIBRESP2                                  ABXC   *
+      * 24 - EIBRESP,EIBRESP2                                  ABXD   *
+      * 25 - BRXA-TRANSACTION-AREA                             ABXE   *
+      * 26 - EIBRESP,EIBRESP2                                  ABXF   *
+      * 27 - EIBRESP,EIBRESP2                                  ABXG   *
+      * 29 - Length of message                                 ABXI   *
+      * 30 - MQCIH                                             ABXJ   *
+      * 31 - BRDATA                                            ABXK   *
+      *****************************************************************
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *     $SEG(DFH0CBRD),COMP(BRIDGE),PROD(CICS TS ):               *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      * $L0= 732    530 980624 HDDLCRP : Simplified bridge exit       *
+      * $P1= M31155 530 990120 HDDLCRP : BTS msgs > 32K               *
+      * $P2= D01252 620 010907 HDDLCRP : Trace BRDATA when ABXK       *
+      *****************************************************************
+
+      *****************************************************************
+      *****************************************************************
+      ** ABEND ROUTINES                                              **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * ABEND-ABX1                                                    *
+      *   Invalid BRXA-HEADER                                         *
+      *****************************************************************
+       abend-abx1 section.
+           move 11                   to trace-num
+           set address of trace-area to address of brxa-header
+           move eibcalen             to trace-flength
+           perform trace-exception
+           move '1' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABX2                                                    *
+      *   Invalid BRXA-TRANSACTION-AREA                               *
+      *****************************************************************
+       abend-abx2 section.
+           move 12                   to trace-num
+           set address of trace-area to address of brxa-transaction-area
+           move length of brxa-transaction-area to trace-flength
+           perform trace-exception
+           move '2' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABX3                                                    *
+      *   Invalid BRXA-COMMAND-AREA                                   *
+      *****************************************************************
+       abend-abx3 section.
+           move 13                   to trace-num
+           set address of trace-area to address of brxa-command-common
+           move length of brxa-command-common to trace-flength
+           perform trace-exception
+           move '3' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABX5                                                    *
+      *   No User area                                                *
+      *****************************************************************
+       abend-abx5 section.
+           move 15                   to trace-num
+           set address of trace-area to address of brxa-header
+           move eibcalen             to trace-flength
+           perform trace-exception
+           move '5' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABX6                                                    *
+      *   Invalid User area                                           *
+      *****************************************************************
+       abend-abx6 section.
+           move 16                   to trace-num
+           set address of trace-area to address of user-area
+           move length of user-area  to trace-flength
+           perform trace-exception
+           move '6' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXC                                                    *
+      *   Error issuing SYNCPOINT request                             *
+      *****************************************************************
+       abend-abxc section.
+           move 23                   to trace-num
+           set address of trace-area to address of response
+           move length of response   to trace-flength
+           perform trace-exception
+           move 'C' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXD                                                    *
+      *   Error issuing SYNCPOINT ROLLBACK request                    *
+      *****************************************************************
+       abend-abxd section.
+           move 24                   to trace-num
+           set address of trace-area to address of response
+           move length of response   to trace-flength
+           perform trace-exception
+           move 'D' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXE                                                    *
+      *   No BRDATA                                                   *
+      *****************************************************************
+       abend-abxe section.
+           move 25                   to trace-num
+           set address of trace-area to address of brxa-transaction-area
+           move length of brxa-transaction-area to trace-flength
+           perform trace-exception
+           move 'E' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXF                                                    *
+      *   Error in tm-get-message routine                             *
+      *****************************************************************
+       abend-abxf section.
+           move 26                   to trace-num
+           set address of trace-area to address of response
+           move length of response   to trace-flength
+           perform trace-exception
+           move 'F' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXG                                                    *
+      *   Error in tm-put-message routine                             *
+      *****************************************************************
+       abend-abxg section.
+           move 27                   to trace-num
+           set address of trace-area to address of response
+           move length of response   to trace-flength
+           perform trace-exception
+           move 'G' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXI                                                    *
+      *   Input message exceeds size of buffer                        *
+      *****************************************************************
+       abend-abxi section.
+           move 29                   to trace-num
+           set address of trace-area to address of input-flength
+           move length of input-flength to trace-flength
+           perform trace-exception
+           move 'I' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXJ                                                    *
+      *   Invalid MQCIH                                               *
+      *****************************************************************
+       abend-abxj section.
+           move 30                   to trace-num
+           set address of trace-area to address of msg-hdr
+           move length of msg-hdr    to trace-flength
+           perform trace-exception
+           move 'J' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXK                                                    *
+      *   Invalid BRDATA                                              *
+      *****************************************************************
+       abend-abxk section.
+           move 31                   to trace-num
+           set address of trace-area to brxa-brdata-ptr
+           move brxa-brdata-len      to trace-flength
+           perform trace-exception
+           move 'K' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXM                                                    *
+      *   Invalid BRXA - function or command detected                 *
+      *****************************************************************
+       abend-abxm section.
+           move 33                   to trace-num
+           set address of trace-area to address of brxa-command-common
+           move length of brxa-command-common to trace-flength
+           perform trace-exception
+           move 'M' to abend-code(4:1)
+           perform abend
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXS                                                    *
+      *   Error in tm-open-queues                                     *
+      *****************************************************************
+       abend-abxs section.
+           move 39                   to trace-num
+           set address of trace-area to address of response
+           move length of response   to trace-flength
+           perform trace-exception
+           move 'S' to abend-code(4:1)
+           perform abend
+           exit.

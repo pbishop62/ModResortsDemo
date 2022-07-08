@@ -1,0 +1,201 @@
+       CBL CICS('COBOL3,EXCI')
+       PROCESS MAP,XREF
+       Identification Division.
+       Program-id. DFH0CBRX.
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CBRX                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (BR) Sample EXCI Client Program   *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *      Licensed Materials - Property of IBM                     *
+      *                                                               *
+      *      "Restricted Materials of IBM"                            *
+      *                                                               *
+      *      5655-Y04                                                 *
+      *                                                               *
+      *      (C) Copyright IBM Corp. 2001, 2005"                      *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * FUNCTION = Sample EXCI based client program                   *
+      *                                                               *
+      *    DFH0CBRX is a simple client which calls the bridge client  *
+      *    program DFH0CBRL. It is calls DFH0CBRL with a commarea     *
+      *    mapped by DFH0CBRA. The commarea contains the business     *
+      *    data returned or the error information.                    *
+      *                                                               *
+      *    This program is invoked as an EXCI program.                *
+      *    It links to CICS region specified in the field applid.     *
+      *                                                               *
+      *    DFH0CBRX performs the following functions.                 *
+      *    1. Run the search function to get the account number       *
+      *       from a surname.                                         *
+      *    2. Run the display function to get account details from    *
+      *       the account number.                                     *
+      *    3. Display the information in SYSPRINT.                    *
+      *                                                               *
+      * NOTES :                                                       *
+      *  DEPENDENCIES = S/390                                         *
+      *  RESTRICTIONS = Same as Link3270                              *
+      *  REGISTER CONVENTIONS = Normal                                *
+      *  MODULE TYPE = Executable                                     *
+      *  PROCESSOR = COBOL                                            *
+      *  ATTRIBUTES = Read only, Serially Reusable                    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * ENTRY POINT = DFH0CBRX                                        *
+      *                                                               *
+      *   PURPOSE = All functions                                     *
+      *                                                               *
+      *   LINKAGE = Normal EXCI program                               *
+      *                                                               *
+      *   INPUT = None                                                *
+      *                                                               *
+      *   OUTPUT = Messages on SYSPRINT                               *
+      *                                                               *
+      *   EXIT-NORMAL = 0                                             *
+      *                                                               *
+      *   EXIT-ERROR =  1000 EXCI Error                               *
+      *                 1001 Link3270 Error                           *
+      *                                                               *
+      *-------------------------------------------------------------- *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *    $MOD(DFH0CBRX),COMP(BRIDGE),PROD(CICS TS ):                *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $L0= 775    620 010809 HDDLCRP : Created                      *
+      * $L1= 775    620 010817 HDDLCRP : Bridge samples review        *
+      * $P1= D02653 620 011030 HDDLCRP : Review of Link3270 bridge sa *
+      * $P2= D13156 640 050126 HD6KRAH : XOPTS->CICS                  *
+      *                                                               *
+      *****************************************************************
+
+       Environment Division.
+      *****************************************************************
+       Input-Output Section.
+       file-control.
+           select printer assign to sysprint.
+      *****************************************************************
+       Data Division.
+      *****************************************************************
+       File Section.
+       FD  printer block contains 128 characters
+           recording mode is F
+           label records omitted.
+       01  output-record      pic x(128).
+      *****************************************************************
+       Working-Storage Section.
+      * Change the following applid to the router applid
+       01 applid      pic x(8)    value 'DBDCCICS'.
+      * Saved account number
+       01 acctnum     pic x(5).
+      * Commarea
+       01 iodata-area.
+         copy DFH0CBRA.
+      *   Declare Call level, DPL, and EXEC level Return Code areas.
+       copy DFHXCPLO.
+      * Output Area
+       01  exci-errordata.
+         03  filler           pic x(16)  value 'EXCI link failed'.
+         03  filler           pic x(6)   value ' RESP='.
+         03  e-resp           pic 9(8).
+         03  filler           pic x(7)   value ' RESP2='.
+         03  e-resp2          pic 9(8).
+         03  filler           pic x(8)   value ' ABCODE='.
+         03  e-abcode         pic x(4).
+         03  filler           PIC X(71)  value SPACES.
+       01  link3270-errordata.
+         03  filler           pic x(15)  value 'Link3270 failed'.
+         03  filler           pic x(4)   value ' RC='.
+         03  l-returncode     pic 9(8).
+         03  filler           pic x(5)   value ' RSN='.
+         03  l-reason         pic 9(8).
+         03  filler           pic x(6)   value ' COMP='.
+         03  l-compcode       pic 9(8).
+         03  filler           pic x(8)   value ' ABCODE='.
+         03  l-abendcode      pic x(4).
+         03  filler           pic x(5)   value ' MSG='.
+         03  l-data           pic x(57).
+      *****************************************************************
+       Procedure Division.
+      *****************************************************************
+       Main-Processing Section.
+           open output printer.
+           initialize iodata-area.
+
+      *****************************************************************
+      * 1. Run the search function to get the account number          *
+      *    from a surname.                                            *
+      *****************************************************************
+           set  srch-req of input-data to true.
+           move 'JONES' to surname   of srch-inputdata.
+           move 'JACOB' to firstname of srch-inputdata.
+           perform run-nact.
+           move acct-no of srch-outputdata to acctnum.
+
+      *****************************************************************
+      * 2. Run the display function to get account details from       *
+      *    the account number.                                        *
+      *****************************************************************
+           set  disp-req of input-data to true.
+           move acctnum to acct-no of disp-inputdata.
+           perform run-nact.
+
+      *****************************************************************
+      * 3. Output the information to SYSPRINT.                        *
+      *****************************************************************
+           write output-record from disp-line1.
+           write output-record from disp-line2.
+           write output-record from disp-line3.
+           write output-record from disp-line4.
+           move 0 to return-code.
+           close printer.
+           goback.
+
+      *****************************************************************
+      * Run NACT using the 3270 bridge wrapper program                *
+      *****************************************************************
+       run-nact section.
+           EXEC CICS LINK PROGRAM('DFH0CBRL')
+                          COMMAREA(iodata-area)
+                          LENGTH(length of iodata-area)
+                          DATALENGTH(length of input-data)
+                          APPLID(applid)
+                          RETCODE(exci-exec-return-code)
+                          END-EXEC.
+      *
+      * if EXCI link fails write error data
+      *
+           if exec-resp not = 0
+              move exec-resp   to e-resp
+              move exec-resp2  to e-resp2
+              move exec-abcode to e-abcode
+              write output-record from exci-errordata
+              move 1000        to return-code
+              close printer
+              goback
+           end-if.
+      *
+      * if Link3270 fails write error data
+      *
+           if error-returncode not = 0
+              move error-returncode to l-returncode
+              move error-reason     to l-reason
+              move error-compcode   to l-compcode
+              move error-abendcode  to l-abendcode
+              move error-data(1:57) to l-data
+              write output-record from link3270-errordata
+              move 1001             to return-code
+              close printer
+              goback
+           end-if .
+           exit.

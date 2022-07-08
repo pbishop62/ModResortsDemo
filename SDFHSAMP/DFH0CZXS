@@ -1,0 +1,784 @@
+ #pragma XOPTS(FEPI)                                          /* @L1C*/
+
+ /*********************************************************************
+ *                                                                    *
+ *     MODULE NAME = DFH0CZXS                                         *
+ *                                                                    *
+ *     DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample Program:           *
+ *                        Setup.                                      *
+ *                        C version                                   *
+ *                                                                    *
+ *                                                                    *
+ *                                                                    *
+ *           Licensed Materials - Property of IBM                     *
+ *                                                                    *
+ *           "Restricted Materials of IBM"                            *
+ *                                                                    *
+ *           5655-Y04                                                 *
+ *                                                                    *
+ *           (C) Copyright IBM Corp. 1998"                            *
+ *                                                                    *
+ *                                                                    *
+ *                                                                    *
+ *                                                                    *
+ *     FUNCTION = This program installs the resources                 *
+ *                (property sets, nodes, targets, pools)              *
+ *                used by the FEPI sample programs.                   *
+ *                                                                    *
+ *     TRANSACTION NAME = CZXS                                        *
+ *                                                                    *
+ **********************************************************************
+ *                                                                    *
+ *     OVERVIEW                                                       *
+ *                                                                    *
+ *     This program is used to install property sets, nodes, targets, *
+ *     and pools prior to the use of the FEPI sample programs.        *
+ *                                                                    *
+ *     The definitions of each of these resources are organized so    *
+ *     they can easily be changed.  They are kept separate from the   *
+ *     processing that does the installation, and there is no         *
+ *     hard-coding of values in the CICS commands.  There are four    *
+ *     main tables, holding details of each resource type.  This      *
+ *     enables the resources to be changed by repeating sets of       *
+ *     definitions which are in an easy-to-understand form.  If       *
+ *     desired, the program could be changed to obtain the resource   *
+ *     definitions from a file.                                       *
+ *                                                                    *
+ *     The resources defined are:                                     *
+ *       Pool     Property set   Node(s)                Target(s)     *
+ *       POOL1    PROPSET1       NODE1  NODE2  NODE3    TARGET1       *
+ *                               NODE4  NODE5                         *
+ *       POOL2    PROPSET2       NODE6  NODE7  NODE8    TARGET1       *
+ *                               NODE9  NODE10                        *
+ *       POOL3    PROPSET3       NODE1  NODE2  NODE3    TARGET2       *
+ *                               NODE4  NODE5                         *
+ *                                                                    *
+ *     You should customize these definitions to match the            *
+ *     requirements of your system.  If you do, you may also need     *
+ *     to change the definitions in the sample customization          *
+ *     constants copy book, DFH0BZCx.  You do not need to change      *
+ *     any other samples - you need simply reassemble them.           *
+ *                                                                    *
+ *     Each table is processed in turn.  Nodes and targets are        *
+ *     organized into lists for reasons of efficiency.                *
+ *     Details of resource installation are written to the CICS log   *
+ *     automatically by FEPI.                                         *
+ *                                                                    *
+ *     On completion, a message is sent.  The setup program would     *
+ *     typically be started by a PLT program, in which case the       *
+ *     message will go to the CICS log.  It can, however, be invoked  *
+ *     from a terminal, when the message will be sent to the          *
+ *     terminal.                                                      *
+ *                                                                    *
+ *     For clarity, error checking is minimal.  In particular, the    *
+ *     FEPI INSTALL commands do not check errors at all, because      *
+ *     FEPI will report any errors that occur to the FEPI transient   *
+ *     data queue, and they will then be recorded by the sample       *
+ *     monitor program.                                               *
+ *                                                                    *
+ **********************************************************************
+ *                                                                    *
+ *     PROGRAM LOGIC                                                  *
+ *                                                                    *
+ *     For each property set in table                                 *
+ *         FEPI INSTALL PROPERTYSET                                   *
+ *                                                                    *
+ *     For each node in table                                         *
+ *         Add node to list                                           *
+ *     FEPI INSTALL NODELIST                                          *
+ *                                                                    *
+ *     For each target in table                                       *
+ *         Add target to list                                         *
+ *     FEPI INSTALL TARGETLIST                                        *
+ *                                                                    *
+ *     For each pool in table                                         *
+ *         Start new lists of nodes and targets                       *
+ *         For each entry within pool definition                      *
+ *             If node, add details to node list                      *
+ *             If target, add details to target list                  *
+ *         FEPI INSTALL POOL with NODELIST and TARGETLIST             *
+ *                                                                    *
+ *     Send completion message                                        *
+ *     RETURN                                                         *
+ *                                                                    *
+ *--------------------------------------------------------------------*
+ *                                                                    *
+ * CHANGE ACTIVITY :                                                  *
+ *                                                                    *
+ *       $MOD(DFH0CZXS),COMP(SAMPLES),PROD(CICS TS ):                 *
+ *                                                                    *
+ *    PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+ *   $L1= M28379 530 980806 HD7OPJW: Incorrect #pragmas               *
+ *                                                                    *
+ *********************************************************************/
+
+
+ /*********************************************************************
+ *             Includes and function definitions                      *
+ *********************************************************************/
+
+ /*  DFH0BZMC defines the messages and other text used by the        */
+ /*  FEPI sample programs.                                           */
+
+ #include "dfh0bzmc.h"
+
+ /*  C functions.                                                    */
+
+ #include "string.h"
+
+ /*  Functions defined in this program.                              */
+
+ void b_props(void);
+ void b_nodes(void);
+ void b_tgts(void);
+ void b_pools(void);
+
+ /*  Constants.                                                      */
+
+ #define FEPINAME      8
+ static const char *const c_start_term = "TD";
+
+
+ /*********************************************************************
+ *             Property set table                                     *
+ *********************************************************************/
+
+ /*  This table defines the property sets that are used by the       */
+ /*  FEPI sample programs. You can add new property sets by copying  */
+ /*  an entry and changing the definitions as required.              */
+
+ /* There is one property set for each data type and mode:           */
+ /* SLU2 data stream, SLU2 formatted, and SLU P.                     */
+ /*                                                                  */
+ /* For the SLU2 cases, begin-session, end-session, and unsolicited  */
+ /* data transactions are specified, and the exceptional event queue */
+ /* is the common FEPI queue.  CONTENTION is set to 'WIN', to        */
+ /* match the action of a real terminal.                             */
+ /*                                                                  */
+ /* For SLU P, most properties are set so that the FEPI default is   */
+ /* used.  UNSOLDATACK must be POSITIVE for IMS.                     */
+ /*                                                                  */
+ typedef struct {
+                  const char name[FEPINAME];
+                  const long device;
+                  const long format;
+                  const long contentn;
+                  const long initial;
+                  const char stsn[04];
+                  const char begnsess[04];
+                  const char endsess[04];
+                  const char excepq[04];
+                  const char unsoldata[04];
+                  const long unsoldatack;
+                  const long maxfln;
+                } PROPERTYSETS;
+
+ static PROPERTYSETS aproperty[] =
+        {
+
+          { "PROPSET1",
+            DFHVALUE(T3278M2),
+            DFHVALUE(DATASTREAM),
+            DFHVALUE(WIN),
+            DFHVALUE(INBOUND),
+            "    ",                /* STSN              */
+            "CZUC",                /* Begin-session     */
+            "CZUU",                /* End-session       */
+            "CSZX",                /* Exception queue   */
+            "CZUX",                /* Unsolicited data  */
+            DFHVALUE(NOTAPPLIC),   /* Unsoldatack       */
+            2048L                  /* Max length        */
+          },
+
+          { "PROPSET2",
+            DFHVALUE(T3278M2),
+            DFHVALUE(FORMATTED),
+            DFHVALUE(WIN),
+            DFHVALUE(INBOUND),
+            "    ",                /* STSN              */
+            "CZUC",                /* Begin-session     */
+            "CZUU",                /* End-session       */
+            "CSZX",                /* Exception queue   */
+            "CZUX",                /* Unsolicited data  */
+            DFHVALUE(NOTAPPLIC),   /* Unsoldatack       */
+            2048L                  /* Max length        */
+          },
+
+          { "PROPSET3",
+            DFHVALUE(LUP),
+            DFHVALUE(NOTAPPLIC),
+            DFHVALUE(WIN),
+            DFHVALUE(NOTINBOUND),
+            "CZQS",                /* STSN              */
+            "    ",                /* Begin-session     */
+            "    ",                /* End-session       */
+            "CSZX",                /* Exception queue   */
+            "    ",                /* Unsolicited data  */
+            DFHVALUE(POSITIVE),    /* Unsoldatack       */
+            2048L                  /* Max length        */
+          },
+
+        };
+
+ /*  Number of property sets.                                        */
+
+ #define PROPNUM (sizeof(aproperty) / sizeof(PROPERTYSETS))
+
+
+ /*********************************************************************
+ *             Node table                                             *
+ *********************************************************************/
+
+ /*  This table defines the nodes that are used by the               */
+ /*  FEPI sample programs.  You can add new nodes by copying         */
+ /*  an entry and changing the definitions as required.              */
+
+ /*  Each node name has associated with it a password, which may be  */
+ /*  set to nulls to indicate no password is needed.                 */
+
+ typedef struct {
+                  const char node[FEPINAME];
+                  const char password[FEPINAME];
+                } NODES;
+
+ static NODES anodes[] =
+        {
+          { "NODE1   ", "\0\0\0\0\0\0\0\0" },
+          { "NODE2   ", "PASSWORD"         },
+          { "NODE3   ", "\0\0\0\0\0\0\0\0" },
+          { "NODE4   ", "PASSWORD"         },
+          { "NODE5   ", "\0\0\0\0\0\0\0\0" },
+          { "NODE6   ", "PASSWORD"         },
+          { "NODE7   ", "\0\0\0\0\0\0\0\0" },
+          { "NODE8   ", "PASSWORD"         },
+          { "NODE9   ", "\0\0\0\0\0\0\0\0" },
+          { "NODE10  ", "PASSWORD"         }
+        };
+
+ /*  Number of nodes.                                                */
+
+ #define NODENUM (sizeof(anodes) / sizeof(NODES))
+
+
+ /*********************************************************************
+ *             Target table                                           *
+ *********************************************************************/
+
+ /*  This table defines the targets that are used by the             */
+ /*  FEPI sample programs.  You can add new targets by copying       */
+ /*  an entry and changing the definitions as required.              */
+
+ /*  Each target name has associated with it an application ID.      */
+ /*  Target names can be specified with the same value as the        */
+ /*  application ID to which they refer, but it is recommended that  */
+ /*  logical target names are used.  This allows back-end name       */
+ /*  changes to be accommodated by changing only the setup program,  */
+ /*  and not all the front-end applications.                         */
+
+ typedef struct {
+                  const char target[FEPINAME];
+                  const char applid[FEPINAME];
+                } TARGETS;
+
+ static TARGETS atargs[] =
+        {
+          { "TARGET1 ", "CICS1   " },
+          { "TARGET2 ", "IMS1    " }
+        };
+
+ /*  Number of targets.                                              */
+
+ #define TARGNUM (sizeof(atargs) / sizeof(TARGETS))
+
+
+ /*********************************************************************
+ *             Pool table                                             *
+ *********************************************************************/
+
+ /*  This table defines the pools that are used by the               */
+ /*  FEPI sample programs.  You can add new pools or change the      */
+ /*  pool structure.  Note that a given node-target pair must not    */
+ /*  exist in more than one pool.                                    */
+
+ /*  The table defines the relationships of the pools to property    */
+ /*  sets, targets and nodes in the following way.                   */
+ /*  Each pool definition is an entry (C05_POOLn) which comprises:   */
+ /*                                                                  */
+ /*   header information:                                            */
+ /*       flag C_TYPE_POOL
+ /*       8-character pool name.                                     */
+ /*       flag C_TYPE_PROP                                           */
+ /*       8-character property set name.                             */
+ /*                                                                  */
+ /*   followed by:                                                   */
+ /*       list of nodes and targets associated with this pool.       */
+ /*       Each node or target in the list is defined by:             */
+ /*           flag C_TYPE_NODE or C_TYPE_TARGET                      */
+ /*           8-character name                                       */
+
+ typedef struct {
+                  const char type;
+                  const char name[FEPINAME];
+                } POOLS;
+ #define C_TYPE_POOL   'P'
+ #define C_TYPE_PROP   ' '
+ #define C_TYPE_NODE   'N'
+ #define C_TYPE_TARGET 'T'
+
+ static POOLS apools[] =
+        {
+
+          { C_TYPE_POOL,   "POOL1   " },
+          { C_TYPE_PROP,   "PROPSET1" },
+          { C_TYPE_NODE,   "NODE1   " },
+          { C_TYPE_NODE,   "NODE2   " },
+          { C_TYPE_NODE,   "NODE3   " },
+          { C_TYPE_NODE,   "NODE4   " },
+          { C_TYPE_NODE,   "NODE5   " },
+          { C_TYPE_TARGET, "TARGET1 " },
+
+          { C_TYPE_POOL,   "POOL2   " },
+          { C_TYPE_PROP,   "PROPSET2" },
+          { C_TYPE_NODE,   "NODE6   " },
+          { C_TYPE_NODE,   "NODE7   " },
+          { C_TYPE_NODE,   "NODE8   " },
+          { C_TYPE_NODE,   "NODE9   " },
+          { C_TYPE_NODE,   "NODE10  " },
+          { C_TYPE_TARGET, "TARGET1 " },
+
+          { C_TYPE_POOL,   "POOL3   " },
+          { C_TYPE_PROP,   "PROPSET3" },
+          { C_TYPE_NODE,   "NODE1   " },
+          { C_TYPE_NODE,   "NODE2   " },
+          { C_TYPE_NODE,   "NODE3   " },
+          { C_TYPE_NODE,   "NODE4   " },
+          { C_TYPE_NODE,   "NODE5   " },
+          { C_TYPE_TARGET, "TARGET2 " }
+
+        };
+
+ /*  Number of pool table entries.                                   */
+
+ #define POOLNUM (sizeof(apools) / sizeof(POOLS))
+
+
+ /*********************************************************************
+ *             Main procedure                                         *
+ *********************************************************************/
+
+ /*  This section controls the processing of property sets, nodes    */
+ /*  targets and pools.                                              */
+
+ void main(void)
+ {
+
+    char  startcode[2];      /* CICS start code                      */
+    short slength;           /* Length for CICS commands             */
+    long  llength;           /* Length for CICS commands             */
+
+ /*  Install property sets.                                          */
+
+    b_props();
+
+ /*  Install nodes.                                                  */
+
+    b_nodes();
+
+ /*  Install targets.                                                */
+
+    b_tgts();
+
+ /*  Install pools                                                   */
+ /*  with their associated property sets, targets, and nodes.        */
+
+    b_pools();
+
+ /*  Determine how transaction was started                           */
+ /*  and send completion message appropriately.                      */
+
+    EXEC CICS ASSIGN STARTCODE(startcode);
+
+    if (strncmp(startcode,c_start_term,strlen(c_start_term)) == 0)
+    {
+        slength = strlen(dfh0bzmc_msgp);
+        EXEC CICS SEND
+                  FROM(dfh0bzmc_msgp)
+                  LENGTH(slength)
+                  ERASE;
+    }
+    else
+    {
+        llength = strlen(dfh0bzmc_msgp);
+        EXEC CICS WRITE OPERATOR
+                  TEXT(dfh0bzmc_msgp)
+                  TEXTLENGTH(llength);
+    }
+
+ /*  Return to CICS.                                                 */
+
+    EXEC CICS RETURN;
+
+ }
+
+
+ /*********************************************************************
+ *             Process property sets routine                          *
+ *********************************************************************/
+
+ /*  This section installs the property sets.                        */
+
+ void b_props(void)
+ {
+
+    PROPERTYSETS *pprop;     /* Pointer to current property set      */
+    short index;             /* Index to property set table array    */
+
+ /*  Install each property set.                                      */
+
+    index = -1;
+    while(++index < PROPNUM)
+    {
+        pprop = (PROPERTYSETS *)&aproperty[index].name[0];
+
+ /*  Two formats of the FEPI command are necessary because           */
+ /*  STSN cannot be specified for non-SLU P property sets and        */
+ /*  FORMAT cannot be specified for SLU P.                           */
+ /*  The options used are explained below.                           */
+ /*                                                                  */
+ /*  PROPERTYSET is used to assign processing characteristics        */
+ /*  to a pool or pools.                                             */
+ /*            PROPERTYSET(pprop->name)                              */
+ /*                                                                  */
+ /*  DEVICE is a CVDA specifying the logical device that the         */
+ /*  connection will appear as.                                      */
+ /*            DEVICE(pprop->device)                                 */
+ /*                                                                  */
+ /*  FORMAT is a CVDA specifying the data format: DATASTREAM or      */
+ /*  FORMATTED.                                                      */
+ /*            FORMAT(pprop->format)                                 */
+ /*                                                                  */
+ /*  CONTENTION is a CVDA specifying whether the front-end           */
+ /*  application will win or lose when there is inbound data with a  */
+ /*  'begin bracket' waiting and the it attempts a FEPI SEND.        */
+ /*            CONTENTION(pprop->contentn)                           */
+ /*                                                                  */
+ /*  INITIALDATA determines whether initial inbound data is          */
+ /*  expected or not when a session begins.                          */
+ /*            INITIALDATA(pprop->initial)                           */
+ /*                                                                  */
+ /*  STSN specifies a transaction to be invoked for STSN             */
+ /*  processing.  This option is allowed only on SLU P property sets.*/
+ /*            STSN(pprop->stsn)                                     */
+ /*                                                                  */
+ /*  BEGINSESSION specifies a transaction to be invoked when a       */
+ /*  FEPI session is set to ACQUIRED state.                          */
+ /*            BEGINSESSION(pprop->begnsess)                         */
+ /*                                                                  */
+ /*  ENDSESSION specifies a transaction to be invoked when a         */
+ /*  conversation of a session ends.                                 */
+ /*            ENDSESSION(pprop->endsess)                            */
+ /*                                                                  */
+ /*  EXCEPTIONQ specifies a transient data queue where details of    */
+ /*  exceptional events will be sent.                                */
+ /*            EXCEPTIONQ(pprop->excepq)                             */
+ /*                                                                  */
+ /*  UNSOLDATA specifies a transaction to be invoked when            */
+ /*  unsolicited data is received from the back-end system.          */
+ /*            UNSOLDATA(pprop->unsoldata)                           */
+ /*                                                                  */
+ /*  UNSOLDATACK specifies a response to be sent by FEPI when        */
+ /*  unsolicited data is received from the back-end system,          */
+ /*  rather than invoking a transaction.                             */
+ /*            UNSOLDATA(pprop->unsoldatack)                         */
+ /*                                                                  */
+ /*  MAXFLENGTH is the maximum length of data that can be sent or    */
+ /*  received in one command.                                        */
+ /*            MAXFLENGTH(pprop->maxfln)                             */
+ /*                                                                  */
+ /*  NOHANDLE specifies that errors are to be ignored and that       */
+ /*  the transaction is not to be abended.                           */
+ /*            NOHANDLE                                              */
+
+ /*  For SLU P devices:                                              */
+
+        if (pprop->device == DFHVALUE(LUP))
+            EXEC CICS FEPI INSTALL
+                PROPERTYSET(pprop->name)
+                DEVICE(pprop->device)
+                CONTENTION(pprop->contentn)
+                INITIALDATA(pprop->initial)
+                STSN(pprop->stsn)
+                EXCEPTIONQ(pprop->excepq)
+                UNSOLDATACK(pprop->unsoldatack)
+                MAXFLENGTH(pprop->maxfln)
+                NOHANDLE;
+
+ /*  For non-SLU P devices:                                          */
+
+        else
+            EXEC CICS FEPI INSTALL
+                PROPERTYSET(pprop->name)
+                DEVICE(pprop->device)
+                FORMAT(pprop->format)
+                CONTENTION(pprop->contentn)
+                INITIALDATA(pprop->initial)
+                BEGINSESSION(pprop->begnsess)
+                ENDSESSION(pprop->endsess)
+                EXCEPTIONQ(pprop->excepq)
+                UNSOLDATA(pprop->unsoldata)
+                MAXFLENGTH(pprop->maxfln)
+                NOHANDLE;
+
+ /*  End of loop and routine.                                        */
+
+    } /* while(++index < PROPNUM) */
+ }
+
+
+ /*********************************************************************
+ *             Process nodes routine                                  *
+ *********************************************************************/
+
+ /*  This section installs the nodes.                                */
+
+ void b_nodes(void)
+ {
+
+    short index;                       /* Index to node table array  */
+    char listnode[NODENUM][FEPINAME];  /* List of node names         */
+    char listpass[NODENUM][FEPINAME];  /* List of passwords          */
+
+ /*  Install the nodes.                                              */
+ /*  The nodes and associated passwords are assembled into lists     */
+ /*  which can be installed with a single command rather than        */
+ /*  installing the nodes singly.                                    */
+ /*  Installing a list improves the efficiency of the processing.    */
+ /*                                                                  */
+ /*  The lists are built by making a pass of the node table, storing */
+ /*  the nodes in one list and the passwords in a second list.       */
+
+ /*  Convert node table into separate lists of nodes and passwords.  */
+
+    index = -1;
+    while (++index < NODENUM)
+    {
+        strncpy(&listnode[index][0],
+                &anodes[index].node[0], FEPINAME);
+
+        strncpy(&listpass[index][0],
+                &anodes[index].password[0], FEPINAME);
+    }
+
+ /*  Now install the list of nodes.                                  */
+ /*                                                                  */
+ /*  FEPI INSTALL NODELIST is used to define the nodes to FEPI.      */
+ /*  The options used are explained below.                           */
+ /*                                                                  */
+ /*  NODELIST is a table of 8-character names of nodes.              */
+ /*            NODELIST(&listnode[0][0])                             */
+ /*                                                                  */
+ /*  NODENUM is a count of the number of nodes in the list.          */
+ /*            NODENUM(index)                                        */
+ /*                                                                  */
+ /*  PASSWORDLIST is a table of optional passwords.                  */
+ /*  These correspond one-to-one with the list of nodes.             */
+ /*  Nulls can be used to indicate that there is no password for the */
+ /*  corresponding node.                                             */
+ /*  If no node has a password, it is unnecessary to specify the     */
+ /*  password list at all.                                           */
+ /*            PASSWORDLIST(&listpass[0][0])                         */
+ /*                                                                  */
+ /*  NOHANDLE specifies that errors are to be ignored and that       */
+ /*  the transaction is not to be abended.                           */
+ /*            NOHANDLE                                              */
+
+     EXEC CICS FEPI INSTALL
+         NODELIST(&listnode[0][0])
+         NODENUM(index)
+         PASSWORDLIST(&listpass[0][0])
+         NOHANDLE;
+
+ /*  End of routine.                                                 */
+
+ }
+
+
+ /*********************************************************************
+ *             Process targets routine                                *
+ *********************************************************************/
+
+ /*  This section installs the targets.                              */
+
+ void b_tgts(void)
+ {
+
+    short index;                       /* Index to target table array*/
+    char listtarg[TARGNUM][FEPINAME];  /* List of target names       */
+    char listappl[TARGNUM][FEPINAME];  /* List of appl IDs           */
+
+ /*  Install the targets.                                            */
+ /*  The targets and associated appl IDs are assembled into lists    */
+ /*  which can be installed with a single command rather than        */
+ /*  installing the targets singly.                                  */
+ /*  Installing a list improves the efficiency of the processing.    */
+ /*                                                                  */
+ /*  The lists are built by making a pass of the target table,       */
+ /*  storing the targets in one list and the appl IDs in another.    */
+
+ /*  Convert target table into separate lists of targets and         */
+ /*  appl IDs.                                                       */
+
+    index = -1;
+    while (++index < TARGNUM)
+    {
+        strncpy(&listtarg[index][0],
+                &atargs[index].target[0], FEPINAME);
+
+        strncpy(&listappl[index][0],
+                &atargs[index].applid[0], FEPINAME);
+    }
+
+ /*  Now install the list of targets.                                */
+ /*                                                                  */
+ /*  FEPI INSTALL TARGETLIST is used to define the targets to FEPI.  */
+ /*                                                                  */
+ /*  TARGETLIST is a table of 8-character names of targets.          */
+ /*            TARGETLIST(&listtarg[0][0])                           */
+ /*                                                                  */
+ /*  TARGETNUM is a count of the number of nodes in the list.        */
+ /*            TARGETNUM(index)                                      */
+ /*                                                                  */
+ /*  APPLLIST is a table of required appl IDs.                       */
+ /*  These correspond one-to-one with the list of targets.           */
+ /*            APPLLIST(&listappl[0][0])                             */
+ /*                                                                  */
+ /*  NOHANDLE specifies that errors are to be ignored and that       */
+ /*  the transaction is not to be abended.                           */
+ /*            NOHANDLE                                              */
+
+     EXEC CICS FEPI INSTALL
+         TARGETLIST(&listtarg[0][0])
+         TARGETNUM(index)
+         APPLLIST(&listappl[0][0])
+         NOHANDLE;
+
+ /*  End of routine.                                                 */
+
+ }
+
+
+ /*********************************************************************
+ *             Process pools routine.                                 *
+ *********************************************************************/
+
+ /*  This section installs the pools.                                */
+
+ void b_pools(void)
+ {
+
+    short index;                       /* Index to pool table array  */
+    short ipoolname;                   /* Index of name of pool      */
+    short ipropname;                   /* Index of name of prop set  */
+    short inodes;                      /* Index to list of nodes     */
+    short itargs;                      /* Index of list of targets   */
+    char listnode[POOLNUM - 2][FEPINAME];
+                                       /* List of node names         */
+    char listtarg[POOLNUM - 2][FEPINAME];
+                                       /* List of target names       */
+
+ /*  Install pools with associated property sets, targets and nodes. */
+ /*  Once again, the targets and nodes are gathered into lists to    */
+ /*  improve efficiency.  The data in the pool table is scanned,     */
+ /*  extracting the pool name, the property set name, and then the   */
+ /*  lists of nodes and targets to be associated with the named pool.*/
+
+    index = 0;
+    while (index < POOLNUM)
+    {
+
+ /*  Pool header: store the name and the property set name.          */
+
+        ipoolname = index++;
+        ipropname = index++;
+
+ /*  Put the target and node entries associated with this            */
+ /*  pool into two lists.                                            */
+
+        inodes = 0;
+        itargs = 0;
+        while ((index < POOLNUM) &&
+               (toupper(apools[index].type) != C_TYPE_POOL))
+        {
+            switch (toupper(apools[index].type))
+            {
+
+ /*  Check for node, if so add to node list.                         */
+
+                case C_TYPE_NODE:
+                    strncpy(&listnode[inodes++][0],
+                            &apools[index].name[0], FEPINAME);
+                    break;
+
+ /*  Check for target, if so add to target list.                     */
+
+                case C_TYPE_TARGET:
+                    strncpy(&listtarg[itargs++][0],
+                            &apools[index].name[0], FEPINAME);
+                    break;
+
+ /*  Move to next entry in list, and loop.                           */
+
+            } /* switch */
+            index++;
+        } /* while */
+
+ /*  At end of entries for this pool.                                */
+ /*  inodes and itargs are the node and target counts.               */
+
+ /*  Install the pool with associated targets and nodes, using       */
+ /*  lists for efficiency.                                           */
+ /*                                                                  */
+ /*  FEPI INSTALL POOL defines the pools to FEPI,                    */
+ /*  and optionally associates nodes and targets with the pool.      */
+ /*                                                                  */
+ /*  PROPERTYSET defines the characteristics of the pool.            */
+ /*  This affects how the back-end system is perceived by the        */
+ /*  front-end applications.                                         */
+ /*        PROPERTYSET(&apools[ipropname].name[0])                   */
+ /*                                                                  */
+ /*  NODELIST is the list of nodes to be used by the pool. Each      */
+ /*  node in this list can make a connection with each target in     */
+ /*  the pool.                                                       */
+ /*        NODELIST(&listnode[0][0])                                 */
+ /*                                                                  */
+ /*  NODENUM is the count of nodes to be associated with a pool.     */
+ /*        NODENUM(inodes)                                           */
+ /*                                                                  */
+ /*  TARGETLIST is the targets to be associated with the pool.       */
+ /*        TARGETLIST(&listtarg[0][0])                               */
+ /*                                                                  */
+ /*  TARGETNUM is the count of targets to be associated with the     */
+ /*  pool.                                                           */
+ /*        TARGETNUM(itargs)                                         */
+ /*                                                                  */
+ /*  NOHANDLE specifies that errors are to be ignored and that       */
+ /*  the transaction is not to be abended.                           */
+ /*        NOHANDLE                                                  */
+
+        EXEC CICS FEPI INSTALL POOL(&apools[ipoolname].name[0])
+            PROPERTYSET(&apools[ipropname].name[0])
+            NODELIST(&listnode[0][0])
+            NODENUM(inodes)
+            TARGETLIST(&listtarg[0][0])
+            TARGETNUM(itargs)
+            NOHANDLE;
+
+ /*  End of loop and routine.                                        */
+
+    } /* while (index < POOLNUM) */
+ }
+
+
+ /*********************************************************************
+ *             End of program DFH0CZXS                                *
+ *********************************************************************/

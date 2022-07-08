@@ -1,0 +1,2345 @@
+       PROCESS CICS('COBOL3,APOST,SP')
+       PROCESS APOST TRUNC(BIN) NOSSRANGE
+       Identification Division.
+       Program-id. DFH0CBRF
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CBRF                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Sample Formatter routine                   *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1998, 2003"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * Transport mechanism specific code is documented at the end    *
+      * of this code.                                                 *
+      *                                                               *
+      * On each request passed to the exit the following happens -    *
+      *     For SENDS and CONVERSE data is copied from the BRXA       *
+      *     into storage getmained by the exit. The address of this   *
+      *     storage is placed in the user area so that the bridge     *
+      *     program can access it.                                    *
+      *                                                               *
+      *     For RECEIVES, CONVERSE and RETRIEVE data is copied from   *
+      *     the data block, supplied by the bridge, into the BRXA.    *
+      *                                                               *
+      * More data will only be requested when a receive command is    *
+      * being processed and end of input ocurrs. Therefore to ensure  *
+      * that all your retrieve data is available to the URM it should *
+      * be sent in the first data string.                             *
+      *                                                               *
+      * The maximum record size for a record is given by              *
+      * the variable 'tm-block-length'. You may modify this value     *
+      * within the range allowed by the transport mechanism in order  *
+      * to optimise the storage used by bridge transactions.          *
+      *                                                               *
+      * There is a single input message which contains both retrieve  *
+      * and recieve vectors. The current position in this message     *
+      * is the input-offset. When the next vector requested is        *
+      * a receive vector the message is search until a receive        *
+      * vector is found. On the way, any retrieve vector found        *
+      * are added onto the bottom of a chain of getmained vectors.    *
+      * When the next requested vector is a retrieve vector,          *
+      * firstly the chain of getmained vectors is checked. If there   *
+      * is nothing there the input message is scanned for the next    *
+      * retrieve vector. If it is found it is flagged a read.         *
+      * The input-offset is not updated.                              *
+      * All retrieve vectors must be in the first message.            *
+      *****************************************************************
+      * This program is divided into the following groups of sections.*
+      * Each Group contain related routines.                          *
+      *                                                               *
+      * MAIN PROCESSING                                               *
+      *   main-processing                                             *
+      *   tc-command-check                                            *
+      *   bms-command-check                                           *
+      *   ic-command-check                                            *
+      *   round-brmq-from-length                                      *
+      *   round-space-needed                                          *
+      *   round-adsl-len                                              *
+      *   round-adsl-offset                                           *
+      *   calculate-adsl-length                                       *
+      *   calculate-adsdl-length                                      *
+      *                                                               *
+      * INPUT ROUTINES                                                *
+      *   tc-receive                                                  *
+      *   bms-receive-map                                             *
+      *   ic-retrieve                                                 *
+      *   find-receive-vector                                         *
+      *   stack-brmq-rt-vector                                        *
+      *   unstack-brmq-rt-vector                                      *
+      *                                                               *
+      * OUTPUT ROUTINES                                               *
+      *   tc-send                                                     *
+      *   bms-send                                                    *
+      *                                                               *
+      * MESSAGE ROUTINES                                              *
+      *   get-more-data                                               *
+      *   erase-output-brmq-vectors                                   *
+      *   add-output-brmq-vector                                      *
+      *   add-request-brmq-vector                                     *
+      *   check-space-needed                                          *
+      *                                                               *
+      * DECODE INBOUND VECTORS                                        *
+      *   decode-brmq-re-vector                                       *
+      *   decode-brmq-rm-vector                                       *
+      *   decode-brmq-rt-vector                                       *
+      *   decode-ads                                                  *
+      *                                                               *
+      * DECODE ADS SUB-VECTORS                                        *
+      *                                                               *
+      * BUILD OUTBOUND VECTORS                                        *
+      *   build-vector-header                                         *
+      *   build-brmq-se-vector                                        *
+      *   build-brmq-ie-vector                                        *
+      *   build-brmq-sc-vector                                        *
+      *   build-brmq-sm-vector                                        *
+      *   build-brmq-st-vector                                        *
+      *   convert-converse-to-send                                    *
+      *                                                               *
+      * BUILD ADS SUB-VECTORS                                         *
+      *   build-3270-data                                             *
+      *   build-3270-data-plus-pga                                    *
+      *   build-ads                                                   *
+      *   build-adsl                                                  *
+      *                                                               *
+      * BUILD ADSD SUB-VECTORS                                        *
+      *   build-adsd                                                  *
+      *   build-adsdlo                                                *
+      *   build-adsdli                                                *
+      *   build-adsdl-header                                          *
+      *   build-adsdl-field                                           *
+      *   build-brmq-adsd-vector                                      *
+      *                                                               *
+      * BUILD REQUESTOR VECTORS                                       *
+      *   build-brmq-rer-vector                                       *
+      *   build-brmq-rmr-vector                                       *
+      *                                                               *
+      * DATA VALIDATION ROUTINES                                      *
+      *   validate-brxa                                               *
+      *   validate-brxa-subareas                                      *
+      *   validate-user-data                                          *
+      *   validate-brmq-rm                                            *
+      *   validate-brmq-re                                            *
+      *   validate-brmq-rt                                            *
+      *                                                               *
+      * TRACE ROUTINES                                                *
+      *   trace-brmq-input                                            *
+      *   trace-brmq-stack                                            *
+      *   trace-brmq-unstack                                          *
+      *   trace-brmq-output                                           *
+      *   trace-brmq-skip                                             *
+      *                                                               *
+      *****************************************************************
+      * List of Abend Codes                                           *
+      * Some abends do not result in the abend code returned to the   *
+      * to the user due to inconsistancy in the state data.           *
+      * These are indicated by Reply No                               *
+      * Some abends result in an exception trace being issued.        *
+      *****************************************************************
+      * Abend Description of error                        Reply Trace *
+      * ABX1  Invalid BRXA-HEADER                           No   11   *
+      * ABX2  Invalid BRXA-TRANSACTION-AREA                 No   12   *
+      * ABX3  Invalid BRXA-COMMAND-AREA                     No   13   *
+      * ABX5  No user area                                  No   15   *
+      * ABX6  Invalid User area                             No   16   *
+      * ABX7  Output message exceeds size of buffer              17   *
+      * ABX8  Requested mapset name does not match vector        18   *
+      * ABX9  Requested map name does not match vector           19   *
+      * ABXA  Incorrect type of receive vector found             20/50*
+      * ABXH  More data requested, but non-conversational             *
+      * ABXM  Invalid BRXA - function or command detected        33   *
+      * ABXN  Input message too short                            34   *
+      * ABXO  Invalid BRMQ vector                                35(*)*
+      * ABXP  Invalid BRMQ vector header                         36(*)*
+      * ABXQ  No ADSD when external format requested             37   *
+      *****************************************************************
+      * Trace point descriptions:                                     *
+      *   Single digit trace points are traced if BR=2.               *
+      *   Double digit trace points are exception traces associated   *
+      *   with abend codes.                                           *
+      *   Up to 4000 bytes of data is traced.                         *
+      *   (*) The input-message and error-offset (50,51) are also     *
+      *       traced for these abend codes.                           *
+      *****************************************************************
+      * No.  Data traced                                       Abend  *
+      *****************************************************************
+      *  1 - Input message                                     n/a    *
+      *  3 - Output message                                    n/a    *
+      *  4 - Input BRMQ vector                                 n/a    *
+      *  5 - Stack BRMQ retrieve vector                        n/a    *
+      *  6 - Unstack BRMQ retrieve vector                      n/a    *
+      *  7 - Output BRMQ vector                                n/a    *
+      *  8 - Skip BRMQ recieve vector                          n/a    *
+      * 11 - BRXA-HEADER                                       ABX1   *
+      * 12 - BRXA-TRANSACTION-AREA                             ABX2   *
+      * 13 - BRXA-COMMAND-AREA                                 ABX3   *
+      * 15 - USER-AREA                                         ABX5   *
+      * 16 - USER-AREA                                         ABX6   *
+      * 17 - msg-hdr-len space-needed output-max-flength       ABX7   *
+      * 20 - BRMQ                                              ABXA   *
+      * 33 - BRMQ                                              ABXM   *
+      * 35 - BRMQ                                              ABXO   *
+      * 36 - BRMQ                                              ABXP   *
+      * 37 - BRXA-COMMAND-AREA                                 ABXQ   *
+      * 50 - BRXA-COMMAND-AREA                                 n/a    *
+      * 51 - INPUT-MESSAGE                                     n/a    *
+      * 52 - ERROR-OFFSET                                      n/a    *
+      *****************************************************************
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *     $SEG(DFH0CBRF),COMP(BRIDGE),PROD(CICS TS ):               *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      *    $01= A70813 630 030225 HDBGNRB: Migrate PQ70813 from SPA R6*
+      * $L0= 732    530 980414 HDDLCRP : Created                      *
+      * $P2= M29659 530 980819 HDDLCRP : Message validation errors    *
+      * $P3= M29887 530 981201 HDDLCRP : Trace error-offset           *
+      * $P4= M29295 530 981208 HDDLCRP : Multiple retrieves fail      *
+      * $P5= M30288 530 981214 HDDLCRP : ADSDL offset should be fullw *
+      * $P7= M31138 530 990112 HDDLCRP : ADSL and ADSDL values incorr *
+      * $P8= M31155 530 990120 HDDLCRP : BTS messages >32K            *
+      * $P9= M31497 530 990128 HDDLCRP : Incorrect BRMQ-SM-ADSD-OFFSE *
+      * $PA= M31568 530 990204 HDDLCRP : Multiple retrieves fail ABXF *
+      * $PB= M31843 530 990422 HDDLCRP : Add output-max-flength       *
+      * $PC= D00650 620 010209 HDDLCRP : Compile option NOSSRANGE     *
+      * $PD= D02488 620 010917 HDDLCRP : Start bridge outline field   *
+      * $PE= D02813 620 011030 HDDLCRP : Bridge exit samples do not c *
+      *****************************************************************
+       Environment Division.
+       Data Division.
+      *****************************************************************
+       Working-storage section.
+      *****************************************************************
+
+      *****************************************************************
+      * BRXA Constants                                                *
+      *****************************************************************
+       copy DFHBRACO.
+
+      *****************************************************************
+      * BMS Constants                                                 *
+      *****************************************************************
+       copy DFHBMSCA.
+
+      *****************************************************************
+      * Miscellaneous local declarations                              *
+      *****************************************************************
+
+       01 program-working-storage.
+        03 filler                      pic x(16)
+                                         value '>WORKING STORAGE'.
+        03 user-area-eye               pic x(16)
+                                         value '>USER-AREA======'.
+        03 response.
+          05 resp                      pic s9(8) comp.
+          05 resp2                     pic s9(8) comp.
+        03 rc                          pic s9(8) comp.
+           88 rc-ok                      value 0.
+           88 rc-error                   value 1.
+        03 data-flag                   pic s9(8) comp.
+           88 data-not-sent              value 0.
+           88 data-sent                  value 1.
+        03 wait-flag                   pic s9(8) comp.
+           88 get-no-wait                value 0.
+           88 get-wait                   value 1.
+        03 receive-flag                pic s9(8) comp.
+          88 receive-not-found           value 0.
+          88 receive-found               value 1.
+        03 save-input-offset           pic s9(8) comp.
+        03 data-offset                 pic s9(8) comp.
+        03 adso-data-offset            pic s9(8) comp.
+        03 next-adsl-offset            pic s9(8) comp.
+      * send-output-offset moved to user area by @BA70813
+      * 03 send-output-offset          pic s9(8) comp.
+        03 space-needed                pic s9(8) comp.
+        03 data-plus-pga               pic s9(8) comp.
+        03 ads-offset                  pic s9(8) comp.
+        03 chained-block-ptr           pointer.
+        03 chain-block-length          pic s9(8) comp.
+        03 outbound-vector             pic x(1) value 'O'.
+        03 inbound-vector              pic x(1) value 'I'.
+        03 null-image                  pic x(1) value LOW-VALUE.
+        03 div-quot                    pic s9(4) comp.
+        03 div-rem                     pic s9(4) comp.
+        03 field-offset                pic s9(8) comp.
+        03 rounded-field-len           pic s9(8) comp.
+        03 adsl-len                    pic s9(8) comp.
+        03 adsdl-len                   pic s9(8) comp.
+        03 adsl-offset                 pic s9(8) comp.
+        03 adsdl-offset                pic s9(8) comp.
+        03 field-count                 pic s9(8) comp.
+        03 adsd-value                  pic s9(8) comp.
+        03 trace-num                   pic s9(4) comp.
+        03 trace-flength               pic s9(8) comp.
+        03 max-trace-flength           pic s9(8) comp value 4000.
+        03 abend-code                  pic x(4).
+        03 getmain-offset              pic s9(8) comp.
+        03 getmain-length              pic s9(8) comp.
+        03 i                           pic s9(8) comp.
+        03 dummy                       pic s9(4) comp.
+        03 fullword-bin                pic s9(8) comp.
+        03 fullword-char               redefines fullword-bin.
+          05 filler                    pic x(3).
+          05 fullword-byte             pic x(1).
+        03 trace-data.
+          05 trc-msg-hdr-len           pic s9(8) comp.
+          05 trc-space-needed          pic s9(8) comp.
+          05 trc-output-max-flength    pic s9(8) comp.
+
+      *****************************************************************
+      * Start of transport mechanism specific values                  *
+      *****************************************************************
+        03 trace-resource              pic x(8)  value 'DFH0CBRF'.
+        03 current-time                pic s9(15) comp-3.
+        03 timeout-time                pic s9(15) comp-3.
+        03 delay-interval              pic s9(8) comp.
+        03 max-delay-interval          pic s9(8) comp value 5.
+        03 recovstatus                 pic s9(8) comp.
+        03 record-flag                 pic s9(8) comp.
+          88 record-not-found            value 0.
+          88 record-found                value 1.
+
+      *****************************************************************
+      * Message constants                                             *
+      * Note: these are the same as MQSeries/ESA 1.2 in CMQV          *
+      *****************************************************************
+      *01 msg-constants.
+      *copy DFHBRMCO REPLACING ==77== BY ==10==.
+
+      *****************************************************************
+       Linkage section.
+      *****************************************************************
+
+      *****************************************************************
+      * BRXA Structure (this is the BREXIT commarea)                  *
+      *****************************************************************
+       copy DFHBRARO.
+      *****************************************************************
+      * Message structures                                            *
+      *****************************************************************
+       01 output-message-area          pic x(32760).
+       01 input-message-area           pic x(32760).
+       01 vector                       pic x(100).
+
+       copy DFHBRMQO.
+
+       01 chained-block.
+          02 next-chained-block-ptr pointer.
+          02 chained-brmq-vector       pic x(30).
+
+       01 from-area                    pic x(1).
+       01 to-area                      pic x(1).
+       01 adso-data-area               pic x(1).
+       01 brmq-adsi-data               pic x(1).
+       01 brmq-adso-data               pic x(1).
+       01 brmq-adsli-data              pic x(1).
+       01 brmq-adslo-data              pic x(1).
+       01 ads-field.
+         03 ads-field-len              pic s9(4) comp.
+         03 ads-field-3270-attr        pic x(1).
+         03 ads-field-data-plus-attr   pic x(1).
+
+       01 trace-area                   pic x(4000).
+
+      *****************************************************************
+      * The user area is created by the exit progam. It is used to    *
+      * store information required by the exit program.               *
+      * This information needs to be saved over multiple calls to the *
+      * exit by the same task. The address is saved in the BRXA.      *
+      *****************************************************************
+       01 user-area.
+       copy DFH0CBRU.
+
+      *****************************************************************
+       Procedure Division.
+      *****************************************************************
+      *****************************************************************
+      *****************************************************************
+      ** MAIN PROCESSING                                             **
+      *****************************************************************
+      *****************************************************************
+       main-processing section.
+
+           set rc-ok to TRUE
+
+      *****************************************************************
+      * Address and validate BRXA and subareas                        *
+      * Note that the brxa-ads-descriptor-ptr could be zero.          *
+      *****************************************************************
+           set address of brxa-header to address of dfhcommarea
+           perform validate-brxa
+
+           set address of brxa-transaction-area
+                       to brxa-transaction-area-ptr
+           set address of brxa-command-common
+                       to brxa-command-area-ptr
+           set address of brxa-bms-command
+                       to brxa-command-area-ptr
+           set address of user-area
+                       to brxa-user-area-ptr
+           set address of from-area
+                       to brxa-from-ptr
+           set address of input-message-area
+                       to input-message-area-ptr
+           set address of output-message-area
+                       to output-message-area-ptr
+           set address of ads-descriptor
+                       to brxa-ads-descriptor-ptr
+
+           perform validate-brxa-subareas
+
+           if brxa-function-code = brxa-bms
+              if ( brxa-command-code = brxa-receive-map or
+                   brxa-command-code = brxa-send-map ) and
+                 external-message-format  and
+                 brxa-from-len not = ZERO and
+                 brxa-ads-descriptor-ptr = NULLS
+                 perform abend-abxq
+              end-if
+              if external-message-format
+                 perform calculate-adsl-length
+              end-if
+              perform calculate-adsdl-length
+           end-if
+
+           if msg-not-validated
+              move input-offset to save-input-offset
+              perform validate-input-message
+              set msg-validated to TRUE
+              move save-input-offset to input-offset
+           end-if
+
+      *****************************************************************
+      * Process request according to function and command codes.      *
+      * Set rc-error if invalid command.                              *
+      *****************************************************************
+           evaluate brxa-function-code
+             when brxa-tc     perform tc-command-check
+             when brxa-bms    perform bms-command-check
+             when brxa-ic     perform ic-command-check
+             when other       set rc-error to TRUE
+           end-evaluate
+
+           if rc-error
+              perform abend-abxm
+           end-if
+
+      *****************************************************************
+      * Normal return                                                 *
+      *****************************************************************
+           EXEC CICS RETURN END-EXEC
+           goback.
+
+      *****************************************************************
+      * TC-COMMAND-CHECK                                              *
+      *   Select type of TC command                                   *
+      *****************************************************************
+       tc-command-check section.
+           evaluate brxa-command-code
+              when brxa-receive
+                 perform tc-receive
+              when brxa-send
+                 perform tc-send
+              when brxa-converse
+                 if brxa-read-nowait-issued = brxa-no
+                    perform tc-send
+                 end-if
+                 perform tc-receive
+              when brxa-issue-eraseaup
+                 perform tc-send
+              when brxa-free
+              when brxa-issue-disconnect
+                 continue
+              when other
+                 set rc-error to TRUE
+           end-evaluate
+           exit.
+
+      *****************************************************************
+      * BMS-COMMAND-CHECK                                             *
+      *   Select type of BMS command                                  *
+      *****************************************************************
+       bms-command-check section.
+           evaluate brxa-command-code
+              when brxa-receive-map   perform bms-receive-map
+              when brxa-send-map
+              when brxa-send-text
+              when brxa-send-control  perform bms-send
+              when other              set rc-error to TRUE
+           end-evaluate
+           exit.
+
+      *****************************************************************
+      * IC-COMMAND-CHECK                                              *
+      *   Select type of IC command                                   *
+      *****************************************************************
+       ic-command-check section.
+           evaluate brxa-command-code
+              when brxa-retrieve      perform ic-retrieve
+              when other              set rc-error to TRUE
+           end-evaluate
+           exit.
+
+      *****************************************************************
+      * ROUND-BRMQ-VECTOR-LENGTH                                      *
+      *   Make brmq-vector-length a multiple of 4                     *
+      *****************************************************************
+       round-brmq-vector-length section.
+           add 3 to brmq-vector-length
+           divide brmq-vector-length by 4 giving brmq-vector-length
+                                          remainder div-rem
+           multiply brmq-vector-length by 4 giving brmq-vector-length
+           exit.
+
+      *****************************************************************
+      * ROUND-SPACE-NEEDED                                            *
+      *   Make space-needed a multiple of 4                           *
+      *****************************************************************
+       round-space-needed section.
+           add 3 to space-needed
+           divide space-needed by 4 giving space-needed
+                                    remainder div-rem
+           multiply space-needed by 4 giving space-needed
+           exit.
+
+      *****************************************************************
+      * ROUND-ADSL-LEN                                                *
+      *   Make adsl-len a multiple of 4                               *
+      *****************************************************************
+       round-adsl-len section.
+           add 3 to adsl-len
+           divide adsl-len by 4 giving adsl-len
+                                remainder div-rem
+           multiply adsl-len by 4 giving adsl-len
+           exit.
+
+      *****************************************************************
+      * ROUND-ADSL-OFFSET                                             *
+      *   Make adsl-offset a multiple of 4                            *
+      *****************************************************************
+       round-adsl-offset section.
+           add 3 to adsl-offset
+           divide adsl-offset by 4 giving adsl-offset
+                                   remainder div-rem
+           multiply adsl-offset by 4 giving adsl-offset
+           exit.
+
+      *****************************************************************
+      * CALCULATE-ADSL-LENGTH                                         *
+      *    Calculate ADSL length (input or output)                    *
+      *    Without going through all the fields it is not possible    *
+      *    to calculate the adsl-len therefore, calculate the         *
+      *    maximum possible adsl-len. This may exceed the real length *
+      *    by up to 3 * adsd-field-count.                             *
+      *****************************************************************
+       calculate-adsl-length section.
+           move ZERO to adsl-len
+           if brxa-ads-descriptor-ptr not = NULLS
+              move brxa-from-len to adsl-len
+              perform round-adsl-len
+              compute
+                 adsl-len = adsl-len +
+                            adsd-field-count *
+                            ( 3                                +
+                              length of brmq-adsl-output-field -
+                              length of brmq-ads-output-field  -
+                              adsd-attribute-number            )
+              end-compute
+           end-if
+           exit.
+
+      *****************************************************************
+      * CALCULATE-ADSDL-LENGTH                                        *
+      *   Calculate length of long form of ADSD                       *
+      *****************************************************************
+       calculate-adsdl-length section.
+           if brxa-ads-descriptor-ptr not = NULLS
+              move ZERO to adsdl-len
+              if adsd-length not = ZERO
+                 compute
+                    adsdl-len = length of ADS-long-descriptor -
+                                length of ADSDL-first-field   +
+                                  adsd-field-count *
+                                ( length of ADS-long-field-descriptor -
+                                  length of ADSDL-next-field )
+                 end-compute
+              end-if
+           end-if
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** INPUT ROUTINES                                              **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * TC-RECEIVE                                                    *
+      *   Address the next receive vector and decode                  *
+      *****************************************************************
+       tc-receive section.
+           set address of brxa-tc-command to brxa-command-area-ptr
+           set address of brmq-vector-header to
+               address of input-message-area(input-offset : 1)
+           perform find-receive-vector
+           perform decode-brmq-re-vector
+           if brmq-re-transmit-send-areas = brxa-no
+              perform erase-output-vectors
+           end-if
+           add brmq-vector-length to input-offset
+           exit.
+
+      *****************************************************************
+      * BMS-RECEIVE-MAP                                               *
+      *   Address the next receive vector and decode                  *
+      *****************************************************************
+       bms-receive-map section.
+           set address of brmq-vector-header to
+               address of input-message-area(input-offset : 1)
+           perform find-receive-vector
+           perform decode-brmq-rm-vector
+           if brmq-rm-transmit-send-areas = brxa-no
+              perform erase-output-vectors
+           end-if
+           add brmq-vector-length to input-offset
+           exit.
+
+      *****************************************************************
+      * IC-RETRIEVE                                                   *
+      *   If retrieve chain not empty, get buffer from there          *
+      *   If retrieve chain empty get data from receive data          *
+      *   If no retrieve data found, return ENDDATA                   *
+      *****************************************************************
+       ic-retrieve section.
+           set address of brxa-ic-command to brxa-command-area-ptr
+           if first-chained-block-ptr not = NULLS
+              perform unstack-brmq-rt-vector
+              set address of chained-block to
+                  unstacked-chained-block-ptr
+              set address of brmq-vector-header to
+                  address of chained-brmq-vector
+              if brxa-trace = brxa-yes
+                 perform trace-brmq-unstack
+              end-if
+              perform decode-brmq-rt-vector
+           else
+              if input-offset not > input-flength
+                 set address of brmq-vector-header to
+                     address of input-message-area(input-offset : 1)
+                 move input-offset to save-input-offset
+                 perform until input-offset > input-flength or
+                    ( brmq-vector-descriptor(1 : 2) = brxa-ic and
+                      brmq-vector-descriptor(3 : 2) = brxa-retrieve )
+                    if brxa-trace = brxa-yes and
+                       brmq-vector-descriptor not = HIGH-VALUE
+                       perform trace-brmq-skip
+                    end-if
+                    add brmq-vector-length to input-offset
+                    set address of brmq-vector-header to
+                       address of input-message-area(input-offset : 1)
+                    set receive-vector-in-msg to TRUE
+                 end-perform
+                 if input-offset not > input-flength
+                    if brxa-trace = brxa-yes
+                       perform trace-brmq-input
+                    end-if
+                    perform decode-brmq-rt-vector
+      *
+      *             Setting brmq-vector-descriptor to HIGH-VALUE
+      *             means this vector has been read
+      *
+                    move HIGH-VALUE to brmq-vector-descriptor
+                    add brmq-vector-length to input-offset
+                 else
+                    perform retrieve-vector-not-found
+                 end-if
+      *
+      *          if we have found receive vectors in the message
+      *          restore the pointer to the original next vector
+      *
+                 if receive-vector-in-msg
+                    move save-input-offset to input-offset
+                 end-if
+              else
+                 perform retrieve-vector-not-found
+              end-if
+           end-if
+           exit.
+
+      *****************************************************************
+      * RETRIEVE-VECTOR-NOT-FOUND                                     *
+      *   We have reached the end of the current message and can't    *
+      *   find a retrieve vector. As long as we haven't seen any      *
+      *   receive vectors, we can request another message.            *
+      *   Otherwise return ENDDATA.                                   *
+      *   A retrieve message can only be requested with nowait        *
+      *   (retrieve messages are not conversational).                 *
+      *   If no data is returned after this request, do not           *
+      *   issue any more requests.                                    *
+      *****************************************************************
+       retrieve-vector-not-found section.
+           if enddata-returned or receive-vector-in-msg
+              move DFHRESP(ENDDATA) to brxa-resp
+              set enddata-returned to TRUE
+           else
+              if brxa-read-nowait-issued = brxa-yes and
+                 msg-hdr-len = (input-offset - 1)
+                 move DFHRESP(ENDDATA) to brxa-resp
+                 set enddata-returned to TRUE
+              else
+                 perform get-more-data
+              end-if
+           end-if
+           exit.
+
+      *****************************************************************
+      * FIND-RECEIVE-VECTOR                                           *
+      *   Look through the input vectors and find the first           *
+      *   non retrieve vector (which by definition is a receive       *
+      *   vector of some flavour).                                    *
+      *****************************************************************
+       find-receive-vector section.
+           set receive-not-found to TRUE
+
+           perform until receive-found
+              perform test before until receive-found or
+                                        input-offset > input-flength
+                 set address of brmq-vector-header to
+                     address of input-message-area(input-offset : 1)
+                 evaluate brmq-vector-descriptor(1 : 2)
+                    when brxa-ic
+                       if brxa-trace = brxa-yes
+                          perform trace-brmq-stack
+                       end-if
+                       perform stack-brmq-rt-vector
+                       add brmq-vector-length to input-offset
+                    when HIGH-VALUE
+                       add brmq-vector-length to input-offset
+                    when other
+                       set receive-found to TRUE
+                       set receive-vector-in-msg to TRUE
+                 end-evaluate
+              end-perform
+              if receive-not-found
+                 if conversational-task
+                    perform get-more-data
+                    set address of brmq-vector-header to
+                        address of input-message-area(input-offset : 1)
+                 else
+                    perform abend-abxh
+                 end-if
+              else
+      *                                                               *
+      *   If message obtained and request was a converse we need      *
+      *   to change the converse to a send request to prevent         *
+      *   the end user application replying to it.                    *
+      *                                                               *
+                 if brxa-function-code       = brxa-tc       and
+                    brxa-command-code        = brxa-converse and
+                    brxa-read-nowait-issued  = brxa-yes      and
+                    brxa-request-next-issued = brxa-no
+                    perform convert-converse-to-send
+                 end-if
+              end-if
+           end-perform
+      * re-address input message                                @01C
+           set address of brmq-vector-header to
+           address of input-message-area(input-offset : 1)
+
+           if brxa-trace = brxa-yes
+              perform trace-brmq-input
+           end-if
+
+           if brmq-vector-descriptor(1 : 2) not = brxa-function-code or
+              brmq-vector-descriptor(3 : 2) not = brxa-command-code
+              perform abend-abxa
+           end-if
+           exit.
+
+      *****************************************************************
+      * STACK-BRMQ-RT-VECTOR                                          *
+      *   Put an unused BRMQ retrieve vector to the retrieve chain    *
+      *****************************************************************
+       stack-brmq-rt-vector section.
+           add 4 to brmq-vector-length giving chain-block-length
+           EXEC CICS GETMAIN FLENGTH(chain-block-length)
+                             SET(chained-block-ptr)
+                             END-EXEC
+           if first-chained-block-ptr = NULLS
+              set first-chained-block-ptr to chained-block-ptr
+           end-if
+           if last-chained-block-ptr not = NULLS
+              set address of chained-block to last-chained-block-ptr
+              set next-chained-block-ptr to chained-block-ptr
+           end-if
+           set last-chained-block-ptr to chained-block-ptr
+           set address of chained-block to chained-block-ptr
+           set next-chained-block-ptr to NULLS
+           move brmq-vector-header(1 : brmq-vector-length) to
+                chained-brmq-vector(1 : brmq-vector-length)
+           exit.
+
+      *****************************************************************
+      * UNSTACK-BRMQ-RT-VECTOR                                        *
+      *   Get an unused BRMQ retrieve vector from the retrieve chain  *
+      *   Data is not freed immediately as the data is returned to    *
+      *   the caller. To prevent a build up of retrieve vectors       *
+      *   we keep the previous one in unstacked-chained-block-ptr     *
+      *   and free that on subsequent unstack calls. Therefore we are *
+      *   one vector out of step.                                     *
+      *   If it is not freed before it will be freed at end of task   *
+      *****************************************************************
+       unstack-brmq-rt-vector section.
+           if unstacked-chained-block-ptr not = NULLS
+              EXEC CICS FREEMAIN
+                        DATAPOINTER(unstacked-chained-block-ptr)
+                        NOHANDLE
+                        END-EXEC
+           end-if
+           set address of chained-block to first-chained-block-ptr
+           set unstacked-chained-block-ptr to first-chained-block-ptr
+           set first-chained-block-ptr to next-chained-block-ptr
+           if first-chained-block-ptr = NULLS
+              set last-chained-block-ptr to NULLS
+           end-if
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** OUTPUT ROUTINES                                             **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * TC-SEND                                                       *
+      *   If data buffer is too small for the data sent, abend        *
+      *   If insufficient space in buffer flush and retry.            *
+      *   Add data to buffer                                          *
+      *   If BRXA-WAIT-INDICATOR then flush.                          *
+      *****************************************************************
+       tc-send section.
+           set address of brxa-tc-command to brxa-command-area-ptr
+           if brxa-command-code = brxa-send or
+              brxa-command-code = brxa-converse
+              move length of brmq-send to space-needed
+              add brxa-from-len to space-needed
+              perform round-space-needed
+           else
+              move length of brmq-issue-eraseaup to space-needed
+           end-if
+           perform check-space-available
+           if brxa-command-code = brxa-send or
+              brxa-command-code = brxa-converse
+              perform build-brmq-se-vector
+           else
+              perform build-brmq-ie-vector
+           end-if
+           move output-offset to send-output-offset
+           perform add-output-brmq-vector
+           if brxa-wait-indicator = brxa-yes
+              move brxa-fmt-write-message to brxa-fmt-response
+           end-if
+           exit.
+
+      *****************************************************************
+      * BMS-SEND                                                      *
+      *   If data buffer is too small for the data sent, abend        *
+      *   If insufficient space in buffer, flush and retry            *
+      *   Add data to buffer                                          *
+      *   If BRXA-WAIT-INDICATOR then flush                           *
+      *****************************************************************
+       bms-send section.
+           evaluate brxa-command-code
+              when brxa-send-text
+      *
+      *   send text mapped contains an additional 4 bytes of data
+      *   know as the page control area (PGA)
+      *
+                 move length of brmq-send-text to space-needed
+                 add brxa-from-len to space-needed
+                 perform round-space-needed
+                 if brxa-text-type = brxa-text-mapped
+                    add 4 to space-needed
+                 end-if
+              when brxa-send-map
+                 move length of brmq-send-map to space-needed
+                 if external-message-format
+                    add adsl-len to space-needed
+                 else
+                    add brxa-from-len to space-needed
+                 end-if
+                 perform round-space-needed
+                 if adsd-send and brxa-ads-descriptor-ptr not = NULLS
+                    if external-message-format
+                       add adsdl-len to space-needed
+                    else
+                       add adsd-length to space-needed
+                    end-if
+                 end-if
+                 perform round-space-needed
+              when brxa-send-control
+                 move length of brmq-send-control to space-needed
+           end-evaluate
+           perform check-space-available
+           evaluate brxa-command-code
+              when brxa-send-control
+                 perform build-brmq-sc-vector
+              when brxa-send-map
+                 perform build-brmq-sm-vector
+              when brxa-send-text
+                 perform build-brmq-st-vector
+           end-evaluate
+           perform add-output-brmq-vector
+           if brxa-wait-indicator = brxa-yes
+              move brxa-fmt-write-message to brxa-fmt-response
+           end-if
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** MESSAGE ROUTINES                                            **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * GET-MORE-DATA                                                 *
+      *   Get subsequent input message from input queue.              *
+      *   The routine can be called more than once for the same cmd.  *
+      *                                                               *
+      *   1) Return a response of BRXA-FMT-READ-MESSAGE-NOWAIT to see *
+      *   if the next msg has already arrived. If a message is read   *
+      *   the formatter will be called again. This time there should  *
+      *   be a vector to process the command so the routine won't be  *
+      *   called again. If there is no message, get-more-data will    *
+      *   be called again.                                            *
+      *                                                               *
+      *   2) Add a request vector to the end of the message.          *
+      *   Return a response of BRXA-FMT-REQUEST-NEXT-MESSAGE.         *
+      *   The bridge exit will write the current message, and read    *
+      *   the next message when it arrives. When the message is read  *
+      *   the formatter will be called again. This time there should  *
+      *   be a vector to process the command so the routine won't be  *
+      *   called again. If there is no message, get-more-data will    *
+      *****************************************************************
+       get-more-data section.
+      *                                                               *
+      *   If we haven't already done so, see if the next message      *
+      *   is already on the queue.                                    *
+      *                                                               *
+           if brxa-read-nowait-issued = brxa-no
+              move brxa-fmt-read-message-nowait to brxa-fmt-response
+              EXEC CICS RETURN END-EXEC
+           end-if
+      *                                                               *
+      *   If not available, send the request and wait for a response  *
+      *                                                               *
+           if brxa-function-code = brxa-tc       and
+              brxa-command-code  = brxa-converse
+              continue
+           else
+              perform add-request-brmq-vector
+           end-if
+           move brxa-fmt-request-next-message to brxa-fmt-response
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ADD-OUTPUT-BRMQ-VECTOR                                        *
+      *   add a brmq vector to the output data                        *
+      *   put high-value byte after this to help dump readability     *
+      *****************************************************************
+       add-output-brmq-vector section.
+           perform trace-brmq-output
+           add brmq-vector-length to output-offset
+           if output-offset <  output-max-flength
+              move HIGH-VALUE to output-message-area(output-offset : 1)
+           end-if
+           exit.
+
+      *****************************************************************
+      * ADD-REQUEST-BRMQ-VECTOR                                       *
+      *   add a brmq request vector to the output data                *
+      *   this may involve sending the data if there is not           *
+      *   enough room to add the vector                               *
+      *****************************************************************
+       add-request-brmq-vector section.
+      *                                                               *
+      *   check if there is enough room to add a request vector       *
+      *   if not send the data so far                                 *
+      *                                                               *
+           if brxa-function-code = brxa-tc
+              move length of brmq-receive-request to space-needed
+           else
+              move length of brmq-receive-map-request to space-needed
+              if adsd-recv and brxa-ads-descriptor-ptr not = NULLS
+                 add adsd-length to space-needed
+              end-if
+           end-if
+
+            if (output-offset + space-needed) > output-max-flength
+               move brxa-fmt-output-buffer-full to brxa-fmt-response
+               EXEC CICS RETURN END-EXEC
+            end-if
+      *                                                               *
+      *   add the request vector onto the end of the message          *
+      *   then send the message                                       *
+      *                                                               *
+           if brxa-function-code = brxa-tc
+              perform build-brmq-rer-vector
+           else
+              perform build-brmq-rmr-vector
+           end-if
+           perform add-output-brmq-vector
+           exit.
+
+      *****************************************************************
+      * CHECK-SPACE-AVAILABLE                                         *
+      *   If the new vector is too large for the buffer abend.        *
+      *   If the new vector overflows the buffer, flush it and        *
+      *   request that the formatter is called again.                 *
+      *****************************************************************
+       check-space-available section.
+           if (msg-hdr-len + space-needed) > output-max-flength
+              perform abend-abx7
+           end-if
+           if (output-offset + space-needed) > output-max-flength
+              move brxa-fmt-output-buffer-full to brxa-fmt-response
+              EXEC CICS RETURN END-EXEC
+           end-if
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** DECODE INBOUND VECTORS                                      **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * DECODE-BRMQ-RE-VECTOR                                         *
+      *   Create BRMQ-RECEIVE vector (receive or converse)            *
+      *****************************************************************
+       decode-brmq-re-vector section.
+           set address of brmq-receive to
+               address of brmq-vector-header
+           move brmq-re-aid(1 : 1) to brxa-aid
+           move brmq-re-cposn to brxa-cposn
+           move brmq-re-data-len to brxa-into-len
+           if brmq-vector-length > length of brmq-receive
+              add 1 , length of brmq-receive giving data-offset
+              perform decode-ads
+           end-if
+           exit.
+
+      *****************************************************************
+      * DECODE-BRMQ-RM-VECTOR                                         *
+      *   Create BRMQ-RECEIVE-MAP vector                              *
+      *****************************************************************
+       decode-brmq-rm-vector section.
+           set address of brmq-receive-map to
+               address of brmq-vector-header
+           if brmq-rm-mapset not = SPACES and
+              brmq-rm-mapset not = brxa-mapset
+              perform abend-abx8
+           end-if
+           if brmq-rm-map not = SPACES and
+              brmq-rm-map not = brxa-map
+              perform abend-abx9
+           end-if
+           move brmq-rm-aid(1 : 1) to brxa-aid
+           move brmq-rm-cposn to brxa-cposn
+           move brmq-rm-data-len to brxa-into-len
+           If brmq-vector-length > length of brmq-receive-map
+              if external-message-format
+                 perform convert-adsli-to-ads
+                 subtract 1 from ads-offset giving brmq-rm-data-len
+                 perform trace-brmq-input
+              end-if
+              add 1 , length of brmq-receive-map giving data-offset
+              perform decode-ads
+           end-if
+           move brmq-rm-data-len to brxa-into-len
+           exit.
+
+      *****************************************************************
+      * DECODE-BRMQ-RT-VECTOR                                         *
+      *   Create BRMQ-RETRIEVE vector                                 *
+      *****************************************************************
+       decode-brmq-rt-vector section.
+           set address of brmq-retrieve to
+               address of brmq-vector-header
+           move brmq-rt-rtransid to brxa-rtransid
+           move brmq-rt-rtermid to brxa-rtermid
+           move brmq-rt-queue to brxa-queue
+           move brmq-rt-data-len to brxa-into-len
+           if brmq-vector-length > length of brmq-retrieve
+              add 1 , length of brmq-retrieve giving data-offset
+              perform decode-ads
+           end-if
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** DECODE ADS SUB-VECTORS                                      **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * DECODE-ADS                                                    *
+      *   Update into ptr with input data                             *
+      *****************************************************************
+       decode-ads section.
+           set address of vector to address of brmq-vector-header
+           set brxa-into-ptr to
+               address of vector(data-offset : 1)
+           exit.
+
+      *****************************************************************
+      * CONVERT-ADSLI-TO-ADS                                          *
+      *   Convert long ADS to ADS in same storage                     *
+      *****************************************************************
+       convert-adsli-to-ads section.
+      *
+      * address ads and adsl (adsd already addressed)
+      *
+           add 1, length of brmq-receive-map giving data-offset
+           set address of vector to address of brmq-vector-header
+           set address of brmq-ads-input-header to
+               address of vector(data-offset : 1)
+           set address of brmq-adsl-input-header to
+               address of vector(data-offset : 1)
+
+           perform convert-adsl-header
+      *
+      * address first ads, adsl and adsd fields
+      *
+           add 1 , length of brmq-ads-input-header giving ads-offset
+           set address of vector to address of brmq-ads-input-header
+           set address of brmq-ads-input-field to
+               address of vector(ads-offset : 1)
+
+           add 1 , length of brmq-adsl-input-header giving adsl-offset
+           set address of vector to address of brmq-adsl-input-header
+           set address of brmq-adsl-input-field to
+               address of vector(adsl-offset : 1)
+
+           set address of ads-field-descriptor to
+               address of adsd-first-field
+
+           perform adsd-field-count times
+              perform convert-adsl-field
+      *
+      * address next ads, adsl and adsd fields
+      *
+              set address of vector to address of brmq-ads-input-header
+              set address of brmq-ads-input-field to
+                  address of vector(ads-offset : 1)
+
+              set address of vector to address of brmq-adsl-input-header
+              set address of brmq-adsl-input-field to
+                  address of vector(adsl-offset : 1)
+
+              set address of ads-field-descriptor to
+                  address of adsd-next-field
+           end-perform
+           exit.
+
+      *****************************************************************
+      * CONVERT-ADSL-HEADER                                           *
+      *   convert header from long form of ADS to short form.         *
+      *   This is a null routine as they are the same.                *
+      *****************************************************************
+       convert-adsl-header section.
+           exit.
+
+      *****************************************************************
+      * CONVERT-ADSL-FIELD                                            *
+      *   convert field from long form of ADS to short form.          *
+      *****************************************************************
+       convert-adsl-field section.
+      *
+      * build adsl field header
+      *
+           add brmq-adsli-len, adsl-offset giving next-adsl-offset
+           move brmq-adsli-data-len to brmq-adsi-data-len
+           move brmq-adsli-flag to fullword-bin
+           move fullword-byte to brmq-adsi-flag
+      *
+      * address ads and adsl field data (adsd already addressed)
+      *
+           add length of brmq-ads-input-field to ads-offset
+           add adsd-attribute-number to ads-offset
+           set address of vector to address of brmq-ads-input-header
+           set address of brmq-adsi-data to
+               address of vector(ads-offset : 1)
+
+           add length of brmq-adsl-input-field to adsl-offset
+           set address of vector to address of brmq-adsl-input-header
+           set address of brmq-adsli-data to
+               address of vector(adsl-offset : 1)
+      *
+      * build adsl field data
+      *
+           move brmq-adsli-data(1 : adsd-field-data-len) to
+                brmq-adsi-data(1 : adsd-field-data-len)
+           add adsd-field-data-len to ads-offset
+           move next-adsl-offset to adsl-offset
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** BUILD OUTBOUND VECTORS                                      **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * BUILD-VECTOR-HEADER                                           *
+      *   Create an outbound vector header                            *
+      *   brmq-vector-length must be set by the caller                *
+      *****************************************************************
+       build-vector-header section.
+           set address of brmq-vector-header to
+               address of output-message-area(output-offset : 1)
+           move outbound-vector to brmq-vector-type
+           move brxa-function-code to brmq-vector-descriptor(1 : 2)
+           move brxa-command-code to brmq-vector-descriptor(3 : 2)
+           move '0000' to brmq-vector-version
+           exit.
+
+      *****************************************************************
+      * BUILD-BRMQ-SE-VECTOR                                          *
+      *   Create BRMQ-SEND vector (send or converse)                  *
+      *****************************************************************
+       build-brmq-se-vector section.
+           perform build-vector-header
+           set address of brmq-send to
+               address of brmq-vector-header
+           move length of brmq-send to brmq-vector-length
+           move brxa-ctlchar to brmq-se-ctlchar
+           move brxa-strfield-indicator to brmq-se-strfield-indicator
+           move brxa-defresp-indicator to brmq-se-defresp-indicator
+           move brxa-erase-indicator to brmq-se-erase-indicator
+           move brxa-invite-indicator to brmq-se-invite-indicator
+           move brxa-last-indicator to brmq-se-last-indicator
+           move brxa-wait-indicator to brmq-se-wait-indicator
+           move brxa-from-len to brmq-se-data-len
+           perform build-3270-data
+           exit.
+
+      *****************************************************************
+      * BUILD-BRMQ-IE-VECTOR                                          *
+      *   Create BRMQ-ISSUE-ERASEAUP                                  *
+      *****************************************************************
+       build-brmq-ie-vector section.
+           perform build-vector-header
+           set address of brmq-issue-eraseaup to
+               address of brmq-vector-header
+           move length of brmq-issue-eraseaup to brmq-vector-length
+           move brxa-wait-indicator to brmq-ie-wait-indicator
+           exit.
+
+      *****************************************************************
+      * BUILD-BRMQ-SC-VECTOR                                          *
+      *   Create BRMQ-SEND-CONTROL vector                             *
+      *   This is used in send text and send map                      *
+      *****************************************************************
+       build-brmq-sc-vector section.
+           perform build-vector-header
+           set address of brmq-send-control to
+               address of brmq-vector-header
+           move length of brmq-send-control to brmq-vector-length
+           move brxa-erase-indicator to brmq-sc-erase-indicator
+           move brxa-eraseaup-indicator to brmq-sc-eraseaup-indicator
+           move brxa-freekb-indicator to brmq-sc-freekb-indicator
+           move brxa-alarm-indicator to brmq-sc-alarm-indicator
+           move brxa-frset-indicator to brmq-sc-frset-indicator
+           move brxa-last-indicator to brmq-sc-last-indicator
+           move brxa-wait-indicator to brmq-sc-wait-indicator
+           move brxa-cursor to brmq-sc-cursor
+           move brxa-msr-data to brmq-sc-msr-data
+           exit.
+
+      *****************************************************************
+      * BUILD-BRMQ-SM-VECTOR                                          *
+      *   Create BRMQ-SEND-MAP vector                                 *
+      *****************************************************************
+       build-brmq-sm-vector section.
+           perform build-brmq-sc-vector
+           set address of brmq-send-map to
+               address of brmq-vector-header
+           move length of brmq-send-map to brmq-vector-length
+           move brxa-mapset to brmq-sm-mapset
+           move brxa-map to brmq-sm-map
+           move brxa-data-indicator to brmq-sm-data-indicator
+           move brmq-vector-length to brmq-sm-data-offset
+           move ZERO to brmq-sm-data-len
+           move ZERO to brmq-sm-adsd-len
+           move ZERO to brmq-sm-adsd-offset
+           if brxa-from-len > 0
+              if external-message-format
+                 move adsl-len to brmq-sm-data-len
+                 perform build-adsl
+              else
+                 move brxa-from-len to brmq-sm-data-len
+                 perform build-ads
+              end-if
+              if adsd-send and brxa-ads-descriptor-ptr not = NULLS
+                 if external-message-format
+                    perform round-brmq-vector-length
+                    move brmq-vector-length to brmq-sm-adsd-offset
+                    move adsdl-len to brmq-sm-adsd-len
+                    perform build-adsdlo
+                 else
+                    move brmq-vector-length to brmq-sm-adsd-offset
+                    move adsd-length to brmq-sm-adsd-len
+                    perform build-adsd
+                 end-if
+              end-if
+           end-if
+           exit.
+
+      *****************************************************************
+      * BUILD-BRMQ-ST-VECTOR                                          *
+      *   Create BRMQ-SEND-TEXT vector                                *
+      *****************************************************************
+       build-brmq-st-vector section.
+           perform build-brmq-sc-vector
+           set address of brmq-send-text to
+               address of brmq-vector-header
+           move length of brmq-send-text to brmq-vector-length
+           move brxa-text-type to brmq-st-text-type
+           move brxa-from-len to brmq-st-data-len
+           if brxa-text-type = brxa-text-mapped
+              perform build-3270-data-plus-pga
+           else
+              perform build-3270-data
+           end-if
+           exit.
+
+      *****************************************************************
+      * CONVERT-CONVERSE-TO-SEND                                      *
+      *   Convert BRMQ-CONVERSE vector to a BRMQ-SEND vector          *
+      *****************************************************************
+       convert-converse-to-send section.
+           set address of brmq-vector-header to
+               address of output-message-area(send-output-offset : 1)
+           set address of brmq-send to
+               address of brmq-vector-header
+           move brxa-send to brmq-vector-descriptor(3 : 2)
+           move brxa-no to brmq-se-invite-indicator
+           move brxa-no to brmq-se-last-indicator
+           move brxa-no to brmq-se-wait-indicator
+           perform trace-brmq-output
+           exit.
+
+      *****************************************************************
+      * ERASE-OUTPUT-VECTORS                                          *
+      *   Erase output vectors, but not the msg-hdr                   *
+      *****************************************************************
+       erase-output-vectors section.
+           add 1 , msg-hdr-len giving output-offset
+           move HIGH-VALUE to output-message-area(output-offset : 1)
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** BUILD ADS SUB-VECTORS                                       **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * BUILD-3270-DATA                                               *
+      *   move data to end of vector                                  *
+      *****************************************************************
+       build-3270-data section.
+           if brxa-from-len > 0
+              add 1 to brmq-vector-length giving data-offset
+              move from-area(1 : brxa-from-len) to
+                   brmq-vector-header(data-offset : brxa-from-len )
+              add brxa-from-len to brmq-vector-length
+              perform round-brmq-vector-length
+           end-if
+           exit.
+
+      *****************************************************************
+      * BUILD-3270-DATA-PLUS-PGA                                      *
+      *   move data to end of vector                                  *
+      *   a 4 byte PGA precedes the data, and is not included         *
+      *   in the brxa-from-len                                        *
+      *****************************************************************
+       build-3270-data-plus-pga section.
+           add 4 , brxa-from-len giving data-plus-pga
+           add 1 to brmq-vector-length giving data-offset
+           move from-area(1 : data-plus-pga) to
+                brmq-vector-header(data-offset : data-plus-pga )
+           add data-plus-pga to brmq-vector-length
+           perform round-brmq-vector-length
+           exit.
+
+      *****************************************************************
+      * BUILD-ADS                                                     *
+      *   move ads to end of vector                                   *
+      *****************************************************************
+       build-ads section.
+           add 1 to brmq-vector-length giving data-offset
+           move from-area(1 : brxa-from-len) to
+                brmq-vector-header(data-offset : brxa-from-len )
+           add brxa-from-len to brmq-vector-length
+           perform round-brmq-vector-length
+           exit.
+
+      *****************************************************************
+      * BUILD-ADSL (LONG form of ADS)                                 *
+      *   move adsl to end of vector                                  *
+      *****************************************************************
+       build-adsl section.
+      *
+      * address ads and adsl (adsd already addressed)
+      *
+           set address of brmq-ads-output-header to
+               address of from-area
+           add 1 to brmq-vector-length giving data-offset
+           set address of vector to address of brmq-vector-header
+           set address of brmq-adsl-output-header to
+               address of vector(data-offset : 1)
+
+           perform build-adsl-header
+      *
+      * address first ads, adsl and adsd fields
+      *
+           add 1 , length of brmq-ads-output-header giving ads-offset
+           set address of vector to address of brmq-ads-output-header
+           set address of brmq-ads-output-field to
+               address of vector(ads-offset : 1)
+
+           add 1 , length of brmq-adsl-output-header giving adsl-offset
+           set address of vector to address of brmq-adsl-output-header
+           set address of brmq-adsl-output-field to
+               address of vector(adsl-offset : 1)
+
+           set address of ads-field-descriptor to
+               address of adsd-first-field
+
+      *********************************
+      * loop over all fields          *
+      *********************************
+           perform adsd-field-count times
+              perform build-adsl-field
+      *
+      * address next ads, adsl and adsd fields
+      *
+              add adsd-field-data-len to ads-offset
+              set address of vector to
+                  address of brmq-ads-output-header
+              set address of brmq-ads-output-field to
+                  address of vector(ads-offset : 1)
+
+              add adsd-field-data-len to adsl-offset
+              subtract 1 from adsl-offset
+              perform round-adsl-offset
+              add 1 to adsl-offset
+              set address of vector to
+                  address of brmq-adsl-output-header
+              set address of brmq-adsl-output-field to
+                  address of vector(adsl-offset : 1)
+
+              set address of ads-field-descriptor to
+                  address of adsd-next-field
+           end-perform
+      *********************************
+      * end of loop over all fields   *
+      *********************************
+      *
+      * update vector length
+      *
+           add adsl-len to brmq-vector-length
+           exit.
+
+      *****************************************************************
+      * BUILD-ADSL-HEADER                                             *
+      *   build header for long form of ADS                           *
+      *****************************************************************
+       build-adsl-header section.
+           move brmq-ads-output-header to brmq-adsl-output-header
+           exit.
+
+      *****************************************************************
+      * BUILD-ADSL-FIELD                                              *
+      *   build field for long form of ADS                            *
+      *****************************************************************
+       build-adsl-field section.
+      *
+      * build adsl field header
+      *
+           move LOW-VALUES to brmq-adsl-output-field
+           move length of brmq-adsl-output-field to brmq-adslo-len
+           move brmq-adso-cursor to brmq-adslo-cursor
+           move ZERO             to fullword-bin
+           move brmq-adso-attr   to fullword-byte
+           move fullword-bin     to brmq-adslo-attr
+      *
+      * address first ads field attributes
+      *
+           add length of brmq-ads-output-field to ads-offset
+      *
+      * build adsl field attributes
+      *
+           move ZERO to i
+           perform adsd-attribute-number times
+              set address of vector to
+                  address of brmq-ads-output-header
+              set address of brmq-adso-mapatts-field to
+                  address of vector(ads-offset : 1)
+              add 1 to i
+              move ZERO to fullword-bin
+              move brmq-adso-mapatt to fullword-byte
+              evaluate adsd-attribute-type-codes(i)
+                 when 'C' move fullword-bin to brmq-adslo-color
+                 when 'P' move fullword-bin to brmq-adslo-ps
+                 when 'H' move fullword-bin to brmq-adslo-hilight
+                 when 'V' move fullword-bin to brmq-adslo-validn
+                 when 'O' move fullword-bin to brmq-adslo-outline
+                 when 'S' move fullword-bin to brmq-adslo-sosi
+                 when 'T' move fullword-bin to brmq-adslo-transp
+                 when other continue
+              end-evaluate
+              add 1 to ads-offset
+           end-perform
+      *
+      * address ads and adsl field data (adsd already addressed)
+      *
+           set address of vector to address of brmq-ads-output-header
+           set address of brmq-adso-data to
+               address of vector(ads-offset : 1)
+
+           add length of brmq-adsl-output-field to adsl-offset
+           set address of vector to address of brmq-adsl-output-header
+           set address of brmq-adslo-data to
+               address of vector(adsl-offset : 1)
+      *
+      * build adsl field data
+      *
+           add  adsd-field-data-len to brmq-adslo-len
+           move brmq-adso-data(1 : adsd-field-data-len) to
+                brmq-adslo-data(1 : adsd-field-data-len)
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** BUILD ADSD SUB-VECTORS                                      **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * BUILD-ADSD                                                    *
+      *   move adsd to end of vector                                  *
+      *****************************************************************
+       build-adsd section.
+           add 1 to brmq-vector-length giving data-offset
+           move ads-descriptor(1 : adsd-length) to
+                brmq-vector-header(data-offset : adsd-length)
+           add adsd-length to brmq-vector-length
+           perform round-brmq-vector-length
+           exit.
+
+      *****************************************************************
+      * BUILD-ADSDLO                                                  *
+      *   move long form of adsd for SEND MAP to end of vector        *
+      *****************************************************************
+       build-adsdlo section.
+      *
+      * address adsdl (adsd already addressed)
+      *
+           add 1 to brmq-vector-length giving data-offset
+           set address of vector to address of brmq-vector-header
+           set address of ads-long-descriptor to
+               address of vector(data-offset : 1)
+
+           perform build-adsdl-header
+      *
+      * address first adsd and adsdl fields
+      *
+           set address of ads-field-descriptor to
+               address of adsd-first-field
+           set address of ads-long-field-descriptor to
+               address of adsdl-first-field
+      *
+      * calculate offset of first adsl field
+      *
+           add 1 , length of brmq-adsl-output-header giving adsl-offset
+      *********************************
+      * loop over all fields          *
+      *********************************
+           move ZERO to field-count
+           perform adsd-field-count times
+              add 1 to field-count
+              perform build-adsdl-field
+      *
+      * calculate data offset in adsl
+      *
+              set address of vector to
+                  address of brmq-adsl-output-header
+              set address of brmq-adsl-output-field to
+                  address of vector(adsl-offset : 1)
+              move adsl-offset to adsdl-field-offset
+              subtract 1 from adsdl-field-offset
+      *
+      * calculate next adsl field
+      *
+              add brmq-adslo-len to adsl-offset
+              subtract 1 from adsl-offset
+              perform round-adsl-offset
+              add 1 to adsl-offset
+      *
+      * address next adsd and adsdl fields
+      *
+              set address of ads-field-descriptor to
+                  address of adsd-next-field
+              set address of ads-long-field-descriptor to
+                  address of adsdl-next-field
+           end-perform
+      *********************************
+      * end of loop over all fields   *
+      *********************************
+      *
+      * calculate adsl length
+      *
+           subtract 1 from adsl-offset
+           move adsl-offset to adsdl-structure-length
+      *
+      * update vector length
+      *
+           add adsdl-len to brmq-vector-length
+           exit.
+
+      *****************************************************************
+      * BUILD-ADSDLI                                                  *
+      *   move long form of adsd for RECEIVE MAP to end of vector     *
+      *****************************************************************
+       build-adsdli section.
+      *
+      * address adsdl (adsd already addressed)
+      *
+           add 1 to brmq-vector-length giving data-offset
+           set address of vector to address of brmq-vector-header
+           set address of ads-long-descriptor to
+               address of vector(data-offset : 1)
+
+           perform build-adsdl-header
+      *
+      * address first adsd and adsdl fields
+      *
+           set address of ads-field-descriptor to
+               address of adsd-first-field
+           set address of ads-long-field-descriptor to
+               address of adsdl-first-field
+      *
+      * calculate offset of first adsl field
+      *
+           add 1 , length of brmq-adsl-input-header giving adsl-offset
+      *********************************
+      * loop over all fields          *
+      *********************************
+           move ZERO to field-count
+           perform adsd-field-count times
+              add 1 to field-count
+              perform build-adsdl-field
+      *
+      * calculate data offset in adsl
+      *
+              set address of brmq-adsl-input-field to
+                  address of brmq-adsl-input-header(adsl-offset : 1)
+              move adsl-offset to adsdl-field-offset
+              subtract 1 from adsdl-field-offset
+      *
+      * calculate next adsl field
+      *
+              add length of brmq-adsl-input-field to adsl-offset
+              add adsdl-field-data-len to adsl-offset
+              subtract 1 from adsl-offset
+              perform round-adsl-offset
+              add 1 to adsl-offset
+      *
+      * address next adsd and adsdl fields
+      *
+              set address of ads-field-descriptor to
+                  address of adsd-next-field
+              set address of ads-long-field-descriptor to
+                  address of adsdl-next-field
+           end-perform
+      *********************************
+      * end of loop over all fields   *
+      *********************************
+      *
+      * calculate adsl length
+      *
+           subtract 1 from adsl-offset
+           move adsl-offset to adsdl-structure-length
+      *
+      * update vector length
+      *
+           add adsdl-len to brmq-vector-length
+           exit.
+
+      *****************************************************************
+      * BUILD-ADSDL-HEADER                                            *
+      *   build header for long form of ADSD                          *
+      *****************************************************************
+       build-adsdl-header section.
+           move adsdl-len                   to adsdl-length
+           move 'ADSL'                      to adsdl-eyecatcher
+           move adsd-map-index              to adsdl-map-index
+           move adsd-field-count            to adsdl-field-count
+           move adsd-attribute-number       to adsdl-attribute-number
+           move ZERO to i
+           perform 12 times
+              add 1 to i
+              move adsd-attribute-type-codes(i) to
+                   adsdl-attribute-type-codes(i)
+           end-perform
+           move adsd-map-justify-hor        to adsdl-map-justify-hor
+           move adsd-map-justify-ver        to adsdl-map-justify-ver
+           move adsd-map-starting-line      to adsdl-map-starting-line
+           move adsd-map-starting-column    to adsdl-map-starting-column
+           move adsd-map-lines              to adsdl-map-lines
+           move adsd-map-columns            to adsdl-map-columns
+           move adsd-write-control-char     to adsdl-write-control-char
+           exit.
+
+      *****************************************************************
+      * BUILD-ADSDL-FIELD                                             *
+      *   build field for long form of ADSD (except offset value)     *
+      *****************************************************************
+       build-adsdl-field section.
+           move adsd-field-name      to adsdl-field-name
+           move adsd-field-name-len  to adsdl-field-name-len
+           move adsd-occurs-index    to adsdl-occurs-index
+           move adsd-field-data-len  to adsdl-field-data-len
+           move adsd-field-justify   to adsdl-field-justify
+           move adsd-field-fill-char to adsdl-field-fill-char
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** BUILD REQUESTOR VECTORS                                     **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * BUILD-BRMQ-RER-VECTOR                                         *
+      *   Create BRMQ-RECIEVE-REQUEST vector (receive or converse)    *
+      *****************************************************************
+       build-brmq-rer-vector section.
+           perform build-vector-header
+           move length of brmq-receive-request to brmq-vector-length
+           set address of brmq-receive-request to
+               address of brmq-vector-header
+           move brxa-buffer-indicator to brmq-rer-buffer-indicator
+           exit.
+
+      *****************************************************************
+      * BUILD-BRMQ-RMR-VECTOR                                         *
+      *   Create BRMQ-RECIEVE-MAP-REQUEST vector                      *
+      *****************************************************************
+       build-brmq-rmr-vector section.
+           perform build-vector-header
+           move length of brmq-receive-map-request to
+              brmq-vector-length
+           set address of brmq-receive-map-request to
+               address of brmq-vector-header
+           move brxa-map to brmq-rmr-map
+           move brxa-mapset to brmq-rmr-mapset
+           if adsd-recv and brxa-ads-descriptor-ptr not = NULLS
+              if external-message-format
+                 move adsdl-len to brmq-rmr-adsd-len
+                 perform build-adsdli
+              else
+                 move adsd-length to brmq-rmr-adsd-len
+                 perform build-adsd
+              end-if
+           else
+              move ZERO to brmq-rmr-adsd-len
+           end-if
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** DATA VALIDATION ROUTINES                                    **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * VALIDATE-BRXA                                                 *
+      *   Check the BRXA format and the version.                      *
+      *****************************************************************
+       validate-brxa section.
+           if brxa-header-eyecatcher not = brxa-header-eye or
+              brxa-header-version-no not = brxa-current-version-no or
+              brxa-header-length     not = length of brxa-header
+              perform abend-abx1
+           end-if
+           exit.
+
+      *****************************************************************
+      * VALIDATE-BRXA-SUBAREAS                                        *
+      *   Check the BRXA command and transaction areas.               *
+      *   Check the user area (except for xm init)                    *
+      *****************************************************************
+       validate-brxa-subareas section.
+           if brxa-tran-area-eyecatcher not = brxa-tran-area-eye
+              perform abend-abx2
+           end-if
+           if brxa-command-area-eyecatcher not = brxa-command-area-eye
+              perform abend-abx3
+           end-if
+           if not (brxa-function-code = brxa-xm and
+                   brxa-command-code  = brxa-init)
+             perform validate-user-data
+           end-if
+           exit.
+
+      *****************************************************************
+      * VALIDATE-USER-DATA                                            *
+      *   Check that the user data is set up and has an eye catcher   *
+      *****************************************************************
+       validate-user-data section.
+           if brxa-user-area-ptr = NULLS
+              perform abend-abx5
+           end-if
+           if user-area-eyecatcher not = user-area-eye
+              perform abend-abx6
+           end-if
+           exit.
+
+      *****************************************************************
+      * VALIDATE-INPUT-MESSAGE                                        *
+      *   Check the format of the input message.                      *
+      *****************************************************************
+       validate-input-message section.
+           move ZERO to error-offset
+           add 1 , msg-hdr-len giving input-offset
+           perform test before until input-offset > input-flength
+             set address of brmq-vector-header to
+                 address of input-message-area(input-offset : 1)
+             if (input-offset - 1 + brmq-vector-length) > input-flength
+               add 0 , -1, input-offset giving error-offset
+               if input-flength < max-trace-flength
+                  move input-flength to trace-flength
+               else
+                  move max-trace-flength to trace-flength
+               end-if
+               perform abend-abxn
+             end-if
+             if brmq-vector-length < length of brmq-vector-header
+               add 0 , -1, input-offset giving error-offset
+               set rc-error to TRUE
+             end-if
+             if rc-ok and
+                not ((brmq-vector-descriptor(1:2) = brxa-bms and
+                      brmq-vector-descriptor(3:2) = brxa-receive-map) or
+                     (brmq-vector-descriptor(1:2) = brxa-tc and
+                      (brmq-vector-descriptor(3:2) = brxa-receive or
+                       brmq-vector-descriptor(3:2) = brxa-converse)) or
+                     (brmq-vector-descriptor(1:2) = brxa-ic and
+                      brmq-vector-descriptor(3:2) = brxa-retrieve))
+                add 4 , -1, input-offset giving error-offset
+                set rc-error to TRUE
+             end-if
+             if rc-ok and brmq-vector-type  not = inbound-vector
+               add 8 , -1, input-offset giving error-offset
+               set rc-error to TRUE
+             end-if
+             if rc-ok and brmq-vector-version not = '0000'
+               add 12 , -1, input-offset giving error-offset
+               set rc-error to TRUE
+             end-if
+             if rc-error
+                perform abend-abxp
+             end-if
+
+             evaluate brmq-vector-descriptor(1:2)
+               when brxa-bms
+                 perform validate-brmq-rm
+               when brxa-tc
+                 perform validate-brmq-re
+               when brxa-ic
+                 perform validate-brmq-rt
+               when other
+                 continue
+             end-evaluate
+             if rc-error
+                perform abend-abxo
+             end-if
+             add brmq-vector-length to input-offset
+           end-perform
+           exit.
+
+      *****************************************************************
+      * VALIDATE-BRMQ-RM                                              *
+      *   Check that this looks like a BRMQ RECEIVE MAP vector        *
+      *   Multiple checking of length is to avoid 0C4 errors          *
+      *   Set RC-ERROR if any errors are found                        *
+      *****************************************************************
+       validate-brmq-rm section.
+           set address of brmq-receive-map to
+               address of input-message-area(input-offset : 1)
+           if brmq-vector-length < length of brmq-receive-map
+             add 0 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-rm-data-len < 0 then
+             add 44 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-vector-length <
+             (length of brmq-receive-map + brmq-rm-data-len)
+             add 44 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-vector-descriptor(3:2) not = brxa-receive-map
+             add 6 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-rm-transmit-send-areas not = 'Y   ' and
+              brmq-rm-transmit-send-areas not = 'N   '
+             add 16 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-rm-cposn < ZERO or brmq-rm-cposn > 65535
+             move ZERO to brmq-rm-cposn
+           end-if
+           exit.
+
+      *****************************************************************
+      * VALIDATE-BRMQ-RE                                              *
+      *   Check that this looks like a BRMQ RECEIVE/CONVERSE vector   *
+      *   Multiple checking of length is to avoid 0C4 errors          *
+      *   Set RC-ERROR if any errors are found                        *
+      *****************************************************************
+       validate-brmq-re section.
+           set address of brmq-receive to
+               address of input-message-area(input-offset : 1)
+           if brmq-vector-length < length of brmq-receive
+             add 0 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-re-data-len < 0
+             add 32 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-vector-length <
+             (length of brmq-receive + brmq-re-data-len)
+             add 32 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-vector-descriptor(3:2) not = brxa-receive and
+              brmq-vector-descriptor(3:2) not = brxa-converse
+             add 6 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-re-transmit-send-areas not = 'Y   ' and
+              brmq-re-transmit-send-areas not = 'N   '
+             add 16 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+      *
+      * Buffer check does not apply to converse
+      *
+           if brmq-vector-descriptor(3:2)  = brxa-receive and
+              brmq-re-buffer-indicator not = 'Y   ' and
+              brmq-re-buffer-indicator not = 'N   '
+             add 20 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-re-cposn < ZERO or brmq-re-cposn > 65535
+             move ZERO to brmq-re-cposn
+           end-if
+           exit.
+
+      *****************************************************************
+      * VALIDATE-BRMQ-RT                                              *
+      *   Check that this looks like a BRMQ RETRIEVE vector           *
+      *   Multiple checking of length is to avoid 0C4 errors          *
+      *   Set RC-ERROR if any errors are found                        *
+      *****************************************************************
+       validate-brmq-rt section.
+           set address of brmq-retrieve to
+               address of input-message-area(input-offset : 1)
+           if brmq-vector-length < length of brmq-retrieve
+             add 0 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-rt-data-len < 0
+             add 32 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-vector-length <
+             (length of brmq-retrieve + brmq-rt-data-len)
+             add 32 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           if brmq-vector-descriptor(3:2) not = brxa-retrieve
+             add 6 , -1, input-offset giving error-offset
+             set rc-error to TRUE
+           end-if
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** ABEND ROUTINES                                              **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * ABEND-ABX1                                                    *
+      *   Invalid BRXA-HEADER                                         *
+      *****************************************************************
+       abend-abx1 section.
+           EXEC CICS ENTER TRACENUM(11) EXCEPTION
+                     RESOURCE(trace-resource)
+                     FROM(brxa-header)
+                     FROMLENGTH(eibcalen)
+                     NOHANDLE
+                     END-EXEC
+           EXEC CICS ABEND ABCODE('ABX1') END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABX2                                                    *
+      *   Invalid BRXA-TRANSACTION-AREA                               *
+      *****************************************************************
+       abend-abx2 section.
+           move 12 to trace-num
+           perform etrace-brxa-transaction
+           EXEC CICS ABEND ABCODE('ABX2') END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABX3                                                    *
+      *   Invalid BRXA-COMMAND-AREA                                   *
+      *****************************************************************
+       abend-abx3 section.
+           move 13 to trace-num
+           perform etrace-brxa-command
+           EXEC CICS ABEND ABCODE('ABX3') END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABX5                                                    *
+      *   No User area                                                *
+      *****************************************************************
+       abend-abx5 section.
+           move 'ABX5' to brxa-user-abend-code
+           EXEC CICS ENTER TRACENUM(15) EXCEPTION
+                     RESOURCE(trace-resource)
+                     NOHANDLE
+                     END-EXEC
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABX6                                                    *
+      *   Invalid User area                                           *
+      *****************************************************************
+       abend-abx6 section.
+           move length of user-area to trace-flength
+           EXEC CICS ENTER TRACENUM(16) EXCEPTION
+                     RESOURCE(trace-resource)
+                     FROM(user-area)
+                     FROMLENGTH(trace-flength)
+                     NOHANDLE
+                     END-EXEC
+           move 'ABX6' to brxa-user-abend-code
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABX7                                                    *
+      *   Output message exceeds size of buffer                       *
+      *****************************************************************
+       abend-abx7 section.
+           move msg-hdr-len    to trc-msg-hdr-len
+           move space-needed   to trc-space-needed
+           move output-max-flength to trc-output-max-flength
+           move length of trace-data to trace-flength
+           EXEC CICS ENTER TRACENUM(17) EXCEPTION
+                     RESOURCE(trace-resource)
+                     FROM(trace-data)
+                     FROMLENGTH(trace-flength)
+                     NOHANDLE
+                     END-EXEC
+           move 'ABX7' to brxa-user-abend-code
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABX8                                                    *
+      *   Requested mapset name does not match vector                 *
+      *****************************************************************
+       abend-abx8 section.
+           move 'ABX8' to brxa-user-abend-code
+           move 18 to trace-num
+           perform etrace-brmq
+           move 50 to trace-num
+           perform etrace-brxa-command
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABX9                                                    *
+      *   Requested map name does not match vector                    *
+      *****************************************************************
+       abend-abx9 section.
+           move 'ABX9' to brxa-user-abend-code
+           move 19 to trace-num
+           perform etrace-brmq
+           move 50 to trace-num
+           perform etrace-brxa-command
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXA                                                    *
+      *   Incorrect type of receive vector found                      *
+      *****************************************************************
+       abend-abxa section.
+           move 'ABXA' to brxa-user-abend-code
+           move 20 to trace-num
+           perform etrace-brmq
+           move 50 to trace-num
+           perform etrace-brxa-command
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXH                                                    *
+      *   More data requested, but non-conversational                 *
+      *****************************************************************
+       abend-abxh section.
+           move 'ABXH' to brxa-user-abend-code
+           move 27 to trace-num
+           perform etrace-brxa-command
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXM                                                    *
+      *   Invalid BRXA - function or command detected                 *
+      *****************************************************************
+       abend-abxm section.
+           move 'ABXM' to brxa-user-abend-code
+           move 33 to trace-num
+           perform etrace-brxa-command
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXN                                                    *
+      *   Input message too short                                     *
+      *****************************************************************
+       abend-abxn section.
+           EXEC CICS ENTER TRACENUM(37) EXCEPTION
+                     RESOURCE(trace-resource)
+                     FROM(input-message-area)
+                     FROMLENGTH(trace-flength)
+                     NOHANDLE
+                     END-EXEC
+           move 'ABXN' to brxa-user-abend-code
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXO                                                    *
+      *   Invalid BRMQ vector                                         *
+      *****************************************************************
+       abend-abxo section.
+           move 35 to trace-num
+           perform etrace-brmq
+           perform etrace-input-message-error
+           move 'ABXO' to brxa-user-abend-code
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXP                                                    *
+      *   Invalid BRMQ vector header                                  *
+      *****************************************************************
+       abend-abxp section.
+           move 36 to trace-num
+           perform etrace-brmq
+           perform etrace-input-message-error
+           move 'ABXP' to brxa-user-abend-code
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * ABEND-ABXQ                                                    *
+      *   No ADSD when external format requested                      *
+      *****************************************************************
+       abend-abxq section.
+           move 'ABXQ' to brxa-user-abend-code
+           move 37 to trace-num
+           perform etrace-brxa-command
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** TRACE ROUTINES                                              **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * TRACE-BRMQ-INPUT                                              *
+      *   Trace a BRMQ input vector when read                         *
+      *****************************************************************
+       trace-brmq-input section.
+           move 4 to trace-num
+           perform trace-brmq
+           exit.
+
+      *****************************************************************
+      * TRACE-BRMQ-STACK                                              *
+      *   Trace a BRMQ retrieve vector when written to the stack      *
+      *****************************************************************
+       trace-brmq-stack section.
+           move 5 to trace-num
+           perform trace-brmq
+           exit.
+
+      *****************************************************************
+      * TRACE-BRMQ-UNSTACK                                            *
+      *   Trace a BRMQ retrieve vector when read from the stack       *
+      *****************************************************************
+       trace-brmq-unstack section.
+           move 6 to trace-num
+           perform trace-brmq
+           exit.
+
+      *****************************************************************
+      * TRACE-BRMQ-OUTPUT                                             *
+      *   Trace a BRMQ output vector when written                     *
+      *****************************************************************
+       trace-brmq-output section.
+           move 7 to trace-num
+           perform trace-brmq
+           exit.
+
+      *****************************************************************
+      * TRACE-BRMQ-SKIP                                               *
+      *   Trace a BRMQ receive vector skipped finding a retrieve      *
+      *****************************************************************
+       trace-brmq-skip section.
+           move 8 to trace-num
+           perform trace-brmq
+           exit.
+
+      *****************************************************************
+      * TRACE-BRMQ                                                    *
+      *   Trace a BRMQ vector                                         *
+      *****************************************************************
+       trace-brmq section.
+           if brmq-vector-length < max-trace-flength
+              move brmq-vector-length to trace-flength
+           else
+              move max-trace-flength to trace-flength
+           end-if
+           EXEC CICS ENTER TRACENUM(trace-num)
+                     RESOURCE(trace-resource)
+                     FROM(brmq-vector-header)
+                     FROMLENGTH(trace-flength)
+                     NOHANDLE
+                     END-EXEC
+           exit.
+
+      *****************************************************************
+      * ETRACE-BRXA-COMMAND                                           *
+      *   Trace a BRXA COMMAND AREA ON EXCEPTION                      *
+      *****************************************************************
+       etrace-brxa-command section.
+           move length of brxa-command-common to trace-flength
+           EXEC CICS ENTER TRACENUM(trace-num) EXCEPTION
+                     RESOURCE(trace-resource)
+                     FROM(brxa-command-common)
+                     FROMLENGTH(trace-flength)
+                     NOHANDLE
+                     END-EXEC
+           exit.
+
+      *****************************************************************
+      * ETRACE-BRXA-TRANSACTION-EXC                                   *
+      *   Trace a BRXA TRANSACTION AREA on exception                  *
+      *****************************************************************
+       etrace-brxa-transaction section.
+           move length of brxa-transaction-area to trace-flength
+           EXEC CICS ENTER TRACENUM(trace-num) EXCEPTION
+                     RESOURCE(trace-resource)
+                     FROM(brxa-command-common)
+                     FROMLENGTH(trace-flength)
+                     NOHANDLE
+                     END-EXEC
+           exit.
+
+      *****************************************************************
+      * ETRACE-BRMQ                                                   *
+      *   Trace a BRMQ vector on exception                            *
+      *****************************************************************
+       etrace-brmq section.
+           if brmq-vector-length < max-trace-flength
+              move brmq-vector-length to trace-flength
+           else
+              move max-trace-flength to trace-flength
+           end-if
+
+           EXEC CICS ENTER TRACENUM(trace-num) EXCEPTION
+                     RESOURCE(trace-resource)
+                     FROM(brmq-vector-header)
+                     FROMLENGTH(trace-flength)
+                     NOHANDLE
+                     END-EXEC
+           exit.
+
+      *****************************************************************
+      * ETRACE-INPUT-MESSAGE-ERROR                                    *
+      *   Trace input message and error-offset                        *
+      *****************************************************************
+       etrace-input-message-error section.
+           move 51 to trace-num
+           set address of trace-area to address of input-message-area
+           move input-flength to trace-flength
+           perform trace-exception
+
+           move 52 to trace-num
+           set address of trace-area to address of error-offset
+           move length of error-offset to trace-flength
+           perform trace-exception
+           exit.
+
+      *****************************************************************
+      * TRACE-EXCEPTION                                               *
+      *   Exception trace                                             *
+      *****************************************************************
+       trace-exception section.
+           if trace-flength > length of trace-area
+              move length of trace-area to trace-flength
+           end-if
+           EXEC CICS ENTER TRACENUM(trace-num) EXCEPTION
+                     RESOURCE(trace-resource)
+                     FROM(trace-area)
+                     FROMLENGTH(trace-flength)
+                     NOHANDLE
+                     END-EXEC
+           exit.

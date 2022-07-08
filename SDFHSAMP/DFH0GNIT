@@ -1,0 +1,333 @@
+CBL CICS('COBOL3,SP') APOST
+      *****************************************************************
+      *
+      *  MODULE NAME = DFH0GNIT
+      *
+      *  DESCRIPTIVE NAME = CICS TS  sample goodnight transaction
+      *
+      *
+      *
+      *       Licensed Materials - Property of IBM
+      *
+      *       "Restricted Materials of IBM"
+      *
+      *       5655-Y04
+      *
+      *       (C) Copyright IBM Corp. 1993, 2005"
+      *
+      *
+      *
+      *
+      *  STATUS = 7.2.0
+      *
+      *  TRANSACTION NAME = user-defined
+      *
+      *  FUNCTION =
+      *     This module is a sample "goodnight" transaction, to be
+      *     invoked when a signed-on user is inactive at his terminal
+      *     for a time in excess of the value specified in the TIMEOUT
+      *     parameter in the CICS segment of the user definition in
+      *     the External Security Manager.
+      *
+      *  NOTES :
+      *   DEPENDENCIES = S/390
+      *   RESTRICTIONS =
+      *   PATCH LABEL = Standard COBOL patch Area
+      *   MODULE TYPE = Executable
+      *   PROCESSOR = COBOL
+      *   ATTRIBUTES = Read only, Serially Reusable
+      *
+      *-----------------------------------------------------------------
+      *
+      *  CHANGE ACTIVITY :
+      *       $MOD(DFH0GNIT),COMP(SIGNON),PROD(CICS TS ):
+      *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS
+      * $01= A54080 410 940606 HDCWNRB : Migrate PN54080 from SPA R410
+      * $02= A59634 410 940913 HDCWNRB : Migrate PN59634 from SPA R410
+      * $03= A10796 650 051207 HDBGNRB : Migrate PK10796 from SPA R640
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $L0= 649    410 931108 HD2JPEH : Sample goodnight transaction
+      * $P1= M85179 410 940113 HD2JPEH : Restore screen in mixed case
+      * $P2= MIGRAT 530 970626 HDEWJPR : change PLXMAP COBOL string
+      * $P3= M85164 410 940113 HD2JPEH : Expired & revoked passwords
+      * $P4= M14300 610 991025 HD2JPEH : Restore screen base colors
+      *
+      ******************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID.    DFH0GNIT.
+       DATE-WRITTEN.  AUG-NOV 1993.
+       DATE-COMPILED. NOV 1993.
+      ******************************************************************
+      ****                                                          ****
+      ****          G O O D N I G H T   T R A N S A C T I O N       ****
+      ****                                                          ****
+      ****                                                          ****
+      ****    THIS PROGRAM IS STARTED BY THE CICS TERMINAL TIMEOUT  ****
+      ****    MECHANISM. THE COMMAREA PASSED IN CONTAINS VARIOUS    ****
+      ****    PARAMETERS THAT ALLOW THIS TRANSACTION TO RESTORE     ****
+      ****    ANY PSEUDO-CONVERSATIONAL STATE SUCH AS THE PREVIOUS  ****
+      ****    SCREEN CONTENTS AND COMMAREA. FOR FURTHER DETAILS     ****
+      ****    ON THE GOODNIGHT TRANSACTION REFER TO THE CICS        ****
+      ****    CUSTOMIZATION GUIDE.                                  ****
+      ****                                                          ****
+      ******************************************************************
+
+       ENVIRONMENT DIVISION.
+
+       DATA DIVISION.
+
+       WORKING-STORAGE SECTION.
+
+           COPY DFH0GMAP.
+           COPY DFHBMSCA.
+           COPY DFHAID.
+
+        77 GNTRAN-MAPSET PIC X(8) VALUE IS 'DFH0GNT '.
+        77 GNTRAN-MAP PIC X(8) VALUE IS 'GNMAP   '.
+        77 MSG-PASSWORD-INCORRECT PIC X(43) VALUE IS
+           'Your password is incorrect.  Please retype.'.
+        77 WRITE-CONTROL-CHARACTER PIC X(1) VALUE IS X'C3'.
+
+        01 TIMEOUT-TIME.
+           02 HOURS                  PIC X(2).
+           02 FILLER                 PIC X(1).
+           02 MINUTES                PIC X(2).
+           02 FILLER                 PIC X(1).
+           02 SECONDS                PIC X(2).
+
+        77 WS-RESP PIC S9(4) COMP VALUE ZERO.
+        77 WS-VERIFY-RESP PIC S9(4) COMP VALUE ZERO.
+        77 WS-USERID PIC X(8).
+
+        01 TS-QUEUE-NAME.
+           02 TSQ-TRANID             PIC X(4).
+           02 TSQ-TERMID             PIC X(4).
+
+      * FOLLOWING 4 LINES ADDED BY APAR PK10796                    @03A
+        01  C-PSA-CVT-POINTER        PIC 9(9) COMP SYNC VALUE 16.
+        01  C-PSA-CVT-ADRS REDEFINES C-PSA-CVT-POINTER USAGE POINTER.
+        01  RCVTPLC-QUOTIENT         PIC 9(4) COMP-4.
+        01  RCVTPLC-REMAINDER        PIC 9(4) COMP-4.
+
+       LINKAGE SECTION.
+
+           COPY DFHSNGSO
+            REPLACING ==DFHSNGS.== BY
+                      ==DFHSNGS REDEFINES DFHCOMMAREA.==.
+
+       01 FILLER                           REDEFINES DFHCOMMAREA.
+          02 FILLER                        PIC X(48).
+      * Overlaying part of 16 byte GNTRAN-USER-FIELD of DFHSNGS.
+          02 FILLER.
+      * FOLLOWING LINE ADDED BY APAR PK10796                       @03A
+                04 UCTRAN-SAVE             PIC S9(9) COMP.
+                04 PSEUDO-COMMAREA-LENGTH  PIC S9(4) COMP.
+                04 TIMEOUT-COMMAREA-LENGTH PIC S9(4) COMP.
+                04 PASSWORD-REQUESTED      PIC X(1).
+
+       01 PSEUDO-CONV-COMMAREA.
+          02 FILLER   PIC  X(32767).
+
+      * FOLLOWING 8 LINES ADDED BY APAR PK10796                    @03A
+       01  CVT-ADRS                     USAGE IS POINTER.
+       01  CVT.
+           05  FILLER                   PIC X(992).
+           05  CVTRAC                   USAGE IS POINTER.
+       01  RCVT.
+           05  FILLER                   PIC X(632).
+      * RCVTPLC is second bit of second byte which follows
+           05  RCVTPLC                  PIC 9(4) COMP-4.
+
+       PROCEDURE DIVISION.
+       0000-MAINLINE SECTION.
+
+           IF GNTRAN-START-TRANSID NOT = 'CEGN' THEN
+             EXEC CICS RETURN END-EXEC
+           END-IF.
+
+           MOVE EIBTRMID TO TSQ-TERMID.
+           MOVE EIBTRNID TO TSQ-TRANID.
+
+           EXEC CICS ASSIGN USERID(WS-USERID)
+           END-EXEC.
+
+           MOVE LOW-VALUES TO GNMAPO.
+           MOVE SPACES TO MSGOUTO.
+
+           IF PASSWORD-REQUESTED NOT EQUAL 'Y' THEN
+             PERFORM 0010-RECEIVE-ANY-COMMAREA
+      * FOLLOWING LINE ADDED BY APAR PK10796                       @03A
+             PERFORM 0100-SET-UPPERCASING-OFF
+             PERFORM 0020-REQUEST-PASSWORD
+             MOVE 'Y' TO PASSWORD-REQUESTED
+             PERFORM 0090-CONTINUE-TIMEOUT-PROCESS
+           ELSE
+             PERFORM 0015-READ-COMMAREA-FROM-QUEUE
+             PERFORM 0030-VERIFY-PASSWORD
+           END-IF.
+
+           IF WS-VERIFY-RESP = DFHRESP(NORMAL) THEN
+             PERFORM 0050-DISPLAY-PREVIOUS-SCREEN
+             PERFORM 0060-DISPLAY-PREVIOUS-CURSOR
+             PERFORM 0070-RETURN-WITH-TRANSID
+           ELSE
+             PERFORM 0020-REQUEST-PASSWORD
+             PERFORM 0090-CONTINUE-TIMEOUT-PROCESS
+           END-IF.
+
+       0000-EXIT.
+           EXIT.
+
+       0010-RECEIVE-ANY-COMMAREA.
+           IF GNTRAN-PSEUDO-CONV-FLAG = 'Y' THEN
+             EXEC CICS RECEIVE SET(ADDRESS OF PSEUDO-CONV-COMMAREA)
+                               LENGTH(PSEUDO-COMMAREA-LENGTH)
+                               RESP(WS-RESP)
+             END-EXEC.
+           IF PSEUDO-COMMAREA-LENGTH GREATER THAN ZERO THEN
+             EXEC CICS WRITEQ TS QUEUE(TS-QUEUE-NAME)
+                                 FROM(PSEUDO-CONV-COMMAREA)
+                                 LENGTH(PSEUDO-COMMAREA-LENGTH)
+             END-EXEC.
+       0010-EXIT.
+           EXIT.
+
+       0015-READ-COMMAREA-FROM-QUEUE.
+           IF PSEUDO-COMMAREA-LENGTH IS GREATER THAN ZERO THEN
+             EXEC CICS GETMAIN  SET(ADDRESS OF PSEUDO-CONV-COMMAREA)
+                                LENGTH(PSEUDO-COMMAREA-LENGTH)
+             END-EXEC
+             EXEC CICS READQ TS QUEUE(TS-QUEUE-NAME) ITEM(1)
+                                INTO(PSEUDO-CONV-COMMAREA)
+                                LENGTH(PSEUDO-COMMAREA-LENGTH)
+             END-EXEC
+           END-IF.
+
+       0020-REQUEST-PASSWORD.
+           MOVE WS-USERID TO GNUSERO.
+           MOVE SPACES TO GNPASSO.
+           EXEC CICS FORMATTIME ABSTIME(GNTRAN-TIMEOUT-TIME)
+                                TIME(GNTIMEO)
+                                TIMESEP
+                                DATE(GNDATEO)
+                                DATESEP
+           END-EXEC.
+
+           EXEC CICS SEND MAP(GNTRAN-MAP) MAPSET(GNTRAN-MAPSET)
+                          FROM(GNMAPO) FRSET FREEKB ERASE
+           END-EXEC.
+
+       0030-VERIFY-PASSWORD.
+           EXEC CICS RECEIVE MAP(GNTRAN-MAP) MAPSET(GNTRAN-MAPSET)
+                             INTO(GNMAPI) RESP(WS-RESP)
+           END-EXEC.
+
+           EXEC CICS VERIFY USERID(WS-USERID) PASSWORD(GNPASSI)
+                            RESP(WS-VERIFY-RESP)
+           END-EXEC.
+
+      *
+           EVALUATE WS-VERIFY-RESP ALSO EIBRESP2
+             WHEN DFHRESP(NORMAL) ALSO 0
+               MOVE SPACES TO MSGOUTO
+      *
+             WHEN DFHRESP(NOTAUTH) ALSO 2
+               MOVE MSG-PASSWORD-INCORRECT TO MSGOUTO
+             WHEN OTHER
+               PERFORM 0080-CLEAR-SCREEN
+      * FOLLOWING LINE ADDED BY APAR PK10796                       @03A
+               PERFORM 0110-RESTORE-UCTRAN
+               EXEC CICS RETURN IMMEDIATE TRANSID('CESF')
+               END-EXEC
+      *
+           END-EVALUATE.
+
+       0030-EXIT.
+           EXIT.
+
+       0050-DISPLAY-PREVIOUS-SCREEN.
+           IF GNTRAN-SCREEN-HEIGHT IS EQUAL TO 24 AND
+              GNTRAN-SCREEN-WIDTH  IS EQUAL TO 80 THEN
+             EXEC CICS SEND FROM(GNTRAN-SCREEN-BUFFER)
+                            LENGTH(GNTRAN-SCREEN-LENGTH)
+                            ERASE DEFAULT ASIS
+                            CTLCHAR(WRITE-CONTROL-CHARACTER)
+             END-EXEC
+           ELSE
+             EXEC CICS SEND FROM(GNTRAN-SCREEN-BUFFER)
+                            LENGTH(GNTRAN-SCREEN-LENGTH)
+                            ERASE ALTERNATE ASIS
+                            CTLCHAR(WRITE-CONTROL-CHARACTER)
+             END-EXEC
+           END-IF.
+       0050-EXIT.
+           EXIT.
+
+       0060-DISPLAY-PREVIOUS-CURSOR.
+           EXEC CICS SEND CONTROL CURSOR(GNTRAN-CURSOR-POSITION)
+                          FREEKB
+           END-EXEC.
+       0060-EXIT.
+           EXIT.
+
+       0070-RETURN-WITH-TRANSID.
+           EXEC CICS DELETEQ TS QUEUE(TS-QUEUE-NAME) NOHANDLE
+           END-EXEC.
+      * FOLLOWING LINE ADDED BY APAR PK10796                       @03A
+           PERFORM 0110-RESTORE-UCTRAN
+           IF PSEUDO-COMMAREA-LENGTH = 0 THEN
+             EXEC CICS RETURN TRANSID(GNTRAN-PSEUDO-CONV-TRANSID)
+             END-EXEC
+           ELSE
+             EXEC CICS RETURN TRANSID(GNTRAN-PSEUDO-CONV-TRANSID)
+                              COMMAREA(PSEUDO-CONV-COMMAREA)
+                              LENGTH(PSEUDO-COMMAREA-LENGTH)
+             END-EXEC
+           END-IF.
+
+       0070-EXIT.
+           EXIT.
+
+       0080-CLEAR-SCREEN.
+           EXEC CICS SEND CONTROL ERASE FREEKB
+           END-EXEC.
+
+       0080-EXIT.
+           EXIT.
+
+       0090-CONTINUE-TIMEOUT-PROCESS.
+           ADD LENGTH OF DFHSNGS-FIXED TO GNTRAN-SCREEN-LENGTH
+               GIVING TIMEOUT-COMMAREA-LENGTH.
+           EXEC CICS RETURN TRANSID(EIBTRNID)
+                            COMMAREA(DFHSNGS)
+                            LENGTH(TIMEOUT-COMMAREA-LENGTH)
+           END-EXEC.
+      * FOLLOWING 27 LINES ADDED BY APAR PK10796                   @03A
+       0090-EXIT.
+           EXIT.
+
+       0100-SET-UPPERCASING-OFF.
+      * If RACF bit set for mixedcase password set terminal to NOUCTRAN
+           SET ADDRESS OF CVT-ADRS TO C-PSA-CVT-ADRS.
+           SET ADDRESS OF CVT      TO CVT-ADRS.
+           SET ADDRESS OF RCVT     TO CVTRAC.
+           DIVIDE RCVTPLC BY 128 GIVING RCVTPLC-QUOTIENT
+                  REMAINDER RCVTPLC-REMAINDER.
+           IF RCVTPLC-REMAINDER >= 64 THEN
+             EXEC CICS INQUIRE TERMINAL(EIBTRMID)
+                               UCTRANST(UCTRAN-SAVE)
+             END-EXEC
+             EXEC CICS SET TERMINAL(EIBTRMID) NOUCTRAN
+             END-EXEC
+           END-IF.
+       0100-EXIT.
+           EXIT.
+
+       0110-RESTORE-UCTRAN.
+           IF UCTRAN-SAVE NOT EQUAL 0 THEN
+             EXEC CICS SET TERMINAL(EIBTRMID) UCTRANST(UCTRAN-SAVE)
+             END-EXEC
+           END-IF.
+       0110-EXIT.
+           EXIT.

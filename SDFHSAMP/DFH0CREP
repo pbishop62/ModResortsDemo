@@ -1,0 +1,206 @@
+       CBL CICS('COBOL3')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CREP                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Low Balance Inquiry for Sample Application *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1990, 1991"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      * $SEG(DFH0CREP),COMP(SAMPLES),PROD(CICS TS ):                  *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      *    $P0= .      320 900320        : CREATED.                   *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.            *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FILECREP.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       77  LOWLIM       PIC X(8)  VALUE '$0050.00'.
+       77  KEYNUM       PIC 9(6)  VALUE 0.
+      *
+      * THE INPUT AREA FOR KEYED DTA AND THE MAXIMUM LENGHT OF KEYED
+      * DATA FOLLOW.
+      * IN PRACTICE, THE OPERATOR WILL ONLY PRESS ENTER.
+      *
+       77  TERMDATA     PIC X(1).
+       77  TERMLENG     PIC S9(4) COMP.
+       77  PAGEN        PIC 9(3)  VALUE 1.
+       77  OPINSTR      PIC X(52) VALUE 'PRESS THE ENTER KEY AND FOLLOW
+      -                                 'WITH PAGING COMMANDS.'.
+       77  RESPONSE     PIC S9(8).
+                    COPY DFH0CGD.
+       01  FILEA.   COPY DFH0CFIL.
+       PROCEDURE DIVISION.
+      *
+      *    THE ERROR EXITS ARE SET UP. NOTE THAT THE "ERROR" CONDITION
+      *    IS SPECIFIED TO DETECT ANY UNEXPECTED ERRORS, ALL OTHER
+      *    ERRORS ARE DETECTED EXPLICITLY BY USING THE "RESP" OPTION
+      *    ON CICS COMMANDS. NOTE THAT AN EXIT MUST BE SPECIFIED FOR
+      *    THE "OVERFLOW" CONDITION OTHERWISE CICS WILL NOT ALLOW THIS
+      *    RESPONSE TO A "SEND MAP" COMMAND, EVEN THOUGH THIS RESPONSE
+      *    IS DETECTED BY USE OF THE "RESP" OPTION.
+      *
+           EXEC CICS HANDLE CONDITION ERROR(ERRORS)
+                            OVERFLOW(OFLOW) END-EXEC.
+           MOVE LOW-VALUE TO PAGENA
+      *
+      *    A PAGE NUMBER OF 1 IS MOVED TO THE HEADING MAP.
+      *
+           MOVE PAGEN     TO PAGENO
+      *
+      *    THIS "BMS" COMMAND SETS UP THE HEADING IN THE PAGE BUILD
+      *    OPERATION, "BMS" BUILDS THE PAGES IN TEMPORARY STORAGE.
+      *
+           EXEC CICS SEND MAP('HEADING') MAPSET('DFH0CGD') ACCUM
+                PAGING ERASE END-EXEC
+      *
+      *    THE "STARTBR" COMMAND SETS UP THE FILE BROWSE TO BEGIN AT
+      *    THE FIRST RECORD WITH A KEY EQUAL TO OR GREATER THAN THE
+      *    "RIDFLD", IN THIS CASE THE FIRST RECORD ON FILE.
+      *
+           EXEC CICS STARTBR FILE('FILEA') RIDFLD(KEYNUM) END-EXEC.
+       REPEAT.
+      *
+      *    THIS COMMAND READS THE NEXT CUSTOMER RECORD FROM "FILEA".
+      *    NOTE THE TESTING OF THE RESPONSE TO THE COMMAND.
+      *
+           EXEC CICS READNEXT INTO(FILEA) RIDFLD(KEYNUM)
+                              RESP(RESPONSE) FILE('FILEA') END-EXEC
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(ENDFILE) THEN GO TO ENDFILE.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+           MOVE AMOUNT    TO AMOUNTO
+      *
+      *    THE SEARCH CRITERION FOR CREATING THE REPORT IS THAT THE
+      *    CUSTOMER HAS A BANK BALANCE WHICH IS $50 OR LESS.
+      *
+           IF AMOUNTO GREATER THAN LOWLIM GO TO REPEAT.
+           MOVE LOW-VALUE TO LINEO
+           MOVE AMOUNT    TO AMOUNTO
+      *
+      *    FIELDS ARE MOVED FROM THE SELECTED CUSTOMER RECORD TO THE
+      *    MAP AREA FOR THE DETAIL LINE.
+      *
+           MOVE NUMB      TO NUMBERO
+           MOVE NAME      TO NAMEO
+      *
+      *    THE CUSTOMER DETAIL MAP IS SET UP FOR SUBSEQUENT PAGING.
+      *
+           EXEC CICS SEND MAP('LINE') MAPSET('DFH0CGD')
+                     ACCUM PAGING RESP(RESPONSE) END-EXEC
+      *
+      *    CHECK RESPONSES
+      *
+           IF RESPONSE = DFHRESP(OVERFLOW) THEN GO TO OFLOW.
+           IF RESPONSE NOT = DFHRESP(NORMAL) THEN GO TO ERRORS.
+           GO TO REPEAT.
+       ENDFILE.
+      *
+      *    WHEN THE "ENDFILE" CONDITION IS RAISED, THE LAST MAP IS SENT
+      *    TO "BMS".
+      *
+           EXEC CICS SEND MAP('FINAL') MAPSET('DFH0CGD')
+                     MAPONLY ACCUM PAGING END-EXEC
+      *
+      *    THE "SEND PAGE" COMMAND MAKES ALL THE PAGES OF THE REPORT
+      *    AVAILABLE FOR PAGING AT THE TERMINAL, WHEN THE CURRENT
+      *    TRANSACTION TERMINATES.
+      *
+           EXEC CICS SEND PAGE END-EXEC
+      *
+      *    A MESSAGE IS SENT TO THE TERMINAL. THIS MESSAGE WILL BE
+      *    DISPLAYED BEFORE THE PAGES OF THE LOW BALANCE REPORT.
+      *
+           EXEC CICS SEND TEXT FROM(OPINSTR) LENGTH(52)
+                     ERASE END-EXEC
+      *
+      *    THE FILE BROWSE OPERATION IS TERMINATED.
+      *
+           EXEC CICS ENDBR FILE('FILEA') END-EXEC
+      *
+      *    A RECEIVE COMMAND IS ISSUED TO GIVE THE TERMINAL OPERATOR
+      *    A CHANCE TO READ THE PROMPTING MESSAGE.
+      *
+      *    THE TRANSACTION WILL TERMINATE WHEN THE OPERATOR PRESSES THE
+      *    ENTER KEY.
+      *
+      *    PAGING COMMANDS CAN THEN BE ISSUED.
+      *
+      *    NO HARM IS DONE IF THE OPERATOR TYPES IN DATA BEFORE
+      *    PRESSING THE ENTER KEY.
+      *
+      *    THE "RECEIVE MAP" COMMAND READS FROM THE TERMINAL AND ALLOWS
+      *    THE TERMINAL OPERATOR TO READ THE PROMPTING MESSAGE BEFORE
+      *    THE FIRST PAGE OF THE REPORT IS DISPLAYED.
+      *
+           EXEC CICS RECEIVE INTO(TERMDATA) LENGTH(TERMLENG)
+                     RESP(RESPONSE) END-EXEC.
+      *
+      *    CHECK RESPONSE - IGNORE LENGERR
+      *
+           IF NOT (RESPONSE = DFHRESP(NORMAL)
+                   OR RESPONSE = DFHRESP(EOC)
+                   OR RESPONSE = DFHRESP(LENGERR))
+              THEN GO TO ERRORS.
+       ENDTASK.
+      *
+      *    THE PROGRAM ENDS, THE FIRST PAGE OF THE REPORT WILL NOW BE
+      *    DISPLAYED.
+      *
+           EXEC CICS RETURN END-EXEC.
+           GOBACK.
+       ERRORS.
+      *
+      *    IF THE "ERROR" CONDITION OCCURS ON A CICS COMMAND, THIS
+      *    ROUTINE GAINS CONTROL. HANDLING OF THE "ERROR" CONDITION IS
+      *    SUPRESSED, ANY DATA SENT TO "BMS" IS PURGED AND THE PROGRAM
+      *    TERMINATES ABNORMALLY WITH A TRANSACTION DUMP.
+      *
+           EXEC CICS PURGE MESSAGE NOHANDLE END-EXEC
+           EXEC CICS ABEND ABCODE('ERRS') NOHANDLE END-EXEC.
+        OFLOW.
+      *
+      *    IF THE PROGRAM DETECTS THE "OVERFLOW" CONDITION WHEN A DETAIL
+      *    LINE IS SENT TO "BMS", THIS ROUTINE GAINS CONTROL.
+      *    THIS ROUTINE COMPLETES THE CURRENT PAGE AND STARTS THE NEXT
+      *    ONE. THIS "BMS" COMMAND SETS UP THE FOOTING FOR THE CURRENT
+      *    PAGE.
+      *
+           EXEC CICS SEND MAP('FOOTING') MAPSET('DFH0CGD')
+                             MAPONLY ACCUM PAGING END-EXEC
+           ADD 1      TO PAGEN
+           MOVE PAGEN TO PAGENO
+      *
+      *    THIS "BMS" COMMAND SETS UP THE HEADING FOR THE NEXT PAGE.
+      *
+           EXEC CICS SEND MAP('HEADING') MAPSET('DFH0CGD')
+                     ACCUM PAGING ERASE END-EXEC.
+      *
+      *    THIS "BMS" COMMAND RESENDS THE DETAIL LINE WHICH CAUSED THE
+      *    "OVERFLOW" CONDITION.
+      *
+           EXEC CICS SEND MAP('LINE') MAPSET('DFH0CGD')
+                     ACCUM PAGING END-EXEC
+           GO TO REPEAT.

@@ -1,0 +1,1638 @@
+      ******************************************************************
+      *
+      * CONTROL BLOCK NAME = DFH0IPCC
+      *
+      * DESCRIPTIVE NAME = Migration Aids Utility
+      *
+      *
+      *
+      *     Licensed Materials - Property of IBM
+      *
+      *     "Restricted Materials of IBM"
+      *
+      *     5655-Y04
+      *
+      *     (C) Copyright IBM Corp. 2006, 2015"
+      *
+      *
+      *
+      *
+      * STATUS = 7.2.0
+      *
+      *-----------------------------------------------------------------
+      *
+      * FUNCTION =
+      *     The purpose of this utility is to provide a means of
+      *     migrating CONNECTION and SESSIONS definitions in a CSD file
+      *     used for intercommunication via SNA over APPC to those
+      *     used for IP interconnectivity (i.e. TCPIPSERVICE and IPCONN
+      *     definitions).
+      *
+      *     The utility uses DFHCSDUP EXTRACT to gather data from the
+      *     CSD File about the CONNECTION and SESSIONS definitions in
+      *     each of the specified GROUPs and LISTs. It stores this data
+      *     in a storage file, and processes this, along with a user
+      *     input file, to produce DEFINE statements that can be used
+      *     to create new IPCONN definitions in the CSD file.
+      *
+      *     This program is a tool that works in conjunction with the
+      *     CSD File Update Utility, DFHCSDUP. The program is invoked
+      *     once for every attribute of a definition it is to process.
+      *
+      *     The program accepts an input from DFHCSDUP, in the form
+      *     of an EXTRACT command output.
+      *
+      * LIFETIME =
+      *     The program is invoked by DFHCSDUP EXTRACT. It terminates
+      *     when all the processing for the EXTRACT command has been
+      *     carried out.
+      *
+      * NOTES :
+      *  DEPENDENCIES = S/390
+      *  MODULE TYPE = Control block definition
+      *  PROCESSOR = COBOL
+      *
+      *-----------------------------------------------------------------
+      *
+      * EXTERNAL REFERENCES =
+      *      None.
+      *
+      *   DATA AREAS =
+      *      No reference operating system data areas are referenced.
+      *
+      *   GLOBAL VARIABLES (Macro pass) =
+      *      No global macro variables are referenced.
+      *
+      *-----------------------------------------------------------------
+      *
+      * CHANGE ACTIVITY :
+      *
+      *     $SEG(DFH0IPCC),COMP(IPIC),PROD(CICS TS ):
+      *
+      *    PN= REASON REL YYMMDD HDXXIII : REMARKS
+      *   $L0= 710    650 061218 HDJJSX    Created.
+      *   $L1= 710    650 070503 HDJJJR  : Migration Aids Changes
+      *        R97693 700 141210 HD0EGMA : Add USERAUTH support
+      *
+      ******************************************************************
+
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0IPCC.
+       AUTHOR. Jonathan Rees.
+
+      ******************************************************************
+
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+
+      ******************************************************************
+      * Create an alias for the CSD Copy File (CSD-COPY).
+      *-----------------------------------------------------------------
+      * This file is used to temporarily store the relevant data from
+      * the CSD files. It is used as a temporary file when processing,
+      * as COBOL cannot dynamically allocate memory to store an unknown
+      * number of definitions in memory.
+      *-----------------------------------------------------------------
+      * Used as an OUTPUT and INPUT.
+      ******************************************************************
+
+           SELECT CSD-COPY
+             ASSIGN TO SYS002-DA-3380-S-CSDCOPY
+             ORGANIZATION IS SEQUENTIAL
+             ACCESS IS SEQUENTIAL.
+
+      ******************************************************************
+      * Create an alias for the APPLID Table (APPLID-TABLE).
+      *-----------------------------------------------------------------
+      * This is a table in which all the relevant APPLIDs are stored,
+      * along with their corresponding HOST and PORT values.
+      *-----------------------------------------------------------------
+      * Used as an INPUT.
+      ******************************************************************
+
+           SELECT APPLID-TABLE
+             ASSIGN TO SYS002-DA-3380-S-APPLTABL
+             ORGANIZATION IS SEQUENTIAL
+             ACCESS IS SEQUENTIAL
+             FILE STATUS IS APPLID-STATUS.
+
+      ******************************************************************
+      * Create an alias for the Log File (LOG-FILE).
+      *-----------------------------------------------------------------
+      * This is the message log file.
+      *-----------------------------------------------------------------
+      * Used as an OUTPUT.
+      ******************************************************************
+
+           SELECT LOG-FILE
+             ASSIGN TO SYS002-DA-3380-S-LOGFILE
+             ORGANIZATION IS SEQUENTIAL
+             ACCESS IS SEQUENTIAL.
+
+      ******************************************************************
+      * Create an alias for the Temporary DEFINE File (OUT-FILE).
+      *-----------------------------------------------------------------
+      * This is the file into which the DEFINE statements are written
+      * It is used for concatenating the DEFINE statements for one or
+      * more CSD GROUPs and LISTs.
+      *-----------------------------------------------------------------
+      * Used as an OUTPUT.
+      ******************************************************************
+
+           SELECT OUT-FILE
+             ASSIGN TO SYS002-DA-3380-S-OUTFILE
+             ORGANIZATION IS SEQUENTIAL
+             ACCESS IS SEQUENTIAL.
+
+      ******************************************************************
+
+       DATA DIVISION.
+       FILE SECTION.
+
+      ******************************************************************
+      * Define the structure of the CSD Copy File (CSD-COPY).
+      ******************************************************************
+
+       FD CSD-COPY
+           RECORD CONTAINS 80 CHARACTERS
+           BLOCK CONTAINS 192 RECORDS
+           RECORDING MODE IS F
+           LABEL RECORDS ARE OMITTED.
+
+      ******************************************************************
+      * Define the I/O buffer for CSD-COPY.
+      ******************************************************************
+
+       01  CSD-COPY-BUFFER.
+           02  RESOURCE-TYPE              PIC X(1).
+           02  RESOURCE-DEFINITION        PIC X(61).
+           02  FILLER                     PIC X(18).
+
+      ******************************************************************
+      * Define the structure of the APPLID Table (APPLID-TABLE).
+      ******************************************************************
+
+       FD APPLID-TABLE
+           RECORD CONTAINS 80 CHARACTERS
+           BLOCK CONTAINS 192 RECORDS
+           RECORDING MODE IS F
+           LABEL RECORDS ARE OMITTED.
+
+      ******************************************************************
+      * Define the I/O buffer for APPLID-TABLE.
+      ******************************************************************
+
+       01  APPLID-TABLE-BUFFER.
+           02  APPLID                     PIC X(8).
+           02  SEPARATOR-ONE              PIC X.
+           02  NETWORKID                  PIC X(8).
+           02  SEPARATOR-TWO              PIC X.
+           02  PORT                       PIC X(5).
+           02  SEPARATOR-THREE            PIC X.
+           02  HOST                       PIC X(55).
+           02  CONTINUATION               PIC X.
+
+      ******************************************************************
+      * Define the structure of the Log File (LOG-FILE).
+      ******************************************************************
+
+       FD LOG-FILE
+           RECORD CONTAINS 80 CHARACTERS
+           BLOCK CONTAINS 192 RECORDS
+           RECORDING MODE IS F
+           LABEL RECORDS ARE OMITTED.
+
+      ******************************************************************
+      * Define the I/O buffer for LOG-FILE.
+      ******************************************************************
+
+       01  LOG-FILE-BUFFER PIC X(80).
+
+      ******************************************************************
+      * Define the structure of the Output File (OUT-FILE).
+      ******************************************************************
+
+       FD OUT-FILE
+           RECORD CONTAINS 80 CHARACTERS
+           BLOCK CONTAINS 192 RECORDS
+           RECORDING MODE IS F
+           LABEL RECORDS ARE OMITTED.
+
+      ******************************************************************
+      * Define the I/O buffer for OUT-FILE.
+      ******************************************************************
+
+       01  OUT-FILE-BUFFER PIC X(80).
+
+      ******************************************************************
+
+       WORKING-STORAGE SECTION.
+
+      ******************************************************************
+      * Call types, as defined by DFHCSDUP.
+      ******************************************************************
+
+       01  INITIAL-CALL                   PIC 99 VALUE IS 0.
+       01  LIST-START-CALL                PIC 99 VALUE IS 2.
+       01  GROUP-START-CALL               PIC 99 VALUE IS 4.
+       01  OBJECT-START-CALL              PIC 99 VALUE IS 6.
+       01  KEYWORD-START-CALL             PIC 99 VALUE IS 8.
+       01  OBJECT-END-CALL                PIC 99 VALUE IS 10.
+       01  GROUP-END-CALL                 PIC 99 VALUE IS 12.
+       01  LIST-END-CALL                  PIC 99 VALUE IS 14.
+       01  FINAL-CALL                     PIC 99 VALUE IS 16.
+
+      ******************************************************************
+      * Return codes.
+      ******************************************************************
+
+       01  INVALID-CALL-TYPE              PIC S9(4) VALUE IS 2.
+       01  NONBLANK-APPLID                PIC S9(4) VALUE IS 2.
+       01  BLANK-HOST                     PIC S9(4) VALUE IS 2.
+       01  BLANK-PORT                     PIC S9(4) VALUE IS 2.
+
+      ******************************************************************
+      * The names of the CONNECTION and GROUP being processed.
+      ******************************************************************
+
+       01  CURRENT-CONNECTION             PIC X(4) VALUE IS SPACES.
+       01  CURRENT-GROUP                  PIC X(8) VALUE IS SPACES.
+
+      ******************************************************************
+      * Flags to determine whether the next CONNECTION definition
+      * encountered is to be processed, and whether a CONNECTION or
+      * SESSION definition has just been read from the file.
+      ******************************************************************
+
+       01  PROCESS-NEXT-CONN              PIC 9 COMP VALUE IS 1.
+       01  CONNECTION-PROCESSED           PIC 9 COMP VALUE IS 0.
+
+      ******************************************************************
+      * End-of-file flags.
+      ******************************************************************
+
+       01  EOF-FLAG-C                     PIC 9 COMP VALUE IS 0.
+       01  EOF-FLAG-S                     PIC 9 COMP VALUE IS 0.
+       01  EOF-FLAG-A                     PIC 9 COMP VALUE IS 0.
+
+      ******************************************************************
+      * Variable used for doing nothing.
+      ******************************************************************
+
+       01  DO-NOTHING                     PIC 9 COMP VALUE IS 1.
+
+      ******************************************************************
+      * The FILE STATUS for APPLID-TABLE.
+      ******************************************************************
+
+       01  APPLID-STATUS                  PIC XX.
+
+      ******************************************************************
+      * Flag for whether to store a CONNECTION definition.
+      ******************************************************************
+
+       01  STORE-CONNECTION               PIC 9 COMP VALUE IS 1.
+
+      ******************************************************************
+      * String for concatenating long HOST names.
+      ******************************************************************
+
+       01  LONG-HOST                      PIC X(116).
+
+      ******************************************************************
+      * Send and receive sessions counters.
+      ******************************************************************
+
+       01  TEMP-S-SEND                    PIC X(3) VALUE IS SPACES.
+       01  TEMP-S-RECEIVE                 PIC X(3) VALUE IS SPACES.
+       01  TEMP-N-SEND                    PIC 9(3) COMP VALUE IS 0.
+       01  TEMP-N-RECEIVE                 PIC 9(3) COMP VALUE IS 0.
+       01  TEMP-T-SEND                    PIC 9(3) COMP VALUE IS 0.
+       01  TEMP-T-RECEIVE                 PIC 9(3) COMP VALUE IS 0.
+
+      ******************************************************************
+      * Default NETWORKID Value and TCPIPSERVICE Name.
+      ******************************************************************
+
+       01  DEFAULT-NETWORKID              PIC X(8) VALUE IS SPACES.
+       01  DEFAULT-TCPIPSERVICE           PIC X(8) VALUE IS SPACES.
+
+      ******************************************************************
+      * Temporary CONNECTION definition.
+      * - Should be the same length as RESOURCE-DEFINITION
+      ******************************************************************
+
+       01  TEMP-CONNECTION.
+           02  AUTOCONNECT                PIC X(3).
+           02  ATTACHSEC                  PIC X(10).
+           02  CONNECTION                 PIC X(4).
+           02  GGROUP                     PIC X(8).
+           02  INSERVICE                  PIC X(3).
+           02  MAXQTIME                   PIC X(4).
+           02  NETNAME                    PIC X(8).
+           02  PROTOCOL                   PIC X(4).
+           02  QUEUELIMIT                 PIC X(4).
+           02  SECURITYNAME               PIC X(8).
+           02  XLNACTION                  PIC X(5).
+
+      ******************************************************************
+      * Temporary SESSIONS definition.
+      * - Should be the same length as RESOURCE-DEFINITION
+      ******************************************************************
+
+       01  TEMP-SESSIONS.
+           02  CONNECTION                 PIC X(4).
+           02  GGROUP                     PIC X(8).
+           02  SENDS                      PIC X(3).
+           02  RECEIVES                   PIC X(3).
+           02  RECEIVECOUNT               PIC X(3).
+           02  SENDCOUNT                  PIC X(3).
+           02  USERID                     PIC X(8).
+           02  FILLER                     PIC X(29).
+
+      ******************************************************************
+      * Temporary IPCONN definition.
+      ******************************************************************
+
+       01  TEMP-IPCONN.
+           02  APPLID                     PIC X(8).
+           02  AUTOCONNECT                PIC X(3).
+           02  GGROUP                     PIC X(8).
+           02  HOST                       PIC X(116).
+           02  INSERVICE                  PIC X(3).
+           02  IPCONN                     PIC X(8).
+           02  LINKAUTH                   PIC X(8).
+           02  MAXQTIME                   PIC X(4).
+           02  NETWORKID                  PIC X(8).
+           02  PORT                       PIC X(5).
+           02  QUEUELIMIT                 PIC X(4).
+           02  RECEIVECOUNT               PIC X(3).
+           02  SECURITYNAME               PIC X(8).
+           02  SENDCOUNT                  PIC X(3).
+           02  USERAUTH                   PIC X(11).
+           02  XLNACTION                  PIC X(5).
+
+      ******************************************************************
+      * The linkage between this program and DFHCSDUP. Here, we only
+      * need to define the format of the data items pointed to by the
+      * parameter list passed to the program by DFHCSDUP. The COBOL
+      * compiler takes care of establishing addressability to the
+      * addresses in the parameter list.
+      ******************************************************************
+
+       LINKAGE SECTION.
+
+       01  EXIT-FUNCTION-CODE             PIC 99 COMP.
+       01  EXIT-WORK-AREA-PTR             POINTER.
+       01  EXIT-BACK-TRANS-CMD-PTR        POINTER.
+       01  EXIT-LIST-NAME                 PIC X(8).
+       01  EXIT-GROUP-NAME                PIC X(8).
+       01  EXIT-OBJECT-TYPE               PIC X(12).
+       01  EXIT-OBJECT-NAME               PIC X(8).
+       01  EXIT-KEYWORD-TYPE              PIC X(12).
+       01  EXIT-KEYWORD-LENGTH            PIC 999 COMP.
+       01  EXIT-KEYWORD-VALUE.
+           02  EXIT-KEYWORD-CHAR          PIC X OCCURS 1 TO 255
+                                   DEPENDING ON EXIT-KEYWORD-LENGTH.
+
+      ******************************************************************
+      *
+      *
+      *        M A I N L I N E   C O D E   S T A R T S   H E R E
+      *       ---------------------------------------------------
+      *
+      *
+      ******************************************************************
+
+      ******************************************************************
+      * Check which function value has been passed to the utility and
+      * run the corresponding procedure.
+      ******************************************************************
+
+       PROCEDURE DIVISION USING EXIT-FUNCTION-CODE
+                                EXIT-WORK-AREA-PTR
+                                EXIT-BACK-TRANS-CMD-PTR
+                                EXIT-LIST-NAME
+                                EXIT-GROUP-NAME
+                                EXIT-OBJECT-TYPE
+                                EXIT-OBJECT-NAME
+                                EXIT-KEYWORD-TYPE
+                                EXIT-KEYWORD-LENGTH
+                                EXIT-KEYWORD-VALUE.
+
+
+      ******************************************************************
+      * Check the value of the exit function code and take the
+      * appropriate action.
+      ******************************************************************
+
+           EVALUATE EXIT-FUNCTION-CODE
+
+      ******************************************************************
+      * On the initial call, open the output file.
+      ******************************************************************
+
+           WHEN INITIAL-CALL
+
+             OPEN OUTPUT CSD-COPY
+
+      ******************************************************************
+      * At the start of a list, write to the log.
+      ******************************************************************
+
+           WHEN LIST-START-CALL
+
+             OPEN EXTEND LOG-FILE
+             MOVE SPACES TO LOG-FILE-BUFFER
+             STRING 'List ' DELIMITED BY SIZE EXIT-LIST-NAME
+               DELIMITED BY SPACES ' has been started'
+               DELIMITED BY SIZE INTO LOG-FILE-BUFFER
+             WRITE LOG-FILE-BUFFER
+             CLOSE LOG-FILE
+
+      ******************************************************************
+      * At the start of a group, write to the log.
+      ******************************************************************
+
+           WHEN GROUP-START-CALL
+
+             OPEN EXTEND LOG-FILE
+             MOVE SPACES TO LOG-FILE-BUFFER
+             STRING 'Group ' DELIMITED BY SIZE EXIT-GROUP-NAME
+               DELIMITED BY SPACES ' has been started'
+               DELIMITED BY SIZE INTO LOG-FILE-BUFFER
+             WRITE LOG-FILE-BUFFER
+             CLOSE LOG-FILE
+
+      ******************************************************************
+      * At the start of each new object, log when relevant, and empty
+      * the temporary structures.
+      ******************************************************************
+
+           WHEN OBJECT-START-CALL
+
+      ******************************************************************
+      * LOG THE START OF THE CONNECTION DEFINITION.
+      ******************************************************************
+
+             IF EXIT-OBJECT-TYPE = 'CONNECTION' THEN
+               OPEN EXTEND LOG-FILE
+               MOVE SPACES TO LOG-FILE-BUFFER
+               STRING 'Processing CONNECTION ' EXIT-OBJECT-NAME
+                 DELIMITED BY SIZE INTO LOG-FILE-BUFFER
+               WRITE LOG-FILE-BUFFER
+               CLOSE LOG-FILE
+             END-IF
+
+      ******************************************************************
+      * LOG THE START OF THE SESSIONS DEFINITION.
+      ******************************************************************
+
+             IF EXIT-OBJECT-TYPE = 'SESSIONS' THEN
+               OPEN EXTEND LOG-FILE
+               MOVE SPACES TO LOG-FILE-BUFFER
+               STRING 'Processing SESSIONS ' EXIT-OBJECT-NAME
+                 DELIMITED BY SIZE INTO LOG-FILE-BUFFER
+               WRITE LOG-FILE-BUFFER
+               CLOSE LOG-FILE
+             END-IF
+
+      ******************************************************************
+      * FLUSH THE TEMPORARY STRUCURES WITH SPACES.
+      ******************************************************************
+
+             MOVE SPACES TO TEMP-CONNECTION
+             MOVE SPACES TO TEMP-SESSIONS
+             MOVE 1 TO STORE-CONNECTION
+
+      ******************************************************************
+      * Store the value of the current keyword in the appropriate field
+      * of the appropriate data structure.
+      ******************************************************************
+
+           WHEN KEYWORD-START-CALL
+
+      ******************************************************************
+      * Check the current object type.
+      ******************************************************************
+
+             EVALUATE EXIT-OBJECT-TYPE
+
+             WHEN 'CONNECTION'
+
+      ******************************************************************
+      * Check the current keyword type and store the keyword value in
+      * the corresponding field in the temporary CONNECTION structure.
+      ******************************************************************
+
+               MOVE EXIT-OBJECT-NAME TO CONNECTION OF TEMP-CONNECTION
+               MOVE EXIT-GROUP-NAME  TO GGROUP     OF TEMP-CONNECTION
+
+               EVALUATE EXIT-KEYWORD-TYPE
+
+               WHEN 'AUTOCONNECT'  MOVE EXIT-KEYWORD-VALUE
+               TO    AUTOCONNECT   OF TEMP-CONNECTION
+               WHEN 'ATTACHSEC'    MOVE EXIT-KEYWORD-VALUE
+               TO    ATTACHSEC     OF TEMP-CONNECTION
+               WHEN 'INSERVICE'    MOVE EXIT-KEYWORD-VALUE
+               TO    INSERVICE     OF TEMP-CONNECTION
+               WHEN 'MAXQTIME'     MOVE EXIT-KEYWORD-VALUE
+               TO    MAXQTIME      OF TEMP-CONNECTION
+               WHEN 'NETNAME'      MOVE EXIT-KEYWORD-VALUE
+               TO    NETNAME       OF TEMP-CONNECTION
+               WHEN 'QUEUELIMIT'   MOVE EXIT-KEYWORD-VALUE
+               TO    QUEUELIMIT    OF TEMP-CONNECTION
+               WHEN 'SECURITYNAME' MOVE EXIT-KEYWORD-VALUE
+               TO    SECURITYNAME  OF TEMP-CONNECTION
+               WHEN 'XLNACTION'    MOVE EXIT-KEYWORD-VALUE
+               TO    XLNACTION     OF TEMP-CONNECTION
+
+      ******************************************************************
+      * If PROTOCOL is not MRO or APPC, discard the definition.
+      ******************************************************************
+
+               WHEN 'PROTOCOL' PERFORM
+                 MOVE EXIT-KEYWORD-VALUE TO PROTOCOL OF TEMP-CONNECTION
+                 IF ((EXIT-KEYWORD-VALUE NOT = 'APPC') AND
+                 (EXIT-KEYWORD-VALUE NOT = SPACES)) THEN
+                   MOVE 0 TO STORE-CONNECTION
+                   OPEN EXTEND LOG-FILE
+                   MOVE SPACES TO LOG-FILE-BUFFER
+                   MOVE 'PROTOCOL is not APPC or MRO, rejecting'
+                     TO LOG-FILE-BUFFER
+                   WRITE LOG-FILE-BUFFER
+                   CLOSE LOG-FILE
+                 END-IF
+
+               END-PERFORM
+
+      ******************************************************************
+      * If SINGLESESS = YES, discard the definition.
+      ******************************************************************
+
+               WHEN 'SINGLESESS' PERFORM
+                 IF EXIT-KEYWORD-VALUE = 'YES' THEN
+                   MOVE 0 TO STORE-CONNECTION
+                   OPEN EXTEND LOG-FILE
+                   MOVE SPACES TO LOG-FILE-BUFFER
+                   MOVE 'SINGLESESS = YES, rejecting' TO LOG-FILE-BUFFER
+                   WRITE LOG-FILE-BUFFER
+                   CLOSE LOG-FILE
+                 END-IF
+               END-PERFORM
+
+      ******************************************************************
+      * If ACCESSMETHOD = INDIRECT, discard the definition.
+      ******************************************************************
+
+               WHEN 'ACCESSMETHOD' PERFORM
+                 IF EXIT-KEYWORD-VALUE = 'INDIRECT' THEN
+                   MOVE 0 TO STORE-CONNECTION
+                   OPEN EXTEND LOG-FILE
+                   MOVE SPACES TO LOG-FILE-BUFFER
+                   MOVE 'ACCESSMETHOD = INDIRECT, rejecting'
+                   TO LOG-FILE-BUFFER
+                   WRITE LOG-FILE-BUFFER
+                   CLOSE LOG-FILE
+                 END-IF
+               END-PERFORM
+
+               END-EVALUATE
+
+             WHEN 'SESSIONS'
+
+      ******************************************************************
+      * Check the current keyword type and store the keyword value in
+      * the corresponding field in the temporary SESSIONS structure.
+      ******************************************************************
+
+               MOVE EXIT-GROUP-NAME TO GGROUP OF TEMP-SESSIONS
+
+               EVALUATE EXIT-KEYWORD-TYPE
+
+               WHEN 'CONNECTION'   MOVE EXIT-KEYWORD-VALUE
+               TO    CONNECTION    OF TEMP-SESSIONS
+               WHEN 'SENDCOUNT'    MOVE EXIT-KEYWORD-VALUE
+               TO    SENDCOUNT     OF TEMP-SESSIONS
+               WHEN 'RECEIVECOUNT' MOVE EXIT-KEYWORD-VALUE
+               TO    RECEIVECOUNT  OF TEMP-SESSIONS
+      ******************************************************************
+      * Work out the number of send and receive sessions for the
+      * SESSIONS definition.
+      ******************************************************************
+
+               WHEN 'MAXIMUM'
+
+                 MOVE SPACES TO TEMP-S-RECEIVE
+                 MOVE SPACES TO TEMP-S-SEND
+                 MOVE 0 TO TEMP-N-RECEIVE
+                 MOVE 0 TO TEMP-N-SEND
+
+                 UNSTRING EXIT-KEYWORD-VALUE DELIMITED BY ','
+                   INTO TEMP-S-RECEIVE TEMP-S-SEND
+                 END-UNSTRING
+
+               END-EVALUATE
+
+      ******************************************************************
+      * End of object type selection.
+      ******************************************************************
+
+             END-EVALUATE
+
+      ******************************************************************
+      * After the object data has been stored in a temporary data
+      * structure, write the data to the output file so it can be
+      * accessed again later, during data processing.
+      ******************************************************************
+
+           WHEN OBJECT-END-CALL
+
+             MOVE SPACES TO CSD-COPY-BUFFER
+
+             EVALUATE EXIT-OBJECT-TYPE
+
+      ******************************************************************
+      * When a CONNECTION resource definition has been processed, write
+      * the data stored in the temporary structure to the output file.
+      ******************************************************************
+
+             WHEN 'CONNECTION'
+
+               MOVE 'C' TO RESOURCE-TYPE OF CSD-COPY-BUFFER
+               MOVE TEMP-CONNECTION TO RESOURCE-DEFINITION
+                 OF CSD-COPY-BUFFER
+               IF STORE-CONNECTION = 1 THEN
+                 WRITE CSD-COPY-BUFFER
+               END-IF
+
+      ******************************************************************
+      * When a SESSION resource definition has been processed, write
+      * the data stored in the temporary structure to the output file.
+      ******************************************************************
+
+             WHEN 'SESSIONS'
+
+      ******************************************************************
+      * Format the send and receive sessions counters so that they
+      * don't cause problems when transferred to a numeric variable.
+      * IF THERE IS A SPACE ON THE RHS OF THE NUMBER, SHIFT THE NUMBER
+      * TO THE RIGHT AND ADD A LEADING ZERO. REPEAT.
+      ******************************************************************
+
+      ******************************************************************
+      * TEMP-S-RECEIVE (RECEIVE SESSIONS FROM MAXIMUM)
+      ******************************************************************
+
+               IF TEMP-S-RECEIVE(3:1) = SPACES THEN
+                 MOVE TEMP-S-RECEIVE(2:1) TO TEMP-S-RECEIVE(3:1)
+                 MOVE TEMP-S-RECEIVE(1:1) TO TEMP-S-RECEIVE(2:1)
+                 MOVE '0' TO TEMP-S-RECEIVE(1:1)
+               END-IF
+
+               IF TEMP-S-RECEIVE(3:1) = SPACES THEN
+                 MOVE TEMP-S-RECEIVE(2:1) TO TEMP-S-RECEIVE(3:1)
+                 MOVE TEMP-S-RECEIVE(1:1) TO TEMP-S-RECEIVE(2:1)
+                 MOVE '0' TO TEMP-S-RECEIVE(1:1)
+               END-IF
+
+      ******************************************************************
+      * TEMP-S-SEND (SEND SESSIONS FROM MAXIMUM)
+      ******************************************************************
+
+               IF TEMP-S-SEND(3:1) = SPACES THEN
+                 MOVE TEMP-S-SEND(2:1) TO TEMP-S-SEND(3:1)
+                 MOVE TEMP-S-SEND(1:1) TO TEMP-S-SEND(2:1)
+                 MOVE '0' TO TEMP-S-SEND(1:1)
+               END-IF
+
+               IF TEMP-S-SEND(3:1) = SPACES THEN
+                 MOVE TEMP-S-SEND(2:1) TO TEMP-S-SEND(3:1)
+                 MOVE TEMP-S-SEND(1:1) TO TEMP-S-SEND(2:1)
+                 MOVE '0' TO TEMP-S-SEND(1:1)
+               END-IF
+
+      ******************************************************************
+      * SENDCOUNT (SEND SESSIONS FROM SENDCOUNT)
+      ******************************************************************
+
+               IF SENDCOUNT OF TEMP-SESSIONS(3:1) = SPACES THEN
+                 MOVE SENDCOUNT OF TEMP-SESSIONS(2:1)
+                 TO   SENDCOUNT OF TEMP-SESSIONS(3:1)
+                 MOVE SENDCOUNT OF TEMP-SESSIONS(1:1)
+                 TO   SENDCOUNT OF TEMP-SESSIONS(2:1)
+                 MOVE '0' TO SENDCOUNT OF TEMP-SESSIONS(1:1)
+               END-IF
+
+               IF SENDCOUNT OF TEMP-SESSIONS(3:1) = SPACES THEN
+                 MOVE SENDCOUNT OF TEMP-SESSIONS(2:1)
+                 TO   SENDCOUNT OF TEMP-SESSIONS(3:1)
+                 MOVE SENDCOUNT OF TEMP-SESSIONS(1:1)
+                 TO   SENDCOUNT OF TEMP-SESSIONS(2:1)
+                 MOVE '0' TO SENDCOUNT OF TEMP-SESSIONS(1:1)
+               END-IF
+
+      ******************************************************************
+      * RECEIVECOUNT (RECEIVE SESSIONS FROM RECEIVECOUNT)
+      ******************************************************************
+
+               IF RECEIVECOUNT OF TEMP-SESSIONS(3:1) = SPACES THEN
+                 MOVE RECEIVECOUNT OF TEMP-SESSIONS(2:1)
+                 TO   RECEIVECOUNT OF TEMP-SESSIONS(3:1)
+                 MOVE RECEIVECOUNT OF TEMP-SESSIONS(1:1)
+                 TO   RECEIVECOUNT OF TEMP-SESSIONS(2:1)
+                 MOVE '0' TO RECEIVECOUNT OF TEMP-SESSIONS(1:1)
+               END-IF
+
+               IF RECEIVECOUNT OF TEMP-SESSIONS(3:1) = SPACES THEN
+                 MOVE RECEIVECOUNT OF TEMP-SESSIONS(2:1)
+                 TO   RECEIVECOUNT OF TEMP-SESSIONS(3:1)
+                 MOVE RECEIVECOUNT OF TEMP-SESSIONS(1:1)
+                 TO   RECEIVECOUNT OF TEMP-SESSIONS(2:1)
+                 MOVE '0' TO RECEIVECOUNT OF TEMP-SESSIONS(1:1)
+               END-IF
+
+      ******************************************************************
+      * TRANSFER COUNTS FROM STRINGS TO NUMERIC VARIABLES.
+      ******************************************************************
+
+               MOVE TEMP-S-RECEIVE TO TEMP-N-RECEIVE
+               MOVE TEMP-S-SEND    TO TEMP-N-SEND
+
+      ******************************************************************
+      * CALCULATE THE NEW NUMBER OF RECEIVE SESSIONS.
+      ******************************************************************
+
+               SUBTRACT TEMP-N-SEND FROM TEMP-N-RECEIVE
+                 GIVING TEMP-N-RECEIVE
+
+      ******************************************************************
+      * ADD TO THE TEMPORARY STRUCTURES AND STORE IN CSD-COPY.
+      ******************************************************************
+
+               MOVE TEMP-N-RECEIVE TO RECEIVES OF TEMP-SESSIONS
+               MOVE TEMP-N-SEND TO SENDS OF TEMP-SESSIONS
+
+               MOVE 'S' TO RESOURCE-TYPE OF CSD-COPY-BUFFER
+               MOVE TEMP-SESSIONS TO RESOURCE-DEFINITION
+                 OF CSD-COPY-BUFFER
+               WRITE CSD-COPY-BUFFER
+
+      ******************************************************************
+      * End of Object Type selection.
+      ******************************************************************
+
+             END-EVALUATE
+
+      ******************************************************************
+      * At the end of a group, write to the log file.
+      ******************************************************************
+
+           WHEN GROUP-END-CALL
+             OPEN EXTEND LOG-FILE
+             MOVE SPACES TO LOG-FILE-BUFFER
+             STRING 'Group ' DELIMITED BY SIZE EXIT-GROUP-NAME
+               DELIMITED BY SPACES ' has been processed'
+               DELIMITED BY SIZE INTO LOG-FILE-BUFFER
+             WRITE LOG-FILE-BUFFER
+             CLOSE LOG-FILE
+
+      ******************************************************************
+      * At the end of a list, write to the log file.
+      ******************************************************************
+
+           WHEN LIST-END-CALL
+
+             OPEN EXTEND LOG-FILE
+             MOVE SPACES TO LOG-FILE-BUFFER
+             STRING 'List ' DELIMITED BY SIZE EXIT-LIST-NAME
+               DELIMITED BY SPACES ' has been processed'
+               DELIMITED BY SIZE INTO LOG-FILE-BUFFER
+             WRITE LOG-FILE-BUFFER
+             CLOSE LOG-FILE
+
+      ******************************************************************
+      * On the final call, close CSD-COPY and open OUT-FILE.
+      ******************************************************************
+
+           WHEN FINAL-CALL
+
+             OPEN EXTEND LOG-FILE
+             CLOSE CSD-COPY
+             OPEN EXTEND OUT-FILE
+
+      ******************************************************************
+      * Find the default NETWORKID.
+      ******************************************************************
+
+      ******************************************************************
+      * CHECK FOR I/O ERRORS.
+      ******************************************************************
+
+             OPEN INPUT APPLID-TABLE
+
+             IF APPLID-STATUS NOT = '00' THEN
+               MOVE SPACES TO LOG-FILE-BUFFER
+               STRING 'Error: Applid Table FILE STATUS code '
+                 APPLID-STATUS '. This file must have FB80 '
+                 'format.' DELIMITED BY SIZE INTO LOG-FILE-BUFFER
+               WRITE LOG-FILE-BUFFER
+             END-IF
+
+      ******************************************************************
+      * WRITE TO THE LOG FILE.
+      ******************************************************************
+
+             MOVE SPACES TO APPLID-TABLE-BUFFER
+             MOVE SPACES TO LOG-FILE-BUFFER
+             MOVE 'Loading default values' TO LOG-FILE-BUFFER
+             WRITE LOG-FILE-BUFFER
+
+      ******************************************************************
+      * SCAN THE APPLID TABLE FOR A MATCH.
+      ******************************************************************
+
+             PERFORM WITH TEST BEFORE UNTIL EOF-FLAG-A = 1
+
+               READ APPLID-TABLE
+                 AT END MOVE 1 TO EOF-FLAG-A
+               END-READ
+
+      ******************************************************************
+      * Find the default TCPIPSERVICE and NETWORKID.
+      ******************************************************************
+
+               IF APPLID OF APPLID-TABLE-BUFFER = '.DEFAULT' THEN
+                 MOVE NETWORKID OF APPLID-TABLE-BUFFER
+                   TO DEFAULT-NETWORKID
+                 MOVE HOST OF APPLID-TABLE-BUFFER(14:8)
+                   TO DEFAULT-TCPIPSERVICE
+               END-IF
+
+             END-PERFORM
+
+      ******************************************************************
+      * If this is still blank, use a hard-coded default.
+      ******************************************************************
+
+             IF DEFAULT-TCPIPSERVICE = SPACES
+               THEN MOVE 'DFHIPIC' TO DEFAULT-TCPIPSERVICE
+             END-IF
+
+             CLOSE APPLID-TABLE
+
+      ******************************************************************
+      * Process the CSD Copy File until the end of the file has been
+      * reached.
+      ******************************************************************
+
+             PERFORM WITH TEST BEFORE UNTIL EOF-FLAG-C = 1
+
+               OPEN INPUT CSD-COPY
+               MOVE 0 TO CONNECTION-PROCESSED
+
+               PERFORM WITH TEST BEFORE UNTIL EOF-FLAG-C = 1
+                 OR CONNECTION-PROCESSED = 1
+
+                 MOVE SPACES TO CSD-COPY-BUFFER
+                 READ CSD-COPY
+                   AT END MOVE 1 TO EOF-FLAG-C
+                 END-READ
+
+      ******************************************************************
+      * Look for CONNECTION definitions to process.
+      ******************************************************************
+
+                 IF RESOURCE-TYPE OF CSD-COPY-BUFFER = 'C' THEN
+
+                   MOVE RESOURCE-DEFINITION OF CSD-COPY-BUFFER
+                     TO TEMP-CONNECTION
+
+      ******************************************************************
+      * Find the first unprocessed CONNECTION definition in the CSD
+      * Copy File and process it.
+      ******************************************************************
+
+                   IF PROCESS-NEXT-CONN = 1 THEN
+
+      ******************************************************************
+      * Unprocessed CONNECTION definition has been found.
+      ******************************************************************
+
+                     MOVE SPACES TO TEMP-IPCONN
+                     MOVE 0 TO TEMP-T-SEND
+                     MOVE 0 TO TEMP-T-RECEIVE
+
+      ******************************************************************
+      * Find all SESSIONS definitions in the CSD Copy File that match
+      * the CONNECTION definition being processed. Add up the numbers
+      * of send and receive sessions.
+      ******************************************************************
+
+                     MOVE CONNECTION OF TEMP-CONNECTION TO
+                       CURRENT-CONNECTION
+                     MOVE GGROUP OF TEMP-CONNECTION TO CURRENT-GROUP
+
+      ******************************************************************
+      * WRITE TO THE LOG FILE.
+      ******************************************************************
+
+                     MOVE SPACES TO LOG-FILE-BUFFER
+                     STRING 'Processing CONNECTION ' DELIMITED BY SIZE
+                       CURRENT-CONNECTION DELIMITED BY SPACE ' in '
+                       DELIMITED BY SIZE CURRENT-GROUP DELIMITED
+                       BY SPACE INTO LOG-FILE-BUFFER
+                     WRITE LOG-FILE-BUFFER
+
+                     CLOSE CSD-COPY
+                     OPEN INPUT CSD-COPY
+
+                     MOVE SPACES TO TEMP-SESSIONS
+                     MOVE 0 TO EOF-FLAG-S
+
+      ******************************************************************
+      * SEARCH THE ENTIRE CSD COPY FILE FOR APPROPRIATE SESSIONS DEFS.
+      ******************************************************************
+
+                     PERFORM WITH TEST BEFORE UNTIL EOF-FLAG-S = 1
+
+                       READ CSD-COPY
+                         AT END MOVE 1 TO EOF-FLAG-S
+                       END-READ
+
+                       IF EOF-FLAG-S = 0 THEN
+
+                         IF RESOURCE-TYPE OF CSD-COPY-BUFFER = 'S' THEN
+
+                           MOVE RESOURCE-DEFINITION OF CSD-COPY-BUFFER
+                             TO TEMP-SESSIONS
+
+      ******************************************************************
+      * CHECK THE CURRENT RECORD FOR A MATCH.
+      ******************************************************************
+
+                           IF CONNECTION OF TEMP-SESSIONS =
+                             CURRENT-CONNECTION AND GGROUP OF
+                             TEMP-SESSIONS = CURRENT-GROUP THEN
+
+      ******************************************************************
+      * LOG THE MATCH.
+      ******************************************************************
+
+                             MOVE SPACES TO LOG-FILE-BUFFER
+                             STRING 'Processing SESSIONS for '
+                               'CONNECTION ' CURRENT-CONNECTION
+                               DELIMITED BY SIZE INTO LOG-FILE-BUFFER
+                             WRITE LOG-FILE-BUFFER
+
+      ******************************************************************
+      * FOR APPC CONNECTIONS, THE SEND AND RECEIVE COUNTS COME FROM
+      * THE VALUES CALCULATED FROM MAXIMUM.
+      ******************************************************************
+
+                             IF PROTOCOL OF TEMP-CONNECTION = 'APPC'
+                               THEN
+                               MOVE SENDS OF TEMP-SESSIONS TO
+                                 TEMP-N-SEND
+                               ADD TEMP-N-SEND TO TEMP-T-SEND GIVING
+                                 TEMP-T-SEND
+                               MOVE RECEIVES OF TEMP-SESSIONS TO
+                                 TEMP-N-RECEIVE
+                               ADD TEMP-N-RECEIVE TO TEMP-T-RECEIVE
+                                 GIVING TEMP-T-RECEIVE
+                             END-IF
+
+      ******************************************************************
+      * FOR MRO CONNECTIONS, THE SEND AND RECEIVE COUNTS COME FROM
+      * THE SENDCOUNT AND RECEIVECOUNT.
+      ******************************************************************
+
+                             IF PROTOCOL OF TEMP-CONNECTION = SPACES
+                               THEN
+                               MOVE SENDCOUNT OF TEMP-SESSIONS TO
+                                 TEMP-N-SEND
+                               ADD TEMP-N-SEND TO TEMP-T-SEND GIVING
+                                 TEMP-T-SEND
+                               MOVE RECEIVECOUNT OF TEMP-SESSIONS TO
+                                 TEMP-N-RECEIVE
+                               ADD TEMP-N-RECEIVE TO TEMP-T-RECEIVE
+                                 GIVING TEMP-T-RECEIVE
+                             END-IF
+
+      ******************************************************************
+      * END OF TEST FOR CONNECTION-SESSIONS MATCH.
+      ******************************************************************
+
+                           END-IF
+
+      ******************************************************************
+      * END OF TEST FOR SESSIONS RECORD.
+      ******************************************************************
+
+                         END-IF
+
+      ******************************************************************
+      * END OF TEST FOR END-OF-FILE.
+      ******************************************************************
+
+                       END-IF
+
+      ******************************************************************
+      * End of perform until end-of-file.
+      ******************************************************************
+
+                     END-PERFORM
+
+      ******************************************************************
+      * LOG THE START OF THE ATTRIBUTE MIGRATION.
+      ******************************************************************
+
+                     MOVE SPACES TO LOG-FILE-BUFFER
+                     STRING 'Migrating attributes for CONNECTION '
+                       CURRENT-CONNECTION DELIMITED BY SIZE INTO
+                       LOG-FILE-BUFFER
+                     WRITE LOG-FILE-BUFFER
+
+      ******************************************************************
+      * APPLID
+      ******************************************************************
+
+                     MOVE NETNAME      OF TEMP-CONNECTION
+                     TO   APPLID       OF TEMP-IPCONN
+
+      ******************************************************************
+      * ATTACHSEC
+      ******************************************************************
+                     IF ATTACHSEC OF TEMP-CONNECTION = 'LOCAL' THEN
+                       MOVE 'LOCAL' TO USERAUTH OF TEMP-IPCONN
+                     END-IF
+                     IF ATTACHSEC OF TEMP-CONNECTION = 'IDENTIFY' THEN
+                       MOVE 'IDENTIFY' TO USERAUTH OF TEMP-IPCONN
+                     END-IF
+                     IF ATTACHSEC OF TEMP-CONNECTION = 'VERIFY' THEN
+                       MOVE 'VERIFY' TO USERAUTH OF TEMP-IPCONN
+                     END-IF
+
+      ******************************************************************
+      * AUTOCONNECT
+      ******************************************************************
+
+                     MOVE AUTOCONNECT  OF TEMP-CONNECTION
+                     TO   AUTOCONNECT  OF TEMP-IPCONN
+                     IF AUTOCONNECT OF TEMP-IPCONN = 'ALL' THEN
+                       MOVE 'YES' TO AUTOCONNECT OF TEMP-IPCONN
+                     END-IF
+
+      ******************************************************************
+      * GROUP
+      ******************************************************************
+
+                     MOVE GGROUP       OF TEMP-CONNECTION
+                     TO   GGROUP       OF TEMP-IPCONN
+
+      ******************************************************************
+      * INSERVICE
+      ******************************************************************
+
+                     MOVE INSERVICE    OF TEMP-CONNECTION
+                     TO   INSERVICE    OF TEMP-IPCONN
+
+      ******************************************************************
+      * IPCONN
+      ******************************************************************
+
+                     MOVE CONNECTION   OF TEMP-CONNECTION
+                     TO   IPCONN       OF TEMP-IPCONN
+
+      ******************************************************************
+      * LINKAUTH
+      ******************************************************************
+
+                     IF SECURITYNAME OF TEMP-CONNECTION NOT =
+                       SPACES THEN
+                       MOVE 'SECUSER' TO LINKAUTH OF TEMP-IPCONN
+                     END-IF
+
+      ******************************************************************
+      * MAXQTIME
+      ******************************************************************
+
+                     MOVE MAXQTIME     OF TEMP-CONNECTION
+                     TO   MAXQTIME     OF TEMP-IPCONN
+
+      ******************************************************************
+      * QUEUELIMIT
+      ******************************************************************
+
+                     MOVE QUEUELIMIT   OF TEMP-CONNECTION
+                     TO   QUEUELIMIT   OF TEMP-IPCONN
+
+      ******************************************************************
+      * RECEIVECOUNT - Bump up to 1 if necessary.
+      ******************************************************************
+
+                     IF TEMP-T-RECEIVE = 0 THEN
+                       MOVE 1 TO TEMP-T-RECEIVE
+                     END-IF
+                     MOVE TEMP-T-RECEIVE
+                     TO   RECEIVECOUNT OF TEMP-IPCONN
+
+      ******************************************************************
+      * SECURITYNAME
+      ******************************************************************
+
+                     MOVE SECURITYNAME OF TEMP-CONNECTION
+                     TO   SECURITYNAME OF TEMP-IPCONN
+
+      ******************************************************************
+      * SENDCOUNT - Bump up to 1 if necessary.
+      ******************************************************************
+
+                     IF TEMP-T-SEND = 0 THEN
+                       MOVE 1 TO TEMP-T-SEND
+                     END-IF
+                     MOVE TEMP-T-SEND
+                     TO   SENDCOUNT    OF TEMP-IPCONN
+
+      ******************************************************************
+      * XLNACTION
+      ******************************************************************
+
+                     MOVE XLNACTION    OF TEMP-CONNECTION
+                     TO   XLNACTION    OF TEMP-IPCONN
+
+      ******************************************************************
+      * Use the APPLID Table to fill in the HOST and PORT attributes.
+      ******************************************************************
+
+                     OPEN INPUT APPLID-TABLE
+                     MOVE SPACES TO APPLID-TABLE-BUFFER
+                     MOVE 0 TO EOF-FLAG-A
+
+      ******************************************************************
+      * SCAN THE TABLE UNTIL END-OF-FILE HAS BEEN REACHED.
+      ******************************************************************
+
+                     PERFORM WITH TEST BEFORE UNTIL EOF-FLAG-A = 1
+
+                       READ APPLID-TABLE
+                         AT END MOVE 1 TO EOF-FLAG-A
+                       END-READ
+
+      ******************************************************************
+      * CHECK FOR A POSITIVE MATCH ON THE CURRENT APPLID.
+      ******************************************************************
+
+                       IF APPLID OF APPLID-TABLE-BUFFER = APPLID OF
+                         TEMP-IPCONN THEN
+
+      ******************************************************************
+      * FILL IN THE PORT AND NETWORKID OF THE IPCONN.
+      ******************************************************************
+
+                         MOVE PORT OF APPLID-TABLE-BUFFER
+                           TO PORT OF TEMP-IPCONN
+                         MOVE NETWORKID OF APPLID-TABLE-BUFFER
+                           TO NETWORKID OF TEMP-IPCONN
+
+      ******************************************************************
+      * FILL IN THE FIRST 55 CHARACTERS OF HOST.
+      ******************************************************************
+
+                         MOVE SPACES TO LONG-HOST
+                         MOVE HOST OF APPLID-TABLE-BUFFER TO LONG-HOST
+
+      ******************************************************************
+      * CHECK FOR A CONTINUATION CHARACTER IN THE LAST COLUMN.
+      ******************************************************************
+
+                         IF CONTINUATION OF APPLID-TABLE-BUFFER NOT =
+                           SPACES THEN
+
+                           READ APPLID-TABLE
+                             AT END MOVE 1 TO EOF-FLAG-A
+                           END-READ
+
+      ******************************************************************
+      * TERMINATE IF A NON-BLANK APPLID IS FOUND IN THE NEXT RECORD.
+      * THIS IS TO PREVENT ERRORS IN THE APPLID TABLE GOING UN-NOTICED.
+      ******************************************************************
+
+                           IF APPLID OF APPLID-TABLE-BUFFER NOT =
+                             SPACES THEN
+                             MOVE NONBLANK-APPLID TO RETURN-CODE
+                             MOVE SPACES TO LOG-FILE-BUFFER
+                             STRING 'APPLID of continuation '
+                               'record must be blank' DELIMITED
+                               BY SIZE INTO LOG-FILE-BUFFER
+                             WRITE LOG-FILE-BUFFER
+                             GOBACK
+                           END-IF
+
+      ******************************************************************
+      * FILL IN THE NEXT 55 CHARACTERS OF HOST.
+      ******************************************************************
+
+                           MOVE HOST OF APPLID-TABLE-BUFFER TO
+                             LONG-HOST(56:55)
+
+      ******************************************************************
+      * CHECK FOR A CONTINUATION CHARACTER IN THE LAST COLUMN.
+      ******************************************************************
+
+                           IF CONTINUATION OF APPLID-TABLE-BUFFER NOT =
+                             SPACES THEN
+
+                             READ APPLID-TABLE
+                               AT END MOVE 1 TO EOF-FLAG-A
+                             END-READ
+
+      ******************************************************************
+      * TERMINATE IF A NON-BLANK APPLID IS FOUND IN THE NEXT RECORD.
+      * THIS IS TO PREVENT ERRORS IN THE APPLID TABLE GOING UN-NOTICED.
+      ******************************************************************
+
+                             IF APPLID OF APPLID-TABLE-BUFFER NOT =
+                               SPACES THEN
+                               MOVE NONBLANK-APPLID TO RETURN-CODE
+                               MOVE SPACES TO LOG-FILE-BUFFER
+                               STRING 'APPLID of continuation '
+                                 'record must be blank' DELIMITED
+                                 BY SIZE INTO LOG-FILE-BUFFER
+                               WRITE LOG-FILE-BUFFER
+                               GOBACK
+                             END-IF
+
+      ******************************************************************
+      * FILL IN THE FINAL 6 CHARACTERS OF HOST.
+      ******************************************************************
+
+                             MOVE HOST OF APPLID-TABLE-BUFFER TO
+                               LONG-HOST(111:6)
+
+      ******************************************************************
+      * END OF SECOND CONTINUATION CHARACTER TEST.
+      ******************************************************************
+
+                           END-IF
+
+      ******************************************************************
+      * END OF FIRST CONTINUATION CHARACTER TEST.
+      ******************************************************************
+
+                         END-IF
+
+      ******************************************************************
+      * END OF TEST FOR MATCHING APPLID.
+      ******************************************************************
+
+                       END-IF
+
+      ******************************************************************
+      * END OF PERFORM UNTIL END-OF-FILE.
+      ******************************************************************
+
+                     END-PERFORM
+
+                     CLOSE APPLID-TABLE
+
+      ******************************************************************
+      * IF HOST IS MISSING, THE DEFINITION IS INVALID, SO TERMINATE.
+      ******************************************************************
+
+                     IF LONG-HOST = SPACES THEN
+                       MOVE BLANK-HOST TO RETURN-CODE
+                       MOVE SPACES TO LOG-FILE-BUFFER
+                       MOVE 'Error: HOST is blank' TO LOG-FILE-BUFFER
+                       WRITE LOG-FILE-BUFFER
+                       GOBACK
+                     END-IF
+
+      ******************************************************************
+      * IF PORT IS MISSING, THE DEFINITION IS INVALID, SO TERMINATE.
+      ******************************************************************
+
+                     IF PORT OF TEMP-IPCONN = SPACES THEN
+                       MOVE BLANK-PORT TO RETURN-CODE
+                       MOVE SPACES TO LOG-FILE-BUFFER
+                       MOVE 'Error: PORT is blank' TO LOG-FILE-BUFFER
+                       WRITE LOG-FILE-BUFFER
+                       GOBACK
+                     END-IF
+
+      ******************************************************************
+      * IF NETWORKID IS MISSING, USE THE DEFAULT VALUE.
+      ******************************************************************
+
+                     IF NETWORKID OF TEMP-IPCONN = SPACES THEN
+                       MOVE DEFAULT-NETWORKID TO NETWORKID OF
+                         TEMP-IPCONN
+                     END-IF
+
+      ******************************************************************
+      * Write the DEFINE statements to the output file. If a field is
+      * optional and has no value, omit it from the DEFINE statement.
+      ******************************************************************
+
+                     MOVE SPACES TO LOG-FILE-BUFFER
+                     STRING 'Writing DEFINE for IPCONN ' IPCONN OF
+                       TEMP-IPCONN DELIMITED BY SIZE INTO
+                       LOG-FILE-BUFFER
+                     WRITE LOG-FILE-BUFFER
+
+      ******************************************************************
+      * DEFINE IPCONN
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     STRING 'DEFINE IPCONN(' IPCONN OF TEMP-IPCONN ')'
+                       DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                     WRITE OUT-FILE-BUFFER
+
+      ******************************************************************
+      * GROUP
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     STRING 'GROUP(' DELIMITED BY SIZE GGROUP OF
+                       TEMP-IPCONN DELIMITED BY SPACE ')' DELIMITED BY
+                       SIZE INTO OUT-FILE-BUFFER
+                     WRITE OUT-FILE-BUFFER
+
+      ******************************************************************
+      * APPLID
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF APPLID OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'APPLID(' DELIMITED BY SIZE
+                         APPLID OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * AUTOCONNECT
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF AUTOCONNECT OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'AUTOCONNECT(' DELIMITED BY SIZE
+                         AUTOCONNECT OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * HOST - split this onto two lines with a continuation character
+      * if necessary.
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF LONG-HOST(66:51) = SPACES THEN
+                       STRING 'HOST(' DELIMITED BY SIZE
+                         LONG-HOST DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     ELSE
+                       STRING 'HOST(' DELIMITED BY SIZE
+                         LONG-HOST(1:66) DELIMITED BY SIZE
+                         '*' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                       MOVE SPACES TO OUT-FILE-BUFFER
+                       STRING LONG-HOST(67:50) DELIMITED BY SPACE ')'
+                         DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * INSERVICE
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF INSERVICE OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'INSERVICE(' DELIMITED BY SIZE
+                         INSERVICE OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * LINKAUTH
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF LINKAUTH OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'LINKAUTH(' DELIMITED BY SIZE
+                         LINKAUTH OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * MAXQTIME
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF MAXQTIME OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'MAXQTIME(' DELIMITED BY SIZE
+                         MAXQTIME OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * NETWORKID
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF NETWORKID OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'NETWORKID(' DELIMITED BY SIZE
+                         NETWORKID OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * PORT
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     STRING 'PORT(' DELIMITED BY SIZE
+                       PORT OF TEMP-IPCONN DELIMITED BY SPACE
+                       ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                     WRITE OUT-FILE-BUFFER
+
+      ******************************************************************
+      * QUEUELIMIT
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF QUEUELIMIT OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'QUEUELIMIT(' DELIMITED BY SIZE
+                         QUEUELIMIT OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * RECEIVECOUNT
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF RECEIVECOUNT OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'RECEIVECOUNT(' DELIMITED BY SIZE
+                         RECEIVECOUNT OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * SECURITYNAME
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF SECURITYNAME OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'SECURITYNAME(' DELIMITED BY SIZE
+                         SECURITYNAME OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * SENDCOUNT
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF SENDCOUNT OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'SENDCOUNT(' DELIMITED BY SIZE
+                         SENDCOUNT OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * TCPIPSERVICE
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     STRING 'TCPIPSERVICE(' DELIMITED BY SIZE
+                       DEFAULT-TCPIPSERVICE DELIMITED BY SPACE
+                       ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                     WRITE OUT-FILE-BUFFER
+
+      ******************************************************************
+      * USERAUTH
+      ******************************************************************
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF USERAUTH OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'USERAUTH(' DELIMITED BY SIZE
+                         USERAUTH OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * XLNACTION
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     IF XLNACTION OF TEMP-IPCONN NOT = SPACES THEN
+                       STRING 'XLNACTION(' DELIMITED BY SIZE
+                         XLNACTION OF TEMP-IPCONN DELIMITED BY SPACE
+                         ')' DELIMITED BY SIZE INTO OUT-FILE-BUFFER
+                       WRITE OUT-FILE-BUFFER
+                     END-IF
+
+      ******************************************************************
+      * SEPARATOR - for readability.
+      ******************************************************************
+
+                     MOVE SPACES TO OUT-FILE-BUFFER
+                     MOVE ' ' TO OUT-FILE-BUFFER
+                     WRITE OUT-FILE-BUFFER
+
+                     MOVE 0 TO PROCESS-NEXT-CONN
+                     MOVE 1 TO CONNECTION-PROCESSED
+
+                   ELSE
+
+      ******************************************************************
+      * CONNECTION definition has already been processed, check whether
+      * the next CONNECTION definition should be processed.
+      ******************************************************************
+
+                     IF  CURRENT-CONNECTION = CONNECTION OF
+                       TEMP-CONNECTION AND CURRENT-GROUP = GGROUP OF
+                       TEMP-CONNECTION THEN
+                       MOVE 1 TO PROCESS-NEXT-CONN
+                     END-IF
+
+      ******************************************************************
+      * End of PROCESS-NEXT-CONN test.
+      ******************************************************************
+
+                   END-IF
+
+      ******************************************************************
+      * End of Resource Type = 'C' test.
+      ******************************************************************
+
+                 END-IF
+
+      ******************************************************************
+      * End of processing for one CONNECTION definition.
+      ******************************************************************
+
+               END-PERFORM
+
+               CLOSE CSD-COPY
+
+      ******************************************************************
+      * End of processing for the entire CSD Copy File.
+      ******************************************************************
+
+             END-PERFORM
+
+      ******************************************************************
+      * Close the output file and the log file.
+      ******************************************************************
+
+             CLOSE OUT-FILE
+             CLOSE LOG-FILE
+
+      ******************************************************************
+      * If DFHCSDUP has sent the program an invalid exit code, set the
+      * return code from the program to INVALID-CALL-TYPE.
+      ******************************************************************
+
+           WHEN OTHER
+
+             OPEN EXTEND LOG-FILE
+             MOVE INVALID-CALL-TYPE TO RETURN-CODE
+             MOVE SPACES TO LOG-FILE-BUFFER
+             MOVE 'Error: Invalid call type' TO LOG-FILE-BUFFER
+             WRITE LOG-FILE-BUFFER
+             CLOSE LOG-FILE
+
+      ******************************************************************
+      * End of call type selection.
+      ******************************************************************
+
+           END-EVALUATE
+
+      ******************************************************************
+      * Now that all the processing in this invocation of the program
+      * is finished, we must pass control back to DFHCSDUP. We must
+      * make sure that the COBOL data storage areas are preserved, so
+      * the data stored in them can be used on the next invocation.
+      * This is done using the GOBACK command, unless this is the final
+      * call, in which case we call STOP RUN to terminate processing.
+      ******************************************************************
+
+           IF EXIT-FUNCTION-CODE = FINAL-CALL THEN
+             STOP RUN
+           ELSE
+             GOBACK
+           END-IF.

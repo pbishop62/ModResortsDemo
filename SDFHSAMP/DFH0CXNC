@@ -1,0 +1,799 @@
+       CBL CICS('COBOL3,EXCI')
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0CXN.
+      ****************************************************************
+      *                                                              *
+      *  PROGRAM NAME: DFH0CXN                                       *
+      *                                                              *
+      *  TITLE: Sample Batch Client Program.                         *
+      *                                                              *
+      *                                                              *
+      *                                                              *
+      *     Licensed Materials - Property of IBM                     *
+      *                                                              *
+      *     "Restricted Materials of IBM"                            *
+      *                                                              *
+      *     5655-Y04                                                 *
+      *                                                              *
+      *     (C) Copyright IBM Corp. 1993, 2016"                      *
+      *                                                              *
+      *                                                              *
+      *                                                              *
+      *                                                              *
+      *  DATE: 12.03.93                                              *
+      *                                                              *
+      *  PROGRAM DESCRIPTION: This program should give an example of *
+      *                       how to code a simple batch type        *
+      *                       application using the EXCI API calls.  *
+      *                                                              *
+      *  SPECIAL REQUIREMENTS: The program must be translated with   *
+      *                        the EXCI option, and run amode 31 to  *
+      *                        use the External CICS Interface.      *
+      *                                                              *
+      *  SYSTEM LEVEL:  CICS 5.4 or higher                           *
+      *                                                              *
+      *  INPUT:         The target CICS region with which this       *
+      *                 batch client program communicates can be     *
+      *                 specified via the JCL PARM statement,        *
+      *                 otherwise it defaults to applid DBDCCICS.    *
+      *                 The USERID can also be passed as a parameter.*
+      *                 The parameters are passed in the form -      *
+      *                       APPLID,USERID                          *
+      *                                                              *
+      *  OUTPUT:        The program writes messages to the output    *
+      *                 log to record progress.                      *
+      *                                                              *
+      *                                                              *
+      * CHANGE ACTIVITY :                                            *
+      * $SEG(DFH0CXNC),COMP(SAMPLES),PROD(CICS TS ):                 *
+      *                                                              *
+      *   REASON  REL YYMMDD HDXIII : REMARKS                        *
+      *   R000363 710 160706 HDAFDRB: Initial coding (story 113471)  *
+      *   R150387 720 180716 HD2GJST: Show use of SPI commands       *
+      *                                                              *
+      ****************************************************************
+       ENVIRONMENT DIVISION.
+      *==============================================================*
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT PRINTER ASSIGN TO SYSPRINT.
+       DATA DIVISION.
+      *==============================================================*
+       FILE SECTION.
+      *==============================================================*
+       FD  PRINTER BLOCK CONTAINS 128 CHARACTERS
+           RECORDING MODE IS F
+           LABEL RECORDS OMITTED.
+       01  OUTPUT-RECORD      PIC X(128).
+       WORKING-STORAGE SECTION.
+       77  PARM-DATA-LENGTH   PIC 9(8) COMP.
+      *==============================================================*
+      *   Declare Call level,DPL, and EXEC level Return Code areas.  *
+      *==============================================================*
+       COPY DFHXCPLO.
+      *==============================================================*
+      *   Declare Areas to be used for outputting return codes.      *
+      *==============================================================*
+       01  OUTPUT-RETAREA.
+         05  FILLER           PIC X(20)  VALUE SPACES.
+         05  O-RESP           PIC 9(8).
+         05  FILLER           PIC XX     VALUE SPACES.
+         05  O-RESP2          PIC 9(8).
+         05  FILLER           PIC XX     VALUE SPACES.
+         05  OEXCI-SUB-REASON1 PIC 9(8).
+         05  O-ABCODE-LINE    REDEFINES OEXCI-SUB-REASON1.
+             10  O-ABCODE     PIC X(4).
+             10  OPAD-ABCODE  PIC X(4).
+         05  FILLER           PIC X(80) VALUE SPACES.
+       01  SUB                PIC S9(8) COMP.
+       01  SUBX               PIC S9(8) COMP.
+       01  SUBY               PIC S9(8) COMP.
+       01  OUT-REC.
+         05 OUT-REC-ELEM      PIC X OCCURS 128 TIMES.
+      *==============================================================*
+      *   Initialise Target information variables.                   *
+      *==============================================================*
+       01  TARGET-PROGRAM     PIC X(8)       VALUE 'DFH$AXNS'.
+       01  TARGET-TRANSID     PIC X(4)       VALUE 'EXCI'.
+       01  TARGET-SYSTEM.
+         05 TARGET-SYS-ELEM   PIC X OCCURS 8 TIMES.
+       01  TARGET-USERID.
+         05 TARGET-USER-ID    PIC X OCCURS 8 TIMES.
+      *==============================================================*
+      *   Initialise Call level specific variables.                  *
+      *==============================================================*
+       01  APPLICATION        PIC X(8)       VALUE 'BATCHCLI'.
+       01  USER-TOKEN         PIC S9(8) COMP VALUE ZERO.
+       01  PIPE-TOKEN         PIC S9(8) COMP VALUE ZERO.
+      *==============================================================*
+      *   Initialise program specific variables and flags.           *
+      *==============================================================*
+       01  SERVER-RETCODE     PIC S9(8) COMP VALUE ZERO.
+       01  PROGRAM-FLAGS.
+         05  ABORT            PIC X(3)        VALUE 'NO '.
+         05  YES              PIC X(3)        VALUE 'YES'.
+         05  NOT-YET          PIC X(3)        VALUE 'NO '.
+         05  OK               PIC X(2)        VALUE 'OK'.
+       01  SAVED-RESPONSE     PIC 9(8)   COMP VALUE ZERO.
+       01  UTF8               PIC 9(8)   COMP VALUE 1208.
+       01  GET-LENGTH         PIC 9(8)   COMP VALUE 100.
+       01  GET-AREA           PIC X(100) VALUE SPACES.
+       01  CHANNEL            PIC X(16)  VALUE SPACES.
+       01  CONT-TXT1 PIC X(31) VALUE '   Here are some data in EBCDIC'.
+       01  CONT-TXT2 PIC X(30) VALUE '   More data in this container'.
+       01  TXT1L     PIC S9(8) COMP VALUE 31.
+       01  TXT2L     PIC S9(8) COMP VALUE 30.
+       01  CCNT      PIC S9(8) COMP VALUE 0.
+       01  CORRECT-CCNT PIC S9(8) COMP VALUE 3.
+       01  BTOK      PIC S9(8) COMP VALUE 0.
+       01  CNTR      PIC X(16) VALUE SPACES.
+
+       01  PROGRAM-MESSAGES.
+         05  MSG00  PIC X(128) VALUE SPACES.
+         05  MSG01  PIC X(128) VALUE '*===================== EXCI Sample
+      -     ' Batch Client Program =======================*'.
+         05  MSG02  PIC X(128) VALUE '*
+      -     '                                             *'.
+         05  MSG03  PIC X(128) VALUE '*  EXEC Level Processor.
+      -     '                                             *'.
+         05  MSG04  PIC X(128) VALUE '*    Setting up the EXEC level cal
+      -     'l.                                           *'.
+         05  MSG05  PIC X(128) VALUE '*    The Link Request with channel
+      -     ' FIRST_CHANNEL has completed successfully.   *'.
+         05  MSG06  PIC X(128) VALUE '*    The Link request with channel
+      -     ' SECOND_CHANNEL has completed successfully.  *'.
+         05  MSG09  PIC X(128) VALUE '*    The Link Request has failed.
+      -     'Return codes are;                            *'.
+         05  MSG10  PIC X(128) VALUE '*    A PUT_CONTAINER command has f
+      -     'ailed. Return codes are;                     *'.
+         05  MSG11  PIC X(128) VALUE '*      Resp =
+      -     '                                             *'.
+         05  MSG12  PIC X(128) VALUE '*      Resp2 =
+      -     '                                             *'.
+         05  MSG13  PIC X(128) VALUE '*    A message was received from t
+      -     'he target CICS region:                       *'.
+         05  MSG14  PIC X(128) VALUE '*    >>>> Aborting further process
+      -     'ing <<<<                                     *'.
+         05  MSG15  PIC X(128) VALUE '*  CALL Level Processor.
+      -     '                                             *'.
+         05  MSG16  PIC X(128) VALUE '*    Initialise_User call complete
+      -     '.                                            *'.
+         05  MSG17  PIC X(128) VALUE '*    Allocate_Pipe call complete.
+      -     '                                             *'.
+         05  MSG18  PIC X(128) VALUE '*    Open_Pipe call complete.
+      -     '                                             *'.
+         05  MSG19  PIC X(128) VALUE '*    The connection has been succe
+      -     'ssful.                                       *'.
+         05  MSG23  PIC X(128) VALUE '*    The connection has been unsuc
+      -     'cessful.  Return codes are:                  *'.
+         05  MSG25  PIC X(128) VALUE '*      The DPL request has failed.
+      -     '                                             *'.
+         05  MSG26  PIC X(128) VALUE '*      Link return codes are:
+      -     '                                             *'.
+         05  MSG27  PIC X(128) VALUE '*      DPL return codes are:
+      -     '                                             *'.
+         05  MSG28  PIC X(128) VALUE '*    Channels have been deleted.
+      -     '                                             *'.
+         05  MSG29  PIC X(128) VALUE '*    Close_Pipe call complete.
+      -     '                                             *'.
+         05  MSG30  PIC X(128) VALUE '*    Deallocate_Pipe call complete
+      -     '                                             *'.
+         05  MSG31  PIC X(128) VALUE '*=================== End of EXCI S
+      -     'AMPLE BATCH CLIENT PROGRAM ==================*'.
+         05  MSG32.
+           07  FILLER     PIC X(17) VALUE '*    Parameters: '.
+           07  FILL-APP   PIC X(7) VALUE 'APPLID='.
+           07  MSG-SYSTEM PIC X(8) VALUE SPACES.
+           07  FILL-USER  PIC X(9) VALUE '  USERID='.
+           07  MSG-USERID PIC X(8) VALUE SPACES.
+           07  FILLER     PIC X(30) VALUE SPACES.
+           07  FILLER     PIC X(1) VALUE '*'.
+           07  FILLER     PIC X(48) VALUE SPACES.
+         05  MSG34  PIC X(128) VALUE '*    Response container does not c
+      -     'ontain OK.                                   *'.
+         05  MSG35  PIC X(128) VALUE '*    Checking response container s
+      -     'ent by server.                               *'.
+         05  MSG36  PIC X(128) VALUE '*    Container EBCDIC_DATA was rec
+      -     'eived correctly in channel FIRST_CHANNEL.    *'.
+         05  MSG37  PIC X(128) VALUE '*    Container ASCII_DATA was rece
+      -     'ived correctly in channel SECOND_CHANNEL.    *'.
+         05  MSG38  PIC X(128) VALUE '*    Response OK, continue process
+      -     'ing.                                         *'.
+         05  MSG39  PIC X(128) VALUE '*    Query channel command complet
+      -     'ed successfully.                             *'.
+         05  MSG40  PIC X(128) VALUE '*    Correct number of containers
+      -     'returned.                                    *'.
+         05  MSG41  PIC X(128) VALUE '*    Query channel command failed.
+      -     '                                             *'.
+         05  MSG42  PIC X(128) VALUE '*    Incorrect number of container
+      -     's returned.                                  *'.
+         05  MSG43  PIC X(128) VALUE '*    Browse of channel names compl
+      -     'eted successfully.                           *'.
+         05  MSG44  PIC X(128) VALUE '*    Browse of channel names faile
+      -     'd.                                           *'.
+
+       01  PARM-DATA.
+         05 PARM-STRING-LENGTH  PIC 9(4) COMP.
+         05 PARM-STRING         PIC X OCCURS 17 TIMES.
+
+      *==============================================================*
+       LINKAGE SECTION.
+         01  NULL-PTR  USAGE IS POINTER.
+      *
+         01  CALL-LEVEL-MSG.
+           05 CALL-LEVEL-MSG-LEN  PIC S9(4) COMP.
+           05 FILLER              PIC S9(4) COMP.
+           05 CALL-LEVEL-MSG-TEXT PIC X OCCURS 128 TIMES.
+
+      *
+         01  EXEC-LEVEL-MSG.
+           05 EXEC-LEVEL-MSG-TEXT PIC X OCCURS 128 TIMES.
+      *
+       PROCEDURE DIVISION.
+           OPEN OUTPUT PRINTER.
+      *==============================================================*
+      *   Get applid AND USERID from PARM statement if specified     *
+      *==============================================================*
+
+           MOVE 'DBDCCICS' TO TARGET-SYSTEM.
+           MOVE '        ' TO TARGET-USERID.
+
+           MOVE 17 to PARM-DATA-LENGTH.
+           CALL "CEE3PR2" USING PARM-DATA-LENGTH, PARM-DATA.
+
+           IF PARM-STRING-LENGTH > 0 THEN
+             IF PARM-STRING (1) = ',' THEN
+               MOVE '      ' to FILL-APP
+               MOVE '        ' to MSG-SYSTEM
+               MOVE 1 TO SUB
+             ELSE
+               MOVE '        ' TO TARGET-SYSTEM
+               PERFORM TEST BEFORE VARYING SUB FROM 1 BY 1
+               UNTIL SUB > PARM-STRING-LENGTH OR SUB > 8
+                 OR PARM-STRING (SUB) = ','
+                 MOVE PARM-STRING (SUB) TO TARGET-SYS-ELEM(SUB)
+               END-PERFORM
+               MOVE TARGET-SYSTEM TO MSG-SYSTEM.
+
+             IF PARM-STRING (SUB) = ',' THEN
+               ADD 1 TO SUB
+               ELSE
+                 MOVE '       ' to FILL-USER
+                 MOVE '        ' to MSG-USERID.
+
+             IF PARM-STRING-LENGTH >= SUB THEN
+               MOVE 1 TO SUBY
+               PERFORM TEST BEFORE
+               VARYING SUBX FROM SUB BY 1
+               UNTIL SUBX > PARM-STRING-LENGTH OR SUBX > 17
+                 MOVE PARM-STRING (SUBX) TO TARGET-USER-ID(SUBY)
+                 ADD 1 TO SUBY
+               END-PERFORM
+             MOVE TARGET-USERID TO MSG-USERID.
+
+           IF PARM-STRING-LENGTH = 0
+           THEN MOVE ' None' to FILL-APP.
+
+           IF TARGET-USERID = '        '
+           THEN MOVE LOW-VALUES TO TARGET-USERID.
+
+       SECTION-1.
+      *==============================================================*
+      *                                                              *
+      *   SECTION-1:   This section will use an EXEC level EXCI call *
+      *                to  invoke the program DFH$AXNS on the target *
+      *                CICS  region   and  communicate  with  it  by *
+      *                sending  containers and receiving containers. *
+      *                                                              *
+      *==============================================================*
+      *
+           WRITE OUTPUT-RECORD FROM MSG00.
+           WRITE OUTPUT-RECORD FROM MSG01.
+           WRITE OUTPUT-RECORD FROM MSG02.
+           WRITE OUTPUT-RECORD FROM MSG32.
+           WRITE OUTPUT-RECORD FROM MSG02.
+           WRITE OUTPUT-RECORD FROM MSG03.
+           WRITE OUTPUT-RECORD FROM MSG04.
+      *
+      *  Set up the containers for transmission.
+      *
+           EXEC CICS PUT CONTAINER('REQUEST_TYPE')
+                     CHANNEL('FIRST_CHANNEL   ')
+                     FROM('LINK1')
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+      *  Set up some EBCDIC data to send.
+      *
+           EXEC CICS PUT CONTAINER('EBCDIC_DATA')
+                     CHANNEL('FIRST_CHANNEL   ')
+                     FROM(CONT-TXT1)
+                     FLENGTH(TXT1L)
+                     DATATYPE(1019)
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+      *  Perform the Link Request;
+      *
+           EXEC CICS LINK PROGRAM(TARGET-PROGRAM)
+                          TRANSID(TARGET-TRANSID)
+                          APPLID(TARGET-SYSTEM)
+                          CHANNEL('FIRST_CHANNEL   ')
+                          RETCODE(EXCI-EXEC-RETURN-CODE)
+                          SYNCONRETURN
+           END-EXEC.
+      *
+      *  Check on how well the request has performed.  We may have
+      *  to abort  further processing  if either  the link, or the
+      *  server program failed in any way.
+      *
+           IF EXEC-RESP IS EQUAL TO ZERO THEN
+              WRITE OUTPUT-RECORD FROM MSG05
+           ELSE
+              PERFORM LINK-NOT-OK.
+           IF ABORT IS EQUAL TO YES
+              GO TO FINISH-PROGRAM
+           ELSE
+              GO TO SECTION-1B.
+      *
+      *  The following code performs the required response checking
+      *  and will decide whether an abort is neccessary.
+      *
+       LINK-NOT-OK.
+           WRITE OUTPUT-RECORD FROM MSG09.
+           MOVE  EXEC-RESP TO O-RESP.
+           MOVE  EXEC-RESP2 TO O-RESP2.
+           MOVE  SPACES TO OPAD-ABCODE.
+           MOVE  SPACES TO OPAD-ABCODE.
+           MOVE  EXEC-ABCODE TO O-ABCODE.
+           WRITE OUTPUT-RECORD FROM OUTPUT-RETAREA.
+           IF EXEC-MSG-PTR IS NOT EQUAL TO NULLS THEN
+              WRITE OUTPUT-RECORD FROM MSG11
+              WRITE OUTPUT-RECORD FROM MSG02
+              SET ADDRESS OF EXEC-LEVEL-MSG TO EXEC-MSG-PTR
+              MOVE SPACES TO OUT-REC
+              PERFORM TEST BEFORE
+              VARYING SUB FROM 1 BY 1
+              UNTIL SUB > EXEC-MSG-LEN
+                MOVE EXEC-LEVEL-MSG-TEXT (SUB) TO OUT-REC-ELEM (SUB)
+              END-PERFORM
+              WRITE OUTPUT-RECORD FROM OUT-REC
+              WRITE OUTPUT-RECORD FROM MSG02
+           END-IF
+           WRITE OUTPUT-RECORD FROM MSG14.
+           MOVE YES TO ABORT.
+           MOVE EXEC-RESP TO SAVED-RESPONSE.
+           EXIT.
+      *
+      *  The LINK was successful, so we can continue processing. Now
+      *  put a container  containing UTF-8 data into a  new channel.
+      *  We do this by putting  the container with EBCDIC data, then
+      *  get it into  the UTF-8 codepage then putting it again. This
+      *  demonstrates the  use of containers  as a means of codepage
+      *  conversion.
+      *
+      *  A new channel is  used for this. This is not necessary, but
+      *  is done so as to illustrate the use of multiple channels.
+      *
+       SECTION-1B.
+      *
+      * Check the response container to see that we are OK to continue
+      *
+           WRITE OUTPUT-RECORD FROM MSG35.
+           MOVE 100 TO GET-LENGTH.
+      *
+           EXEC CICS GET CONTAINER('EXCI_RESPONSE')
+                     CHANNEL('FIRST_CHANNEL   ')
+                     INTO(GET-AREA)
+                     FLENGTH(GET-LENGTH)
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+           IF GET-AREA(1:2) IS NOT EQUAL TO OK THEN
+              WRITE OUTPUT-RECORD FROM MSG34
+              WRITE OUTPUT-RECORD FROM MSG14
+              GO TO FINISH-PROGRAM.
+
+           WRITE OUTPUT-RECORD FROM MSG38.
+      *
+      * This section is not required. It merely demonstrates how
+      * to use the EXCI SPI to query how many containers are on the
+      * channel and to browse to get the names of the containers.
+      * The code does not do anything with the container names, it
+      * merely checks the browse works ok.
+      *
+           EXEC CICS QUERY CHANNEL('FIRST_CHANNEL   ')
+                     CONTAINERCNT(CCNT) RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+           IF EXEC-RESP IS EQUAL TO ZERO THEN
+              WRITE OUTPUT-RECORD FROM MSG39
+              IF CCNT IS EQUAL TO CORRECT-CCNT THEN
+                WRITE OUTPUT-RECORD FROM MSG40
+              ELSE
+                WRITE OUTPUT-RECORD FROM MSG42
+                GO TO FINISH-PROGRAM
+           ELSE
+              WRITE OUTPUT-RECORD FROM MSG41
+              GO TO FINISH-PROGRAM.
+      *
+           EXEC CICS STARTBROWSE CONTAINER CHANNEL('FIRST_CHANNEL   ')
+                     BROWSETOKEN(BTOK) RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+           IF EXEC-RESP IS NOT EQUAL TO ZERO THEN
+              WRITE OUTPUT-RECORD FROM MSG44
+              GO TO FINISH-PROGRAM.
+      *
+           PERFORM WITH TEST BEFORE
+              UNTIL CCNT IS EQUAL TO ZERO
+              EXEC CICS GETNEXT CONTAINER(CNTR)
+                     BROWSETOKEN(BTOK) RETCODE(EXCI-EXEC-RETURN-CODE)
+              END-EXEC
+      *
+              IF EXEC-RESP IS NOT EQUAL TO ZERO THEN
+                WRITE OUTPUT-RECORD FROM MSG44
+                GO TO FINISH-PROGRAM
+              END-IF
+              SUBTRACT 1 FROM CCNT
+           END-PERFORM.
+      *
+           EXEC CICS ENDBROWSE CONTAINER
+                     BROWSETOKEN(BTOK) RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+           IF EXEC-RESP IS NOT EQUAL TO ZERO THEN
+              WRITE OUTPUT-RECORD FROM MSG44
+              GO TO FINISH-PROGRAM
+           ELSE
+              WRITE OUTPUT-RECORD FROM MSG43.
+      *
+      *
+      *  Delete the response container to be tidy
+      *
+      *
+           EXEC CICS DELETE CONTAINER('EXCI_RESPONSE')
+                     CHANNEL('FIRST_CHANNEL   ')
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+           EXEC CICS PUT CONTAINER('REQUEST_TYPE2')
+                     CHANNEL('FIRST_CHANNEL   ')
+                     FROM('LINK2')
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+      * The PUT container call above put the wrong container into the
+      * wrong channel.  This  can be  corrected  by  using  the  MOVE
+      * container command.
+      *
+      * MOVE  the  container  to the  correct channel.  The MOVE also
+      * provides the opportunity to rename a container.
+      *
+           EXEC CICS MOVE CONTAINER('REQUEST_TYPE2')
+                     AS('REQUEST_TYPE')
+                     CHANNEL('FIRST_CHANNEL   ')
+                     TOCHANNEL('SECOND_CHANNEL  ')
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+      *  Set up some data to send.
+      *
+           EXEC CICS PUT CONTAINER('ASCII_DATA')
+                     CHANNEL('SECOND_CHANNEL  ')
+                     FROM(CONT-TXT2)
+                     FLENGTH(TXT2L)
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+           MOVE 100 TO GET-LENGTH.
+      *
+      *  Using the INTOCCSID parameter on the GET CONTAINER causes the
+      *  contents of the container  to be codepage translated into the
+      *  specified codepage.
+      *
+           EXEC CICS GET CONTAINER('ASCII_DATA')
+                     CHANNEL('SECOND_CHANNEL  ')
+                     INTO(GET-AREA)
+                     FLENGTH(GET-LENGTH)
+                     INTOCCSID(UTF8)
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+
+      *  Using the FROMCCSID parameter on the PUT CONTAINER causes the
+      *  contents of  the  container  to be  treated  as being  in the
+      *  specified codepage.
+
+           EXEC CICS PUT CONTAINER('ASCII_DATA')
+                     CHANNEL('SECOND_CHANNEL  ')
+                     FROM(GET-AREA)
+                     FROMCCSID(UTF8)
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+      *  Perform the Link Request
+      *
+           EXEC CICS LINK PROGRAM(TARGET-PROGRAM)
+                          TRANSID(TARGET-TRANSID)
+                          APPLID(TARGET-SYSTEM)
+                          CHANNEL('SECOND_CHANNEL  ')
+                          RETCODE(EXCI-EXEC-RETURN-CODE)
+                          SYNCONRETURN
+           END-EXEC.
+      *
+      *  Check on how well the request has performed.  We may have
+      *  to  abort further  processing if  either the link, or the
+      *  server program failed in any way.
+      *
+           IF EXEC-RESP IS EQUAL TO ZERO THEN
+              WRITE OUTPUT-RECORD FROM MSG06
+           ELSE
+              PERFORM LINK-NOT-OK2.
+           IF ABORT IS EQUAL TO YES
+              GO TO FINISH-PROGRAM
+           ELSE
+              GO TO SECTION-1C.
+      *
+      *  The following code performs the required response checking
+      *  and will decide whether an abort is neccessary.
+      *
+       LINK-NOT-OK2.
+           WRITE OUTPUT-RECORD FROM MSG09.
+           MOVE  EXEC-RESP TO O-RESP.
+           MOVE  EXEC-RESP2 TO O-RESP2.
+           MOVE  SPACES TO OPAD-ABCODE.
+           MOVE  SPACES TO OPAD-ABCODE.
+           MOVE  EXEC-ABCODE TO O-ABCODE.
+           WRITE OUTPUT-RECORD FROM OUTPUT-RETAREA.
+           IF EXEC-MSG-PTR IS NOT EQUAL TO NULLS THEN
+              WRITE OUTPUT-RECORD FROM MSG11
+              WRITE OUTPUT-RECORD FROM MSG02
+              SET ADDRESS OF EXEC-LEVEL-MSG TO EXEC-MSG-PTR
+              MOVE SPACES TO OUT-REC
+              PERFORM TEST BEFORE
+              VARYING SUB FROM 1 BY 1
+              UNTIL SUB > EXEC-MSG-LEN
+                MOVE EXEC-LEVEL-MSG-TEXT (SUB) TO OUT-REC-ELEM (SUB)
+              END-PERFORM
+              WRITE OUTPUT-RECORD FROM OUT-REC
+              WRITE OUTPUT-RECORD FROM MSG02
+           END-IF
+           WRITE OUTPUT-RECORD FROM MSG14.
+           MOVE YES TO ABORT.
+           MOVE EXEC-RESP TO SAVED-RESPONSE.
+           EXIT.
+      *
+      *  Check the response container to see if it is OK to continue
+      *
+       SECTION-1C.
+           WRITE OUTPUT-RECORD FROM MSG35.
+           EXEC CICS GET CONTAINER('EXCI_RESPONSE')
+                     CHANNEL('SECOND_CHANNEL  ')
+                     INTO(GET-AREA)
+                     FLENGTH(GET-LENGTH)
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+      *
+           IF GET-AREA(1:2) IS EQUAL TO OK
+              WRITE OUTPUT-RECORD FROM MSG38
+              GO TO SECTION-2
+           ELSE
+              WRITE OUTPUT-RECORD FROM MSG34
+              WRITE OUTPUT-RECORD FROM MSG14
+              GO TO FINISH-PROGRAM.
+      *
+      *
+       SECTION-2.
+      *==============================================================*
+      *                                                              *
+      *   SECTION-2:   This routine  will perform a Call level EXEC  *
+      *                request by setting  up a Pipe to  the target  *
+      *                CICS  region with Initialise User, Allocate,  *
+      *                and Open Pipe calls.  It will then perform a  *
+      *                series of  DPL calls  in succession  passing  *
+      *                containers to  the server  and checking  the  *
+      *                response container returned.                  *
+      *                                                              *
+      *==============================================================*
+      *
+           WRITE OUTPUT-RECORD FROM MSG02.
+           WRITE OUTPUT-RECORD FROM MSG15.
+      *
+      *  Perform the Initialise User Call.
+      *
+           CALL 'DFHXCIS' USING VERSION-1 EXCI-RETURN-CODE USER-TOKEN
+                        INIT-USER APPLICATION.
+           WRITE OUTPUT-RECORD FROM MSG16.
+      *
+      *  Perform the Allocate Pipe Call.
+      *
+           CALL 'DFHXCIS' USING VERSION-1 EXCI-RETURN-CODE USER-TOKEN
+                        ALLOCATE-PIPE PIPE-TOKEN TARGET-SYSTEM
+                        SPECIFIC-PIPE.
+           WRITE OUTPUT-RECORD FROM MSG17.
+      *
+      *  Perform the Open Pipe Call.
+      *
+           CALL 'DFHXCIS' USING VERSION-1 EXCI-RETURN-CODE USER-TOKEN
+                        OPEN-PIPE PIPE-TOKEN.
+           WRITE OUTPUT-RECORD FROM MSG18.
+      *
+      *  Check to see if the Pipe has been successfully allocated
+      *  and opened.  If not, then the DPL request will not work,
+      *  so we might as  well abort now, and  attempt to back out
+      *  the connection building.
+      *
+           IF EXCI-RESPONSE IS EQUAL TO ZERO THEN
+              WRITE OUTPUT-RECORD FROM MSG19
+              MOVE  SPACES TO CHANNEL
+           EXEC CICS PUT CONTAINER('REQUEST_TYPE')
+                     CHANNEL('FIRST_CHANNEL   ')
+                     FROM('CALL1')
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC
+              PERFORM DPL-SECTION THRU END-DPL-SECTION
+                 UNTIL ABORT IS EQUAL TO YES
+           ELSE
+              WRITE OUTPUT-RECORD FROM MSG23
+              MOVE  EXCI-RESPONSE TO O-RESP
+              MOVE  EXCI-REASON TO O-RESP2
+              MOVE  EXCI-SUB-REASON1 TO OEXCI-SUB-REASON1
+              WRITE OUTPUT-RECORD FROM OUTPUT-RETAREA
+              WRITE OUTPUT-RECORD FROM MSG14
+              MOVE EXCI-RESPONSE TO SAVED-RESPONSE
+              MOVE YES TO ABORT.
+           GO TO SECTION-3.
+      *
+      *
+       DPL-SECTION.
+      *==============================================================*
+      *                                                              *
+      *   DPL-SECTION:   This  is  the routine  which  will  perform *
+      *                  multiple sequential DPL calls to the target *
+      *                  CICS region, each  time  sending containers *
+      *                  and receiving containers from the server.   *
+      *                                                              *
+      *==============================================================*
+      *
+      *  No Userid nor Uowid is passed. This shows how to leave out
+      *  a parameter from the list. A null pointer must replace the
+      *  pointer  in the  list which  would  normally  point to the
+      *  parameter missing.
+      *
+           SET ADDRESS OF NULL-PTR TO NULLS.
+      *
+      *  Set up the call, and perform the DPL request.
+      *
+           IF CHANNEL IS EQUAL TO SPACES THEN
+              MOVE 'FIRST_CHANNEL   ' TO CHANNEL
+           ELSE
+              MOVE 'SECOND_CHANNEL  ' TO CHANNEL
+              EXEC CICS PUT CONTAINER('REQUEST_TYPE')
+                     CHANNEL(CHANNEL)
+                     FROM('CALL2')
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+              END-EXEC.
+           CALL 'DFHXCIS' USING VERSION-3 EXCI-RETURN-CODE USER-TOKEN
+                        DPL-REQUEST PIPE-TOKEN TARGET-PROGRAM CHANNEL
+                        NULL-PTR NULL-PTR TARGET-TRANSID NULL-PTR
+                        TARGET-USERID EXCI-DPL-RETAREA
+                        SYNCONRETURN NULL-PTR NULL-PTR NULL-PTR.
+      *
+      *  Check how successful the call was.
+      *
+           IF EXCI-RESPONSE IS = ZERO THEN
+              IF EXCI-DPL-RESP IS NOT = ZERO THEN
+                 WRITE OUTPUT-RECORD FROM MSG25
+                 WRITE OUTPUT-RECORD FROM MSG27
+                 MOVE  EXCI-DPL-RESP TO O-RESP
+                 MOVE  EXCI-DPL-RESP2 TO O-RESP2
+                 MOVE  SPACES TO OPAD-ABCODE
+                 MOVE  EXCI-DPL-ABCODE TO O-ABCODE
+                 WRITE OUTPUT-RECORD FROM OUTPUT-RETAREA
+                 WRITE OUTPUT-RECORD FROM MSG14
+                 MOVE YES TO ABORT
+                 MOVE EXCI-DPL-RESP TO SAVED-RESPONSE
+              ELSE
+                    MOVE NOT-YET TO ABORT
+           ELSE
+              WRITE OUTPUT-RECORD FROM MSG25
+              WRITE OUTPUT-RECORD FROM MSG26
+              MOVE  EXCI-RESPONSE TO O-RESP
+              MOVE  EXCI-REASON TO O-RESP2
+              MOVE  EXCI-SUB-REASON1 TO OEXCI-SUB-REASON1
+              WRITE OUTPUT-RECORD FROM OUTPUT-RETAREA
+              IF EXCI-MSG-PTR IS NOT EQUAL TO NULLS THEN
+                 WRITE OUTPUT-RECORD FROM MSG13
+                 WRITE OUTPUT-RECORD FROM MSG02
+                 SET ADDRESS OF CALL-LEVEL-MSG TO EXCI-MSG-PTR
+                 MOVE SPACES TO OUT-REC
+                 SUBTRACT 4 FROM CALL-LEVEL-MSG-LEN
+                 PERFORM TEST BEFORE
+                 VARYING SUB FROM 1 BY 1
+                 UNTIL SUB > CALL-LEVEL-MSG-LEN
+                   MOVE CALL-LEVEL-MSG-TEXT (SUB) TO OUT-REC-ELEM (SUB)
+                 END-PERFORM
+                 WRITE OUTPUT-RECORD FROM OUT-REC
+                 WRITE OUTPUT-RECORD FROM MSG02
+              END-IF
+              WRITE OUTPUT-RECORD FROM MSG27
+              MOVE  EXCI-DPL-RESP TO O-RESP
+              MOVE  EXCI-DPL-RESP2 TO O-RESP2
+              MOVE  SPACES TO OPAD-ABCODE
+              MOVE  EXCI-DPL-ABCODE TO O-ABCODE
+              WRITE OUTPUT-RECORD FROM OUTPUT-RETAREA
+              WRITE OUTPUT-RECORD FROM MSG14
+              MOVE YES TO ABORT.
+              MOVE EXCI-RESPONSE TO SAVED-RESPONSE
+           IF CHANNEL IS EQUAL TO 'FIRST_CHANNEL   ' THEN
+              MOVE 100 TO GET-LENGTH
+              EXEC CICS GET CONTAINER('EBCDIC_DATA')
+                        CHANNEL(CHANNEL)
+                        INTO(GET-AREA)
+                        FLENGTH(GET-LENGTH)
+                        RETCODE(EXCI-EXEC-RETURN-CODE)
+              END-EXEC
+              IF EXEC-RESP IS EQUAL TO ZERO THEN
+                 WRITE OUTPUT-RECORD FROM MSG36
+              ELSE
+                 WRITE OUTPUT-RECORD FROM MSG14
+           ELSE
+              MOVE 100 TO GET-LENGTH
+              EXEC CICS GET CONTAINER('ASCII_DATA')
+                        CHANNEL(CHANNEL)
+                        INTO(GET-AREA)
+                        FLENGTH(GET-LENGTH)
+                        RETCODE(EXCI-EXEC-RETURN-CODE)
+              END-EXEC
+              IF EXEC-RESP IS EQUAL TO ZERO THEN
+                WRITE OUTPUT-RECORD FROM MSG37
+                MOVE YES TO ABORT
+              ELSE
+                WRITE OUTPUT-RECORD FROM MSG14.
+       END-DPL-SECTION.
+           EXIT.
+      *
+      *
+       SECTION-3.
+      *==============================================================*
+      *                                                              *
+      *   SECTION-3:  Whether  or  not  SECTION-II  processing was a *
+      *               success, we assume that at least all the calls *
+      *               were completed. The channels  used are deleted *
+      *               so as to tidy  up the storage used. Processing *
+      *               then  continues  with Closing and Deallocating *
+      *               the Pipe  to  the  Target  CICS region to shut *
+      *               down the Link before exiting to MVS.           *
+      *                                                              *
+      *==============================================================*
+      *
+      *  Delete the channels used
+      *
+           EXEC CICS DELETE CHANNEL('FIRST_CHANNEL   ')
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+           EXEC CICS DELETE CHANNEL('SECOND_CHANNEL  ')
+                     RETCODE(EXCI-EXEC-RETURN-CODE)
+           END-EXEC.
+           WRITE OUTPUT-RECORD FROM MSG28.
+      *
+      *  Perform Close Pipe call.
+      *
+           CALL 'DFHXCIS' USING VERSION-1 EXCI-RETURN-CODE USER-TOKEN
+                        CLOSE-PIPE PIPE-TOKEN.
+           WRITE OUTPUT-RECORD FROM MSG29.
+      *
+      *  Perform Deallocate Pipe call.
+      *
+           CALL 'DFHXCIS' USING VERSION-1 EXCI-RETURN-CODE USER-TOKEN
+                        DEALLOCATE-PIPE PIPE-TOKEN.
+           WRITE OUTPUT-RECORD FROM MSG30.
+      *
+      *  Exit to MVS.
+      *
+       FINISH-PROGRAM.
+           WRITE OUTPUT-RECORD FROM MSG02.
+           WRITE OUTPUT-RECORD FROM MSG31.
+           CLOSE PRINTER.
+           MOVE SAVED-RESPONSE TO RETURN-CODE.
+           STOP RUN.

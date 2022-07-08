@@ -1,0 +1,889 @@
+      CBL CICS('COBOL3') APOST
+PROCESS MAP,XREF
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CNA2                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (NACT) NACT SAMPLE                *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 2001"                             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *****************************************************************
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      * This program provides the Create, Read, Update, Delete (CRUD) *
+      * functions of the CICS Application Design and Programming      *
+      * book sample application. It is designed to be LINKed to in    *
+      * order to allow any number of front-ends to use its services,  *
+      * e.g., BMS front-end (DFH0CNA1), VB, etc.                      *
+      *                                                               *
+      * However in this application we decided to put the validation  *
+      * with the presentation logic in order to ensure that the end   *
+      * user is able to correct errors at the earliest possible time. *
+      * This is particularly useful for front-end interfaces where    *
+      * interactivity is an essential part of their nature, such as   *
+      * Graphical User Inerfaces (GUIs). The unfortunate consequence  *
+      * of this decision is that the validation rules must be         *
+      * implemented in each of the front-end programs, e.g.,
+      * DFH0CNA1, VB, etc.                                            *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      * $MOD(DFH0CNA2),COMP(SAMPLES),PROD(CICS TS ):                  *
+      *                                                               *
+      * PN= REASON REL YYMMDD HDXXIII : REMARKS                       *
+      * $P0= D02652 620 011003 HDFXAB  : Install Nact                 *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0CNA2.
+       AUTHOR.       A PROGRAMMER.
+       INSTALLATION. IBM HURSLEY.
+       DATE-WRITTEN. AUGUST 1999.
+       DATE-COMPILED.
+      ***************************************************************
+      *     FILES
+      *
+      *     ACCTFILE - WS-LITS-FILES-ACCOUNT
+      *         WRITE
+      *         READ
+      *         READ UPDATE
+      *         REWRITE
+      *         DELETE
+      *
+      *     ACINUSE - WS-LITS-FILES-LOCKING
+      *         DELETE
+      *         WRITE
+      *         REWRITE
+      *         READ UPDATE
+      *
+      ***************************************************************
+      *     CICS RESOURCES
+      *
+      ***************************************************************
+      *     UTILITIES
+      *
+      ***************************************************************
+      *     COPYBOOKS
+      *
+      *     DFH0CNAR - Working storage layout of the data passed to
+      *                the Error Handler program.
+      *     DFH0CNAC - Common working storage.
+      *     DFH0CNAL - Working storage layout of the Logical Locking,
+      *                In Use record.
+      *     DFH0CNAG - Working storage layout of the Account record.
+      *     DFH0CNAF - Commarea layout of the data passed to this
+      *                program from the calling program.
+      *
+      ***************************************************************
+      *
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+      *
+       WORKING-STORAGE SECTION.
+      *
+      *    Store eye-catcher details to aid dump reading
+      *
+       01  WS-DEBUG-DETAILS.
+              05  FILLER                     PIC X(32)
+                    VALUE 'DFH0CNA2-----WORKING STORAGE  '.
+              05  DEBUG-EYE.
+                    10  DEBUG-TRANID         PIC X(4) VALUE SPACES.
+                    10  DEBUG-TERMID         PIC X(4) VALUE SPACES.
+                    10  DEBUG-TASKNO         PIC 9(7) VALUE ZERO.
+              05  FILLER                     PIC X    VALUE SPACE.
+              05  DEBUG-COMMAREA-ADDR  USAGE IS POINTER.
+      *
+      * These fields are used for interfacing with other
+      * programs in the suite.
+      *
+           05  WS-PROGRAM-NAME               PIC X(8) VALUE SPACES.
+           05  CRUD-PROGRAM.
+               10  WS-CRUD-PROGRAM-PREFIX    PIC X(7) VALUE SPACES.
+               10  FILLER                    PIC X(1) VALUE '2'.
+           05  PRINT-PROGRAM.
+               10  WS-PRINT-PROGRAM-PREFIX   PIC X(7) VALUE SPACES.
+               10  FILLER                    PIC X(1) VALUE '3'.
+           05  ABEND-PROGRAM.
+               10  WS-ABEND-PROGRAM-PREFIX   PIC X(7) VALUE SPACES.
+               10  FILLER                    PIC X(1) VALUE '4'.
+           05  BROWSE-PROGRAM.
+               10  WS-BROWSE-PROGRAM-PREFIX  PIC X(7) VALUE SPACES.
+               10  FILLER                    PIC X(1) VALUE '5'.
+      *
+       01  FILLER.
+      *
+      * These fields are used for managing the logical
+      * locking status of the account when needed.
+      *
+           05  USERID                        PIC X(8).
+           05  LOCK-ACTIVITY                 PIC X.
+               88  LOCK-ACTION-OK            VALUE 'S'.
+               88  LOCK-ACTION-FAILED        VALUE 'F'.
+               88  LOCK-ACTION-ERROR         VALUE 'E'.
+           05  LOCK-VALIDITY                 PIC X.
+               88  LOCK-VALID                VALUE 'Y'.
+               88  LOCK-INVALID              VALUE 'N'.
+      *
+      * Store of EIBRESP and EIBRESP2 set up in each EXEC CICS statement
+      *
+           05  RESPONSE                      PIC S9(8) COMP-4 VALUE 0.
+           05  REASON-CODE                   PIC S9(8) COMP-4 VALUE 0.
+      *
+      * The EIBFN is defined as character but the error interface
+      * expects a numeric value.
+      *
+           05  WORK-FN                       PIC 9(4) COMP.
+           05  WORK-FN-X REDEFINES WORK-FN   PIC X(2).
+      *
+      * This is a constant set of values for initializing
+      * the history fields when an account is added. This has been
+      * included to allow for future development of the application,
+      * but is not actively used
+      *
+           05  PAY-INIT                      PIC X(36) VALUE
+               '    0.00000000    0.00000000    0.00'.
+      *
+      * The interface to the error handler program is described
+      * in a copy book in order to ensure consistency.
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+              '********  DFH0CNAR COPYBOOK  *******'.
+           COPY DFH0CNAR.
+      *
+      * Various values which you might wish to modify are placed in one
+      * copy book in order to make those sorts of changes more easily.
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+              '********  DFH0CNAC COPYBOOK  *******'.
+           COPY DFH0CNAC.
+      *
+      * The description of the account locking record is
+      * placed in a copy book.
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+              '********  DFH0CNAL COPYBOOK  *******'.
+           COPY DFH0CNAL.
+      *
+      * The description of the account record is placed in a copy book.
+      * This area is used to obtain the old record when an update is
+      * requested.
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+              '********  DFH0CNAG COPYBOOK  *******'.
+       01  OLD-ACCTREC.
+           COPY DFH0CNAG.
+      *
+       01  FILLER.
+           05  FILLER                        PIC X(36) VALUE
+               '********  LINKAGE SECTION   ********'.
+      *
+       EJECT.
+      *
+      * Between pseudo-conversational tasks various data needs to
+      * be saved. This area describes that data.
+      *
+       LINKAGE SECTION.
+       01  DFHCOMMAREA.
+           COPY DFH0CNAF.
+      *
+       EJECT.
+      *
+       PROCEDURE DIVISION.
+      *
+       NACT02-MAIN SECTION.
+      *
+      *  Return the name of the current program to WS-PROGRAM-NAME
+      *
+       NACT02-010.
+           EXEC CICS ASSIGN
+                     PROGRAM(WS-PROGRAM-NAME)
+                     USERID(USERID)
+                     NOHANDLE
+           END-EXEC.
+      *
+           MOVE WS-PROGRAM-NAME TO WS-CRUD-PROGRAM-PREFIX
+                                   WS-PRINT-PROGRAM-PREFIX
+                                   WS-ABEND-PROGRAM-PREFIX
+                                   WS-BROWSE-PROGRAM-PREFIX.
+      *
+       NACT02-020.
+      *
+      * Establish the abend handler in case unexpected
+      * errors arise, such as program interrupts. The technique
+      * used here assumes a naming convention where the variable
+      * part of the program names is in the 8th position.
+      * This allows for changes to the names in case the provided
+      * names conflict with existing applications. Note also that
+      * we also take the opportunity here to obtain the USERID at
+      * the same time since this will be needed if an account lock
+      * needs to be processed.
+      *
+           EXEC CICS HANDLE ABEND
+                     PROGRAM(ABEND-PROGRAM)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           IF  RESPONSE NOT = DFHRESP(NORMAL)
+               EXEC CICS ABEND
+                         ABCODE(WS-LITS-ABEND-ERROR-ABEND)
+               END-EXEC
+           END-IF.
+      *
+       NACT02-030.
+      *
+      *  Set up values in the eye-catcher
+      *
+           MOVE EIBTRNID TO DEBUG-TRANID.
+           MOVE EIBTRMID TO DEBUG-TERMID.
+           MOVE EIBTASKN TO DEBUG-TASKNO.
+      *
+      *  Set up the commarea address
+      *
+           SET DEBUG-COMMAREA-ADDR TO ADDRESS OF DFHCOMMAREA.
+      *
+       NACT02-040.
+      *
+      * Next the passed data is analyzed an validated generating
+      * appropriate error responses where necessary.
+      * Processing is dependant upon the value of the CA-CRUD-FUNCTION
+      * field in the commarea.
+      * Note that an ABEND must be forced if the passed area is too
+      * small to be able to indicate an error in the normal way.
+      *
+           IF  EIBCALEN > 21
+               IF  CA-CRUD-CORRECT-VERSION
+                   IF  CA-CRUD-VALID-REQUEST
+                       PERFORM A-ANALYZE-REQUEST
+                       EVALUATE TRUE
+                           WHEN CA-CRUD-REQ-CREATE
+                               PERFORM B-CREATE-NEW-RECORD
+                           WHEN CA-CRUD-REQ-READ
+                               PERFORM C-READ-THE-RECORD
+                           WHEN CA-CRUD-REQ-UPDATE
+                               PERFORM D-UPDATE-THE-RECORD
+                           WHEN CA-CRUD-REQ-DELETE
+                               PERFORM E-DELETE-THE-RECORD
+                           WHEN CA-CRUD-REQ-ENQUIRE
+                               PERFORM C-READ-THE-RECORD
+                           WHEN CA-CRUD-REQ-LOCK
+                               PERFORM F-LOCK-ACCOUNT
+                           WHEN CA-CRUD-REQ-FREE
+                               PERFORM G-REMOVE-LOCK
+                       END-EVALUATE
+                   ELSE
+                       SET CA-CRUD-BAD-FORMAT    TO TRUE
+                       SET CA-CRUD-REQUEST-ERROR TO TRUE
+                   END-IF
+               ELSE
+                   SET CA-CRUD-BAD-FORMAT    TO TRUE
+                   SET CA-CRUD-VERSION-ERROR TO TRUE
+               END-IF
+           ELSE
+               IF  EIBCALEN > 11
+                   SET CA-CRUD-BAD-FORMAT   TO TRUE
+                   SET CA-CRUD-LENGTH-ERROR TO TRUE
+               ELSE
+                   EXEC CICS ABEND
+                             ABCODE(WS-LITS-ABEND-CRUD-IF)
+                   END-EXEC
+               END-IF
+           END-IF.
+      *
+       NACT02-050.
+      *
+           EXEC CICS RETURN
+           END-EXEC.
+      *
+       END-NACT02-MAIN.
+           EXIT.
+           EJECT.
+      *
+       A-ANALYZE-REQUEST SECTION.
+      *
+      * Once the input parameters have been vetted for correct format,
+      * then standard fields are initialised before deciding what it
+      * is that we need to do.
+      *
+       A-010.
+           MOVE ACCTDO IN NACTREC-DATA TO WS-LOCK-INUSE-ACCOUNT.
+           MOVE USERID                 TO WS-LOCK-INUSE-USERID.
+           MOVE EIBTRMID               TO WS-LOCK-INUSE-TERMID.
+           MOVE EIBDATE                TO WS-LOCK-INUSE-DATE.
+           MOVE EIBTIME                TO WS-LOCK-INUSE-TIME.
+      *
+           SET CA-CRUD-NO-ERROR TO TRUE.
+           MOVE CA-CRUD-RESP    TO CA-CRUD-REAS.
+           MOVE ZERO            TO CA-CRUD-CICS-FUNCTION.
+      *
+       END-A-ANALYZE-REQUEST.
+           EXIT.
+           EJECT.
+      *
+       B-CREATE-NEW-RECORD SECTION.
+      *
+      * A request to add a record logically requires data vetting.
+      *
+      *
+       B-010.
+           IF  ACCTDO IN NACTREC-DATA NOT NUMERIC
+               SET CA-CRUD-BAD-DATA   TO TRUE
+               SET CA-CRUD-ACCT-ERROR TO TRUE
+           END-IF.
+      *
+       B-020.
+      *
+      * Once the data is vetted, then we must check that the
+      * front-end logic already locked the account.
+      *
+           PERFORM Y-READ-LOCK.
+      *
+       B-030.
+      *
+      * If the account lock is owned by this user, then a record can
+      * be added to the file. This requires completing the data record
+      * area with initial values and issuing the CICS WRITE command.
+      *
+           IF  LOCK-ACTION-OK
+               MOVE 'N'        TO STATDO   IN NACTREC-DATA
+               MOVE ' 1000.00' TO LIMITDO  IN NACTREC-DATA
+               MOVE PAY-INIT   TO PAY-HIST IN NACTREC-DATA (1)
+                                  PAY-HIST IN NACTREC-DATA (2)
+                                  PAY-HIST IN NACTREC-DATA (3)
+               EXEC CICS WRITE
+                         FILE(WS-LITS-FILES-ACCOUNT)
+                         RIDFLD(ACCTDO IN NACTREC-DATA)
+                         FROM(NACTREC-DATA)
+                         RESP(CA-CRUD-RESP)
+                         RESP2(CA-CRUD-REAS)
+               END-EXEC
+               MOVE EIBFN    TO WORK-FN-X
+               MOVE WORK-FN  TO CA-CRUD-CICS-FUNCTION
+      *
+      * Once the record has been added, the lock must be released.
+      *
+               PERFORM X-DELETE-LOCK-AFTER-READ
+      *
+      * If the account lock is not owned by this user,
+      * then the front-end must be told.
+      *
+           ELSE
+               SET CA-CRUD-BAD-LOCK TO TRUE
+               SET CA-CRUD-IN-USE   TO TRUE
+           END-IF.
+      *
+       END-B-CREATE-NEW-RECORD.
+           EXIT.
+           EJECT.
+      *
+       C-READ-THE-RECORD SECTION.
+      *
+      * A Read request implies that some change is going to take place
+      * in the near future, so an account lock must be requested.
+      *
+       C-010.
+           IF  CA-CRUD-REQ-READ
+               PERFORM W-ADD-LOCK
+      *
+      * If the account is already locked by someone else,
+      * then the front-end must be told.
+      *
+               IF  LOCK-ACTION-FAILED
+                   SET CA-CRUD-BAD-LOCK TO TRUE
+                   SET CA-CRUD-IN-USE   TO TRUE
+               END-IF
+           ELSE
+               SET LOCK-ACTION-OK TO TRUE
+           END-IF
+      *
+      * If the account lock was successful, then we can get the data.
+      *
+           IF  LOCK-ACTION-OK
+               EXEC CICS READ
+                         FILE(WS-LITS-FILES-ACCOUNT)
+                         RIDFLD(ACCTDO IN NACTREC-DATA)
+                         INTO(NACTREC-DATA)
+                         RESP(CA-CRUD-RESP)
+                         RESP2(CA-CRUD-REAS)
+               END-EXEC
+               MOVE EIBFN    TO WORK-FN-X
+               MOVE WORK-FN  TO CA-CRUD-CICS-FUNCTION
+      *
+      * If the request to get the data was unsuccessful, we need
+      * to release the lock we just obtained.
+      *
+               IF (EIBRESP NOT = DFHRESP(NORMAL))
+               AND CA-CRUD-REQ-READ
+                   PERFORM CA-DELETE-LOCK
+               END-IF
+           END-IF.
+      *
+       END-C-READ-THE-RECORD.
+           EXIT.
+           EJECT.
+      *
+       CA-DELETE-LOCK SECTION.
+      *
+      * This routine attempts to delete a lock record from the special
+      * file set up for this purpose. Depending on the response to the
+      * attempt, further action may need to be taken.
+      *
+       CA-010.
+           EXEC CICS DELETE
+                     FILE(WS-LITS-FILES-LOCKING)
+                     RIDFLD(WS-LOCK-INUSE-ACCOUNT)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           EVALUATE RESPONSE
+               WHEN DFHRESP(NORMAL)
+                   SET LOCK-ACTION-OK TO TRUE
+      *
+      * If the attempt to delete the lock was unsuccessful for
+      * any reason, then a serious problem has occurred,
+      * so the error handler is invoked.
+      *
+               WHEN OTHER
+                   SET LOCK-ACTION-ERROR TO TRUE
+                   PERFORM Z-ERROR-HANDLER
+           END-EVALUATE.
+      *
+       END-CA-DELETE-LOCK.
+           EXIT.
+           EJECT.
+      *
+       D-UPDATE-THE-RECORD SECTION.
+      *
+      * A request to update a record logically requires data vetting.
+      *
+       D-010.
+      *
+      * Once the data is vetted, then we must check that the
+      * front-end logic already locked the account.
+      *
+           PERFORM Y-READ-LOCK.
+      *
+       D-020.
+      *
+      * If the account lock is owned by this user, then the record
+      * can be updated on the file. This requires READing the data
+      * from the file again to inform CICS and VSAM that we intend
+      * to UPDATE the record before actually changing the data in
+      * the file via the CICS REWRITE command.
+      *
+           IF  LOCK-ACTION-OK
+               EXEC CICS READ UPDATE
+                         FILE(WS-LITS-FILES-ACCOUNT)
+                         RIDFLD(ACCTDO IN NACTREC-DATA)
+                         INTO(OLD-ACCTREC)
+                         RESP(CA-CRUD-RESP)
+                         RESP2(CA-CRUD-REAS)
+               END-EXEC
+               MOVE EIBFN    TO WORK-FN-X
+               MOVE WORK-FN  TO CA-CRUD-CICS-FUNCTION
+               IF  EIBRESP = DFHRESP(NORMAL)
+                   MOVE STATDO   IN OLD-ACCTREC
+                        TO  STATDO   IN NACTREC-DATA
+                   MOVE LIMITDO  IN OLD-ACCTREC
+                        TO  LIMITDO  IN NACTREC-DATA
+                   MOVE PAY-HIST IN OLD-ACCTREC (1)
+                        TO  PAY-HIST IN NACTREC-DATA (1)
+                   MOVE PAY-HIST IN OLD-ACCTREC (2)
+                        TO  PAY-HIST IN NACTREC-DATA (2)
+                   MOVE PAY-HIST IN OLD-ACCTREC (3)
+                        TO  PAY-HIST IN NACTREC-DATA (3)
+                   EXEC CICS REWRITE
+                             FILE(WS-LITS-FILES-ACCOUNT)
+                             FROM(NACTREC-DATA)
+                             RESP(CA-CRUD-RESP)
+                             RESP2(CA-CRUD-REAS)
+                   END-EXEC
+                   MOVE EIBFN    TO WORK-FN-X
+                   MOVE WORK-FN  TO CA-CRUD-CICS-FUNCTION
+               END-IF
+      *
+      * Once the record has been updated, the lock must be released.
+      *
+               PERFORM X-DELETE-LOCK-AFTER-READ
+      *
+      * If the account lock is not owned by this user,
+      * then the front-end must be told.
+      *
+           ELSE
+               SET CA-CRUD-BAD-LOCK   TO TRUE
+               SET CA-CRUD-NOT-LOCKED TO TRUE
+           END-IF.
+      *
+       END-D-UPDATE-THE-RECORD.
+           EXIT.
+           EJECT.
+      *
+       E-DELETE-THE-RECORD SECTION.
+      *
+      * A request to delete a record requires the front-end logic
+      * to have already locked the account.
+      *
+       E-010.
+           PERFORM Y-READ-LOCK.
+      *
+      * If the account lock is owned by this user, then the record
+      * can be deleted from the file. This is performed via the
+      * CICS DELETE command.
+      *
+           IF  LOCK-ACTION-OK
+               EXEC CICS DELETE
+                         FILE(WS-LITS-FILES-ACCOUNT)
+                         RIDFLD(ACCTDO IN NACTREC-DATA)
+                         RESP(CA-CRUD-RESP)
+                         RESP2(CA-CRUD-REAS)
+               END-EXEC
+               MOVE EIBFN    TO WORK-FN-X
+               MOVE WORK-FN  TO CA-CRUD-CICS-FUNCTION
+      *
+      * Once the record has been deleted, the lock must be released.
+      *
+               PERFORM X-DELETE-LOCK-AFTER-READ
+      *
+      * If the account lock is not owned by this user,
+      * then the front-end must be told.
+      *
+           ELSE
+               SET CA-CRUD-BAD-LOCK   TO TRUE
+               SET CA-CRUD-NOT-LOCKED TO TRUE
+           END-IF.
+      *
+       END-E-DELETE-THE-RECORD.
+           EXIT.
+           EJECT.
+      *
+       F-LOCK-ACCOUNT SECTION.
+      *
+      * A request to lock an account requires that
+      * the account number has a valid format.
+      *
+       F-010.
+           IF  ACCTDO IN NACTREC-DATA NOT NUMERIC
+               SET CA-CRUD-BAD-DATA   TO TRUE
+               SET CA-CRUD-ACCT-ERROR TO TRUE
+      *
+      * If the the account number has a valid format,
+      * then we must lock the account.
+      *
+           ELSE
+               PERFORM W-ADD-LOCK
+      *
+      * If the account is already locked by someone else,
+      * then the front-end must be told.
+      *
+               IF  LOCK-ACTION-FAILED
+                   SET CA-CRUD-BAD-LOCK TO TRUE
+                   SET CA-CRUD-IN-USE   TO TRUE
+               END-IF
+           END-IF.
+      *
+       END-F-LOCK-ACCOUNT.
+           EXIT.
+           EJECT.
+      *
+       G-REMOVE-LOCK SECTION.
+      *
+      * A request to free an account requires that the
+      * lock is owned by this user, so we need find it.
+      *
+       G-010.
+           PERFORM Y-READ-LOCK.
+      *
+      * If the lock is owned by this user, we need to release it.
+      *
+           IF  LOCK-ACTION-OK
+               PERFORM X-DELETE-LOCK-AFTER-READ
+      *
+      * If the lock is not owned by this user,
+      * then the front-end must be told.
+      *
+           ELSE
+               SET CA-CRUD-BAD-LOCK   TO TRUE
+               SET CA-CRUD-NOT-LOCKED TO TRUE
+           END-IF.
+      *
+       END-G-REMOVE-LOCK.
+           EXIT.
+           EJECT.
+      *
+       W-ADD-LOCK SECTION.
+      *
+      * This routine attempts to add a lock record to the special
+      * file set up for this purpose. Depending on the response
+      * to the attempt, further action may need to be taken.
+      *
+      * This section is performed from the following sections -
+      *      C-READ-THE-RECORD
+      *      F-LOCK-ACCOUNT
+      *
+       W-010.
+           EXEC CICS WRITE
+                     FILE(WS-LITS-FILES-LOCKING)
+                     RIDFLD(WS-LOCK-INUSE-ACCOUNT)
+                     FROM(WS-LOCK-INUSE-REC)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           EVALUATE RESPONSE
+      *
+      * If the attempt to add the lock was successful,
+      * no further action is required.
+      *
+               WHEN DFHRESP(NORMAL)
+                   SET LOCK-ACTION-OK TO TRUE
+      *
+      * If the attempt to add the lock was unsuccessful due to a
+      * duplicate being found, then an attempt to read the lock
+      * data is required. If that is successful, it means that the
+      * user already owns the lock, so the time of the lock needs
+      * to be updated.
+      *
+               WHEN DFHRESP(DUPREC)
+                   PERFORM Y-READ-LOCK
+                   IF  LOCK-ACTION-OK
+                       PERFORM WA-UPDATE-LOCK
+                   ELSE
+                       SET LOCK-ACTION-FAILED TO TRUE
+                   END-IF
+      *
+      * If the attempt to add the lock was unsuccessful due to
+      * any other reason, then a serious problem has occurred,
+      * so the error handler is invoked.
+      *
+               WHEN OTHER
+                   SET LOCK-ACTION-ERROR TO TRUE
+                   PERFORM Z-ERROR-HANDLER
+           END-EVALUATE.
+      *
+       END-W-ADD-LOCK.
+           EXIT.
+           EJECT.
+      *
+       WA-UPDATE-LOCK SECTION.
+      *
+      * This routine allows for the fact that a lock may have existed
+      * but has now expired or requires that the time of the lock be
+      * changed. It performs this via the REWRITE command which
+      * requires that a previous READ with the UPDATE option was
+      * successful.
+      *
+       WA-010.
+           MOVE USERID   TO WS-LOCK-INUSE-USERID.
+           MOVE EIBTRMID TO WS-LOCK-INUSE-TERMID.
+           MOVE EIBDATE  TO WS-LOCK-INUSE-DATE.
+           MOVE EIBTIME  TO WS-LOCK-INUSE-TIME.
+      *
+           EXEC CICS REWRITE
+                     FILE(WS-LITS-FILES-LOCKING)
+                     FROM(WS-LOCK-INUSE-REC)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           EVALUATE RESPONSE
+               WHEN DFHRESP(NORMAL)
+                   SET LOCK-ACTION-OK TO TRUE
+      *
+      * If the attempt to update the lock was unsuccessful due
+      * to any reason, then a serious problem has occurred,
+      * so the error handler is invoked.
+      *
+               WHEN OTHER
+                   SET LOCK-ACTION-ERROR TO TRUE
+                   PERFORM Z-ERROR-HANDLER
+           END-EVALUATE.
+      *
+       END-WA-UPDATE-LOCK.
+           EXIT.
+           EJECT.
+      *
+       X-DELETE-LOCK-AFTER-READ SECTION.
+      *
+      * This routine attempts to delete a lock record from the special
+      * file set up for this purpose after the lock has already been
+      * read (with the UPDATE option). Depending on the response to
+      * the attempt, further action may need to be taken.
+      *
+      * This section is performed from the following sections -
+      *      B-CREATE-NEW-RECORD
+      *      D-UPDATE-THE-RECORD
+      *      E-DELETE-THE-RECORD
+      *      G-REMOVE-LOCK
+      *
+       X-010.
+           EXEC CICS DELETE
+                     FILE(WS-LITS-FILES-LOCKING)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           EVALUATE RESPONSE
+               WHEN DFHRESP(NORMAL)
+                   SET LOCK-ACTION-OK TO TRUE
+      *
+      * If the attempt to delete the lock was unsuccessful for
+      * any reason, then a serious problem has occurred,
+      * so the error handler is invoked.
+      *
+               WHEN OTHER
+                   SET LOCK-ACTION-ERROR TO TRUE
+                   PERFORM Z-ERROR-HANDLER
+           END-EVALUATE.
+      *
+       END-X-DELETE-LOCK-AFTER-READ.
+           EXIT.
+           EJECT.
+      *
+       Y-READ-LOCK SECTION.
+      *
+      * This routine attempts to read a lock record from the
+      * special file set up for this purpose. It uses the
+      * UPDATE option since it anticipates that the lock will
+      * either need to be subsequently updated or deleted.
+      * Depending on the response to the attempt, further
+      * action may need to be taken.
+      *
+      * This section is performed from the following sections -
+      *      B-CREATE-NEW-RECORD
+      *      D-UPDATE-THE-RECORD
+      *      E-DELETE-THE-RECORD
+      *      G-REMOVE-LOCK
+      *      W-ADD-LOCK
+      *
+       Y-010.
+           EXEC CICS READ UPDATE
+                     FILE(WS-LITS-FILES-LOCKING)
+                     RIDFLD(WS-LOCK-INUSE-ACCOUNT)
+                     INTO(WS-LOCK-INUSE-REC)
+                     RESP(RESPONSE)
+                     RESP2(REASON-CODE)
+           END-EXEC.
+      *
+           EVALUATE RESPONSE
+      *
+      * Simply because the lock exists does not mean that it is
+      * owned by this user. That must also be checked.
+      *
+               WHEN DFHRESP(NORMAL)
+                   PERFORM YA-CHECK-LOCK-DATA
+                   IF  LOCK-VALID
+                       SET LOCK-ACTION-OK     TO TRUE
+                   ELSE
+                       SET LOCK-ACTION-FAILED TO TRUE
+                   END-IF
+      *
+      * If the attempt to read the lock was unsuccessful due to it
+      * not being found, then this user does not own it.
+      *
+               WHEN DFHRESP(NOTFND)
+                   SET LOCK-ACTION-FAILED TO TRUE
+      *
+      * If the attempt to read the lock was unsuccessful due to
+      * any other reason, then a serious problem has occurred,
+      * so the error handler is invoked.
+      *
+               WHEN OTHER
+                   SET LOCK-ACTION-ERROR TO TRUE
+                   PERFORM Z-ERROR-HANDLER
+           END-EVALUATE.
+      *
+       END-Y-READ-LOCK.
+           EXIT.
+           EJECT.
+      *
+       YA-CHECK-LOCK-DATA SECTION.
+      *
+      * This routine checks that a lock found on the special file
+      * set up for this purpose is either owned by the current user
+      * or, if owned by someone else, it has expired. It checks for
+      * the second possibility by adding the time limit to the time
+      * in the lcok. (It allows for rolling over midnight.) If as a
+      * result of adding in the time limit, the date in the lock is
+      * greater than the current date, or if the dates are the same
+      * but the time in the lock is earlier than the current time,
+      * then the lock is expired and can be assigned to this user.
+      *
+       YA-010.
+           IF  USERID   = WS-LOCK-INUSE-USERID
+           AND EIBTRMID = WS-LOCK-INUSE-TERMID
+               SET LOCK-VALID TO TRUE
+           ELSE
+               ADD WS-LITS-USE-LIMIT TO WS-LOCK-INUSE-TIME
+               IF  WS-LOCK-INUSE-TIME > 236000
+                   ADD 1 TO WS-LOCK-INUSE-DATE
+                   SUBTRACT 236000 FROM WS-LOCK-INUSE-TIME
+               END-IF
+               IF  WS-LOCK-INUSE-DATE > EIBDATE
+               OR (WS-LOCK-INUSE-DATE = EIBDATE
+                   AND WS-LOCK-INUSE-TIME < EIBTIME)
+                   SET LOCK-VALID   TO TRUE
+               ELSE
+                   SET LOCK-INVALID TO TRUE
+               END-IF
+           END-IF.
+      *
+       END-YA-CHECK-LOCK-DATA.
+           EXIT.
+           EJECT.
+      *
+       Z-ERROR-HANDLER SECTION.
+      *
+      * This routine invokes the error handler for unexpected
+      * conditions from CICS.
+      *
+      * This section is performed from the following sections -
+      *      CA-DELETE-LOCK
+      *      W-ADD-LOCK
+      *      WA-UPDATE-LOCK
+      *      X-DELETE-LOCK-AFTER-READ
+      *      Y-READ-LOCK
+      *
+       Z-010.
+           SET WS-ERRH-CORRECT-VERSION TO TRUE.
+           MOVE RESPONSE               TO WS-ERRH-ERROR.
+           MOVE REASON-CODE            TO WS-ERRH-REASON.
+           MOVE EIBFN                  TO WORK-FN-X.
+           MOVE WORK-FN                TO WS-ERRH-CICS-FUNCTION.
+           MOVE WS-PROGRAM-NAME        TO WS-ERRH-PROGRAM.
+      *
+           EXEC CICS XCTL
+                     PROGRAM(ABEND-PROGRAM)
+                     COMMAREA(WS-ERRH-ERROR-COMMAREA)
+                     NOHANDLE
+           END-EXEC.
+      *
+      * The following will only be executed if the XCTL fails.
+      * The primary reason that might happen is if the error
+      * handling program has become unavailable for some reason.
+      *
+           EXEC CICS ABEND
+                     ABCODE(WS-LITS-ABEND-ERROR-ABEND)
+           END-EXEC.
+      *
+       END-Z-ERROR-HANDLER.
+           EXIT.

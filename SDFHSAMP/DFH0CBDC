@@ -1,0 +1,497 @@
+      ******************************************************************
+      *                                                                *
+      * MODULE NAME = DFH0CBDC                                         *
+      *                                                                *
+      * DESCRIPTIVE NAME = Sample to Produce CSD Listing from EXTRACT  *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *     Licensed Materials - Property of IBM                       *
+      *                                                                *
+      *     "Restricted Materials of IBM"                              *
+      *                                                                *
+      *     5655-Y04                                                   *
+      *                                                                *
+      *     (C) Copyright IBM Corp. 1990, 1991"                        *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      *                                                                *
+      * STATUS = 7.2.0                                                 *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *                                                                *
+      * LANGUAGE: COBOL II                                             *
+      *                                                                *
+      * BDEFCSD takes input from the batch EXTRACT command and         *
+      * produces a listing of part or all of the CSD that can be used  *
+      * to build or rebuild CSD definitions, or as just a summary      *
+      * listing of the CSD. The listing can be used as a means of      *
+      * passing CSD definitions from one CSD to another in a readable, *
+      * commentable form.                                              *
+      * The output varies according to the EXTRACT command being       *
+      * processed as follows:                                          *
+      *                                                                *
+      * EXTRACT GROUP( .. ):                                           *
+      * For every resource in the specified group, a partial DEFINE    *
+      * command is generated, eg.                                      *
+      *              DEFINE resource(XXXXXXX) GROUP(YYYYYYYY)          *
+      * Note that this command is not acceptable input to the batch    *
+      * utility. However, it does provide an editable list of the      *
+      * resources in each group.                                       *
+      *                                                                *
+      * EXTRACT GROUP( .. ) OBJECTS:                                   *
+      * For every resource in the specified group, a DEFINE command is *
+      * generated, eg.                                                 *
+      *              DEFINE PROGRAM(XXXXXXXX) GROUP(YYYYYYYY)          *
+      *              DESCRIPTION( ... )                                *
+      *              LANGUAGE(COBOL) RELOAD(NO) RESIDENT( ...          *
+      *                                                                *
+      * This is acceptable input to the batch utility.                 *
+      *                                                                *
+      * EXTRACT LIST:                                                  *
+      * For every occurence of a group in the specified list an ADD    *
+      * command is generated, eg.                                      *
+      *              ADD GROUP(XXXXXXXX) LIST(YYYYYYYY)                *
+      *                                                                *
+      * EXTRACT LIST OBJECTS:                                          *
+      * As above, plus the equivalent of EXTRACT GROUP( .. ) OBJECTS   *
+      * for every group in the specified list.                         *
+      *                                                                *
+      * Notes.                                                         *
+      *       ADD and DEFINE commands and DESCRIPTION keywords begin   *
+      *       in column 1. All other keywords are listed starting in   *
+      *       column 8. If commmented out, these values are increased  *
+      *       by 1.                                                    *
+      *                                                                *
+      *       An ADD command featuring a list beginning 'DFH' is       *
+      *       prefixed by a DFHCSDUP comment character, '*'.           *
+      *                                                                *
+      *       A DEFINE command featuring a group beginning 'DFH' is    *
+      *       prefixed by a DFHCSDUP comment character, '*'.           *
+      *                                                                *
+      *       Any resource keyword containing a null value is not      *
+      *       outputted as it is not valid input to DEFINE.            *
+      *                                                                *
+      *       Any resource keyword and its value (other than           *
+      *       DESCRIPTION) that will not fit into columns 8-71 is      *
+      *       outputted over multiple lines in a format acceptable as  *
+      *       input to DFHCSDUP.                                       *
+      *                                                                *
+      *                                                                *
+      * Inputs: Data from DFHCULIS                                     *
+      * Outputs: Data file (see DATA-OUT) or the following return      *
+      * code:                                                          *
+      *                                                                *
+      *      02: Invalid call type supplied to program                 *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *                                                                *
+      * OUTPUT FILE                                                    *
+      * DEFINE and ADD commands will be written to this file.          *
+      *                                                                *
+      * Note that NO error processing is performed for this file,      *
+      * eg. open/close errors.                                         *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *                                                                *
+      * N.B. Must be linked RMODE(24)                                  *
+      *                                                                *
+      *----------------------------------------------------------------*
+      *                                                                *
+      * CHANGE ACTIVITY :                                              *
+      *                                                                *
+      *     $MAC(DFH0CBDC),COMP(SAMPLES),PROD(CICS TS ):               *
+      *                                                                *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                     *
+      *    $P0= .      320 900320        : Created.                    *
+      *    $P1= M90474 330 910807 HDBWSH : Prologue fixed.             *
+      *                                                                *
+      ******************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. BDEFCSD.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT DATA-OUT
+                  ASSIGN TO SYS002-DA-3380-S-CBDOUT
+                  ORGANIZATION IS SEQUENTIAL
+                  ACCESS IS SEQUENTIAL.
+       EJECT.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  DATA-OUT
+           RECORD CONTAINS 80 CHARACTERS
+           BLOCK CONTAINS 0 RECORDS
+           RECORDING MODE IS F
+           LABEL RECORDS ARE OMITTED.
+       01  WRITE-BUFFER PIC X(80).
+       EJECT.
+       WORKING-STORAGE SECTION.
+      *
+      * Call types, as defined by DFHCSDUP.
+      *
+       77  INITIAL-CALL                   PIC 99 VALUE IS 0.
+       77  LIST-START-CALL                PIC 99 VALUE IS 2.
+       77  GROUP-START-CALL               PIC 99 VALUE IS 4.
+       77  OBJECT-START-CALL              PIC 99 VALUE IS 6.
+       77  KEYWORD-CALL                   PIC 99 VALUE IS 8.
+       77  OBJECT-END-CALL                PIC 99 VALUE IS 10.
+       77  GROUP-END-CALL                 PIC 99 VALUE IS 12.
+       77  LIST-END-CALL                  PIC 99 VALUE IS 14.
+       77  FINAL-CALL                     PIC 99 VALUE IS 16.
+      *
+      *  Current list and group being processed.
+      *
+       01  CURRENT-LIST-ID.
+           02 LIST-PREFIX                 PIC X(3).
+           02 LIST-SUFFIX                 PIC X(5).
+       01  CURRENT-GROUP-ID.
+           02 GROUP-PREFIX                PIC X(3).
+           02 GROUP-SUFFIX                PIC X(5).
+      *
+      * LONG KEYWORD VALUE HANDLING
+      *
+       01  LINE-LENGTH                    PIC S9(4) COMP.
+       01  LENGTH-LINE-1                  PIC S9(4) VALUE IS 49.
+       01  CHAR-COUNT                     PIC S9(4) COMP.
+       01  LAST-CHAR                      PIC X.
+       01  TEMP-BUFFER                    PIC X(71).
+       01  TEMP-BUFFER-PTR                PIC S9(4) COMP.
+       01  CREATE-LINE-END                PIC X(1).
+      *
+       01  INDENTED-LINE-LEN              PIC S9(4) VALUE IS 62.
+      *
+       77  ASTERISK                       PIC X VALUE IS '*'.
+       77  FLUSH-PREFIX                   PIC X(3).
+      * Return code, if an invalid call is made to this program
+       77  INVALID-CALL-TYPE              PIC S9(4) COMP VALUE IS 2.
+      *
+      * For buffering data whilst it is being formatted.
+      *
+       77  BUFFER                         PIC X(73).
+       77  BUFFER-PTR                     PIC S9(4) COMP.
+       77  NUMBER-OF-SPACES               PIC S9(4) COMP.
+       77  KEYWORD-TYPE-LENGTH            PIC S9(4) COMP.
+       77  KEYWORD-LENGTH                 PIC S9(4) COMP.
+       77  BUFFER-SPACE                   PIC S9(4) COMP.
+       77  MAX-TYPE-LENGTH                PIC S9(4) COMP VALUE IS 12.
+       77  BUFFER-INDENT                  PIC S9(4) COMP VALUE IS 8.
+       77  PARENTHESIS-LENGTH             PIC S9(4) COMP VALUE IS 2.
+       77  KEYWORD-SCAN-PTR               PIC S9(4) COMP.
+       77  CHARACTER-COUNT                PIC S9(4) COMP.
+       77  CURRENT-LINE-LENGTH            PIC S9(4) COMP.
+      * ************************************************************** *
+      * Define the linkage between this program and the CSD off-line   *
+      * utility program. The addressability to the values addressed by *
+      * the parameter list passed from DFHCSDUP is established         *
+      * automatically by the COBOL compiler so all we  need to define  *
+      * here are the actual formats of the values themselves.          *
+      * ************************************************************** *
+       LINKAGE SECTION.
+       01  EXIT-FUNCTION-CODE             PIC 99 COMP.
+       01  EXIT-WORK-AREA-PTR             POINTER.
+       01  EXIT-BACK-TRANS-CMD-PTR        POINTER.
+       01  EXIT-LIST-NAME                 PIC X(8).
+       01  EXIT-GROUP-NAME                PIC X(8).
+       01  EXIT-OBJECT-TYPE               PIC X(12).
+       01  EXIT-OBJECT-NAME               PIC X(8).
+       01  EXIT-KEYWORD-TYPE              PIC X(12).
+       01  EXIT-KEYWORD-LENGTH            PIC 999 COMP.
+       01  EXIT-KEYWORD-VALUE.
+           03 EXIT-KEYWORD-CHAR           PIC X OCCURS 1 TO 255
+                                  DEPENDING ON EXIT-KEYWORD-LENGTH.
+       EJECT.
+      * ************************************************************** *
+      *                                                                *
+      *          M A I N L I N E  C O D E  S T A R T S  H E R E        *
+      *          ----------------------------------------------        *
+      *                                                                *
+      * ************************************************************** *
+       PROCEDURE DIVISION USING EXIT-FUNCTION-CODE
+                                EXIT-WORK-AREA-PTR
+                                EXIT-BACK-TRANS-CMD-PTR
+                                EXIT-LIST-NAME
+                                EXIT-GROUP-NAME
+                                EXIT-OBJECT-TYPE
+                                EXIT-OBJECT-NAME
+                                EXIT-KEYWORD-TYPE
+                                EXIT-KEYWORD-LENGTH
+                                EXIT-KEYWORD-VALUE.
+      *
+      * Perform appropriate action, according to EXIT-FUNCTION-CODE
+      *
+           EVALUATE EXIT-FUNCTION-CODE
+      * Open output file and initialise BUFFER to SPACES.
+              WHEN INITIAL-CALL PERFORM INITIALISE
+      * Store current list name.
+              WHEN LIST-START-CALL
+                 MOVE EXIT-LIST-NAME TO CURRENT-LIST-ID
+      * Store current group name and output an ADD command if there
+      * is a current list.
+              WHEN GROUP-START-CALL
+                 PERFORM
+                    MOVE EXIT-GROUP-NAME TO CURRENT-GROUP-ID
+                    IF CURRENT-LIST-ID NOT EQUAL SPACES
+                       THEN PERFORM
+                               PERFORM ADD-GROUP-TO-LIST
+                               MOVE LIST-PREFIX TO FLUSH-PREFIX
+                               PERFORM FLUSH-BUFFER
+                            END-PERFORM
+                    END-IF
+                 END-PERFORM
+      * Output a partial define command.
+              WHEN OBJECT-START-CALL
+                 PERFORM
+                    PERFORM PROCESS-OBJECT
+                    MOVE GROUP-PREFIX TO FLUSH-PREFIX
+                    PERFORM FLUSH-BUFFER
+                 END-PERFORM
+      * If the keyword has a value then write the keyword and value to
+      * the output buffer. Only write the buffer if the keyword is
+      * DESCRIPTION or if we overflow the buffer.
+              WHEN KEYWORD-CALL
+                 PERFORM
+                    IF EXIT-KEYWORD-LENGTH NOT EQUAL ZERO
+                       THEN PERFORM
+                               IF EXIT-KEYWORD-TYPE = 'DESCRIPTION'
+                                  THEN PERFORM
+                                          IF BUFFER-PTR > BUFFER-INDENT
+                                             THEN PERFORM FLUSH-BUFFER
+                                          END-IF
+                                          PERFORM PROCESS-KEYWORD
+                                          PERFORM FLUSH-BUFFER
+                                       END-PERFORM
+                                  ELSE PERFORM
+                                          IF BUFFER-PTR = 1
+                                             THEN MOVE BUFFER-INDENT
+                                                          TO BUFFER-PTR
+                                          END-IF
+                                          PERFORM PROCESS-KEYWORD
+                                       END-PERFORM
+                               END-IF
+                            END-PERFORM
+                    END-IF
+                 END-PERFORM
+      * Flush the buffer at the end of a resource.
+              WHEN OBJECT-END-CALL PERFORM FLUSH-BUFFER
+      * Clear current group name at the end of the group.
+              WHEN GROUP-END-CALL MOVE SPACES TO CURRENT-GROUP-ID
+      * Clear current list name at the end of the list .
+              WHEN LIST-END-CALL MOVE SPACES TO CURRENT-LIST-ID
+      * Close output file.
+              WHEN FINAL-CALL PERFORM CLEAN-UP
+      * Signal invalid call type to DFHCULIS.
+              WHEN OTHER MOVE INVALID-CALL-TYPE TO RETURN-CODE
+           END-EVALUATE
+      *
+      * Must use GOBACK so that COBOL data areas are preserved and usabl
+      * on the next invocation of the program (eg. CURRENT-LIST-ID and
+      * CURRENT-GROUP-ID).
+      *
+           IF EXIT-FUNCTION-CODE = FINAL-CALL THEN
+              STOP RUN
+           ELSE
+              GOBACK.
+      *
+       ADD-GROUP-TO-LIST.
+      *
+      * Place command on output file of the form:
+      *          ADD GROUP( ... ) LIST( ... )
+      *
+      * If there is no current list then this routine should not be
+      * called.
+      *
+           STRING 'ADD GROUP(' DELIMITED BY SIZE
+                  CURRENT-GROUP-ID DELIMITED BY SPACE
+                  ') LIST(' DELIMITED BY SIZE
+                  CURRENT-LIST-ID DELIMITED BY SPACE
+                  ')' DELIMITED BY SIZE
+                  INTO BUFFER
+           END-STRING.
+      *
+       ADD-KEYWORD-TO-BUFFER.
+      *
+      * Routine to write a keyword to the output buffer.
+      * Note that parenthesis are placed around the keyword value and
+      * a space is appended to the string for padding.
+      *
+           STRING EXIT-KEYWORD-TYPE DELIMITED BY SPACE
+                  '(' EXIT-KEYWORD-VALUE ') ' DELIMITED BY SIZE
+                  INTO BUFFER
+                  WITH POINTER BUFFER-PTR
+           END-STRING.
+      *
+      *
+      *
+       SPLIT-KEYWORD.
+      *
+      * This procedure to splits a keywords value(s) over
+      * multiple lines. As much of the value as possible is put
+      * out on the first line, and a continuation character (*)
+      * placed in column 72. Subsequent lines contain 71
+      * Keyword characters plus a continuation character, apart
+      * from the final line which contains the remainder of the
+      * Keyword value and a right parenthesis.
+      *
+      * Put keyword name at the start of a new line
+           STRING EXIT-KEYWORD-TYPE DELIMITED BY SPACE
+                  '(' DELIMITED BY SIZE
+                  INTO BUFFER
+                  WITH POINTER BUFFER-PTR
+           END-STRING.
+      *
+      * Initialize variables required for data formatting.
+      *
+           MOVE SPACES TO TEMP-BUFFER
+           MOVE 0 TO KEYWORD-SCAN-PTR
+           MOVE 1 TO TEMP-BUFFER-PTR
+           MOVE 0 TO CHARACTER-COUNT
+      *
+      * Now scan keyword value(s) and fill output buffer. When
+      * full flush buffer and continue processing for keyword
+      * creating output records until all keyword value(s)
+      * processed.
+      *
+           PERFORM PERFORM-SPLIT
+                   UNTIL KEYWORD-SCAN-PTR =
+                         EXIT-KEYWORD-LENGTH.
+      *
+      * Write a closing ')' to the output buffer.
+      *
+           STRING TEMP-BUFFER DELIMITED BY SPACE
+                  ') ' DELIMITED BY SIZE
+                  INTO BUFFER
+                  WITH POINTER BUFFER-PTR
+           END-STRING.
+      *
+       PERFORM-SPLIT.
+      *
+      * This routine sequentially transfers characters from
+      * EXIT-KEYWORD-VALUE to TEMP-BUFFER. If TEMP-BUFFER is
+      * filled, then it's contents are written to BUFFER,
+      * a continuation character concatenated in column 72. The
+      * contents of BUFFER are then written to the output file
+      * via a call to FLUSH-BUFFER.
+      *
+            ADD 1 TO KEYWORD-SCAN-PTR.
+            ADD 1 TO CHARACTER-COUNT.
+      *
+      * Calculate line length so far.
+      *
+            ADD CHARACTER-COUNT
+            BUFFER-PTR
+            GIVING CURRENT-LINE-LENGTH.
+      *
+      * Find the next delimited string
+      *
+            STRING EXIT-KEYWORD-CHAR(KEYWORD-SCAN-PTR)
+                   DELIMITED BY SIZE
+                   INTO TEMP-BUFFER
+                   WITH POINTER TEMP-BUFFER-PTR
+            END-STRING.
+      *
+      * Check for full output line, ie 71 characters.
+      *
+            IF CURRENT-LINE-LENGTH > 71 THEN
+               STRING TEMP-BUFFER DELIMITED BY SPACE
+                      ASTERISK DELIMITED BY SIZE
+                      INTO BUFFER
+                      WITH POINTER BUFFER-PTR
+               END-STRING
+               PERFORM FLUSH-BUFFER
+               MOVE SPACES TO TEMP-BUFFER
+               MOVE 1 TO BUFFER-PTR
+               MOVE 1 TO TEMP-BUFFER-PTR
+               MOVE 0 TO CHARACTER-COUNT
+            END-IF.
+      *
+       PROCESS-OBJECT.
+      *
+      * Routine to write an object type to the output file
+      *
+           STRING 'DEFINE ' DELIMITED BY SIZE
+                  EXIT-OBJECT-TYPE DELIMITED BY SPACE
+                  '(' DELIMITED BY SIZE
+                  EXIT-OBJECT-NAME DELIMITED BY SPACE
+                  ') GROUP(' DELIMITED BY SIZE
+                  CURRENT-GROUP-ID DELIMITED BY SPACE
+                  ')' DELIMITED BY SIZE
+                  INTO BUFFER
+                  WITH POINTER BUFFER-PTR
+           END-STRING.
+      *
+       PROCESS-KEYWORD.
+      *
+      * Routine to process a keyword and its value.
+      * If the keyword and its value will fit in the remaining buffer
+      * space then write them. Otherwise flush the buffer and place
+      * the keyword and its value in an empty buffer. If it still won't
+      * fit then issue an error message for that keyword.
+      *
+      * Calculate the length of the keyword and its value(including
+      * parenthesis) and then check to see if it will fit in the buffer.
+      * If it won't fit, flush the buffer and retry. If it still won't
+      * then this is an error.
+      *
+           MOVE ZERO TO NUMBER-OF-SPACES
+           INSPECT EXIT-KEYWORD-TYPE
+                   TALLYING NUMBER-OF-SPACES
+                   FOR ALL SPACE
+           SUBTRACT NUMBER-OF-SPACES FROM MAX-TYPE-LENGTH
+                    GIVING KEYWORD-TYPE-LENGTH
+           ADD KEYWORD-TYPE-LENGTH EXIT-KEYWORD-LENGTH
+               PARENTHESIS-LENGTH
+               GIVING KEYWORD-LENGTH
+           SUBTRACT BUFFER-PTR FROM 72 GIVING BUFFER-SPACE
+           IF BUFFER-SPACE > KEYWORD-LENGTH - 1
+              THEN PERFORM ADD-KEYWORD-TO-BUFFER
+              ELSE PERFORM
+                  IF BUFFER-PTR > BUFFER-INDENT
+                  THEN
+                      PERFORM FLUSH-BUFFER
+                  END-IF
+                      IF EXIT-KEYWORD-TYPE NOT EQUAL 'DESCRIPTION'
+                         THEN MOVE BUFFER-INDENT TO BUFFER-PTR
+                      END-IF
+                      SUBTRACT BUFFER-PTR FROM 72 GIVING BUFFER-SPACE
+                      IF BUFFER-SPACE > KEYWORD-LENGTH - 1
+                         THEN PERFORM ADD-KEYWORD-TO-BUFFER
+                         ELSE PERFORM SPLIT-KEYWORD
+                      END-IF
+                   END-PERFORM
+           END-IF.
+      *
+       FLUSH-BUFFER.
+      *
+      * Routine to write the buffer to the output file.
+      * If the group (for DEFINE) or the list name (for ADD) begin
+      * 'DFH' then prefix the output with DFHCSDUP comment
+      * character, '*'.
+      *
+           MOVE SPACES TO WRITE-BUFFER
+           IF FLUSH-PREFIX = 'DFH'
+              THEN STRING ASTERISK BUFFER DELIMITED BY SIZE
+                          INTO WRITE-BUFFER
+                   END-STRING
+              ELSE MOVE BUFFER TO WRITE-BUFFER
+           END-IF
+           WRITE WRITE-BUFFER.
+           MOVE SPACES TO BUFFER.
+           MOVE 1 TO BUFFER-PTR.
+      *
+       INITIALISE.
+      *
+      * Routine called at initial call to set up working environment.
+      *
+           OPEN OUTPUT DATA-OUT.
+           MOVE SPACES TO BUFFER.
+           MOVE 1 TO BUFFER-PTR.
+           MOVE SPACES TO CURRENT-LIST-ID.
+           MOVE SPACES TO CURRENT-GROUP-ID.
+      *
+       CLEAN-UP.
+      *
+      * Routine called at final call to clean up
+      *
+           CLOSE DATA-OUT.

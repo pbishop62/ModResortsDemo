@@ -1,0 +1,446 @@
+       CBL CICS('COBOL3') APOST MAP XREF
+       Identification Division.
+       Program-id. DFH0CBRL.
+      *****************************************************************
+      * MODULE NAME = DFH0CBRL                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  (BR) Sample 3270 Bridge Client    *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *      Licensed Materials - Property of IBM                     *
+      *                                                               *
+      *      "Restricted Materials of IBM"                            *
+      *                                                               *
+      *      5655-Y04                                                 *
+      *                                                               *
+      *      (C) Copyright IBM Corp. 2001, 2005"                      *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * FUNCTION = Sample 3270 Bridge Client Link Program             *
+      *                                                               *
+      *     DFH0CBRL is the bridge client which wrappers the          *
+      *     NACT transaction. It is called by the business client     *
+      *     program DFH0CBRC with a commarea mapped by DFH0CBRA.      *
+      *     The results or error information is passed back in the    *
+      *     the commarea.                                             *
+      *                                                               *
+      *     DFH0CBRL can be called for two functions:                 *
+      *     1. Search for surnames.                                   *
+      *     2. Display an account number.                             *
+      *                                                               *
+      *     The actions taken by DFH0CBRL are as follows:             *
+      *     1. Allocate a session.                                    *
+      *     2. Setup the NACT menu.                                   *
+      *     3. Create a message to run the search/display request.    *
+      *     4. Delete the session.                                    *
+      *                                                               *
+      * NOTES :                                                       *
+      *  DEPENDENCIES = S/390                                         *
+      *  RESTRICTIONS = Same as Link3270                              *
+      *  REGISTER CONVENTIONS = Normal                                *
+      *  MODULE TYPE = Executable                                     *
+      *  PROCESSOR = COBOL                                            *
+      *  ATTRIBUTES = Read only, Serially Reusable                    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * ENTRY POINT = DFH0CBRL                                        *
+      *                                                               *
+      *   PURPOSE = All functions                                     *
+      *                                                               *
+      *   LINKAGE = Normal CICS program                               *
+      *                                                               *
+      *   INPUT = COBOL copybook DFH0CBRA                             *
+      *                                                               *
+      *   OUTPUT = COBOL copybook DFH0CBRA                            *
+      *                                                               *
+      *   EXIT-NORMAL = error-returncode is zero                      *
+      *                                                               *
+      *   EXIT-ERROR = Set error-returncode to nonzero value          *
+      *                Write output message to TS queue BRCO          *
+      *---------------------------------------------------------------*
+      * List of error codes                                           *
+      *                                                               *
+      * Returncode Description                                        *
+      * 0          OK                                                 *
+      * 1-999      DFHL3270 Error. BRIH-RETURNCODE.                   *
+      * 1000 (3E8) Invalid briv-output-header                         *
+      * 1001 (3E9) briv-sm-mapset not DFH0MNA                         *
+      * 1002 (3EA) briv-sm-map not ACCTMNU after initialising         *
+      * 1003 (3EB) briv-sm-map not ACCTMNU after search               *
+      * 1004 (3EC) briv-sm-map not ACCTDTL after display              *
+      * 1005 (3ED) Invalid search parameter                           *
+      *                                                               *
+      *-------------------------------------------------------------- *
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *    $MOD(DFH0CBRL),COMP(BRIDGE),PROD(CICS TS ):                *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $01= AD0107 640 050117 HDBGNRB : Migrate IND0107 from SPA R630*
+      * $L0= 775    620 010809 HDDLCRP : Created                      *
+      * $L2= 775    620 010817 HDDLCRP : Bridge samples review        *
+      * $P1= D02652 620 011010 HDFXAB  : Nact install (Part 4)        *
+      * $P2= D02653 620 011030 HDDLCRP : Review of Link3270 bridge sa *
+      *                                                               *
+      * Fix for defect 10107                                     @01A *
+      *****************************************************************
+
+       Environment Division.
+      *****************************************************************
+       Data Division.
+      *****************************************************************
+       Working-Storage Section.
+       01 program-working-storage.
+         03 filler        pic x(16)  value '>WORKING STORAGE'.
+         03 msg-area-ptr    pointer.
+         03 ads-offset      pic s9(8) comp.
+         03 low--value      pic x   value low-value.
+         03 output-len      pic s9(4) comp.
+         03 input-len       pic s9(4) comp.
+      * Constants
+       01 default-header.
+       copy DFHBRICO.
+       copy DFHAID.
+      *****************************************************************
+       Linkage Section.
+      * Business client interface with bridge client
+       01 dfhcommarea.
+         copy DFH0CBRA.
+      * briv vectors
+       01 briv-in.
+         copy DFHBRIIO.
+       01 briv-out.
+         copy DFHBRIOO.
+      * Bridge Message
+       01 msg-area.
+         copy DFHBRIHO.
+         03 msg-vectors   pic x(2000).
+      * Application mapset
+       copy dfh0cnam.
+      * Each output line in the application is made up of a number
+      * of fields for the account number.
+       01 first-line.
+         03 filler        pic x(1).
+         03 acct-no       pic x(5).
+         03 filler        pic x(3).
+         03 surname       pic x(5).
+         03 filler        pic x(9).
+         03 firstname     pic x(5).
+         03 filler        pic x(4).
+         03 mid-init      pic x(1).
+         03 filler        pic x(2).
+         03 titl          pic x(4).
+         03 filler        pic x(2).
+         03 address-1     pic x(14).
+         03 filler        pic x(12).
+         03 ac-status     pic x(2).
+         03 filler        pic x(4).
+         03 ac-limit      pic x(8).
+      *****************************************************************
+       Procedure Division using DFHEIBLK DFHCOMMAREA.
+      *****************************************************************
+       main-processing Section.
+           move 0 to error-returncode.
+      *
+      * Get storage for bridge message
+      *
+           EXEC CICS GETMAIN SET(msg-area-ptr)
+                     LENGTH(length of msg-area) END-EXEC.
+           set address of msg-area to msg-area-ptr.
+      *
+      * Allocate session
+      *
+           move length of brih     to output-len.
+           perform allocate-bridge-facility.
+           move length of msg-area to output-len.
+      *
+      * Either run a search session or a display account session
+      *
+           if srch-req
+              perform search-request
+           else
+              perform display-request
+           end-if.
+      *
+      * Delete session
+      *
+           move length of brih     to output-len.
+           perform delete-bridge-facility.
+           goback.
+
+      *****************************************************************
+      * Session to run a search request                               *
+      *****************************************************************
+       search-request section.
+      *
+      * Bring up menu
+      *
+           perform create-menu.
+           perform link3270.
+           perform interpret-menu.
+
+      *
+      * Search for name
+      *
+           perform create-search.
+           perform link3270.
+           perform interpret-search.
+           exit.
+
+      *****************************************************************
+      * Session to run a display account request.                     *
+      *****************************************************************
+       display-request section.
+      *
+      * Bring up menu
+      *
+           perform create-menu.
+           perform link3270.
+           perform interpret-menu.
+      *
+      * Display name
+      *
+           perform create-display.
+           perform link3270.
+           perform interpret-display.
+           exit.
+
+      *****************************************************************
+      * Create menu screen by running NACT with no imput              *
+      *****************************************************************
+       create-menu section.
+           perform create-brih.
+           exit.
+
+      *****************************************************************
+      * Interpret menu output map                                     *
+      *****************************************************************
+       interpret-menu section.
+           perform interpret-briv-send-map.
+           if briv-sm-map not = 'ACCTMNU '
+              perform log-output-message
+              move 1002 to error-returncode
+              goback
+           end-if.
+           exit.
+
+      *****************************************************************
+      * Create search request with input map                          *
+      *****************************************************************
+       create-search section.
+           perform create-brih.
+           perform create-briv-receive-map.
+
+           move surname             of srch-inputdata to snamemi
+           move length of surname   of srch-inputdata to snameml
+           move firstname           of srch-inputdata to fnamemi.
+           move length of firstname of srch-inputdata to fnameml.
+           exit.
+
+      *****************************************************************
+      * Interpret search output map                                   *
+      *****************************************************************
+       interpret-search section.
+           perform interpret-briv-send-map.
+           if briv-sm-map not = 'ACCTMNU '
+              perform log-output-message
+              move 1003 to error-returncode
+              goback
+           end-if.
+      *
+      * Address the application data structure (ADS)
+      *
+           set address of acctmnuo to
+               address of briv-output(briv-sm-data-offset:1).
+      *                                                            @01C
+      *
+      * Check for message indicating invalid search parameters
+      *
+           if msgmo not = low--value
+              perform log-output-message
+              move msgmo      to error-data
+              move 1005       to error-returncode
+              goback
+           end-if.
+      *
+      * Extract search output data from outbound message
+      *
+           set address of first-line to address of sumlnmo(1).
+           move acct-no   in first-line to acct-no   in srch-outputdata.
+           move surname   in first-line to surname   in srch-outputdata.
+           move firstname in first-line to firstname in srch-outputdata.
+           move mid-init  in first-line to mid-init  in srch-outputdata.
+           move titl      in first-line to titl      in srch-outputdata.
+           move address-1 in first-line to address-1 in srch-outputdata.
+           move ac-status in first-line to ac-status in srch-outputdata.
+           move ac-limit  in first-line to ac-limit  in srch-outputdata.
+           exit.
+
+      *****************************************************************
+      * Create display request with input map                         *
+      *****************************************************************
+       create-display section.
+           perform create-brih.
+           perform create-briv-receive-map.
+      *
+      * The receive map addresses the application data structure (ADS)
+      *
+           move req-type           of input-data     to reqmi.
+           move length of req-type of input-data     to reqml.
+           move acct-no            of disp-inputdata to acctmi.
+           move length of acct-no  of disp-inputdata to acctml.
+           exit.
+
+      *****************************************************************
+      * Interpret display input map                                   *
+      *****************************************************************
+       interpret-display section.
+           perform interpret-briv-send-map.
+           if briv-sm-map not = 'ACCTDTL '
+              perform log-output-message
+              move 1004 to error-returncode
+              goback
+           end-if.
+      *
+      * Address the application data structure (ADS)
+      *
+           add 1, briv-sm-data-offset giving ads-offset.
+           set address of acctdtlo to
+               address of briv-output(ads-offset:1).
+      *                                                            @01C
+
+           move acctdo   to acct-no    of disp-outputdata.
+           move snamedo  to surname    of disp-outputdata.
+           move ttldo    to titl       of disp-outputdata.
+           move fnamedo  to firstname  of disp-outputdata.
+           move mido     to mid-init   of disp-outputdata.
+           move teldo    to phone      of disp-outputdata.
+           move addr1do  to address-1  of disp-outputdata.
+           move addr2do  to address-2  of disp-outputdata.
+           move addr3do  to address-3  of disp-outputdata.
+           move cardsdo  to cards-issd of disp-outputdata.
+           move ccodedo  to c-code     of disp-outputdata.
+           move imodo    to issue-mon  of disp-outputdata.
+           move idaydo   to issue-day  of disp-outputdata.
+           move iyrdo    to issue-yr   of disp-outputdata.
+           move rsndo    to rsn-code   of disp-outputdata.
+           move apprdo   to appr-by    of disp-outputdata.
+           move auth1do  to auth-1     of disp-outputdata.
+           move auth2do  to auth-2     of disp-outputdata.
+           move auth3do  to auth-3     of disp-outputdata.
+           move auth4do  to auth-4     of disp-outputdata.
+           move scode1do to sp-code-1  of disp-outputdata.
+           move scode2do to sp-code-2  of disp-outputdata.
+           move scode3do to sp-code-3  of disp-outputdata.
+           move histtldo to history    of disp-outputdata.
+           move limitdo  to ac-limit   of disp-outputdata.
+           move statdo   to ac-status  of disp-outputdata.
+           exit.
+
+      *****************************************************************
+      * Set up BRIH                                                   *
+      *****************************************************************
+       create-brih section.
+           move brih-default to msg-area.
+           move 'NACT'       to brih-transactionid.
+           set brihadsd-no   to true.
+           move facility     to brih-facility.
+           move 300          to brih-facilitykeeptime.
+           move LOW-VALUES   to msg-vectors.
+           exit.
+
+      *****************************************************************
+      * Set up BRIV-RECEIVE-MAP with null input data                  *
+      *****************************************************************
+       create-briv-receive-map section.
+      *
+      * Add new vector at end of current message
+      *
+           set address of briv-in to address of msg-vectors.
+           move briv-receive-map-default to briv-in.
+           move 'DFH0MNA '               to briv-rm-mapset.
+           move 'ACCTMNU '               to briv-rm-map.
+           move '422'                    to briv-rm-cposn.
+      *
+      * Add application data structure (ADS) and set to nulls
+      *
+           move length of acctmnui       to briv-rm-data-len.
+           set  address of acctmnui      to address of briv-rm-data.
+           move low-values               to acctmnui.
+           add  briv-rm-data-len         to briv-input-vector-length.
+      *
+      * Add vector length to message length
+      *
+           add  briv-input-vector-length to brih-datalength.
+           exit.
+
+      *****************************************************************
+      * Validate that we have a SEND MAP vector for mapset DFH0MNA    *
+      *****************************************************************
+       interpret-briv-send-map section.
+           set address of briv-out to address of msg-vectors.
+
+           if not brivdsc-send-map
+              perform log-output-message
+              move 1000 to error-returncode
+              goback
+           end-if
+
+           if briv-sm-mapset not = 'DFH0MNA '
+              perform log-output-message
+              move 1001 to error-returncode
+              goback
+           end-if
+           exit.
+
+      *****************************************************************
+      * Allocate session and save facility                            *
+      *****************************************************************
+       allocate-bridge-facility section.
+           move brih-default            to msg-area
+           set  briht-allocate-facility to true
+           move 300                     to brih-facilitykeeptime
+           perform link3270
+           move brih-facility to facility
+           exit.
+
+      *****************************************************************
+      * Delete session                                                *
+      *****************************************************************
+       delete-bridge-facility section.
+           move brih-default            to msg-area
+           set  briht-delete-facility   to true
+           move facility                to brih-facility
+           perform link3270
+           exit.
+
+      *****************************************************************
+      * Call the Link3270 bridge                                      *
+      *****************************************************************
+       link3270 section.
+           move brih-datalength to input-len
+           EXEC CICS LINK PROGRAM('DFHL3270') COMMAREA(msg-area)
+                          LENGTH(output-len) DATALENGTH(input-len)
+                          END-EXEC.
+           if brih-returncode not = 0
+              move brih-returncode to error-returncode
+              move brih-reason     to error-reason
+              move brih-compcode   to error-compcode
+              move brih-abendcode  to error-abendcode
+              goback
+           end-if.
+           exit.
+      *****************************************************************
+      * Write message to TS queue BRCO                                *
+      *****************************************************************
+       log-output-message section.
+           EXEC CICS WRITEQ TS QUEUE('BRCO')
+                FROM(msg-area) LENGTH(output-len) END-EXEC.
+           exit.

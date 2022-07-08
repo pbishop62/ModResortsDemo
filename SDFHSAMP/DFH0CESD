@@ -1,0 +1,1103 @@
+      CBL CICS('COBOL3,SP')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CESD                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = CICS TS  Shutdown Assist Program           *
+      *                    (Sample COBOL Version)                     *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1995, 2013"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * TRANSACTION NAME = SDA2                                       *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      * The CICS shutdown assist transaction aims to remove two of    *
+      * the problems that can arise when shutting down CICS. These    *
+      * problems are stated below:                                    *
+      *                                                               *
+      * - For a normal shutdown, CICS waits for all running tasks to  *
+      *   finish before entering the second stage of shutdown.        *
+      *   Long-running or conversational transactions can cause an    *
+      *   unacceptable delay or can require operator intervention.    *
+      *   Work being done by a JVM server can cause an unacceptable   *
+      *   delay or require operator intervention so these are shut    *
+      *   down as well.                                               *
+      *                                                               *
+      * - For an immediate shutdown, CICS does not allow running      *
+      *   tasks to finish and so backout is not performed until       *
+      *   emergency restart. This can cause an unacceptable number    *
+      *   of units of work to be shunted with consequent retention    *
+      *   of locks and indoubts.                                      *
+      *                                                               *
+      * The SIT parameter SDTRAN specifies the transid of the         *
+      * shutdown assist transaction. This transaction is started      *
+      * during CICS normal or immediate shutdown processing, and its  *
+      * purpose is to allow control over the purging of long-running  *
+      * tasks. The default transid is CESD which invokes program      *
+      * DFHCESD. DFHCESD attempts to purge and backout long-running   *
+      * tasks using increasingly stronger techniques. It ensures      *
+      * that as many tasks as possible commit or backout cleanly,     *
+      * enabling CICS to shut down in a controlled manner.            *
+      *                                                               *
+      * This program is provided as a sample that the customer can    *
+      * modify as desired, and use as a replacement for DFHCESD.      *
+      * As supplied, it contains the exact same logic as DFHCESD.     *
+      * To use this program, the customer should:                     *
+      *                                                               *
+      * - Modify this program as desired                              *
+      * - In sample CSD group DFH$SDAP modify:                        *
+      *   - The definition for this program DFH0CESD if desired       *
+      *   - The definition for transaction SDA2 if desired            *
+      * - Ensure group DFH$SDAP is part of the startup CICS GRPLIST   *
+      * - Specify SDA2 on the SIT SDTRAN parameter at CICS startup    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      * DFH0CESD is intended to be invoked by a CICS shutdown assist  *
+      * transaction. It attempts to purge and backout long-running    *
+      * tasks ensuring that as many tasks as possible commit or       *
+      * backout cleanly. This enables CICS to shut down in a          *
+      * controlled manner. It may be modified as required by the      *
+      * customer.                                                     *
+      *                                                               *
+      * This purging of tasks involves several steps, each step using *
+      * a stronger purge technique and only being invoked if tasks    *
+      * refuse to disappear from the system. In order to do this,     *
+      * DFH0CESD samples the number of tasks present in the system.   *
+      * It only performs the purge operation, and moves on to the     *
+      * next step, if this samples number of tasks does not reduce    *
+      * over 8 samples (normal shutdown) or 4 samples (immediate      *
+      * shutdown). Each sample is achieved by DFH0CESD issuing a      *
+      * delayed EXEC CICS START for itself, passing the last sample   *
+      * count in a Temporary Storage queue record. The new invocation *
+      * of DFH0CESD takes a sample and compares this with the last    *
+      * sample from the TS queue record. It then decides whether to   *
+      * carry out the purge operation and move to the next step,      *
+      * or to remain on the current step.                             *
+      *                                                               *
+      * After its initial invocation by CICS, there are three steps   *
+      * that DFH0CESD moves through. Note that the last step does     *
+      * not cause the CICS shutdown assist transaction to run again,  *
+      * as CICS ensures that it only runs once.                       *
+      *                                                               *
+      * - Step 1. Normal purge is issued for all remaining tasks.     *
+      *           JVMSERVERs are disabled and work purged    @PI83585A*
+      * - Step 2. VTAM is force closed IRC & TCPIP are immclosed.     *
+      *           JVMSERVERs are forcepurged then killed     @PI83585A*
+      * - Step 3. CICS is shut down using PERFORM SHUT IMMEDIATE.     *
+      *                                                               *
+      * The following information is passed to DFH0CESD in a TS queue *
+      * record.                                                       *
+      *                                                               *
+      * - SDFN  PIC X(2)          Step to perform (00,01,02,03)       *
+      * - SDXN  PIC S9(7) COMP-3  Task number of task that started    *
+      *                           shutdown                            *
+      * - SDNT  PIC S9(8) COMP    Number of tasks in the system at    *
+      *                           last sample                         *
+      * - SDET  PIC S9(4) COMP    Number of samples giving the value  *
+      *                           in SDNT                             *
+      *                                                               *
+      * On the initial invocation SDFN is '00', SDNT and SDET are     *
+      * zero, and SDXN is set to the task number of the shutdown task.*
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *  $MOD(DFH0CESD),COMP(SAMPLES),PROD(CICS TS ):                 *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $L0= 651    510 950124 HDEEBD  : Create program               *
+      * $P1= M94127 510 950410 HD9ZSMH : Improve readbility           *
+      * $P3= M94918 510 951117 HD2TAHI : Abend if started by terminal *
+      * $P4= M96139 510 960101 HDEEBD  : Set default termid =????     *
+      * $P5= M18579 610 010221 HDFVGMB : Include TCPIP in sample shut *
+      * $P6= D03301 630 011127 HD9SHGP : Flush user journals          *
+      * $P7= D09579 640 041122 HD0PIHR : Message Lies Optimistically  *
+      *      R30290 680 110822 HDFXAB  : Increase maxtask to 2000     *
+      *      D60036 680 121008 HDFVGMB : Include JVMSERVER processing *
+      *      D60390 680 121008 HDFVGMB : JVMSERVER only in stage 3    *
+      *      D61612 680 130102 HDFVGMB : PM78626 Remove JVMSERVER code*
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0CESD.
+
+       ENVIRONMENT DIVISION.
+           EJECT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *****************************************************************
+      * The following declares constants that control the operation
+      * of DFH0CESD. They may be changed by the customer as required.
+      * - DELAY-SHUT is the time in seconds to wait between the
+      *   initial invocation and step 1 for a normal shutdown, thus
+      *   allowing tasks to complete normally if possible.
+      * - DELAY-NEXT is the time in seconds between each START of
+      *   SDA2.
+      * - EQUAL-NUM-TASKS-NORM gives the number of equal consecutive
+      *   samples that must be found before carrying out a purge
+      *   action and moving to the next step, for a normal shutdown.
+      * - EQUAL-NUM-TASKS-IMMED gives the number of equal consecutive
+      *   samples that must be found before carrying out a purge
+      *   action and moving to the next step, for immediate shutdown.
+      *****************************************************************
+       77  DELAY-SHUT                  PIC S9(8) COMP VALUE +120.
+       77  DELAY-NEXT                  PIC S9(8) COMP VALUE +2.
+       77  EQUAL-NUM-TASKS-NORM        PIC S9(4) COMP VALUE +8.
+       77  EQUAL-NUM-TASKS-IMMED       PIC S9(4) COMP VALUE +4.
+      *****************************************************************
+      * Various other constants.
+      * - INITIAL-CALL must not be changed as it is set by CICS.
+      *****************************************************************
+       77  INITIAL-CALL                PIC X(2) VALUE '00'.
+       77  STEP1                       PIC X(2) VALUE '01'.
+       77  STEP2                       PIC X(2) VALUE '02'.
+       77  STEP3                       PIC X(2) VALUE '03'.
+       77  NORMSHUT                    PIC X(10) VALUE 'NORMAL.   '.
+       77  IMMEDSHUT                   PIC X(10) VALUE 'IMMEDIATE.'.
+       77  NPURGE                      PIC X(19)
+                                       VALUE 'ATTEMPTING TO PURGE'.
+       77  APURGE                      PIC X(19)
+                                       VALUE 'ACTIVE:            '.
+       77  REQ-ID                      PIC X(8) VALUE 'DFHCESD '.
+       77  MAX-TASKS                   PIC S9(8) COMP VALUE +2000.
+       77  FCI-TERMINAL                PIC X(1)  VALUE X'01'.
+      *****************************************************************
+      * The format of the TS queue record passed to DFH0CESD.
+      * Refer to the prolog above for a description of each field.
+      *****************************************************************
+       01  SDARG.
+         03  SDFN                      PIC X(2).
+         03  SDXN                      PIC S9(7) COMP-3.
+         03  SDET                      PIC S9(4) COMP.
+         03  SDNT                      PIC S9(8) COMP.
+      *****************************************************************
+      * Various other variables.
+      *****************************************************************
+       77  RC                          PIC S9(8) COMP.
+       77  SHUTSTAT                    PIC S9(8) COMP.
+       77  NUM-TASKS                   PIC S9(8) COMP.
+       77  START-DELAY                 PIC S9(8) COMP.
+       77  TI                          PIC S9(4) COMP.
+       77  TI-REM                      PIC S9(4) COMP.
+       77  ERR                         PIC S9(4) COMP.
+       77  SDARGLEN                    PIC S9(4) COMP.
+       77  TASKNO                      PIC S9(7) COMP-3.
+       77  PSDINT                      PIC S9(7) COMP-3.
+       77  TASKLISTP                   USAGE IS POINTER.
+       77  TRANID                      PIC X(4).
+       77  TERMID                      PIC X(4).
+       77  USERID                      PIC X(8).
+       77  SDTYPE                      PIC X(10).
+       77  UOWID                       PIC X(16).
+       77  FCI                         PIC X(1).
+       77  PRINT-UOWID                 PIC X(16).
+       77  ERROR-TXT                   PIC X(40).
+       77  DFHLOG                      PIC X(8) VALUE 'DFHLOG  '.
+       77  DFHSHUNT                    PIC X(8) VALUE 'DFHSHUNT'.
+       77  JNAME                       PIC X(8).
+       77  JSTATUS                     PIC S9(8) COMP.
+       77  JTYPE                       PIC S9(8) COMP.
+       77  INQ-NEXT-RC                 PIC S9(8) COMP.
+       77  SERVERNAME                  PIC X(8) VALUE SPACES.
+       77  PURGETYPE                   PIC S9(8) COMP.
+      *****************************************************************
+      * Message declarations.
+      *****************************************************************
+       01  MSG-BUFFER.
+         03  MSG-PROG                  PIC X(8).
+         03  FILLER                    PIC X(1).
+         03  MSG-APPL                  PIC X(8).
+         03  FILLER                    PIC X(1).
+         03  MSG-TEXT                  PIC X(80).
+       77  MSG-LEN                     PIC S9(8) COMP.
+       77  MSG-RC                      PIC S9(8) COMP.
+
+       01  START-MSG-AUTO.
+         03  FILLER                    PIC X(28).
+         03  TRAN                      PIC X(4).
+         03  FILLER                    PIC X(23).
+         03  SHUT                      PIC X(10).
+         03  FILLER                    PIC X(15).
+       01  START-MSG.
+         03  FILLER  PIC X(28) VALUE 'SHUTDOWN ASSIST TRANSACTION '.
+         03  FILLER  PIC X(4)  VALUE 'xxxx'.
+         03  FILLER  PIC X(23) VALUE ' STARTING. SHUTDOWN IS '.
+         03  FILLER  PIC X(10) VALUE 'xxxxxxxxxx'.
+         03  FILLER  PIC X(15) VALUE SPACES.
+
+       01  COUNT-MSG-AUTO.
+         03  FILLER                    PIC X(14).
+         03  TASK                      PIC 9(4).
+         03  FILLER                    PIC X(27).
+         03  FILLER                    PIC X(35).
+       01  COUNT-MSG.
+         03  FILLER  PIC X(14) VALUE 'THERE ARE NOW '.
+         03  FILLER  PIC X(4)  VALUE '0000'.
+         03  FILLER  PIC X(27) VALUE ' TASKS STILL IN THE SYSTEM.'.
+         03  FILLER  PIC X(35) VALUE SPACES.
+
+       01  PURGE-MSG-AUTO.
+         03  TYP                       PIC X(19).
+         03  FILLER                    PIC X(8).
+         03  TRAN                      PIC X(4).
+         03  FILLER                    PIC X(9).
+         03  TERM                      PIC X(4).
+         03  FILLER                    PIC X(9).
+         03  USER                      PIC X(8).
+         03  FILLER                    PIC X(9).
+         03  TASK                      PIC 9(6).
+         03  FILLER                    PIC X(4).
+       01  PURGE-MSG.
+         03  FILLER  PIC X(19) VALUE 'xxxxxxxxxxxxxxxxxxx'.
+         03  FILLER  PIC X(8)  VALUE ' TRANID '.
+         03  FILLER  PIC X(4)  VALUE 'xxxx'.
+         03  FILLER  PIC X(9)  VALUE ', TERMID '.
+         03  FILLER  PIC X(4)  VALUE '????'.
+         03  FILLER  PIC X(9)  VALUE ', USERID '.
+         03  FILLER  PIC X(8)  VALUE 'xxxxxxxx'.
+         03  FILLER  PIC X(9)  VALUE ', TASKNO '.
+         03  FILLER  PIC X(6)  VALUE '000000'.
+         03  FILLER  PIC X(4)  VALUE SPACES.
+
+       01  LIST-MSG-AUTO.
+         03  FILLER                    PIC X(80).
+       01  LIST-MSG.
+         03  FILLER  PIC X(30) VALUE 'LIST OF SHUNTED UNITS OF WORK '.
+         03  FILLER  PIC X(22) VALUE 'IN THE SYSTEM FOLLOWS.'.
+         03  FILLER  PIC X(28) VALUE SPACES.
+
+       01  SHUNT-MSG-AUTO.
+         03  FILLER                    PIC X(20).
+         03  TRAN                      PIC X(4).
+         03  FILLER                    PIC X(9).
+         03  TERM                      PIC X(4).
+         03  FILLER                    PIC X(15).
+         03  UOW                       PIC X(16).
+         03  FILLER                    PIC X(12).
+       01  SHUNT-MSG.
+         03  FILLER  PIC X(20) VALUE 'SHUNTED TRANSACTION '.
+         03  FILLER  PIC X(4)  VALUE 'xxxx'.
+         03  FILLER  PIC X(9)  VALUE ', TERMID '.
+         03  FILLER  PIC X(4)  VALUE '????'.
+         03  FILLER  PIC X(15) VALUE ', UNIT OF WORK '.
+         03  FILLER  PIC X(16) VALUE 'xxxxxxxxxxxxxxxx'.
+         03  FILLER  PIC X(12) VALUE SPACES.
+
+       01  ERROR-MSG-AUTO.
+         03  FILLER                    PIC X(28).
+         03  TRAN                      PIC X(4).
+         03  FILLER                    PIC X(8).
+         03  TXT                       PIC X(40).
+       01  ERROR-MSG.
+         03  FILLER  PIC X(28) VALUE 'SHUTDOWN ASSIST TRANSACTION '.
+         03  FILLER  PIC X(4)  VALUE 'xxxx'.
+         03  FILLER  PIC X(8)  VALUE ' ERROR. '.
+         03  FILLER  PIC X(40) VALUE SPACES.
+
+       01  STEP-MSG-AUTO.
+         03  FILLER                    PIC X(21).
+         03  STEP                      PIC X(2).
+         03  FILLER                    PIC X(57).
+       01  STEP-MSG.
+         03  FILLER  PIC X(21) VALUE 'SHUTDOWN ASSIST STEP '.
+         03  FILLER  PIC X(2)  VALUE 'xx'.
+         03  FILLER  PIC X(57) VALUE SPACES.
+      *****************************************************************
+      * Conversion declarations
+      *****************************************************************
+       01  C2X-WS.
+         03  C2X-STRIN                 PIC X(40).
+         03  C2X-STROUT                PIC X(80).
+         03  C2X-LENIN                 PIC S9(4) COMP-4.
+         03  C2X-POSIN                 PIC S9(4) COMP-4.
+         03  C2X-POSOUT                PIC S9(4) COMP-4.
+         03  C2X-QUOT                  PIC S9(4) COMP-4.
+         03  C2X-MOD                   PIC S9(4) COMP-4.
+         03  C2X-NUM                   PIC S9(4) COMP-4.
+         03  FILLER                    REDEFINES C2X-NUM.
+           05  FILLER                  PIC X.
+           05  C2X-CHAR                PIC X.
+       77  C2X-HEXCODE                 PIC X(16)
+           VALUE '0123456789ABCDEF'.
+
+       LINKAGE SECTION.
+      *****************************************************************
+      * Storage for task list.
+      *****************************************************************
+       01  TASKLIST.
+         03  TASKL                     PIC S9(7) COMP-3
+             OCCURS 2000 TIMES DEPENDING ON NUM-TASKS.
+
+       EJECT.
+       PROCEDURE DIVISION USING DFHEIBLK.
+      *****************************************************************
+      * DFH0CESD mainline code.
+      *****************************************************************
+
+      *****************************************************************
+      * Obtain the program name and CICS applid for messages.
+      *****************************************************************
+           MOVE SPACES TO MSG-BUFFER.
+           MOVE LENGTH OF MSG-BUFFER TO MSG-LEN.
+           EXEC CICS ASSIGN
+                PROGRAM(MSG-PROG)
+                APPLID(MSG-APPL)
+                FCI(FCI)
+                RESP(RC)
+           END-EXEC.
+      *****************************************************************
+      * Abend if we were started by terminal input
+      *****************************************************************
+           IF FCI EQUAL FCI-TERMINAL THEN
+             EXEC CICS ABEND
+                  ABCODE('ERRS')
+             END-EXEC.
+      *****************************************************************
+      * Obtain the type of CICS shutdown (normal or immediate).
+      *****************************************************************
+           EXEC CICS INQUIRE SYSTEM
+                SHUTSTATUS(SHUTSTAT)
+                RESP(RC)
+           END-EXEC.
+           IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+             MOVE 2 TO ERR
+             PERFORM ERRORC
+           END-IF.
+           EVALUATE SHUTSTAT
+             WHEN DFHVALUE(NOTAPPLIC)
+      *****************************************************************
+      * If CICS is not shutting down then just return quietly.
+      * The START command may have been recovered, and the shutdown
+      * transaction restarted on the next CICS run.
+      *****************************************************************
+               EXEC CICS RETURN
+               END-EXEC
+             WHEN DFHVALUE(CONTROLSHUT)
+               MOVE NORMSHUT TO SDTYPE
+             WHEN OTHER
+               MOVE IMMEDSHUT TO SDTYPE
+           END-EVALUATE.
+      *****************************************************************
+      * Issue CICS ENQ to ensure only one copy of DFH$CESD is running
+      *****************************************************************
+           EXEC CICS ENQ LUW
+                RESOURCE(REQ-ID)
+                LENGTH(LENGTH OF REQ-ID)
+                RESP(RC)
+           END-EXEC.
+      *****************************************************************
+      * Retrieve TS queue record passed to this transaction via EXEC
+      * CICS START TRANSID() FROM().
+      *****************************************************************
+           MOVE LENGTH OF SDARG TO SDARGLEN.
+           EXEC CICS RETRIEVE
+                INTO(SDARG)
+                RESP(RC)
+           END-EXEC.
+           IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+             MOVE 1 TO ERR
+             PERFORM ERRORC
+           END-IF.
+           MOVE LENGTH OF SDARG TO SDARGLEN.
+      *****************************************************************
+      * Inquire on the number of tasks in the system.
+      *****************************************************************
+           EXEC CICS INQUIRE TASK LIST
+                LISTSIZE(NUM-TASKS)
+                SET(TASKLISTP)
+                RESP(RC)
+           END-EXEC.
+           IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+             MOVE 3 TO ERR
+             PERFORM ERRORC
+           END-IF.
+      *****************************************************************
+      * Select on step and call the appropriate routine.
+      * Message STEP-MSG could be issued here if desired.
+      *****************************************************************
+      *    MOVE STEP-MSG TO STEP-MSG-AUTO.
+      *    MOVE SDFN TO STEP OF STEP-MSG-AUTO.
+      *    MOVE STEP-MSG-AUTO TO MSG-TEXT OF MSG-BUFFER.
+      *    PERFORM ISSUE-MESSAGE.
+           EVALUATE SDFN
+             WHEN INITIAL-CALL
+               PERFORM INITIAL-ROUTINE
+             WHEN STEP1
+               PERFORM STEP1-ROUTINE
+             WHEN STEP2
+               PERFORM STEP2-ROUTINE
+             WHEN STEP3
+               PERFORM STEP3-ROUTINE
+             WHEN OTHER
+               MOVE 5 TO ERR
+               PERFORM ERRORC
+           END-EVALUATE.
+      *****************************************************************
+      * End the program and return.
+      *****************************************************************
+           EXEC CICS RETURN
+           END-EXEC.
+           GOBACK.
+
+      *****************************************************************
+      * Procedure to perform initial invocation processing.
+      *
+      *   - Display shunted units of work
+      * - EXEC CICS START ourselves again specifying step 1
+      *****************************************************************
+       INITIAL-ROUTINE.
+      *****************************************************************
+      * Issue an initial startup message indicating shutdown type.
+      *****************************************************************
+           MOVE START-MSG TO START-MSG-AUTO.
+           MOVE SDTYPE TO SHUT OF START-MSG-AUTO.
+           MOVE EIBTRNID TO TRAN OF START-MSG-AUTO.
+           MOVE START-MSG-AUTO TO MSG-TEXT OF MSG-BUFFER.
+           PERFORM ISSUE-MESSAGE.
+      *****************************************************************
+      * Browse and display all shunted units of work.
+      *****************************************************************
+           PERFORM INQ-UOWS
+      *****************************************************************
+      * Move straight to step 1.
+      *****************************************************************
+           MOVE STEP1 TO SDFN.
+           MOVE MAX-TASKS TO SDNT.
+           MOVE ZERO TO SDET.
+           MOVE EIBTASKN TO SDXN.
+      *****************************************************************
+      * Issue the next START for our own transid, passing the updated
+      * TS queue record. Note that we delay for 120 seconds for a
+      * normal shutdown, to allow tasks to terminate normally.
+      *****************************************************************
+           IF SDTYPE EQUAL NORMSHUT THEN
+             MOVE DELAY-SHUT TO START-DELAY
+           ELSE
+             MOVE DELAY-NEXT TO START-DELAY
+           END-IF.
+           EXEC CICS START
+                TRANSID(EIBTRNID)
+                FROM(SDARG)
+                LENGTH(SDARGLEN)
+                AFTER SECONDS(START-DELAY)
+                REQID(REQ-ID)
+                RESP(RC)
+           END-EXEC.
+           IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+             MOVE 6 TO ERR
+             PERFORM ERRORC
+           END-IF.
+
+      *****************************************************************
+      * Procedure to perform processing for step 1.
+      *
+      * - Check if we have finished step 1 and need to move to step 2
+      * - EXEC CICS START ourselves again specifying step 1 or step 2
+      * - If finished step 1 then
+      *   - Close transaction dump data set
+      *   - Normal purge each still running task
+      *   - Tell JVMSERVERs to purge their work
+      *   - Display shunted units of work
+      *****************************************************************
+       STEP1-ROUTINE.
+      *****************************************************************
+      * Check if the sample count has reduced or is still the same.
+      * If we have taken 8 samples (normal shutdown) or 4 samples
+      * (immediate shutdown) without reduction then we will perform
+      * the step 1 purging actions and move to step 2. Otherwise we
+      * will remain on step 1.
+      *****************************************************************
+           PERFORM CHECK-SAMPLE-COUNT.
+           IF (SDTYPE EQUAL NORMSHUT AND
+               SDET NOT LESS THAN EQUAL-NUM-TASKS-NORM) OR
+              (SDTYPE EQUAL IMMEDSHUT AND
+               SDET NOT LESS THAN EQUAL-NUM-TASKS-IMMED) THEN
+             MOVE STEP2 TO SDFN
+             MOVE ZERO TO SDET
+           END-IF.
+      *****************************************************************
+      * Issue the next START for our own transid, passing the updated
+      * TS queue record.
+      *****************************************************************
+           MOVE DELAY-NEXT TO START-DELAY.
+           EXEC CICS START
+                TRANSID(EIBTRNID)
+                FROM(SDARG)
+                LENGTH(SDARGLEN)
+                AFTER SECONDS(START-DELAY)
+                REQID(REQ-ID)
+                RESP(RC)
+           END-EXEC.
+           IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+             MOVE 6 TO ERR
+             PERFORM ERRORC
+           END-IF.
+      *****************************************************************
+      * If finished step 1 then perform the step 1 purging actions.
+      *****************************************************************
+           IF SDFN EQUAL STEP2 THEN
+      *****************************************************************
+      * Close transaction dump dataset to prevent unwanted dumps
+      * from being taken when tasks are purged.
+      *****************************************************************
+             EXEC CICS SET DUMPDS
+                  CLOSED
+                  RESP(RC)
+             END-EXEC
+             IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+               MOVE 10 TO ERR
+               PERFORM ERRORC
+             END-IF
+      *****************************************************************
+      * For each task in the in the list of running tasks, purge it
+      * if it is still running.
+      *****************************************************************
+             PERFORM PURGE-TASKS
+      *****************************************************************
+      * Tell JVMSERVERs to purge their work.                  @PI83585A
+      *****************************************************************
+             MOVE DFHVALUE(PURGE) TO PURGETYPE
+             PERFORM SET-JVMSERVERS
+      *****************************************************************
+      * Browse and display all shunted units of work.
+      *****************************************************************
+             PERFORM INQ-UOWS
+           END-IF.
+
+      *****************************************************************
+      * Procedure to perform processing for step 2.
+      *
+      * - Check if we have finished step 2 and need to move to step 3
+      * - EXEC CICS START ourselves again specifying step 2 or step 3
+      * - If finished step 2 then
+      *   - If normal shutdown or no persistent sessions
+      *     - Force close VTAM
+      *   - Close IRC immediately
+      *   - Close TCPIP immediately
+      *   - Display shunted units of work
+      *****************************************************************
+       STEP2-ROUTINE.
+      *****************************************************************
+      * Check if the sample count has reduced or is still the same.
+      * If we have taken 8 samples (normal shutdown) or 4 samples
+      * (immediate shutdown) without reduction then we will perform
+      * the step 2 purging actions and move to step 3. Otherwise we
+      * will remain on step 2.
+      *****************************************************************
+           PERFORM CHECK-SAMPLE-COUNT.
+           IF (SDTYPE EQUAL NORMSHUT AND
+               SDET NOT LESS THAN EQUAL-NUM-TASKS-NORM) OR
+              (SDTYPE EQUAL IMMEDSHUT AND
+               SDET NOT LESS THAN EQUAL-NUM-TASKS-IMMED) THEN
+             MOVE STEP3 TO SDFN
+             MOVE ZERO TO SDET
+           END-IF.
+      *****************************************************************
+      * Issue the next START for our own transid, passing the updated
+      * TS queue record.
+      *****************************************************************
+           MOVE DELAY-NEXT TO START-DELAY.
+           EXEC CICS START
+                TRANSID(EIBTRNID)
+                FROM(SDARG)
+                LENGTH(SDARGLEN)
+                AFTER SECONDS(START-DELAY)
+                REQID(REQ-ID)
+                RESP(RC)
+           END-EXEC.
+           IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+             MOVE 6 TO ERR
+             PERFORM ERRORC
+           END-IF.
+      *****************************************************************
+      * If finished step 2 then perform the step 2 purging actions.
+      *****************************************************************
+           IF SDFN EQUAL STEP3 THEN
+      *****************************************************************
+      * Check if CICS is running with persistent sessions.
+      *****************************************************************
+             EXEC CICS INQUIRE VTAM
+                  PSDINTERVAL(PSDINT)
+                  RESP(RC)
+             END-EXEC
+             IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+               MOVE 7 TO ERR
+               PERFORM ERRORC
+             END-IF
+      *****************************************************************
+      * If normal shutdown, or CICS is not running with persistent
+      * sessions, force close VTAM. This will abend any task waiting
+      * for input from VTAM, and any task that subsequently accesses
+      * a VTAM session. Otherwise take no action.
+      *****************************************************************
+             IF PSDINT EQUAL ZERO OR
+                SDTYPE EQUAL NORMSHUT THEN
+               EXEC CICS SET VTAM
+                    FORCECLOSE
+                    RESP(RC)
+               END-EXEC
+               IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+                 MOVE 7 TO ERR
+                 PERFORM ERRORC
+               END-IF
+             END-IF
+      *****************************************************************
+      * Close Inter Region Communication immediately.
+      * This will abend any task waiting for input from IRC, and any
+      * task that subsequently accesses an IRC session. It also
+      * closes any open EXCI pipes that may have prevented shutdown
+      * from completing.
+      *****************************************************************
+             EXEC CICS SET IRC
+                  IMMCLOSE
+                  RESP(RC)
+             END-EXEC
+             IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+               MOVE 9 TO ERR
+               PERFORM ERRORC
+             END-IF
+      *****************************************************************
+      * Close TCPIP services immediately
+      * This will abend any task waiting for input from TCPIP and any
+      * task that subsequently accesses TCPIP.
+      *****************************************************************
+             EXEC CICS SET TCPIP
+                  IMMCLOSE
+                  RESP(RC)
+             END-EXEC
+             IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+               MOVE 11 TO ERR
+               PERFORM ERRORC
+             END-IF
+      *****************************************************************
+      * Tell JVMSERVERs to forcepurge their work.             @PI83585A
+      *****************************************************************
+             MOVE DFHVALUE(FORCEPURGE) TO PURGETYPE
+             PERFORM SET-JVMSERVERS
+      *****************************************************************
+      * Now immediately tell JVMSERVERs to kill their work.   @PI83585A
+      * FORCEPURGE is required prior to KILL, but won't do    @PI83585A
+      * extra on top of PURGE as all CICS tasks have already  @PI83585A
+      * terminated by this point.                             @PI83585A
+      *****************************************************************
+             MOVE DFHVALUE(KILL) TO PURGETYPE
+             PERFORM SET-JVMSERVERS
+      *****************************************************************
+      * Browse and display all shunted units of work.
+      *****************************************************************
+             PERFORM INQ-UOWS
+           END-IF.
+
+      *****************************************************************
+      * Procedure to perform processing for step 3.
+      *
+      * - Check if we have finished step 3
+      * - If finished step 3 then
+      *   - Display active tasks that are about to die
+      *   - Display shunted units of work
+      *   - Issue an immediate shutdown of CICS
+      *   - Final end of SDA2
+      * - Else
+      *   - EXEC CICS START ourselves again specifying step 3
+      *****************************************************************
+       STEP3-ROUTINE.
+      *****************************************************************
+      * Check if the sample count has reduced or is still the same.
+      * If we have taken 8 samples (normal shutdown) or 4 samples
+      * (immediate shutdown) without reduction then we will perform
+      * the step 3 purging actions and end the shutdown assist
+      * transaction. Otherwise we will remain on step 3.
+      *****************************************************************
+           PERFORM CHECK-SAMPLE-COUNT.
+           IF (SDTYPE EQUAL NORMSHUT AND
+               SDET NOT LESS THAN EQUAL-NUM-TASKS-NORM) OR
+              (SDTYPE EQUAL IMMEDSHUT AND
+               SDET NOT LESS THAN EQUAL-NUM-TASKS-IMMED) THEN
+      *****************************************************************
+      * Finished step 3 so perform the step 3 purging actions.
+      * For each task in the list of running tasks, issue a message
+      * to indicate it is about to die.
+      *****************************************************************
+             PERFORM SHOW-TASKS
+      *****************************************************************
+      * Browse and display all shunted units of work.
+      *****************************************************************
+             PERFORM INQ-UOWS
+      *****************************************************************
+      * Flush all active user journals
+      *****************************************************************
+             PERFORM FLUSH-JOURNALS
+      *****************************************************************
+      * Terminate CICS by performing an immediate shutdown.
+      * This will NOT cause SDA2 to run again as CICS only permits
+      * one use of the shutdown assist transaction mechanism.
+      * This is the final end of transaction SDA2.
+      *****************************************************************
+             EXEC CICS PERFORM SHUTDOWN
+                  IMMEDIATE
+                  RESP(RC)
+             END-EXEC
+             IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+               MOVE 4 TO ERR
+               PERFORM ERRORC
+             END-IF
+           ELSE
+      *****************************************************************
+      * We have not finished step 3 yet.
+      * Issue the next START for our own transid, passing the updated
+      * TS queue record.
+      *****************************************************************
+             MOVE DELAY-NEXT TO START-DELAY
+             EXEC CICS START
+                  TRANSID(EIBTRNID)
+                  FROM(SDARG)
+                  LENGTH(SDARGLEN)
+                  AFTER SECONDS(START-DELAY)
+                REQID(REQ-ID)
+                  RESP(RC)
+             END-EXEC
+             IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+               MOVE 6 TO ERR
+               PERFORM ERRORC
+             END-IF
+           END-IF.
+
+      *****************************************************************
+      * Procedure to issue a message for each task still in the
+      * system saying it is about to die.
+      * We ignore ourselves and the task that issued the shutdown.
+      *****************************************************************
+       SHOW-TASKS.
+           MOVE ZERO TO TI.
+           PERFORM WITH TEST BEFORE UNTIL TI EQUAL NUM-TASKS
+             ADD 1 TO TI
+             SET ADDRESS OF TASKLIST TO TASKLISTP
+             MOVE TASKL(TI) TO TASKNO
+             EXEC CICS INQUIRE TASK(TASKNO)
+                  TRANSACTION(TRANID)
+                  FACILITY(TERMID)
+                  USERID(USERID)
+                  RESP(RC)
+             END-EXEC
+             IF RC EQUAL DFHRESP(NORMAL) AND
+                TRANID NOT EQUAL EIBTRNID AND
+                TASKNO NOT EQUAL SDXN THEN
+               MOVE PURGE-MSG TO PURGE-MSG-AUTO
+               MOVE APURGE TO TYP OF PURGE-MSG-AUTO
+               MOVE TRANID TO TRAN OF PURGE-MSG-AUTO
+               IF TERMID NOT EQUAL '    ' THEN
+                 MOVE TERMID TO TERM OF PURGE-MSG-AUTO
+               END-IF
+               MOVE USERID TO USER OF PURGE-MSG-AUTO
+               MOVE TASKNO TO TASK OF PURGE-MSG-AUTO
+               MOVE PURGE-MSG-AUTO TO MSG-TEXT OF MSG-BUFFER
+               PERFORM ISSUE-MESSAGE
+             END-IF
+           END-PERFORM.
+
+      *****************************************************************
+      * Procedure to purge each task still in the system.
+      * Also issue a purge message for each task.
+      * We do not purge ourselves or the task that issued the shutdown.
+      * Any error from the purge is ignored.
+      *****************************************************************
+       PURGE-TASKS.
+           MOVE ZERO TO TI.
+           PERFORM WITH TEST BEFORE UNTIL TI EQUAL NUM-TASKS
+             ADD 1 TO TI
+             DIVIDE TI BY 128 GIVING ERR REMAINDER TI-REM
+             IF TI-REM EQUAL ZERO THEN
+      * CICS SUSPEND is issued every 128 times round
+      * the loop to reset the CICS RUNAWAY timer!
+           EXEC CICS SUSPEND
+                RESP(RC)
+             END-EXEC
+             END-IF
+             SET ADDRESS OF TASKLIST TO TASKLISTP
+             MOVE TASKL(TI) TO TASKNO
+             EXEC CICS INQUIRE TASK(TASKNO)
+                  TRANSACTION(TRANID)
+                  FACILITY(TERMID)
+                  USERID(USERID)
+                  RESP(RC)
+             END-EXEC
+             IF RC EQUAL DFHRESP(NORMAL) AND
+                TRANID NOT EQUAL EIBTRNID AND
+                TASKNO NOT EQUAL SDXN THEN
+               MOVE PURGE-MSG TO PURGE-MSG-AUTO
+               MOVE NPURGE TO TYP OF PURGE-MSG-AUTO
+               MOVE TRANID TO TRAN OF PURGE-MSG-AUTO
+               IF TERMID NOT EQUAL '    ' THEN
+                 MOVE TERMID TO TERM OF PURGE-MSG-AUTO
+               END-IF
+               MOVE USERID TO USER OF PURGE-MSG-AUTO
+               MOVE TASKNO TO TASK OF PURGE-MSG-AUTO
+               MOVE PURGE-MSG-AUTO TO MSG-TEXT OF MSG-BUFFER
+               PERFORM ISSUE-MESSAGE
+               EXEC CICS SET TASK(TASKNO)
+                    PURGE
+                    RESP(RC)
+                    END-EXEC
+             END-IF
+           END-PERFORM.
+
+      *****************************************************************
+      * Procedure to browse and display all shunted units of work.
+      *****************************************************************
+       INQ-UOWS.
+      *****************************************************************
+      * Start browse of shunted UOWs
+      *****************************************************************
+           EXEC CICS INQUIRE UOW
+                START
+                SHUNTED
+                RESP(RC)
+           END-EXEC.
+           IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+             MOVE 8 TO ERR
+             PERFORM ERRORC
+           END-IF.
+      *****************************************************************
+      * Issue CICS SUSPEND to reset the CICS RUNAWAY timer
+      *****************************************************************
+           EXEC CICS SUSPEND
+                RESP(RC)
+             END-EXEC
+      *****************************************************************
+      * Get and display each shunted UOW in turn
+      *****************************************************************
+           PERFORM NEXT-UOW WITH TEST BEFORE
+             UNTIL RC NOT EQUAL DFHRESP(NORMAL).
+      *****************************************************************
+      * End browse of shunted UOWs
+      *****************************************************************
+           EXEC CICS INQUIRE UOW
+                END
+                RESP(RC)
+           END-EXEC.
+           IF RC NOT EQUAL DFHRESP(NORMAL) THEN
+             MOVE 8 TO ERR
+             PERFORM ERRORC
+           END-IF.
+
+      *****************************************************************
+      * Procedure to issue a message for each shunted UOW.
+      *****************************************************************
+       NEXT-UOW.
+      *****************************************************************
+      * Get first shunted UOW
+      *****************************************************************
+           EXEC CICS INQUIRE UOW(UOWID)
+                NEXT
+                TRANSID(TRANID)
+                TERMID(TERMID)
+                RESP(RC)
+           END-EXEC.
+           IF RC EQUAL DFHRESP(NORMAL) THEN
+             MOVE LIST-MSG TO LIST-MSG-AUTO
+             MOVE LIST-MSG-AUTO TO MSG-TEXT OF MSG-BUFFER
+             PERFORM ISSUE-MESSAGE
+           END-IF.
+           PERFORM WITH TEST BEFORE
+             UNTIL RC NOT EQUAL DFHRESP(NORMAL)
+      *****************************************************************
+      * Write a message for each shunted UOW.
+      * Note: A UOW is 16 characters long but only the first 8 are
+      * used by CICS/ESA. The last 8 are zeros and may be ignored.
+      *****************************************************************
+             MOVE SHUNT-MSG TO SHUNT-MSG-AUTO
+             MOVE TRANID TO TRAN OF SHUNT-MSG-AUTO
+             IF TERMID NOT EQUAL '    ' THEN
+               MOVE TERMID TO TERM OF SHUNT-MSG-AUTO
+             END-IF
+             MOVE 8 TO C2X-LENIN
+             MOVE UOWID TO C2X-STRIN
+             PERFORM C2X
+             MOVE C2X-STROUT(1:16) TO UOW OF SHUNT-MSG-AUTO
+             MOVE SHUNT-MSG-AUTO TO MSG-TEXT OF MSG-BUFFER
+             PERFORM ISSUE-MESSAGE
+      *****************************************************************
+      * Get next shunted UOW.
+      *****************************************************************
+             EXEC CICS INQUIRE UOW(UOWID)
+                  NEXT
+                  TRANSID(TRANID)
+                  TERMID(TERMID)
+                  RESP(RC)
+             END-EXEC
+           END-PERFORM.
+
+      *****************************************************************
+      * Procedure to convert input to printable hexadecimal.
+      *****************************************************************
+       C2X.
+           MOVE SPACES TO C2X-STROUT.
+           PERFORM WITH TEST BEFORE
+             VARYING C2X-POSIN FROM 1 BY 1
+             UNTIL C2X-POSIN GREATER THAN C2X-LENIN
+             MOVE ZERO TO C2X-NUM
+             MOVE C2X-STRIN(C2X-POSIN:1) TO C2X-CHAR
+             DIVIDE C2X-NUM BY 16 GIVING C2X-QUOT REMAINDER C2X-MOD
+             ADD 1 TO C2X-QUOT C2X-MOD
+             MULTIPLY C2X-POSIN BY 2 GIVING C2X-POSOUT
+             MOVE C2X-HEXCODE(C2X-MOD:1) TO C2X-STROUT(C2X-POSOUT:1)
+             SUBTRACT 1 FROM C2X-POSOUT
+             MOVE C2X-HEXCODE(C2X-QUOT:1) TO C2X-STROUT(C2X-POSOUT:1)
+           END-PERFORM.
+
+      *****************************************************************
+      * Procedure to flush buffers of all active user journals
+      *****************************************************************
+       FLUSH-JOURNALS.
+           EXEC CICS INQUIRE JOURNALNAME
+                START
+                RESP(RC)
+           END-EXEC
+           IF RC EQUAL DFHRESP(NORMAL) THEN
+             PERFORM WITH TEST AFTER
+               UNTIL INQ-NEXT-RC NOT EQUAL DFHRESP(NORMAL)
+               EXEC CICS INQUIRE NEXT
+                    JOURNALNAME(JNAME)
+                    STATUS(JSTATUS)
+                    TYPE(JTYPE)
+                    RESP(INQ-NEXT-RC)
+               END-EXEC
+               IF INQ-NEXT-RC EQUAL DFHRESP(NORMAL) THEN
+                 IF (JNAME NOT EQUAL DFHLOG
+                     AND JNAME NOT EQUAL DFHSHUNT
+                     AND JSTATUS EQUAL DFHVALUE(ENABLED)
+                     AND JTYPE EQUAL DFHVALUE(MVS)) THEN
+                   EXEC CICS SET
+                        JOURNALNAME(JNAME)
+                        FLUSH
+                        RESP(RC)
+                   END-EXEC
+                 END-IF
+               END-IF
+             END-PERFORM
+             EXEC CICS INQUIRE JOURNALNAME
+                  END
+                  RESP(RC)
+             END-EXEC
+           END-IF.
+
+      *****************************************************************
+      * Procedure to issue an error message.
+      *****************************************************************
+       ERRORC.
+           MOVE SPACES TO ERROR-TXT.
+           EVALUATE ERR
+             WHEN (1)   MOVE 'RETRIEVE FAILURE.' TO ERROR-TXT
+             WHEN (2)   MOVE 'INQ SYSTEM FAILURE.' TO ERROR-TXT
+             WHEN (3)   MOVE 'INQ TASK LIST FAILURE.' TO ERROR-TXT
+             WHEN (4)   MOVE 'PERFORM SHUT FAILURE.' TO ERROR-TXT
+             WHEN (5)   MOVE 'UNKNOWN SHUT ASSIST STEP.' TO ERROR-TXT
+             WHEN (6)   MOVE 'START TRANSID FAILURE' TO ERROR-TXT
+             WHEN (7)   MOVE 'SET VTAM FAILURE.' TO ERROR-TXT
+             WHEN (8)   MOVE 'INQ UOW START/END FAILURE.' TO ERROR-TXT
+             WHEN (9)   MOVE 'SET IRC FAILURE.' TO ERROR-TXT
+             WHEN (10)  MOVE 'SET DUMPDS FAILURE.' TO ERROR-TXT
+             WHEN (11)  MOVE 'SET TCPIP FAILURE.' TO ERROR-TXT
+             WHEN (12)  MOVE 'INQ JVMSERVER START FAILURE.' TO ERROR-TXT
+             WHEN OTHER MOVE 'UNKNOWN ERROR.' TO ERROR-TXT
+           END-EVALUATE.
+      *****************************************************************
+      * Write an error message and terminate CICS.
+      *****************************************************************
+           MOVE ERROR-MSG TO ERROR-MSG-AUTO.
+           MOVE EIBTRNID TO TRAN OF ERROR-MSG-AUTO.
+           MOVE ERROR-TXT TO TXT OF ERROR-MSG-AUTO.
+           MOVE ERROR-MSG-AUTO TO MSG-TEXT OF MSG-BUFFER.
+           PERFORM ISSUE-MESSAGE.
+           EXEC CICS RETURN
+           END-EXEC.
+
+      *****************************************************************
+      * Procedure to check if the latest sample of tasks in the
+      * system is the same as the previous sample.
+      * - If it is less then reset the number of equal samples to
+      *   zero, as our purging actions are having an effect,
+      *   and issue a message.
+      * - If it is the same or greater then increment the number
+      *   of equal samples, as our purging actions are not yet
+      *   working.
+      *****************************************************************
+       CHECK-SAMPLE-COUNT.
+           IF NUM-TASKS LESS THAN SDNT THEN
+             MOVE ZERO TO SDET
+             MOVE NUM-TASKS TO SDNT
+             MOVE COUNT-MSG TO COUNT-MSG-AUTO
+             MOVE NUM-TASKS TO TASK OF COUNT-MSG-AUTO
+             MOVE COUNT-MSG-AUTO TO MSG-TEXT OF MSG-BUFFER
+             PERFORM ISSUE-MESSAGE
+           ELSE
+             ADD 1 TO SDET
+           END-IF.
+
+      *****************************************************************
+      * Procedure to issue a message to the console.
+      *****************************************************************
+       ISSUE-MESSAGE.
+           EXEC CICS WRITE OPERATOR
+                TEXT(MSG-BUFFER)
+                TEXTLENGTH(MSG-LEN)
+                RESP(MSG-RC)
+           END-EXEC.
+      *
+       SET-JVMSERVERS.
+      ***************************************************************
+      * Procedure to loop through the JVMSERVERs disabling them
+      * and setting purgetype until the END condition is raised
+      * Errors on the set and INQUIRE END are ignored.      @PI83585A
+      ***************************************************************
+           EXEC CICS INQUIRE JVMSERVER
+                START
+                RESP(RC)
+           END-EXEC.
+           IF RC NOT EQUAL DFHRESP(NORMAL)
+             MOVE 12    TO ERR
+             PERFORM ERRORC
+           END-IF.
+           EXEC CICS INQUIRE JVMSERVER(SERVERNAME)
+                NEXT
+                RESP(RC)
+           END-EXEC.
+      *
+           PERFORM UNTIL RC NOT EQUAL DFHRESP(NORMAL)
+               EXEC CICS SET JVMSERVER(SERVERNAME)
+                    DISABLED
+                    PURGETYPE(PURGETYPE)
+                    RESP(RC)
+               END-EXEC
+               EXEC CICS INQUIRE JVMSERVER(SERVERNAME)
+                    NEXT
+                    RESP(RC)
+               END-EXEC
+           END-PERFORM.
+      *
+           EXEC CICS INQUIRE JVMSERVER
+                END
+                RESP(RC)
+           END-EXEC.

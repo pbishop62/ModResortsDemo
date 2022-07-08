@@ -1,0 +1,1310 @@
+       PROCESS CICS('COBOL3,APOST,SP')
+       PROCESS APOST TRUNC(BIN) NOSSRANGE
+       Identification Division.
+       Program-id. DFH0CBRE
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0CBRE                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Sample Bridge exit routine                 *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1997, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      * The sample bridge exit is responsible for obtaining the       *
+      * data used to run a transaction in a bridge environment,       *
+      * and returning any output data to the end user.                *
+      *                                                               *
+      * Data is obtained in two ways:                                 *
+      *                                                               *
+      * 1) From the bridge monitor via the BRDATA parameter           *
+      *    This non recoverable data is used to tell the bridge exit  *
+      *    a) The identify of the message queue(s)                    *
+      *    b) The position of the record on the message queue         *
+      *    c) A token representing a reused bridge facility.          *
+      *                                                               *
+      *    In the sample, the format of the BRDATA is the BRSD.       *
+      *                                                               *
+      * 2) From a message queue                                       *
+      *    The input message queue may be recoverable.                *
+      *    The output message queue may be recoverable except when    *
+      *    writing a message to say the transaction has abended.      *
+      *    In this case the message queue must be non-recoverable.    *
+      *                                                               *
+      * In the sample, the format of the message is a message         *
+      * header (msg-hdr) followed by data used by the formatter.      *
+      *                                                               *
+      * This sample uses a MQCIH as the msg-hdr. If you want to       *
+      * use a differant message header, change the routines           *
+      * in the group "MSG-HDR SPECIFIC ROUTINES".                     *
+      *                                                               *
+      * The default formatter (DFH0CBRF) does not have any            *
+      * dependancy on the message header.                             *
+      *                                                               *
+      * This sample uses TS and TD as the transaport mechanism.       *
+      * If you want to use a differant transport mechanism, change    *
+      * the routines in the group                                     *
+      * "TRANSPORT MECHANISM SPECIFIC ROUTINES"                       *
+      *                                                               *
+      * The maximum record size for a record is given by              *
+      * the variable 'tm-block-length'. You may modify this value     *
+      * within the range allowed by the transport mechaniusm in order *
+      * to optimise the storage used by bridge transactions.          *
+      *                                                               *
+      * Non transport specific code is in DFH0CBRD COPY. It shoul     *
+      * not be necessary to change this copy book to implement a new  *
+      * transport mechanism.                                          *
+      * Abends and trace points are documented in DFH0CBRD.           *
+      *****************************************************************
+      * This program is divided into the following groups of sections.*
+      * Each Group contain related routines.                          *
+      *                                                               *
+      * MAIN PROCESSING                                               *
+      *   main-processing                                             *
+      *   xm-command-check                                            *
+      *   msg-command-check                                           *
+      * TASK MANAGER ROUTINES                                         *
+      *   init-routine                                                *
+      *   bind-routine                                                *
+      *   get-storage                                                 *
+      *   get-brdata                                                  *
+      *   term-routine                                                *
+      *   abend-routine                                               *
+      *   syncpoint-routine                                           *
+      * MESSAGE ROUTINES                                              *
+      *   read-message                                                *
+      *   write-message                                               *
+      *   read-message-error                                          *
+      *   erase-output-vectors                                        *
+      * BRXA VALIDATION ROUTINES                                      *
+      *   validate-brxa                                               *
+      *   validate-brxa-subareas                                      *
+      *   validate-user-data                                          *
+      * ABEND ROUTINES                                                *
+      *   abend                                                       *
+      * TRACE ROUTINES                                                *
+      *   trace-brdata                                                *
+      *   trace-message-input                                         *
+      *   trace-message-output                                        *
+      * MSG-HDR SPECIFIC ROUTINES                                     *
+      *   decode-msg-hdr                                              *
+      *   decode-msg-hdr-next                                         *
+      *   validate-msg-hdr                                            *
+      *   build-msg-hdr                                               *
+      *   update-msg-hdr                                              *
+      *   update-msg-hdr-commit                                       *
+      *   update-msg-hdr-backout                                      *
+      *   update-msg-hdr-end-task                                     *
+      *   update-msg-hdr-end-task                                     *
+      * TRANSPORT MECHANISM SPECIFIC ROUTINES                         *
+      *   tm-validate-brdata                                          *
+      *   tm-decode-brdata                                            *
+      *   tm-open-queues                                              *
+      *   tm-get-message                                              *
+      *   tm-put-message                                              *
+      *   tm-put-message-commit                                       *
+      *   tm-put-message-backout                                      *
+      *   tm-error-handling-routine                                   *
+      *   tm-syncpoint-ok                                             *
+      *   tm-abend-rollback                                           *
+      *                                                               *
+      *****************************************************************
+      * If this sample is updated for other transport mechanisms      *
+      * change the routines in the group                              *
+      * "TRANSPORT MECHANISM SPECIFIC ROUTINES"                       *
+      *****************************************************************
+      * The following input values are used in the MQCIH              *
+      * Default values are listed where the value is outside the      *
+      * range of valid values. n/a means that it is not possible      *
+      * to give an invalid value. Abend means that either the exit    *
+      * or CICS will abend the transaction with the given abend code. *
+      *****************************************************************
+      * Variable                 * Value                   Default    *
+      *****************************************************************
+      * mqcih-strucid            * mqcih-struc-id      * Abend ABXJ   *
+      * mqcih-version            * mqcih-version-2     * Abend ABXJ   *
+      * mqcih-struclength        * mqcih-length-2      * Abend ABXJ   *
+      * mqcih-getwaitinterval    * >=0                 * 0            *
+      * mqcih-facilitykeeptime   * 0 - 604800          * 604800       *
+      * mqcih-adsdescriptor      * any MQCADSD value   * NONE         *
+      * mqcih-conversationaltask * any MQCCT value     * NO           *
+      * mqcih-facility           * Bridge facility     * Abend ABRG   *
+      * mqcih-authenticator      * password or null    * n/a          *
+      * mqcih-transactionid      * transid or blank    * Abend ABRB   *
+      * mqcih-facilitylike       * termid or blank     * Abend ABRJ   *
+      * mqcih-attentionid        * 0 - 255 (hi byte)   * n/a          *
+      * mqcih-startcode          * any MQCSC value     * TERMINPUT    *
+      * mqcih-cancelcode         * abend code or blank * n/a          *
+      * mqcih-cursorposition     * 0 - 65535           * 0            *
+      *****************************************************************
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *     $SEG(DFH0CBRE),COMP(BRIDGE),PROD(CICS TS ):               *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXIII : REMARKS                    *
+      * $L0= 721    520 970430 HD2UJAH : Bridge Exit URM              *
+      * $L3= 732    530 980414 HDDLCRP : Rewritten as two routines.   *
+      * $PP= M28941 530 980707 HD0JADT : Set STARTCODE for next trans *
+      * $PQ= M28876 530 980716 HDDLCRP : Abend processing fails       *
+      * $PR= M29659 530 980819 HDDLCRP : Message validation errors    *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $PS= M29651 530 980819 HDDLCRP : Termination abend processing *
+      * $PT= M30218 530 981123 HDDLCRP : Long TS QNAMEs               *
+      * $PU= M31155 530 990120 HDDLCRP : BTS msgs >32K                *
+      * $PV= M31843 530 990422 HDDLCRP : Add output-max-flength       *
+      * $PW= D00650 620 010209 HDDLCRP : Compile option NOSSRANGE     *
+      * $PX= D01252 620 010907 HDDLCRP : Trace BRDATA when ABXK       *
+      * $PY= D02813 620 011030 HDDLCRP : Bridge exit samples do not c *
+      *                                                               *
+      * WHOLE MODULE REPLACED BY APAR PQ13011                @BA13011A*
+      *****************************************************************
+       Environment Division.
+       Data Division.
+      *****************************************************************
+       Working-storage section.
+      *****************************************************************
+
+      *****************************************************************
+      * BRXA Constants                                                *
+      *****************************************************************
+       copy DFHBRACO.
+
+      *****************************************************************
+      * Miscellaneous local declarations                              *
+      *****************************************************************
+
+       01 program-working-storage.
+        03 filler                      pic x(16)
+                                         value '>WORKING STORAGE'.
+        03 user-area-eye               pic x(16)
+                                         value '>USER-AREA======'.
+        03 rc                          pic s9(8) comp.
+           88 rc-ok                      value 0.
+           88 rc-error                   value 1.
+        03 data-flag                   pic s9(8) comp.
+           88 data-not-sent              value 0.
+           88 data-sent                  value 1.
+        03 send-type                   pic s9(8) comp.
+           88 send-type-flush            value 0.
+           88 send-type-commit           value 1.
+           88 send-type-backout          value 2.
+        03 wait-flag                   pic s9(8) comp.
+           88 get-no-wait                value 0.
+           88 get-wait                   value 1.
+        03 trace-num                   pic s9(4) comp.
+        03 trace-flength               pic s9(4) comp.
+        03 abend-code-suffix           pic x(1).
+           88 non-replyable-abend-code value '1' '2' '3' '5' '6'
+                                             'E' 'F' 'I' 'J' 'K' 'S'.
+        03 getmain-offset              pic s9(8) comp.
+        03 getmain-length              pic s9(8) comp.
+        03 adsd-value                  pic s9(8) comp.
+        03 null-image                  pic x(1) value LOW-VALUE.
+        03 input-length                pic s9(4) comp.
+        03 output-length               pic s9(4) comp.
+        03 input-message-num-halfword  pic s9(4) comp.
+
+      *****************************************************************
+      * Start of transport mechanism specific values                  *
+      *****************************************************************
+        03 filler                      pic x(16)
+                                         value '>TM SPECIFIC STG'.
+        03 trace-resource              pic x(8)  value 'DFH0CBRE'.
+        03 current-time                pic s9(15) comp-3.
+        03 timeout-time                pic s9(15) comp-3.
+        03 recovstatus                 pic s9(8) comp.
+        03 record-flag                 pic s9(8) comp.
+          88 record-not-found            value 0.
+          88 record-found                value 1.
+      *****************************************************************
+      * Change the first 3 characters of the abend code to a unique   *
+      * abend code prefix. Note that abend codes 'Axxx' are reserved  *
+      * by CICS.                                                      *
+      *****************************************************************
+        03 abend-code                  pic x(4)  value 'ABXx'.
+
+      *****************************************************************
+      * tm-block-length specifies the maximum message size.           *
+      * The tm-block-length must be a multiple of 4.                  *
+      * must be large enough for a mqcih and vectors,                 *
+      * and not exceed the size of the tranport mechanism             *
+      *****************************************************************
+        03 tm-block-length             pic s9(8) comp value 32760.
+
+      *****************************************************************
+      * Message constants                                             *
+      * Note: these are the same as MQSeries/ESA 2.1 in CMQV          *
+      *****************************************************************
+       01 msg-constants.
+       copy DFHBRMCO REPLACING ==77== BY ==10==.
+
+      *****************************************************************
+      * Start data constants                                          *
+      *****************************************************************
+       copy DFHBRSCO.
+
+      *****************************************************************
+      * End of transport mechanism specific values                    *
+      *****************************************************************
+
+      *****************************************************************
+       Linkage section.
+      *****************************************************************
+
+      *****************************************************************
+      * Getmain area                                                  *
+      * (user-area,input-message-area,input-message-area)             *
+      *****************************************************************
+       01 getmain-area                 pic x(65620).
+
+      *****************************************************************
+      * BRXA Structure (this is the BREXIT commarea)                  *
+      *****************************************************************
+       copy DFHBRARO.
+
+      *****************************************************************
+      * Message structures                                            *
+      *****************************************************************
+       01 output-message-area          pic x(32760).
+       01 input-message-area           pic x(32760).
+       01 trace-area                   pic x(4000).
+
+      *****************************************************************
+      * The user area is created by the exit progam. It is used to    *
+      * store information required by the exit program.               *
+      * This information needs to be saved over multiple calls to the *
+      * exit by the same task. The address is saved in the BRXA.      *
+      * It is common to both the bridge exit and the formatter.       *
+      *****************************************************************
+       01 user-area.
+       copy DFH0CBRU.
+
+      *****************************************************************
+      * Start of transport mechanism specific values                  *
+      *****************************************************************
+      *****************************************************************
+      * Data on START command used to identify queues.                *
+      * This is part of the user area.                                *
+      *****************************************************************
+       01 brdata.
+       copy DFHBRSDO REPLACING ==05== BY ==06==
+                               ==04== BY ==05==
+                               ==03== BY ==04==
+                               ==02== BY ==03==
+                               ==01== BY ==02==.
+      *****************************************************************
+      * Message Header                                                *
+      * Note: this is the same as MQSeries/ESA 2.1 in CMQCIHL         *
+      *****************************************************************
+       01 msg-hdr.
+       copy DFHBRMHO REPLACING ==02== BY ==03==
+                               ==01== BY ==02==.
+      *****************************************************************
+      * End of transport mechanism specific values                    *
+      *****************************************************************
+
+      *****************************************************************
+       Procedure Division.
+      *****************************************************************
+
+      *****************************************************************
+      *****************************************************************
+      ** MAIN PROCESSING                                             **
+      *****************************************************************
+      *****************************************************************
+       main-processing section.
+
+           set rc-ok to TRUE
+
+      *****************************************************************
+      * Address and validate BRXA and subareas                        *
+      * Note that the brxa-ads-descriptor-ptr could be zero.          *
+      *****************************************************************
+           set address of brxa-header to address of dfhcommarea
+           perform validate-brxa
+
+           set address of brxa-transaction-area
+                       to brxa-transaction-area-ptr
+           set address of brxa-command-common
+                       to brxa-command-area-ptr
+           set address of user-area
+                       to brxa-user-area-ptr
+           set address of input-message-area
+                       to input-message-area-ptr
+           set address of output-message-area
+                       to output-message-area-ptr
+           set address of brdata
+                       to brxa-brdata-ptr
+
+           perform validate-brxa-subareas
+
+      *****************************************************************
+      * Process request according to function and command codes.      *
+      * Set rc-error if invalid command.                              *
+      *****************************************************************
+           evaluate brxa-function-code
+             when brxa-xm     perform xm-command-check
+             when brxa-msg    perform msg-command-check
+             when brxa-sync   perform syncpoint-routine
+             when other       set rc-error to TRUE
+           end-evaluate
+
+           if rc-error
+               perform abend-abxm
+           end-if
+
+      *****************************************************************
+      * Normal return                                                 *
+      *****************************************************************
+           perform tm-normal-return
+           goback.
+
+      *****************************************************************
+      * XM-COMMAND-CHECK                                              *
+      *   Select type of XM Command                                   *
+      *****************************************************************
+       xm-command-check section.
+           evaluate brxa-command-code
+              when brxa-init  perform init-routine
+              when brxa-bind  perform bind-routine
+              when brxa-term  perform term-routine
+              when brxa-abend perform abend-routine
+              when other      set rc-error to TRUE
+           end-evaluate
+           exit.
+
+      *****************************************************************
+      * MSG-COMMAND-CHECK                                             *
+      *   Select type of MSG Command                                  *
+      *****************************************************************
+       msg-command-check section.
+           evaluate brxa-command-code
+              when brxa-read-message-nowait
+                 set get-no-wait to TRUE
+                 perform read-message
+              when brxa-read-message-wait
+                 perform update-msg-hdr
+                 perform write-message
+                 set get-wait to TRUE
+                 perform read-message
+              when brxa-write-message
+                 perform update-msg-hdr
+                 perform write-message
+              when other
+                 set rc-error to TRUE
+           end-evaluate
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** TASK MANAGER ROUTINES                                       **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * INIT-ROUTINE                                                  *
+      *   Obtain memory for the user area, send and receive data      *
+      *   Get start data and input data and set output data in BRXA   *
+      *   Build output message header vector.                         *
+      *****************************************************************
+       init-routine section.
+           perform init-user-area
+           perform get-brdata
+           exit.
+
+      *****************************************************************
+      * BIND-ROUTINE                                                  *
+      *   Obtain memory for the user area, send and receive data      *
+      *   Get start data and input data and set output data in BRXA   *
+      *   Build output message header vector.                         *
+      *****************************************************************
+       bind-routine section.
+           perform tm-open-queues
+           if rc-error
+              perform abend-abxs
+           end-if
+           set get-wait to TRUE
+           perform read-message
+           move 'DFH0CBRF' to brxa-formatter
+           exit.
+
+      *****************************************************************
+      * INIT-USER-AREA                                                *
+      * Obtain storage for user area, input and output message areas  *
+      * Initialise user area                                          *
+      * Address input and output message areas                        *
+      *****************************************************************
+       init-user-area section.
+           add length of user-area, tm-block-length, tm-block-length
+             giving getmain-length
+           perform getmain-storage
+           set address of getmain-area to brxa-user-area-ptr
+
+           move length of user-area to brxa-user-area-len
+           set address of user-area to address of getmain-area(1:1)
+           move user-area-eye to user-area-eyecatcher
+
+           move length of msg-hdr to msg-hdr-len
+
+           add 1 , length of user-area giving getmain-offset
+           set input-message-area-ptr
+             to address of getmain-area(getmain-offset:1)
+           set address of input-message-area to input-message-area-ptr
+
+           add tm-block-length to getmain-offset
+           set output-message-area-ptr
+             to address of getmain-area(getmain-offset:1)
+           set address of output-message-area to output-message-area-ptr
+           move tm-block-length to output-max-flength
+           exit.
+
+      *****************************************************************
+      * GET-BRDATA                                                    *
+      *   Get BRDATA and init the BRXA.                               *
+      *   Validate this data and trace if requested.                  *
+      *****************************************************************
+       get-brdata section.
+            perform tm-validate-brdata
+            if brxa-trace = brxa-yes
+               move 0                    to trace-num
+               set address of trace-area to address of brdata
+               move length of brdata     to trace-flength
+               perform trace-level-2
+            end-if
+            if rc-ok
+               perform tm-decode-brdata
+            else
+               if brxa-brdata-len = ZERO
+                  perform abend-abxe
+               else
+                  perform abend-abxk
+               end-if
+            end-if
+            exit.
+
+      *****************************************************************
+      * TERM-ROUTINE                                                  *
+      *   Update message header                                       *
+      *   Send message                                                *
+      *****************************************************************
+       term-routine section.
+           perform update-msg-hdr-end-task
+           perform write-message
+           exit.
+
+      *****************************************************************
+      * ABEND-ROUTINE                                                 *
+      *   Update message header                                       *
+      *   Send message (non recoverably)                              *
+      *   Don't try and process requests which will not work.         *
+      *****************************************************************
+       abend-routine section.
+           if brxa-abend-code(1:3) = abend-code(1:3)
+              move brxa-abend-code(4:1) to abend-code-suffix
+              if not non-replyable-abend-code
+                 perform update-msg-hdr-abend-task
+                 perform write-message
+              end-if
+           else
+              perform update-msg-hdr-abend-task
+              perform write-message
+           end-if
+           perform tm-abend-rollback
+           exit.
+
+      *****************************************************************
+      * SYNCPOINT-ROUTINE                                             *
+      *   Note syncpoint request in message header                    *
+      *   Send data so far (non recoverably for rollback)             *
+      *   Issue syncpoint request (or rollback)                       *
+      *   Process syncpoint error                                     *
+      *****************************************************************
+       syncpoint-routine section.
+           set address of msg-hdr to output-message-area-ptr
+           set address of brxa-sync-command to brxa-command-area-ptr
+           perform update-msg-hdr
+           if brxa-rollback = brxa-no
+              if output-queue-recoverable
+                 perform update-msg-hdr-commit
+                 perform write-message
+              end-if
+              perform exec-cics-syncpoint
+              move resp to brxa-resp
+              move resp2 to brxa-resp2
+              evaluate resp
+                 when DFHRESP(NORMAL)
+                    perform tm-syncpoint-ok
+                 when DFHRESP(INVREQ)
+                    perform abend-abxc
+                 when DFHRESP(ROLLEDBACK)
+                    perform update-msg-hdr-backout
+                    perform write-message
+              end-evaluate
+           else
+              perform exec-cics-syncpoint-rollback
+              move resp to brxa-resp
+              move resp2 to brxa-resp2
+              if resp = DFHRESP(INVREQ)
+                 perform abend-abxd
+              end-if
+              perform update-msg-hdr-backout
+              perform write-message
+           end-if
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** MESSAGE ROUTINES                                            **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * READ-MESSAGE                                                  *
+      *   Read message. If record found trace it, validate header,    *
+      *   update the brxa and (re)initialise output message.          *
+      *   Set input pointer to end of message header.                 *
+      *****************************************************************
+       read-message section.
+           set msg-not-validated to TRUE
+           perform tm-get-message
+           if rc-error
+              perform read-message-error
+           end-if
+           if record-found
+              add 1 to input-message-num
+              if brxa-trace = brxa-yes
+                 move 1                    to trace-num
+                 set address of trace-area to input-message-area-ptr
+                 move input-flength         to trace-flength
+                 perform trace-level-2
+              end-if
+              perform validate-msg-hdr
+              if brxa-command-code = brxa-bind
+                 perform decode-msg-hdr
+              else
+                 perform decode-msg-hdr-next
+              end-if
+              if get-wait
+                 perform build-msg-hdr
+              end-if
+           end-if
+           add 1 , msg-hdr-len giving input-offset
+           exit.
+
+      *****************************************************************
+      * WRITE-MESSAGE                                                 *
+      *   Call put-message to send data.                              *
+      *   Reset send offset.                                          *
+      *****************************************************************
+       write-message section.
+           subtract 1 from output-offset giving output-flength
+           if brxa-trace = brxa-yes
+              move 3                    to trace-num
+              set address of trace-area to output-message-area-ptr
+              move output-flength        to trace-flength
+              perform trace-level-2
+           end-if
+           if send-type-flush
+              perform tm-put-message
+              set data-sent to TRUE
+           else
+              if send-type-commit
+                 set data-not-sent to TRUE
+                 perform tm-put-message-commit
+              else
+                 set data-not-sent to TRUE
+                 perform tm-put-message-backout
+              end-if
+           end-if
+           if rc-error
+              perform abend-abxg
+           end-if
+           if data-sent
+              perform erase-output-vectors
+           end-if
+           exit.
+
+      *****************************************************************
+      * READ-MESSAGE-ERROR                                            *
+      *   Process error in calling tm-get-message routines            *
+      *****************************************************************
+       read-message-error section.
+           if record-found
+              perform abend-abxi
+           else
+              perform abend-abxf
+           end-if
+           perform tm-error-handling-routine
+           exit.
+
+      *****************************************************************
+      * ERASE-OUTPUT-VECTORS                                          *
+      *   Erase output vectors, but not the msg-hdr                   *
+      *****************************************************************
+       erase-output-vectors section.
+           add 1 , msg-hdr-len giving output-offset
+           move HIGH-VALUE to output-message-area(output-offset : 1)
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** BRXA VALIDATION ROUTINES                                    **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * VALIDATE-BRXA                                                 *
+      *   Check the BRXA format and the version.                      *
+      *****************************************************************
+       validate-brxa section.
+           if brxa-header-eyecatcher not = brxa-header-eye or
+              brxa-header-version-no not = brxa-current-version-no or
+              brxa-header-length     not = length of brxa-header
+              perform abend-abx1
+           end-if
+           exit.
+
+      *****************************************************************
+      * VALIDATE-BRXA-SUBAREAS                                        *
+      *   Check the BRXA command and transaction areas.               *
+      *   Check the user area (except for xm init)                    *
+      *****************************************************************
+       validate-brxa-subareas section.
+           if brxa-tran-area-eyecatcher not = brxa-tran-area-eye
+              perform abend-abx2
+           end-if
+           if brxa-command-area-eyecatcher not = brxa-command-area-eye
+              perform abend-abx3
+           end-if
+           if not (brxa-function-code = brxa-xm and
+                   brxa-command-code  = brxa-init)
+             perform validate-user-data
+           end-if
+           exit.
+
+      *****************************************************************
+      * VALIDATE-USER-DATA                                            *
+      *   Check that the user data is set up and has an eye catcher   *
+      *****************************************************************
+       validate-user-data section.
+           if brxa-user-area-ptr = NULLS
+              perform abend-abx5
+           end-if
+           if user-area-eyecatcher not = user-area-eye
+              perform abend-abx6
+           end-if
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** ABEND ROUTINES                                              **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * ABEND                                                         *
+      *   If possible set brxa-user-abend-code to abend               *
+      *****************************************************************
+       abend section.
+           if brxa-header-eyecatcher not = brxa-header-eye         or
+              brxa-header-version-no not = brxa-current-version-no or
+              brxa-header-length     not = length of brxa-header   or
+              brxa-command-area-eyecatcher not =
+                                           brxa-command-area-eye   or
+             (brxa-function-code         = brxa-xm                and
+              (brxa-command-code         = brxa-term             or
+               brxa-command-code         = brxa-abend              ))
+              perform exec-cics-abend
+           else
+              move abend-code to brxa-user-abend-code
+              perform tm-error-handling-routine
+           end-if
+           exit.
+
+      *****************************************************************
+      *****************************************************************
+      ** MSG-HDR SPECIFIC ROUTINES                                   **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * DECODE-MSG-HDR                                                *
+      *   Save msg-hdr values the first time a message is read        *
+      *****************************************************************
+       decode-msg-hdr section.
+           set address of msg-hdr to input-message-area-ptr
+           perform exec-cics-verify
+           move mqcih-startcode          to brxa-startcode
+           move mqcih-attentionid(1 : 1) to brxa-aid
+           move mqcih-cursorposition     to brxa-cposn
+           move ZERO                     to message-format
+           perform decode-msg-hdr-next
+           exit.
+
+      *****************************************************************
+      * DECODE-MSG-HDR-NEXT                                           *
+      *   Save msg-hdr values each time an msg-hdr is read            *
+      *****************************************************************
+       decode-msg-hdr-next   section.
+           set address of msg-hdr to input-message-area-ptr
+           move mqcih-facilitykeeptime to brxa-facility-keep-time
+           move mqcih-getwaitinterval  to read-wait-time-msecs
+           move ZERO                   to adsd-output
+           move ZERO                   to adsd-request
+           move ZERO                   to message-format
+           move brxa-no                to brxa-load-ads-descriptor
+           move mqcih-adsdescriptor    to adsd-value
+           if adsd-value >= mqcadsd-msgformat
+              subtract mqcadsd-msgformat from adsd-value
+              set external-message-format to TRUE
+              move brxa-yes to brxa-load-ads-descriptor
+           end-if
+           if adsd-value >= mqcadsd-recv
+              subtract mqcadsd-recv from adsd-value
+              set adsd-recv to TRUE
+              move brxa-yes to brxa-load-ads-descriptor
+           end-if
+           if adsd-value >= mqcadsd-send
+              subtract mqcadsd-send from adsd-value
+              set adsd-send to TRUE
+              move brxa-yes to brxa-load-ads-descriptor
+           end-if
+           if mqcih-cancelcode not = SPACES
+              move mqcih-cancelcode to brxa-user-abend-code
+              perform tm-error-handling-routine
+           end-if
+           if mqcih-conversationaltask = mqcct-yes
+              set conversational-task to TRUE
+           else
+              set non-conversational-task to TRUE
+           end-if
+           exit.
+
+      *****************************************************************
+      * VALIDATE-MSG-HDR                                              *
+      *   Check that this looks like a msg-hdr                        *
+      *   Where possible use default values when data out of bounds   *
+      *****************************************************************
+       validate-msg-hdr section.
+           set address of msg-hdr to input-message-area-ptr
+           if mqcih-strucid     not = mqcih-struc-id        or
+              mqcih-version     not = mqcih-current-version or
+              mqcih-struclength not = mqcih-current-length
+              perform abend-abxj
+           end-if
+           if mqcih-getwaitinterval < ZERO
+             move ZERO to mqcih-getwaitinterval
+           end-if
+           if mqcih-cursorposition < ZERO or
+              mqcih-cursorposition > 65535
+             move ZERO to mqcih-cursorposition
+           end-if
+           if mqcih-facilitykeeptime < ZERO      or
+              mqcih-facilitykeeptime > 604800
+             move 604800 to mqcih-facilitykeeptime
+           end-if
+           exit.
+
+      *****************************************************************
+      * BUILD-MSG-HDR                                                 *
+      *   Update outbound mqcih                                       *
+      *****************************************************************
+       build-msg-hdr section.
+           set address of msg-hdr to output-message-area-ptr
+           move input-message-area(1 : msg-hdr-len) to
+                output-message-area(1 : msg-hdr-len)
+           move SPACES to mqcih-abendcode
+           move ZERO   to mqcih-erroroffset
+           move SPACES to mqcih-nexttransactionid
+           perform erase-output-vectors
+           exit.
+
+      *****************************************************************
+      * UPDATE-MSG-HDR                                                *
+      *   Update outbound mqcih each time data is written             *
+      *****************************************************************
+       update-msg-hdr section.
+           set address of msg-hdr   to output-message-area-ptr
+           move brxa-tranid         to mqcih-transactionid
+           move brxa-facility-token to mqcih-facility
+           move input-message-num   to mqcih-inputitem
+           move mqctes-nosync       to mqcih-taskendstatus
+           set send-type-flush to TRUE
+           exit.
+
+      *****************************************************************
+      * UPDATE-MSG-HDR-COMMIT                                         *
+      *   Update outbound msg-hdr just before a syncpoint             *
+      *****************************************************************
+       update-msg-hdr-commit section.
+           set address of msg-hdr     to output-message-area-ptr
+           move brxa-tranid           to mqcih-transactionid
+           move brxa-facility-token to mqcih-facility
+           move input-message-num   to mqcih-inputitem
+           move mqctes-commit to mqcih-taskendstatus
+           set send-type-commit to TRUE
+           exit.
+
+      *****************************************************************
+      * UPDATE-MSG-HDR-BACKOUT                                        *
+      *   Update outbound msg-hdr just before a syncpoint rollback    *
+      *****************************************************************
+       update-msg-hdr-backout section.
+           set address of msg-hdr   to output-message-area-ptr
+           move brxa-tranid         to mqcih-transactionid
+           move brxa-facility-token to mqcih-facility
+           move input-message-num   to mqcih-inputitem
+           move mqctes-backout      to mqcih-taskendstatus
+           set send-type-backout to TRUE
+           exit.
+
+      *****************************************************************
+      * UPDATE-MSG-HDR-END-TASK                                       *
+      *   Update outbound mqcih at the normal end of the task         *
+      *****************************************************************
+       update-msg-hdr-end-task section.
+           set address of msg-hdr     to output-message-area-ptr
+           move brxa-tranid           to mqcih-transactionid
+           move brxa-nexttranid       to mqcih-nexttransactionid
+           move brxa-startcode        to mqcih-startcode
+           move error-offset          to mqcih-erroroffset
+           if brxa-facility-keep-time = ZERO
+             move LOW-VALUE           to mqcih-facility
+           else
+             move brxa-facility-token to mqcih-facility
+           end-if
+           move mqctes-endtask        to mqcih-taskendstatus
+           set send-type-flush to TRUE
+           exit.
+
+      *****************************************************************
+      * UPDATE-MSG-HDR-ABEND-TASK                                     *
+      *   Update outbound mqcih at the abnormal end of the task       *
+      *****************************************************************
+       update-msg-hdr-abend-task section.
+           set address of msg-hdr     to output-message-area-ptr
+           move brxa-tranid           to mqcih-transactionid
+           move brxa-nexttranid       to mqcih-nexttransactionid
+           move brxa-startcode        to mqcih-startcode
+           move brxa-abend-code       to mqcih-abendcode
+           move error-offset          to mqcih-erroroffset
+           if brxa-facility-keep-time = ZERO
+             move LOW-VALUE           to mqcih-facility
+           else
+             move brxa-facility-token to mqcih-facility
+           end-if
+           move mqctes-endtask        to mqcih-taskendstatus
+           set send-type-backout to TRUE
+           exit.
+
+      *****************************************************************
+      * End of msg-hdr specific values                                *
+      *****************************************************************
+
+      *****************************************************************
+      *****************************************************************
+      ** EXEC CICS ROUTINES                                          **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * GETMAIN-STORAGE                                               *
+      *   Get transaction lifetime storage for the user area.         *
+      *   No need to free this storage.                               *
+      *****************************************************************
+       getmain-storage section.
+           EXEC CICS GETMAIN FLENGTH(getmain-length)
+                             SET(brxa-user-area-ptr)
+                             INITIMG(null-image)
+                             END-EXEC
+           exit.
+
+      *****************************************************************
+      * exec-cics-verify                                              *
+      *   check the password for the current userid.                  *
+      *****************************************************************
+       exec-cics-verify section.
+      *    EXEC CICS VERIFY PASSWORD(mqcih-authenticator)
+           exit.
+
+      *****************************************************************
+      * EXEC-CICS-SYNCPOINT                                           *
+      *   Commit current UOW.                                         *
+      *****************************************************************
+       exec-cics-syncpoint section.
+           EXEC CICS SYNCPOINT
+                     RESP(resp) RESP2(resp2)
+                     END-EXEC
+           exit.
+
+      *****************************************************************
+      * EXEC-CICS-SYNCPOINT-ROLLBACK                                  *
+      *   Backout current UOW.                                        *
+      *****************************************************************
+       exec-cics-syncpoint-rollback section.
+           EXEC CICS SYNCPOINT ROLLBACK
+                     RESP(resp) RESP2(resp2)
+                     END-EXEC
+           exit.
+
+      *****************************************************************
+      * exec-cics-abend                                               *
+      *   Abend user transaction.                                     *
+      *****************************************************************
+       exec-cics-abend section.
+           EXEC CICS ABEND ABCODE(abend-code) END-EXEC
+           exit.
+
+      *****************************************************************
+      * TRACE                                                         *
+      *   Trace level 2                                               *
+      *****************************************************************
+       trace-level-2 section.
+           if trace-flength > length of trace-area
+              move length of trace-area to trace-flength
+           end-if
+           EXEC CICS ENTER TRACENUM(trace-num)
+                     RESOURCE(trace-resource)
+                     FROM(trace-area)
+                     FROMLENGTH(trace-flength)
+                     NOHANDLE
+                     END-EXEC
+           exit.
+
+      *****************************************************************
+      * TRACE-EXCEPTION                                               *
+      *   Exception trace                                             *
+      *****************************************************************
+       trace-exception section.
+           if trace-flength > length of trace-area
+              move length of trace-area to trace-flength
+           end-if
+           EXEC CICS ENTER TRACENUM(trace-num) EXCEPTION
+                     RESOURCE(trace-resource)
+                     FROM(trace-area)
+                     FROMLENGTH(trace-flength)
+                     NOHANDLE
+                     END-EXEC
+           exit.
+
+
+      *****************************************************************
+      *****************************************************************
+      ** TRANSPORT MECHANISM SPECIFIC ROUTINES                       **
+      *****************************************************************
+      *****************************************************************
+
+      *****************************************************************
+      * Start of transport mechanism specific values                  *
+      *****************************************************************
+
+      *****************************************************************
+      *    The following sections use TS/TD as the transport          *
+      *    mechanism and brsd as the start data.                      *
+      *    If a messaging mechanism other than TS/TD is used          *
+      *    the following routines need to be modified.                *
+      *****************************************************************
+
+      *****************************************************************
+      * TM-VALIDATE-BRDATA                                            *
+      *                                                               *
+      * Input : BRDATA                                                *
+      * Output: rc-error              set if error                    *
+      *                                                               *
+      *   Validate the tm specific BRDATA                             *
+      *****************************************************************
+       tm-validate-brdata section.
+           if brxa-brdata-len not = brsd-length-current
+              set rc-error to TRUE
+           end-if
+
+           if rc-ok
+              if brsd-strucid     not = brsd-struc-id  or
+                 brsd-version     not = brsd-version-current or
+                 brsd-struclength not = brsd-length-current
+                 set rc-error to TRUE
+              end-if
+           end-if
+
+           if rc-ok
+              evaluate brsd-input-type
+                when brsd-ts continue
+                when brsd-td continue
+                when other   set rc-error to TRUE
+              end-evaluate
+           end-if
+
+           if rc-ok
+              evaluate brsd-output-type
+                when brsd-ts continue
+                when brsd-td continue
+                when other   set rc-error to TRUE
+              end-evaluate
+           end-if
+           exit.
+
+      *****************************************************************
+      * TM-DECODE-BRDATA                                              *
+      *                                                               *
+      * Input : BRDATA                                                *
+      * Output: none                                                  *
+      *                                                               *
+      *   Set BRXA and user data from BRDATA                          *
+      *****************************************************************
+       tm-decode-brdata section.
+           move brsd-queue-names    to brxa-identifier
+           move brsd-input-item     to input-message-num
+           move brsd-facility-token to brxa-facility-token
+           move brsd-facilitylike   to brxa-facilitylike
+           exit.
+
+      *****************************************************************
+      * TM-OPEN-QUEUES                                                *
+      *                                                               *
+      * Input :                                                       *
+      * Output: rc-error              set if error                    *
+      *         output-queue-recoverable set if recoverable           *
+      *                                                               *
+      * Open the queues and specify if recoverable.                   *
+      *****************************************************************
+       tm-open-queues section.
+           if brsd-output-type = brsd-td
+              EXEC CICS INQUIRE TDQUEUE(BRSD-TD-OUTPUT-QUEUE)
+                                RECOVSTATUS(recovstatus)
+                                NOHANDLE
+                                END-EXEC
+              if eibresp = DFHRESP(NORMAL)
+                 if recovstatus = DFHVALUE(LOGICAL) or
+                    recovstatus = DFHVALUE(PHYSICAL)
+                    set output-queue-recoverable to TRUE
+                 end-if
+              else
+                 set rc-error to TRUE
+              end-if
+           end-if
+           exit.
+
+      *****************************************************************
+      * TM-GET-MESSAGE                                                *
+      *                                                               *
+      * Input : tm-block-length       max length of data requested    *
+      *       : get-wait              if no data should we wait       *
+      *       :                       (return record-not-found        *
+      *       :                        if no record available)        *
+      *       : read-wait-time-msecs  timeout limit (msecs)           *
+      *       :                       (only applies if get-wait)      *
+      * Output: rc-error              set if error                    *
+      *       : record-found          set if record length error      *
+      *       :                       (rc-error must also be set)     *
+      *       : response              describes get error             *
+      *       :                       (rc-error must also be set)     *
+      *       : input-message-area    data storage                    *
+      *       : input-flength          length of data obtained        *
+      *       : brxa-identifier       identifier                      *
+      *                                                               *
+      *   Get the first record from the input queue.                  *
+      *   If the data is not available wait for a second and retry.   *
+      *****************************************************************
+       tm-get-message section.
+           set rc-ok to TRUE
+           set record-not-found to TRUE
+           move tm-block-length to input-flength
+           if get-wait
+              EXEC CICS ASKTIME ABSTIME(timeout-time) END-EXEC
+              add read-wait-time-msecs to timeout-time
+           end-if
+
+           perform test after until record-found or rc-error
+                                                 or get-no-wait
+              move input-flength to input-length
+              if brsd-input-type = brsd-td
+                 EXEC CICS READQ TD QUEUE(brsd-td-input-queue)
+                                    INTO(input-message-area)
+                                    LENGTH(input-length)
+                                    NOSUSPEND
+                                    RESP(resp)
+                                    END-EXEC
+              else
+      *
+      * If initial item number is zero use READQ NEXT rather than
+      * READQ ITEM for all TS queue reads
+      *
+                 if brsd-input-item = ZERO
+                    EXEC CICS READQ TS QNAME(brsd-ts-input-queue)
+                                       INTO(input-message-area)
+                                       LENGTH(input-length)
+                                       RESP(resp)
+                                       END-EXEC
+                 else
+                    move input-message-num to input-message-num-halfword
+                    EXEC CICS READQ TS QNAME(brsd-ts-input-queue)
+                                       ITEM(input-message-num-halfword)
+                                       INTO(input-message-area)
+                                       LENGTH(input-length)
+                                       RESP(resp)
+                                       END-EXEC
+                 end-if
+              end-if
+              move input-length to input-flength
+              evaluate resp
+                 when DFHRESP(NORMAL)
+                    set record-found to TRUE
+                 when DFHRESP(LENGERR)
+                    set record-found to TRUE
+                    set rc-error to TRUE
+                 when DFHRESP(QBUSY)
+                 when DFHRESP(QZERO)
+                 when DFHRESP(ITEMERR)
+                    continue
+                 when other
+                    set rc-error to TRUE
+              end-evaluate
+      *
+      *       if get-wait, wait for progressively longer times until
+      *       current time exceeds timeout time
+      *
+              if rc-ok and record-not-found and get-wait
+                 EXEC CICS ASKTIME ABSTIME(current-time) END-EXEC
+                 if current-time >= timeout-time
+                    set rc-error to TRUE
+                 else
+                    EXEC CICS DELAY FOR SECONDS(1)
+                              NOHANDLE
+                              END-EXEC
+                 end-if
+              end-if
+           end-perform
+      *
+      *    If a get-no-wait request don't destroy the existing mqcih.
+      *    However it is ok to destroy the other vectors.
+      *
+           if rc-ok and record-not-found and get-no-wait
+              move length of msg-hdr to input-flength
+           end-if
+           exit.
+
+      *****************************************************************
+      * TM-PUT-MESSAGE                                                *
+      *                                                               *
+      * Input : output-message-area                                   *
+      *       : output-flength                                         *
+      * Output: rc-error              set if error                    *
+      *                                                               *
+      *   Put a record to the output queue                            *
+      *****************************************************************
+       tm-put-message section.
+           move output-flength to output-length
+           if brsd-output-type = brsd-td
+             EXEC CICS WRITEQ TD QUEUE(brsd-td-output-queue)
+                                 FROM(output-message-area)
+                                 LENGTH(output-length)
+                                 RESP(resp)
+                                 END-EXEC
+           else
+             EXEC CICS WRITEQ TS QNAME(brsd-ts-output-queue)
+                                 FROM(output-message-area)
+                                 LENGTH(output-length)
+                                 RESP(resp)
+                                 END-EXEC
+           end-if
+           if resp not = DFHRESP(NORMAL)
+              set rc-error to TRUE
+           end-if
+           exit.
+
+      *****************************************************************
+      * TM-PUT-MESSAGE-COMMIT                                         *
+      *                                                               *
+      * Input : output-message-area                                   *
+      *       : output-flength                                         *
+      * Output: rc-error              set if error                    *
+      *       : data-sent             set if data sent                *
+      *                                                               *
+      *   The task is about to syncpoint.                             *
+      *   This routine gives the option of sending the data so far    *
+      *   as part of this UOW.                                        *
+      *   If data is sent set the the DATA-SENT flag.                 *
+      *****************************************************************
+       tm-put-message-commit section.
+           perform tm-put-message
+           if not rc-error
+             set data-sent to TRUE
+           end-if
+           exit.
+
+      *****************************************************************
+      * TM-PUT-MESSAGE-BACKOUT                                        *
+      *                                                               *
+      * Input : output-message-area                                   *
+      *       : output-flength                                         *
+      * Output: rc-error              set if error                    *
+      *       : data-sent             set if data sent                *
+      *                                                               *
+      *   The task is about to syncpoint rollback                     *
+      *   This routine gives the option of sending the data so far.   *
+      *   This MUST be done non recoverably.                          *
+      *   If data is sent set the the DATA-SENT flag.                 *
+      *****************************************************************
+       tm-put-message-backout section.
+           perform tm-put-message
+           if not rc-error
+             set data-sent to TRUE
+           end-if
+           exit.
+
+      *****************************************************************
+      * TM-ERROR-HANDLING-ROUTINE                                     *
+      *                                                               *
+      *   An error has occured which means we must exit immediately.  *
+      *   The caller must have set brxa-user-abend-code.              *
+      *****************************************************************
+       tm-error-handling-routine section.
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * TM-SYNCPOINT-OK                                               *
+      *                                                               *
+      *   This is a no op routine for TS/TD.                          *
+      *****************************************************************
+       tm-syncpoint-ok section.
+           exit.
+
+      *****************************************************************
+      * TM-ABEND-ROLLBACK                                             *
+      *                                                               *
+      *   This is a no op routine for TS/TD.                          *
+      *****************************************************************
+       tm-abend-rollback section.
+           exit.
+
+      *****************************************************************
+      * TM-NORMAL-RETURN                                              *
+      *                                                               *
+      *   The bridge exit has complete successfully.                  *
+      *   The routine must issue a EXEC CICS RETURN.                  *
+      *****************************************************************
+       tm-normal-return section.
+           EXEC CICS RETURN END-EXEC
+           exit.
+
+      *****************************************************************
+      * End of transport mechanism specific values                    *
+      *****************************************************************
+
+      *****************************************************************
+      * Non transport mechanism routines                              *
+      *****************************************************************
+       copy DFH0CBRD.
