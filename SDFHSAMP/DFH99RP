@@ -1,0 +1,122 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99RP     TITLE 'DFH99RP - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - PROCESS RETURNED VALUES, BUILD MESSAGES'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99RP                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Process Return Codes and Build Messages          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* FUNCTION: TO BUILD MESSAGES FOR VALUES RETURNED BY DYNALLOC.        *
+*                                                                     *
+* INPUT:    RETHEAD -> FIRST ENTRY IN RETLIST                         *
+*           RETTAIL -> LAST ENTRY IN RETLIST                          *
+*                                                                     *
+* OUTPUT:   MESSAGES ARE ISSUED USING BLDMSG.                         *
+*           EACH ENTRY CREATES A SEPARATE MESSAGE, WHICH CONTAINS     *
+*           KEYWORD(VALUE,...)                                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99RP),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99RP  CSECT
+DFH99RP  DFH99M PROLOG,MAP=S99,                                        *
+               REGS=(K,            CURRENT KEYWORD                     *
+               D,                  CURRENT KEYWORD DESCRIPTION         *
+               E,                  CURRENT RETLIST ENTRY               *
+               TU,                 START OF CURRENT TEXT UNIT          *
+               W,                  WORK, MSG BUILDING                  *
+               L),                 LENGTH OF CURRENT VALUE             *
+               PARMS=NO
+**************************************
+* START SCAN OF RETURNED VALUE CHAIN *
+**************************************
+         ICM   E,15,RETHEAD        PICK UP HEAD OF CHAIN
+         BNZ   ENTPROC
+         B     RETURN              GIVE UP IF NONE
+* STEP TO NEXT ENTRY
+NEXTENT  LR    W,E                 SAVE PREVIOUS ENTRY FOR FREEING
+         USING RETLIST,E
+         DFH99M CHAINRET,E,TYPE=SCAN
+         EXEC CICS FREEMAIN DATA(0(,W)). FREE PREVIOUS ENTRY
+         LTR   E,E                 IS THERE A NEXT ENTRY?
+         BZ    RETURN
+**************************************
+* START TO PROCESS ENTRY             *
+**************************************
+ENTPROC  DS    0H
+         TM    DYNF1,SVC99         IF SVC WAS NOT ISSUED,
+         BZ    NEXTENT             THEN DON'T PROCESS ENTRY.
+         L     K,RETKEY            K-> KEYSET ENTRY
+         USING KEYSET,K
+         L     D,KSPTR             D-> DESCRIPTION
+         USING DESCRIPT,D
+         L     TU,RETTU            TU -> TEXT UNIT
+         USING S99TUNIT,TU
+* ANALYSE DESCRIPTION TO DETERMINE CONVERSION
+         TM    DSFLAG,DSVAL        IF VALUE OPERAND PROCESS VALUE,
+         BZ    KEYTYPE             ELSE DO KEYWORD REVERSE LOOKUP.
+* VALUE TYPE
+         CLI   DSVTYPE,TNUM        TEXT TYPE?
+         BH    TEXTBY              NO, BR
+         LA    W,S99TULNG          THIS LOOKS LIKE A TEXT TOKEN
+         DFH99M ID,1999
+         DFH99M INSERT,(K),FORMAT=TOKEN
+         DFH99M TEXT,'('
+         DFH99M INSERT,(W),FORMAT=TOKEN
+         DFH99M TEXT,(')',RETURNED)
+         DFH99M FILE
+         B     NEXTENT
+TEXTBY   DS    0H
+         CLI   DSVTYPE,TBIN1       SEE IF BINARY
+         BL    BINBY               NOT IF < BIN1
+         CLI   DSVTYPE,TBIN4
+         BH    BINBY               NOT IF > BIN4
+* VALUE IS BINARY, EXTRACT FROM TEXT UNIT
+         SR    L,L                 CLEAR MASK REG
+         SR    W,W                 CLEAR VALUE REG
+         IC    L,DSVTYPE           PREPARE ICM MASK
+         N     L,=F'15'            L CONTAINS MASK
+         EX    L,ICM               GET VALUE INTO W
+         DFH99M ID,1999
+         DFH99M INSERT,(K),FORMAT=TOKEN
+         DFH99M TEXT,'('
+         DFH99M INSERT,(W),FORMAT=BIN
+         DFH99M TEXT,(')',RETURNED)
+         DFH99M FILE
+BINBY    DS    0H
+         B     NEXTENT
+ICM      ICM   W,0,S99TUPAR        PICK UP VALUE FROM TEXT UNIT
+***********************************************************************
+*  KEYWORD RETURNED, USE KEYRET TO CONVERT VALUE BACK TO KEYWORD FORM *
+***********************************************************************
+KEYTYPE  DS    0H                  REVERSE KEYWORD LOOKUP
+         DFH99M INVOKE,DFH99KR,((K),(D),S99TUPAR) KEYRET
+         B     NEXTENT
+RETURN   DFH99M EPILOG
+         END

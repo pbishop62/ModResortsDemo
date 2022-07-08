@@ -1,0 +1,115 @@
+*=====================================================================*
+*                                                                     *
+* MODULE NAME = DFHISAIP                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (IS) ISC over TCP/IP                    *
+*                    IPCONN autoinstall user program (AUP)            *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2006"                                *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION =                                                          *
+*  Autoinstall user program to allow tailoring of autoinstalled       *
+*  IPCONNs.                                                           *
+*                                                                     *
+*  See the comments in DFHISAIC, the AUP commarea, for details of     *
+*  the expected/allowed processing.                                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFHISAIP),COMP(ISCIP),PROD(CICS TS ):                   *
+*                                                                     *
+*  PN= REASON REL YYMMDD HDXXIII : REMARKS                            *
+* $L0= 710    650 060721 HD0JADT : First coded                        *
+* $P1= D16300 650 060829 HD0JADT : 0C1 if applid less than 8 chars    *
+*                                                                     *
+*=====================================================================*
+dfheistg dsect ,
+* Working storage definitions here
+* Copy the Commarea definitions
+         copy  dfhisaic
+*
+DFHISAIP CSECT ,
+*=====================================================================*
+*                     I N I T I A L I S A T I O N                     *
+*=====================================================================*
+dfhisaip rmode any
+         dfhregs ,                 Equate registers
+         oc    eibcalen,eibcalen   Any commarea?
+         bz    return              ...no, get out
+         l     r2,dfheicap         Address input parameter list
+         using dfhisaic,r2         Commarea addressability
+         mvi   isaic_response,0    Assume all OK
+*---------------------------------------------------------------------*
+* Select function required                                            *
+*---------------------------------------------------------------------*
+         cli   isaic_function,isaic_install
+         be    isaip_install       Install requested
+         cli   isaic_function,isaic_delete
+         be    isaip_delete        Delete requested
+         b     return              Invalid function
+*
+*=====================================================================*
+*                                                                     *
+*                     I N S T A L L                                   *
+*                                                                     *
+* If the connecting system did not specify an applid, then use        *
+* isaic_suggested_applid for both the ipconn name and the applid.     *
+* If there is an applid, then use the last four non-blank characters  *
+* as the ipconn name.                                                 *
+*                                                                     *
+* All other parameters are unchanged.                                 *
+*                                                                     *
+*=====================================================================*
+isaip_install ds 0h
+         clc   isaic_applid,=cl8' '
+         bne   use_applid
+         mvc   isaic_ipconn,isaic_suggested_applid
+         mvc   isaic_applid,isaic_suggested_applid
+         b     return              Finished
+use_applid ds 0h
+         mvc   isaic_ipconn,=cl8' '  Ensure clear
+         la    r7,isaic_applid+7   Point at last char of applid
+         la    r8,isaic_applid+3   Limit for non-blank scan
+find_last ds 0h                    Scan for last non-blank char
+         cli   0(r7),c' '          Last non-blank found?
+         bne   last_found          ..yes
+         bctr  r7,0                ..no, step back one
+         cr    r7,r8               Reached the stopper?
+         be    last_found          ..yes, use first 4 if last 4 blank
+         b     find_last           ..no, go look at next char
+last_found ds 0h
+         sh    r7,=h'3'            Back to start of 4 chars to be used
+         mvc   isaic_ipconn(4),0(r7)
+         b     return              Finished
+*
+*=====================================================================*
+*                                                                     *
+*                       D E L E T E                                   *
+*                                                                     *
+*=====================================================================*
+isaip_delete ds 0h
+*
+* >>> Code for delete processing can be added here <<<
+*
+         b     return              Finished
+*
+*=====================================================================*
+* Program return point                                                *
+*=====================================================================*
+return   ds    0h
+         EXEC CICS RETURN
+         END   DFHISAIP

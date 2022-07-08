@@ -1,0 +1,128 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99FP     TITLE 'DFH99FP - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - PROCESS FUNCTION (VERB) KEYWORD'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99FP                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Process Function Keyword                         *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* PROCESS FUNCTION KEYWORD                                            *
+*    INPUT IN COMMREG:                                                *
+*        TOKADDR  A(CURRENT TOKEN)              USE/SET               *
+*        VBKSET   A(VERB KEYSET)                                      *
+*        RBPTR    A(DYNALLOC REQUEST BLOCK)                           *
+*                                                                     *
+* OUTPUT:   DYNALLOC REQUEST BLOCK COMPLETED EXCEPT FOR S99TXTPP      *
+*        OPKSET   A(KEYSET SELECTED FOR OPERANDS OF THIS VERB)        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99FP),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99FP  CSECT
+DFH99FP  DFH99M PROLOG,MAP=S99,                                        *
+               REGS=(T,TL,R,KS,W),                                     *
+               PARMS=NO
+         L     T,TOKADDR           IF FIRST TOKEN IS
+         CLI   0(T),THELP          HELP TOKEN
+         BNE   NOTHELP             THEN LIST THE VERBS
+         DFH99M ID,4998
+         DFH99M TEXT,(VERB,KEYWORDS,ARE)
+         DFH99M FILE
+         DFH99M INVOKE,DFH99KH,(>VBKSET) KEYHELP
+         B     FNCEND              AND RETURN
+***********************************************************************
+* CALL LOOKUP TO FIND VERB IN VERB KEYSET
+***********************************************************************
+NOTHELP  DS    0H
+LOOKP3   DFH99M AUTO,32A           ANSWER AREA FOR LOOKUP
+         DFH99M INVOKE,DFH99LK,(>TOKADDR,>VBKSET,LOOKP3) LOOKUP
+* ANALYSE RETURN CODE FROM LOOKUP
+         B     *+4(15)
+         B     FNCFOUND            0 - FOUND UNIQUELY
+         B     FNCAMBIG            4 - AMBIGUOUS
+NOTFOUND L     T,TOKADDR           8 - NOT FOUND
+         DFH99M ID,4010
+         DFH99M TEXT,(EXPECTING,VERB,,FOUND)
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M FILE
+         B     FNCEND              GIVE UP
+FNCAMBIG L     T,TOKADDR           T -> INPUT TOKEN
+         LA    TL,LOOKP3           TL -> TOKENLIST
+         DFH99M ID,4011
+         DFH99M TEXT,VERB
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(AMBIGUOUS,,MIGHT,BE)
+         DFH99M INSERT,(TL),FORMAT=TOKENLIST
+         DFH99M FILE
+         B     FNCEND
+***********************************************************************
+* VERB IDENTIFIED, SET UP REQUEST BLOCK                               *
+***********************************************************************
+FNCFOUND DS    0H                  LOOKP3 CONTAINS UNIT TOKENLIST
+         L     KS,LOOKP3           KS -> VERB ENTRY IN KEYSET
+         ST    KS,VERB             SAVE A(VERB) IN COMM
+         USING KEYSET,KS
+         L     R,RBPTR             RB -> S99RB
+         USING S99RB,R
+         LH    W,KSCKW             PICK UP CODED VERB
+         STC   W,S99VERB           SET IN DYNALLOC REQUEST BLOCK
+* NO FLAGS ARE SET IN THE DYNALLOC REQUEST BLOCK
+         MVC   OPKSET,KSPTR        RETURN A(OPERAND KEYSET)
+***********************************************************************
+* NOW UPDATE TO NEXT INPUT TOKEN
+***********************************************************************
+         L     T,TOKADDR     ADDRESS CURRENT (VERB) TOKEN
+AFTERVB  DS    0H
+         DFH99M NEXTOK,                                                *
+               T,KW=FNCSET,        RETURN IF KEYWORD IS NEXT           *
+               HELP=KYOHELP,                                           *
+               LP=FNCLP
+* NEXT TOKEN IS NOT KEYWORD, LEFT PAREN, OR HELP.
+FNCSKIPT DFH99M ID,4012
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,                                                  *
+               (INVALID,AFTER,VERB,,EXPECTING,KEYWORD)
+         DFH99M FILE
+         B     FNCEND              GIVE UP
+KYOHELP  L     W,VERB              W->VERB TOKEN
+         DFH99M ID,4998
+         DFH99M TEXT,(KEYWORDS,OF)
+         DFH99M INSERT,(W),FORMAT=TOKEN
+         DFH99M TEXT,(VERB,ARE)
+         DFH99M FILE
+         DFH99M INVOKE,DFH99KH,(>OPKSET) KEYHELP
+         B     FNCEND              AND RETURN
+FNCLP    DFH99M ID,2010
+         DFH99M TEXT,(PARENTHESISED,LIST,IGNORED,AFTER,VERB)
+         DFH99M FILE
+FNCSKIP  DFH99M NEXTOK,T,RP=AFTERVB,END=FNCSKIPT
+         B     FNCSKIP
+FNCSET   ST    T,TOKADDR           RETURN A(NEXT TOKEN)
+FNCEND   DFH99M EPILOG
+         END

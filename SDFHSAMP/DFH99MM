@@ -1,0 +1,352 @@
+* ASM CICS ( NOPROLOG NOEPILOG )
+99MM     TITLE 'DFH99MM - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - MAIN PROGRAM'
+***********************************************************************
+* STATUS = 7.2.0                                                      *
+* $MOD(DFH99MM),COMP(SAMPLES),PROD(CICS TS ):                         *
+*      PN= REASON REL YYMMDD HDXXIII : REMARKS                        *
+*     $P1= M84363 410 931101 HD4OGB  : CONTINUATION ERRORS            *
+*     $P2= M84450 410 931108 HD4OGB :  CSVPL SHOULD BE IN AUTO        *
+***********************************************************************
+DFH99MM  CSECT
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1993"                                *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* CALL TREE                     OVERVIEW OF PROCESSING                *
+*                                                                     *
+* MAIN                      MM  MAIN CONTROL FLOW                     *
+*      GETIN                GI  OBTAIN INPUT COMMAND                  *
+*      TOKENISE             TK  TOKENISE INPUT                        *
+*           MSGPROC         MP  FILE MSGS FOR GROSS SYNTAX ERRORS     *
+*      FNCPROC              FP  PROCESS DYNALLOC VERB KEYWORD         *
+*           LOOKUP          LK  FIND VERB IN FUNCTION TABLE           *
+*                MATCH      MT  TEST FUNCTION VERB AGAINST TABLE VERB *
+*           MSGPROC         MP  FILE MSGS FOR VERB ERRORS             *
+*           KEYHELP         KH  LIST NAMES IN KEYSET FOR HELP         *
+*      KEYOPND              KO  PROCESS A KEYWORD OPERAND             *
+*           LOOKUP          LK  FIND KEYWORD IN KEYTABLE FOR THE VERB *
+*                MATCH      MT  TEST OPND KWD AGAINST TABLE KWD       *
+*           CHARCONV        CC  BUILD TEXT UNIT FOR CHARACTER VALUE   *
+*                MSGPROC    MP  FILE MSGS FOR CONVERSION ERRORS       *
+*           BINCONV         BC  BUILD TEXT UNIT FOR NUMERIC VALUE     *
+*                MSGPROC    MP  FILE MSGS FOR CONVERSION ERRORS       *
+*           KEYCONV         KC  BUILD TEXT UNIT FOR KEYWORD VALUE     *
+*                LOOKUP     LK  FIND KWD VALUE IN DESCRIPTION TABLE   *
+*                     MATCH MT  TEST KDW VALUE AGAINST DESCR KWD      *
+*                MSGPROC    MP  FILE MSGS FOR KWD VALUE ERRORS        *
+*           MSGPROC         MP  FILE MSGS FOR KWD OPND ERRORS         *
+*      DYNA                 DY  ISSUE DYNALLOC AND ANALYSE RESPONSE   *
+*           MSGPROC         MP  FILE MSGS FOR DYNALLOC RESPONSES      *
+*      RETPROC              RP  PROCESS VALUES RETURNED BY DYNALLOC   *
+*           MSGPROC         MP  FILE MSGS FOR VALUES RETURNED         *
+*           KEYRET          KR  FILE MSGS FOR KEYWORD VALUES RETURNED *
+*      MSGPROC              MP  CONTROLS OUTPUT OF A COMPLETE MESSAGE *
+*                               DISPLAYS OUTPUT AREA ON TERMINAL      *
+*           TEXTPUT         TX  CALLED BY MSGPROC TO START NEW LINE   *
+*           MSGLIST         ML  CALLED BY MSGPROC TO PROCESS A LIST   *
+*                MSGLIST    ML  CALLED BY MSGLIST FOR NESTED LIST     *
+*                TEXTPUT    TX  CALLED BY MSGLIST TO ADD WORD TO LINE *
+*      KEYHELP              KH  LIST NAMES IN KEYSET FOR HELP         *
+*           MSGPROC         MP  FILE MSGS FOR HELP                    *
+***********************************************************************
+         EJECT
+DFH99MM  DFH99M PROLOG,                                                *
+               MAP=S99,PARMS=NO,REGS=(RBPR,RBR,TUPLR,TUNITR,TXS,WA,    *
+               EP)
+RBLEN    EQU   S99RBEND-S99RB      REQ BLK LEN
+COMMREG  DFH99M AUTO,CL(COMML)     STORAGE FOR COMM
+         LA    COMMR,COMMREG       SET COMMR ONCE-FOR-ALL
+         XC    COMM(COMML),COMM    CLEAR TO ZEROS
+         MVC   COMMNAME,=CL4'COMM' DEBUG - SET EYECATCHER
+         L     WA,=V(DFH99T)       SET ADDRESS OF KEYWORD TABLE..
+         ST    WA,VBKSET           .. IN COMM
+***********************************************************************
+*   DETERMINE SCREEN WIDTH AND HEIGHT
+***********************************************************************
+         EXEC CICS ASSIGN SCRNHT(SCRNHT) SCRNWD(SCRNWD)
+***********************************************************************
+*   ALLOCATE STORAGE FOR SCREEN BUFFER
+***********************************************************************
+         LH    WA,SCRNWD
+         MH    WA,SCRNHT           WA = SCREEN SIZE
+         LA    WA,20(,WA)          ALLOW FOR CONTROLS
+         ST    WA,SCRBUFSZ         SAVE BUFFER SIZE
+         DFH99M HEAP,1,(WA)        GET STORAGE
+         ST    1,SCRBUFI           AND SAVE ITS ADDRESS
+***********************************************************************
+*   ALLOCATE MAX(240,TOP THIRD) TO INPUT
+***********************************************************************
+         LH    1,SCRNHT
+         SR    0,0
+         D     0,=F'3'             1 HAS 1/3 HEIGHT
+         ST    1,INLINES           SET # INPUT LINES
+*                          NOW WORK OUT HOW MANY LINES IN 240
+         LA    1,240               MINIMUM INPUT SIZE
+         SR    0,0
+         LH    WA,SCRNWD
+         DR    0,WA                1 HAS # LINES
+         LTR   0,0                IF ANY REMAINDER..
+         BZ    COMPLIN             ..ADD 1 TO QUOTIENT
+         LA    1,1(,1)             ADD A LINE
+*                          IF 1/3 IS LESS LINES THAN 240 CHARS..
+COMPLIN  C     1,INLINES
+         BL    ENOUGHIN
+         ST    1,INLINES           ..THEN USE # LINES IN 240 CHARS
+ENOUGHIN DS    0H
+***********************************************************************
+*   ALLOCATE REST TO OUTPUT
+***********************************************************************
+         LH    1,SCRNHT
+         S     1,INLINES           REST = HEIGHT - INPUT
+         ST    1,OUTLINES
+***********************************************************************
+*   CALCULATE SBAS FOR INPUT AND OUTPUT AREAS
+***********************************************************************
+         XC    INSBA,INSBA         ROW 1 COL 1
+         L     1,INLINES
+         MH    1,SCRNWD            1 = LINEAR BUF ADDR OF OUTPUT START
+         LR    0,1                 0 = OFFSET TO OUTPUT AREA, WITH..
+         BCTR  0,0                 ..ATTR AT END OF PREV LINE.
+         A     1,SCRBUFI           1->OUTPUT AREA
+*                                  ALLOW 10 FOR INPUT CONTROLS
+         LA    1,10(,1)            (AND 10 FOR OUTPUT CONTROLS)
+         ST    1,SCRBUFO           SAVE OUTPUT AREA ADDR
+         SR    1,1
+         SRDL  0,6                 PUT 6 BITS IN REG1
+         SRL   1,26                AT BOTTOM END
+         STC   0,OUTSBA            SET HIGH ORDER BYTE
+         STC   1,OUTSBA+1          SET LOW ORDER BYTE
+         TR    INSBA(L'INSBA+L'OUTSBA),SBATABLE MAKE CODES VALID
+***********************************************************************
+* INITIAL MESSAGES IN OUTPUT AREA                                     *
+***********************************************************************
+         DFH99M ID,1000
+         DFH99M TEXT,(ENTER,COMMAND,ABOVE)
+         DFH99M FILE
+         DFH99M ID,1000
+         DFH99M TEXT,(SYNTAX:,VERB,KEYWORD,'(',VALUE,'... ) ...')
+         DFH99M FILE
+         DFH99M ID,1000
+         DFH99M TEXT,('?',LISTS,VERBS)
+         DFH99M FILE
+         DFH99M ID,1000
+         DFH99M TEXT,(VERB,'?',LISTS,KEYWORDS)
+         DFH99M FILE
+         DFH99M ID,1000
+         DFH99M TEXT,(VERB,KEYWORD,'( ? )',DESCRIBES,VALUES)
+         DFH99M FILE
+         EJECT
+***  ***************************************** DELETED BY APAR @BA32218
+***  * FIND SUBTASK CODE, IDENTIFY TO SUPERVIS DELETED BY APAR @BA32218
+***  * THIS CANNOT BE DONE USING LOAD MACRO,   DELETED BY APAR @BA32218
+***  * BECAUSE IF THE MODULE CONTAINING THE CO DELETED BY APAR @BA32218
+***  * A NEW COPY WOULD GET LOADED EACH TIME T DELETED BY APAR @BA32218
+***  *                                         DELETED BY APAR @BA32218
+***  * THIS ROUTINE FINDS THE ADDRESS OF THE S DELETED BY APAR @BA32218
+***  * OPTIONAL FEATURES LIST.                 DELETED BY APAR @BA32218
+***  *                                         DELETED BY APAR @BA32218
+***  * NOTE THAT THE SUBTASK CODE ITSELF IS RE DELETED BY APAR @BA32218
+***  ***************************************** DELETED BY APAR @BA32218
+***  GETIN2   DS    0H                  SECOND DELETED BY APAR @BA32218
+***           LA    EP,DFHDYNA          ADDRES DELETED BY APAR @BA32218
+***           IDENTIFY EPLOC=EPLOC,ENTRY=(EP)  DELETED BY APAR @BA32218
+***           MVI   REASON,3            IDENTI DELETED BY APAR @BA32218
+***           CH    15,=H'8'            IDENTI DELETED BY APAR @BA32218
+***           BH    NOSUBTSK            BR IF  DELETED BY APAR @BA32218
+***  * SUBTASK OK, SET FLAG TO SAY IT IS THERE DELETED BY APAR @BA32218
+***           OI    STATF1,DCSAOK       TESTED DELETED BY APAR @BA32218
+***           B     GETIN               CONTIN DELETED BY APAR @BA32218
+***  EPLOC    DC    CL8'DFHSVC99'       SUBTAS DELETED BY APAR @BA32218
+***************************************************************@BA32218
+* QUERY AND LOAD SVC 99 SUBTASK                                @BA32218
+***************************************************************@BA32218
+GETIN2   DS    0H                                              @BA32218
+CSVPL    DFH99M AUTO,,CSVQUERY                                     @P2A
+         CSVQUERY INEPNAME=EPLOC,                                      *
+               SEARCH=JPALPA,                                          *
+               MF=(E,CSVPL)                                        @P1C
+         LTR   15,15               CSVQUERY RETURN CODE OK ?   @BA32218
+         BZ    GETINOK             YES, ALREADY LOADED         @BA32218
+         LOAD  EP=DFH99SVC,ERRET=GETINERR  NO, ISSUE LOAD      @BA32218
+         B     GETINOK                                         @BA32218
+GETINERR DS    0H                                              @BA32218
+         STCM  15,B'0001',REASON   USE CICS TASK               @BA32218
+         B     NOSUBTSK            BR IF NOT.                  @BA32218
+GETINOK  DS    0H        LOAD OK, SET FLAG TO SAY IT IS THERE. @BA32218
+         OI    STATF1,DCSAOK       TESTED BY DFH99DY.          @BA32218
+         B     GETIN               CONTINUE.                   @BA32218
+EPLOC    DC    CL8'DFH99SVC'       SUBTASK ENTRY NAME          @BA32218
+***********************************************************************
+* DFH99SVC NOT AVAILABLE, DIAGNOSE AND CONTINUE.               @BA32218
+***********************************************************************
+REASON   DFH99M AUTO,X             WHY SUBTASK CODE NOT FOUND
+***  *                     1            CODE A DELETED BY APAR @BA32218
+***  *                     2            SUBTAS DELETED BY APAR @BA32218
+***  *                     3            IDENTI DELETED BY APAR @BA32218
+NOSUBTSK DFH99M ID,1003
+         DFH99M TEXT,(NO,SUBTASK,CODE)
+         DFH99M INSERT,REASON,FORMAT=HEX1
+         DFH99M TEXT,(SVC99,WILL,BE,ISSUED,IN,CICS,TASK)
+         DFH99M FILE
+         EJECT
+***********************************************************************
+* MAIN LOOP, COME BACK HERE TO DRIVE NEXT READ AND PROCESS            *
+***********************************************************************
+GETIN    DS    0H
+* DISPLAY OUTPUT BUFFER, WHICH HAS MESSAGES BUILT NOW.
+         SR    1,1               DISPLAY OUTPUT BUFFER CALL
+         DFH99M INVOKE,DFH99MP     MSGPROC
+* FREE STORAGE ALLOCATED BY MAIN BEFORE NEXT PASS
+FREELOOP SR    0,0
+         ICM   WA,15,FIRSTOK       IF TOKENISE AREA THEN
+         ST    0,FIRSTOK           CLEAR ANCHOR AND
+         BNZ   FREE                FREE IT
+         ICM   WA,15,RB+S99TXTPP-S99RB IF TUPL THEN
+         ST    0,RB+S99TXTPP-S99RB     CLEAR ANCHOR
+         BZ    INITCOMM                AND FREE IT
+FREE     EXEC CICS FREEMAIN DATA(0(,WA))
+         B     FREELOOP            LOOP UNTIL BOTH FREED
+* RE-INITIALISE COMM FOR NEXT PASS
+INITCOMM XC    RB,RB
+         XC    TUPLIX,TUPLIX
+         XC    TULEN,TULEN
+         XC    OUTBUFSZ,OUTBUFSZ
+         MVI   SEVERITY,0
+         XC    RETHEAD,RETHEAD
+         XC    RETTAIL,RETTAIL
+***********************************************************************
+* GET THE INPUT COMMAND                                               *
+* GETIN IS CALLED TO FORMAT THE INPUT AREA IF NECESSARY, REDISPLAY    *
+*       THE CURRENT COMMAND IF NECESSARY, AND READ IN THE NEXT ONE.   *
+* IT STORES THE START AND END ADDRESSES OF THE INPUT STRING IN        *
+* TXTSTART AND TXTEND.                                                *
+* THE RETURN CODE IN REGISTER 15 IS                                   *
+*            0 - TEXT INPUT OBTAINED, TOKENISING NEEDED               *
+*            4 - RESERVED                                             *
+*            8 - NO INPUT OBTAINED                                    *
+***********************************************************************
+         DFH99M INVOKE,DFH99GI     GETIN
+         B     *+4(15)             ANALYSE RETURN CODE
+         B     TOKENIT             TOKENISING NEEDED
+         B     *                   RETURN CODE 4 RESERVED
+***********************************************************************
+* NO INPUT WAS FOUND, DIAGNOSE END OF JOB, AND TERMINATE.             *
+***********************************************************************
+         OI    STATF1,EOJ          SHOW TERMINATING
+         DFH99M ID,4000            SET DISASTER LEVEL - NO INPUT
+         DFH99M TEXT,(TRANSACTION,END)
+         DFH99M FILE
+         B     MSGOUT              GIVE UP
+***********************************************************************
+* NOW TOKENISE THE INPUT                                              *
+***********************************************************************
+TOKENIT  DS    0H
+         L     TXS,TXTEND          CALCULATE TEXT SIZE
+         S     TXS,TXTSTART        = (END-START+1)
+         LA    0,2(TXS,TXS)        ALLOCATE TWICE AS MUCH, FOR WORST
+*                                  CASE INPUT
+         DFH99M HEAP,TXS,(0)       GET STORAGE FOR TOKENISED TEXT
+         ST    TXS,TOKADDR         SAVE CURRENT TOKEN ADDRESS
+         ST    TXS,FIRSTOK         SAVE FIRST TOKEN ADDRESS
+         DFH99M INVOKE,DFH99TK     TOKENISE
+         EJECT
+***********************************************************************
+* INPUT IS NOW TOKENISED. TOKADDR CONTAINS A(FIRST TOKEN).            *
+***********************************************************************
+         DFH99M ERRSTOP,D,NOSVC    GIVE UP IF ANY DISASTER SO FAR
+* INITIALISE THE DYNALLOC PARAMETER STRUCTURE IN DYNAMIC STORAGE
+         LA    RBPR,RBPTR          POINT AT REQ BLK PTR
+         USING S99RBPTR,RBPR
+         LA    RBR,RB              POINT AT REQUEST BLOCK
+         USING S99RB,RBR
+         ST    RBR,S99RBPTR        MAKE RB PTR POINT AT RB
+         OI    S99RBPTR,S99RBPND   SET ITS VL BIT
+         XC    S99RB(RBLEN),S99RB  CLEAR REQ BLK TO ZEROS
+         MVI   S99RBLN,RBLEN       SET RB LENGTH FIELD
+***********************************************************************
+* FIELDS STILL TO BE SET:
+*    RB: S99VERB S99FLAG1  (S99FLAG2 NOT APPLICABLE) S99TXTPP
+*  TUPL: S99TUPTR FOR EACH TXT UNIT, AND S99TUPLN IN LAST
+* TUNIT: S99TUKEY S99TUNUM S99TUENT S99TULNG S99TUPAR IN EACH UNIT
+***********************************************************************
+         SPACE 1
+* CALL FNCPROC TO DECODE THE VERB KEYWORD AND SET S99VERB.
+         XC    OPKSET,OPKSET       CLEAR FOR DEBUG AID
+         DFH99M INVOKE,DFH99FP     FNCPROC
+***********************************************************************
+* ALLOCATE STORAGE FOR TUPL AND TEXT UNITS
+***********************************************************************
+         DFH99M ERRSTOP,D,NOSVC    GIVE UP IF ANY DISASTER SO FAR
+         L     0,KWDCOUNT          NO OF TUP'S + 1
+         BCTR  0,0                 SUBTRACT 1 FOR VERB KEYWORD.
+         SLL   0,2                 LENGTH OF LIST
+         DFH99M HEAP,TUPLR,(0)     ALLOCATE LIST
+         ST    TUPLR,S99TXTPP      MAKE RB POINT TO IT
+TUSIZE   EQU   512                 NUMBER OF BYTES OF TEXT UNIT SPACE
+TUNIT    DFH99M AUTO,(TUSIZE)XL1   S99 TEXT UNIT SPACE
+         LA    0,TUNIT             SET START/END ADDRESSES
+         ST    0,TUSPACE
+         AH    0,=Y(TUSIZE-1)
+         ST    0,TUSPEND
+***********************************************************************
+* BUILD THE TEXT UNITS BY CALLING KEYOPND                             *
+***********************************************************************
+         SPACE 3
+         DFH99M INVOKE,DFH99KO     KEYOPND
+         SPACE 3
+***********************************************************************
+* ISSUE DYNALLOC AND ANALYSE RETURN CODES
+***********************************************************************
+         SPACE 3
+NOSVC    DFH99M INVOKE,DFH99DY     DYNA
+         SPACE 3
+***********************************************************************
+* PRODUCE MESSAGES FOR RETURNED VALUES
+* RETPROC MUST BE CALLED, TO FREEMAIN CHAINRET ENTRIES, EVEN IF
+* NO SVC WAS ISSUED, AND THEREFORE NO VALUES EXIST.
+***********************************************************************
+         SPACE 3
+         DFH99M INVOKE,DFH99RP     RETPROC
+         SPACE 3
+***********************************************************************
+* END OF PROCESSING CURRENT COMMAND, GO BACK FOR NEXT
+***********************************************************************
+RETURN   DS    0H
+         B     GETIN2              GO GET ANOTHER COMMAND
+MSGOUT   DS    0H                  TERMINATION MESSAGE IS IN BUFFER
+         SR    1,1                 DISPLAY OUTPUT BUFFER CALL
+         DFH99M INVOKE,DFH99MP     MSGPROC
+         DFH99M EPILOG,RC=0
+***********************************************************************
+* TRANSLATE TABLE, SBA VALUE TO VALID CODES                           *
+***********************************************************************
+SBATABLE DC    X'40C1C2C3C4C5C6C7C8C94A4B4C4D4E4F'
+         DC    X'50D1D2D3D4D5D6D7D8D95A5B5C5D5E5F'
+         DC    X'6061E2E3E4E5E6E7E8E96A6B6C6D6E6F'
+         DC    X'F0F1F2F3F4F5F6F7F8F97A7B7C7D7E7F'
+*
+***********************************************************************
+* COPY OF DYNALLOC SUBTASK, TO CHECK IT IS CORRECT WHEN FOUND.        *
+* IF IT ISN'T THERE, THIS CODE IS EXECUTED IN THE CICS TASK INSTEAD.  *
+***********************************************************************
+         ENTRY DFHDYNA
+DFHDYNA  DYNALLOC
+         BR    14
+DFHDYNAE EQU   *
+         EJECT ,
+         DFHCSAD TYPE=DSECT
+         DFHAFCD ,
+         IKJTCB  ,
+         END

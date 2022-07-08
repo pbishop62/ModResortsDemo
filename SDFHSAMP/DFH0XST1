@@ -1,0 +1,187 @@
+      CBL CICS('COBOL3,SP')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0XST1                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = SAML token IVP                             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 2000, 2015"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      *   To aid the customer in validating the installation of the   *
+      *   CICS Security Token Service and understanding how it        *
+      *   converts SAML tokens into containers, CICS provides a       *
+      *   sample transaction XST1 and two COBOL2 programs DFH0XST1/2. *
+      *                                                               *
+      *   XST1 is run from a 3270 screen.                             *
+      *   If successful it will send a message to the screen.         *
+      *   If unsuccessful it will abend.                              *
+      *   The parsed containers will be returned in TSQ DFH0XSTO.     *
+      *   If the request is unsuccessful look at the DFHSAML-RESPONSE *
+      *   container to find the reason for the error. These are       *
+      *   documented in the infocentre.                               *
+      *                                                               *
+      *   Progam DFH0XST1 reads a SAML token from the specified       *
+      *   doctemplate (by default a zFS file defined in               *
+      *   doctemplate DFH0XSTI), writes it to TSQ DFH0XSTI            *
+      *   then calls program DFH0XST2 to process this request.        *
+      *                                                               *
+      *   Program DFH0XST2 reads the EBCDIC SAML token from           *
+      *   TSQ DFH0XSTI, puts it into the DFHSAML-TOKEN container,     *
+      *   then LINKs to the DFHSAML program to validate the token     *
+      *   and extract it into containers. It then writes these        *
+      *   containers to TSQ DFH0XSTO.                                 *
+      *                                                               *
+      *   The IVP uses the default options for the JVMSERVER          *
+      *   and doesn't perform any signature validation.               *
+      *   The sample SAML token is not signed.                        *
+      *   If this doesn't match your configuration you will need      *
+      *   to modify DFH0XST2.                                         *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *  $MOD(DFH0XST1),COMP(SAMPLES),PROD(CICS TS ):                 *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      *      R34328 670 130404 HDDLCRP : SAML Feature Pack            *
+      *      D79725 690 131015 HDIYAJL : IVP changes                  *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0XST1.
+
+       ENVIRONMENT DIVISION.
+           EJECT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *****************************************************************
+      * Input values
+      *****************************************************************
+       01 IVP-INPUT.
+          03  FILLER             PIC X(5).
+          03  IVP-INPUT-TEMPLATE PIC X(48).
+       77 IVP-INPUT-LEN          PIC S9(4) COMP VALUE +0.
+      *****************************************************************
+      * Input and output TS Queues.
+      *****************************************************************
+       77 DOC-SAML            PIC X(48) VALUE 'DFH0XSTI'.
+       77 TSQ-INPUT           PIC X(8) VALUE 'DFH0XSTI'.
+       77 TSQ-OUTPUT          PIC X(8) VALUE 'DFH0XSTO'.
+       77 OK-MSG              PIC X(19) VALUE 'SAML IVP SUCCESSFUL'.
+      *****************************************************************
+      * Sample SAML token
+      *****************************************************************
+       77 SAML-TOKEN          PIC X(32000).
+       77 SAML-TOKEN-FLEN     PIC S9(8) COMP.
+       77 SAML-TOKEN-LEN      PIC S9(4) COMP.
+       77 DOC-TOKEN           PIC X(16).
+
+       LINKAGE SECTION.
+           EJECT.
+
+      *****************************************************************
+      ***             Write SAML token to TSQ                       ***
+      *****************************************************************
+       PROCEDURE DIVISION USING DFHEIBLK.
+
+      *---------------------------------------------------------------*
+      * Main processing starts here.
+      *---------------------------------------------------------------*
+
+       MAIN-PROCESSING SECTION.
+      *****************************************************************
+      * Delete input queue
+      *****************************************************************
+           EXEC CICS DELETEQ TS QUEUE(TSQ-INPUT) NOHANDLE
+           END-EXEC
+
+      *****************************************************************
+      * Delete output queue
+      *****************************************************************
+           EXEC CICS DELETEQ TS QUEUE(TSQ-OUTPUT) NOHANDLE
+           END-EXEC
+
+      *****************************************************************
+      * Syncpoint after deletes in case queues are recoverable
+      *****************************************************************
+           EXEC CICS SYNCPOINT NOHANDLE
+           END-EXEC
+
+      *****************************************************************
+      * See if a DOCTEMPLATE was specified
+      *****************************************************************
+           MOVE SPACES TO IVP-INPUT
+           EXEC CICS
+                RECEIVE INTO(IVP-INPUT)
+                LENGTH(IVP-INPUT-LEN)
+                MAXLENGTH(LENGTH OF IVP-INPUT)
+           END-EXEC
+
+      *****************************************************************
+      * Read SAML token (in UTF 8)
+      *****************************************************************
+           IF IVP-INPUT-TEMPLATE = SPACES
+             EXEC CICS DOCUMENT CREATE
+                  DOCTOKEN(DOC-TOKEN)
+                  TEMPLATE(DOC-SAML)
+             END-EXEC
+           ELSE
+             EXEC CICS DOCUMENT CREATE
+                  DOCTOKEN(DOC-TOKEN)
+                  TEMPLATE(IVP-INPUT-TEMPLATE)
+             END-EXEC
+           END-IF
+           EXEC CICS DOCUMENT RETRIEVE
+                DOCTOKEN(DOC-TOKEN)
+                INTO(SAML-TOKEN)
+                MAXLENGTH(LENGTH OF SAML-TOKEN)
+                LENGTH(SAML-TOKEN-FLEN)
+                DATAONLY
+           END-EXEC
+
+      *****************************************************************
+      * Write SAML token to input queue
+      *****************************************************************
+           MOVE SAML-TOKEN-FLEN TO SAML-TOKEN-LEN
+           EXEC CICS WRITEQ TS
+                QUEUE(TSQ-INPUT)
+                FROM(SAML-TOKEN)
+                LENGTH(SAML-TOKEN-LEN)
+           END-EXEC.
+      *****************************************************************
+      * Call program to process TSQ
+      *****************************************************************
+           EXEC CICS LINK PROGRAM('DFH0XST2')
+           END-EXEC.
+      *****************************************************************
+      * If we came back the IVP was successful.
+      *****************************************************************
+           EXEC CICS SEND TEXT FROM(OK-MSG) ERASE
+           END-EXEC.
+
+           EXEC CICS RETURN
+           END-EXEC.
+
+       MAIN-PROCESSING-EXIT.
+           GOBACK.
+           EJECT.

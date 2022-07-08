@@ -1,0 +1,107 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99DY     TITLE 'DFH99DY - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - ISSUE DYNALLOC SVC AND ANALYZE RESPONSE'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99DY                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Issue Dynalloc SVC and Analyse Response          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99DY),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99DY  CSECT
+DFH99DY  DFH99M PROLOG,PARMS=NO,REGS=(B,RC,E),MAP=S99
+         DFH99M ERRSTOP,S,NOSVC    DONT ISSUE DYNALLOC IF ERRORS
+         TM    DYNF1,NOSVC99       IS SVC INHIBITED?
+         BO    NOSVC
+* SET VL BIT IN LAST TEXT UNIT POINTER                                *
+         L     B,RBPTR             B -> S99RB
+         USING S99RB,B
+         L     1,S99TXTPP          POINT AT FIRST TXT UNIT PTR
+         A     1,TUPLIX            POINT AT ..
+         S     1,=F'4'             .. LAST TXT UNIT PTR USED
+         OI    0(1),S99TUPLN       SET VL BIT IN LAST TXT UNIT PTR
+***********************************************************************
+* TEST IF SUBTASK CODE, AND ISSUE ATTACH IF CODE PRESENT              *
+***********************************************************************
+         TM    STATF1,DCSAOK       IS SUBTASK THERE?
+         BZ    NOSUBTSK            BR TO INLINE CODE IF NOT.
+***********************************************************************
+* PREPARE FOR ATTACH                                                  *
+***********************************************************************
+DYNECB   DFH99M AUTO,F             SUBTASK COMPLETION ECB
+DYNTCB   DFH99M AUTO,F             SUBTASK TCB ADDRESS
+         XC    DYNECB,DYNECB
+         LA    1,RBPTR             1->S99RBPTR
+         LA    E,DYNECB
+***********************************************************************
+* ATTACH SUBTASK, WAIT FOR IT, AND DETACH IT.                         *
+***********************************************************************
+         ATTACH EP=DFH99SVC,ECB=(E)                            @BA32218
+         ST    1,DYNTCB            SAVE A(TCB) FOR DETACH
+         EXEC CICS WAIT EVENT ECADDR(E)
+         DETACH DYNTCB
+         SR    RC,RC               GET RETURN CODE
+         ICM   RC,7,DYNECB+1       .. OUT OF ECB
+         B     RCANAL
+         SPACE 3
+***********************************************************************
+* SUBTASK CODE NOT THERE - ISSUE DYNALLOC IN CICS TASK.               *
+***********************************************************************
+NOSUBTSK DS    0H
+         LA    1,RBPTR             1->S99RBPTR
+         L     15,=V(DFHDYNA)      CODE IS IN MAIN PROGRAM
+         BALR  14,15               USE MAIN TASK SVC ..
+         LR    RC,15               .. AND CATCH ITS RETURN CODE
+***********************************************************************
+* ANALYZE RETURN CODES FROM DYNALLOC
+***********************************************************************
+RCANAL   DS    0H
+         OI    DYNF1,SVC99         TURN ON SVC-ISSUED FLAG.
+* REGISTER 15 RETURN CODE
+         DFH99M ID,1000
+         DFH99M TEXT,(DYNALLOC,RETURN,CODE)
+         DFH99M INSERT,(RC),FORMAT=BIN
+* REQUEST BLOCK ERROR CODE
+         DFH99M TEXT,(,ERROR,CODE)
+         DFH99M INSERT,S99ERROR,FORMAT=HEX2
+* REQUEST BLOCK INFORMATION CODE
+         DFH99M TEXT,(,REASON,CODE)
+         DFH99M INSERT,S99INFO,FORMAT=HEX2
+         DFH99M FILE
+         SPACE 3
+***********************************************************************
+* RETURN TO CALLER
+***********************************************************************
+         B     RETURN              BYPASS ISSUING FAILURE MSG
+NOSVC    DS    0H
+         NI    DYNF1,255-SVC99     TURN OFF SVC-ISSUED FLAG.
+         DFH99M ID,1333
+         DFH99M TEXT,(DYNALLOC,NOT,ISSUED)
+         DFH99M FILE
+RETURN   DFH99M EPILOG
+         END

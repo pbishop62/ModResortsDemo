@@ -1,0 +1,222 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99KC     TITLE 'DFH99KC - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - KEYWORD VALUE CONVERSION'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99KC                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Keyword Value Conversion                         *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* FUNCTION: TO CREATE TEXT UNIT VALUES FROM KEYWORD VALUES IN         *
+*           PARENS FOLLOWING OPERAND KEYWORD.                         *
+*                                                                     *
+* INPUT:    TOKADDR ->LEFT PAREN (NOT USED FOR RETND VALUE)  USE/SET  *
+*           TUSPACE ->START OF TEXT UNIT                     USE      *
+*           TULEN   = CUMULATIVE LENGTH OF TEXT UNIT SO FAR  USE/SET  *
+*           DESCRIPT->OPERAND DESCRIPTION IN KEYTAB          USE      *
+*                                                                     *
+* OUTPUT:   VALUES WITH THEIR PREFIX LENGTHS ARE ADDED TO THE         *
+*           CURRENT TEXT UNIT. TULEN IS UPDATED TO COUNT THE          *
+*           STORAGE CONSUMED.                                         *
+*                                                                     *
+* THERE ARE TWO KINDS OF KEYWORDS:                                    *
+*   1. STANDARD KEYWORD, WHOLE STRING LOOKED UP IN TABLE.             *
+*   2. KEYSTRING, EACH CHARACTER LOOKED UP, RESULTS OR-ED TOGETHER.   *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99KC),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99KC  CSECT
+DFH99KC  DFH99M PROLOG,                                                *
+               REGS=(T,            CURRENT TOKEN                       *
+               TU,                 START OF CURRENT TEXT UNIT          *
+               VU,                 START OF CURRENT VALUE SPACE        *
+               D,                  CURRENT OPERAND DESCRIPTION         *
+               KS,                 CURRENT VALUE'S KEYSET              *
+               X,                  WORK, VALUE & MSG BUILDING          *
+               M,                  MASK FOR VALUE                      *
+               L),                 LENGTH OF CURRENT VALUE             *
+               PARMS=NO,MAP=S99
+         L     D,DESCR             D->OPND DESCRIPTION
+         USING DESCRIPT,D
+         L     VU,TUSPACE          VU->START OF TEXT UNIT
+         USING S99TUNIT,VU
+         LA    VU,S99TUENT         POINT AT FIRST VALUE SPACE
+         USING S99TUFLD,VU
+         TM    DSFLAG,DSRET        TEST IF MAKING SPACE FOR A
+         BO    KEYRET              RETURNED VALUE, GO DO IT.
+KSTRFLAG DFH99M AUTO,X             SCANNING-KEYSTRING FLAG
+         MVI   KSTRFLAG,0          SET NOT IN KEYSTRING
+         MVI   STRTOKTY,TKW        SET UP TOKEN TYPE
+         MVI   STRTOKL,1           SET UP TOKEN LENGTH
+         B     NEXTOKEN            GO FETCH FIRST TOKEN
+NEXTVAL  CLI   KSTRFLAG,0          IF A KEYSTRING THEN ..
+         BE    NEXTOKEN
+***********************************************************************
+* .. SCAN THE KEYSTRING, DRIVING THE PROCESSING FOR EACH CHARACTER.
+***********************************************************************
+STRPTR   DFH99M AUTO,A             ADDRESS OF KEYSTRING TOKEN
+STRPOS   DFH99M AUTO,H             INDEX TO CURRENT CHAR
+STRTOK   DFH99M AUTO,0CL3          TOKEN BUILT FROM CURRENT CHAR
+STRTOKTY DFH99M AUTO,X             TOKEN TYPE
+STRTOKL  DFH99M AUTO,X             STRING LENGTH
+STRTOKV  DFH99M AUTO,C             ACTUAL CHARACTER
+STRSCAN  L     T,STRPTR            X -> ORIGINAL TOKEN ..
+***********************************************************************
+* .. SO THAT TOKEN SCAN MAY PROCEED, OR NEXT CHAR BE EXTRACTED
+***********************************************************************
+         MVI   KSTRFLAG,0          SET OFF IN CASE END.
+         CLC   1(1,T),STRPOS+1     IF CURSOR ALREADY AT END ..
+         BNH   TUDONE              .. TEXT UNIT IS FINISHED.
+         MVI   KSTRFLAG,1          SET ON AGAIN, STILL SCANNING.
+         LA    X,1                 ADD 1 ..
+         AH    X,STRPOS            .. TO CURSOR ..
+         STH   X,STRPOS            .. AND STORE BACK.
+         LA    X,1(X,T)            X -> CURRENT CHAR
+         MVC   STRTOKV,0(X)        SET UP TOKEN VALUE
+         LA    T,STRTOK            T-> TOKEN
+         B     KWLOOKUP            GO SEARCH FOR IT
+NEXTOKEN DFH99M NEXTOK,T,RP=ENDVAL,HELP=HELP
+***********************************************************************
+* T NOW POINTS AT A VALUE WHICH MUST BE LOOKED UP IN THE KEYSET
+* WHICH IS IN THE DESCRIPTION
+***********************************************************************
+         TM    DSFLAG,DSKEYSTR     IF A KEYSTRING ..
+         BNO   KWLOOKUP
+         CLI   KSTRFLAG,0          AND SCAN NOT STARTED ..
+         BNE   KWLOOKUP
+*                          .. THEN INITIALISE FOR SCAN OF KEYSTRING
+         MVI   KSTRFLAG,1          SET TO SHOW WE ARE IN KEYSTRING
+         ST    T,STRPTR            SAVE A(ACTUAL TOKEN)
+         XC    STRPOS,STRPOS       CURSOR = 0, NOT SCANNED
+         XC    S99TUPRM(2),S99TUPRM CLEAR TEXT UNIT BEFORE OR-ING
+         B     STRSCAN             GO SCAN STRING
+LOOKP3   DFH99M AUTO,32A           ANSWER AREA FOR LOOKUP
+*
+KWLOOKUP DFH99M INVOKE,DFH99LK,((T),DSKEYSET,LOOKP3) LOOKUP
+         B     *+4(15)
+         B     UNIQUE              ONE HIT
+         B     AMBIG               MULTIPLE HITS
+         B     NOTFOUND            NO HITS
+***********************************************************************
+* IF IT IS FOUND UNIQUELY, ITS CODED LENGTH MUST BE DETERMINED,
+* AND THE CODED VALUE EXTRACTED INTO THE TEXT-UNIT.
+***********************************************************************
+UNIQUE   DS    0H
+         L     KS,LOOKP3           KS->KEYSET ENTRY
+         USING KEYSET,KS
+*   CODED VALUES SHOULD BE 1 OR 2 BYTE BINARY
+         CLI   DSKTYPE,TBIN1
+         BNE   BY1                 BR IF NOT 1-BYTE
+         MVC   S99TULEN,=AL2(1)    SET LENGTH IN TEXT UNIT TO 1
+         CLI   KSTRFLAG,0          IF IN KEYSTRING ..
+         BE    MOVE1
+OR1      OC    S99TUPRM(1),KSCKW   OR CODED VALUE ..
+         B     SETL1               ELSE ..
+MOVE1    MVC   S99TUPRM(1),KSCKW   MOVE CODED VALUE.
+SETL1    LA    L,3                 SIZE OF LENGTH + VALUE
+         B     TUDONE
+BY1      CLI   DSKTYPE,TBIN2
+         BNE   BY2                 BR IF NOT 2-BYTE
+         MVC   S99TULEN,=AL2(2)    SET LENGTH IN TEXT UNIT TO 1
+         CLI   KSTRFLAG,0          IF IN KEYSTRING ..
+         BE    MOVE2
+OR2      OC    S99TUPRM(2),KSCKW   OR CODED VALUE ..
+         B     SETL2               ELSE ..
+MOVE2    MVC   S99TUPRM(2),KSCKW   MOVE CODED VALUE
+SETL2    LA    L,4                 SIZE OF LENGTH + VALUE
+         B     TUDONE
+BY2      EXEC CICS ABEND ABCODE('AKSE'). ERROR IN KEYSET
+***********************************************************************
+* FOR AMBIGUOUS HITS, A MESSAGE IS ISSUED GIVING THE POSSIBILITIES,
+* AND THE VALUE SKIPPED.
+***********************************************************************
+AMBIG    DS    0H
+         LA    KS,LOOKP3           KS->TOKENLIST TOKEN
+         L     X,OPERAND           X->OPERAND
+         DFH99M ID,3061
+         DFH99M INSERT,(X),FORMAT=TOKEN
+         DFH99M TEXT,(HAS,AMBIGUOUS,VALUE)
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(.,MIGHT,BE)
+         DFH99M INSERT,(KS),FORMAT=TOKENLIST
+         DFH99M FILE
+         B     NEXTVAL
+***********************************************************************
+* IF THE VALUE IS NOT FOUND, A MESSAGE IS ISSUED AND THE VALUE SKIPPED
+***********************************************************************
+NOTFOUND DS    0H
+         L     X,OPERAND           X->OPERAND
+         DFH99M ID,3062
+         DFH99M TEXT,(INVALID,VALUE)
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,FOR
+         DFH99M INSERT,(X),FORMAT=TOKEN
+         DFH99M FILE
+         B     NEXTVAL
+***********************************************************************
+*   PREPARE SPACE FOR RETURNED VALUE
+***********************************************************************
+KEYRET   CLI   DSKTYPE,TBIN1
+         BNE   BY1R                BR IF NOT 1-BYTE
+         MVC   S99TULEN,=AL2(1)    SET LENGTH IN TEXT UNIT TO 1
+         MVC   S99TUPRM(1),=X'0000' NULL VALUE
+         LA    L,3                 SIZE OF LENGTH + VALUE
+         B     TUDONER
+BY1R     CLI   DSKTYPE,TBIN2
+         BNE   BY2R                BR IF NOT 2-BYTE
+         MVC   S99TULEN,=AL2(2)    SET LENGTH IN TEXT UNIT TO 1
+         MVC   S99TUPRM(2),=X'0000' NULL VALUE
+         LA    L,4                 SIZE OF LENGTH + VALUE
+         B     TUDONER
+BY2R     EQU   BY2                 GO ABEND 'AKSE'
+* UPDATE TULEN FOR RETURNED VALUE.
+TUDONER  A     L,TULEN
+         ST    L,TULEN
+         B     KEYRETN
+* IF IN KEYSTRING, FETCH NEXT CHAR, ELSE
+TUDONE   CLI   KSTRFLAG,0
+         BNE   NEXTVAL
+***********************************************************************
+* UPDATE VU, AND TULEN, THE LENGTH OF THE CURRENT TEXT UNIT.
+***********************************************************************
+         AR    VU,L                BUMP TO NEXT VALUE SPACE
+         A     L,TULEN
+         ST    L,TULEN
+         B     NEXTVAL
+HELP     L     X,OPERAND           OPERAND KEYWORD
+         DFH99M ID,4999
+         DFH99M INSERT,(X),FORMAT=TOKEN
+         DFH99M TEXT,(OPERAND,IS:)
+         DFH99M FILE
+         DFH99M INVOKE,DFH99VH     VALHELP
+         B     NEXTVAL
+ENDVAL   DFH99M NEXTOK,T           BUMP TO NEXT KWD OPND
+         ST    T,TOKADDR
+KEYRETN  DFH99M EPILOG
+         END

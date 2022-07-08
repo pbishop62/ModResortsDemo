@@ -1,0 +1,284 @@
+DSRP     TITLE 'CUSTOMER INFORMATION CONTROL SYSTEM  -  DISTRIBUTED    *
+                ROUTING SAMPLE EXIT PROGRAM'
+         SPACE 2
+*
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFHDSRP                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  DISTRIBUTED DYNAMIC ROUTING PROGRAM     *
+*                    (SAMPLE ASSEMBLER VERSION)                       *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*       Licensed Materials - Property of IBM                          *
+*                                                                     *
+*       "Restricted Materials of IBM"                                 *
+*                                                                     *
+*       5655-Y04                                                      *
+*                                                                     *
+*       (C) Copyright IBM Corp. 1998, 2004"                           *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*                                                                     *
+*    To enable routing of transactions under the following            *
+*    circumstances...                                                 *
+*      - the result of a Scheduler Services attach request,           *
+*        that is transactions associated with a CICS BTS activity.    *
+*      - the result of a non-terminal dynamic START request.          *
+*      - the result of a request to create a requeststream,           *
+*                                                                     *
+*                                                                     *
+*    When invoked, the Dynamic Router's function depends upon the     *
+*    value held in the 'DYRFUNC' field of the commarea DSECT passed   *
+*    to it by CICS (DFHSHRT2).                                        *
+*    It may take 1 of 7 values:                                       *
+*                                                                     *
+*    DYRFUNC = C'0' If the Router has been invoked to select a        *
+*                   target region                                     *
+*            = C'1' If the Router has been invoked due to a route     *
+*                   selection error                                   *
+*            = C'2' If the Router has been invoked at routed          *
+*                   transaction or program termination                *
+*            = C'3' If the router is being invoked to notify it       *
+*                   that a transaction or DPL request is being        *
+*                   statically routed                                 *
+*            = C'4' If the router is being invoked to notify it       *
+*                   that the transaction or DPL request abended       *
+*            = C'5' If the router is being invoked to indicate        *
+*                   that the transaction is starting in the target    *
+*                   region.                                           *
+*            = C'6' If the router is being invoked to indicate        *
+*                   that the transaction has been routed to the       *
+*                   target region.                                    *
+*                                                                     *
+*    This sample router accepts the default SYSID passed to it        *
+*    on initial invocation and sets the return code to zero.          *
+*                                                                     *
+*    For CICS BTS schedule requests it specifies that no exit be      *
+*    invoked when the transaction initiates and terminates.           *
+*                                                                     *
+*    For Dynamic Start requests it specifies that initiation and      *
+*    termination invocations are to be made when the transaction      *
+*    executes.                                                        *
+*                                                                     *
+*    If invoked due to a route selection error, this sample           *
+*    merely indicates that such an error has occurred.                *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*    RESTRICTIONS = None                                              *
+*    REGISTER CONVENTIONS = Standard exec interface convention        *
+*    MODULE TYPE  = Executable                                        *
+*    PROCESSOR    = Assembler                                         *
+*    ATTRIBUTES   = Read only, Serially Reusable                      *
+*                                                                     *
+* ------------------------------------------------------------------- *
+*                                                                     *
+* ENTRY POINT = DFHDSRP                                               *
+*                                                                     *
+*     PURPOSE = All Functions                                         *
+*                                                                     *
+*     LINKAGE = via a DFHPGLUM LINK_URM call a                        *
+*               with Commarea mapped by DFHDYPDS                      *
+*                                                                     *
+*     INPUT   = See COMMAREA structure in copybook DFHDYPDS A         *
+*                                                                     *
+* ------------------------------------------------------------------- *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFHDSRP),COMP(ISC),PROD(CICS TS ):                      *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= 709    530 980311 HDADNF : Create Program                   *
+*    $P1= M29272 530 980804 HD3YIJM : Comments on making unroutable   *
+*    $P2= M30716 530 981123 HDFVGMB : Update CBTS routers for Dynamic *
+*    $P3= M30885 530 981207 HDADNF  : Alter CBTS to CICS BTS          *
+*    $P4= M30918 530 981209 HDFVGMB : Make DFHDSRP modules consistent *
+*    $P5= M18067 610 010202 HD3YIJM : Comments for EJB                *
+*    $01= A81378 640 040212 HDBGNRB: Migrate PQ81378 from SPA R630    *
+*                                                                     *
+***********************************************************************
+*
+***********************************************************************
+*        REGISTER DEFINITIONS                                         *
+***********************************************************************
+*
+UAPTR    EQU   8                       Pointer to userarea         @01A
+COMPTR   EQU   10                      Pointer to commarea passed
+         SPACE 1
+*
+***********************************************************************
+*        COMMAREA DSECT                                               *
+***********************************************************************
+*
+         COPY  DFHDYPDS                Include DSECT to map commarea
+         EJECT
+*
+***********************************************************************
+*        DISTRIBUTED DYNAMIC ROUTING PROGRAM CONTROL SECTION          *
+***********************************************************************
+*
+DFHDSRP  CSECT
+DFHDSRP  AMODE 31                      Can addr storage above the line
+DFHDSRP  RMODE ANY                     Sample can run above the line
+*
+         L     COMPTR,DFHEICAP         Establish addressability to the
+         USING DFHDYPDS,COMPTR         commarea passed from relay prog
+         L     UAPTR,DYRUAPTR          Establish addressabilit    @01A
+         USING DYRUAREA,UAPTR          to the user area           @01A
+         SPACE 1
+*
+***********************************************************************
+*        CHECK THAT THE COMMAREA HAS ACTUALLY BEEN PASSED             *
+***********************************************************************
+*
+         MVC   DYRRETC,RETCOD8         Set return code anticipating
+*                                      bad commarea. Will be set to
+*                                      zero value later on if ok
+         CLC   EIBCALEN,=AL2(DYRCLEN)  Is commarea correct length?
+         BNE   FINISHED                .. No, exit from router
+         SPACE 1
+*
+***********************************************************************
+*        SET UP DYROPTER DEPENDING ON DYRTYPE                         *
+***********************************************************************
+*
+         MVC DYROPTER,=C'N'            Default to N - do not reinvoke
+         CLI DYRTYPE,C'6'              Is this a dynamic START?
+         BNE FUNCTION                  No, next
+         CLI DYRFUNC,C'0'              Route select?
+         BE  REINVOKE                  yes, branch
+         CLI DYRFUNC,C'1'              Route error?
+         BE  REINVOKE                  yes, branch
+         CLI DYRFUNC,C'5'              Route initialisation
+         BE  REINVOKE                  yes, branch
+         B   FUNCTION                  leave DYROPTER unchanged
+REINVOKE DS 0H
+         MVI DYROPTER,C'Y'             Change to reinvoke the router
+         SPACE 1
+FUNCTION DS 0H
+***********************************************************************
+*        SELECT WHICH FUNCTION IS REQUIRED OF THE ROUTER              *
+***********************************************************************
+*
+         CLI   DYRFUNC,C'0'            Initial invocation of router?
+         BE    RTSELECT                .. Yes, perform route selection
+         CLI   DYRFUNC,C'1'            Invoked due to routing error?
+         BE    RTERROR                 .. Yes, handle this condition
+         CLI   DYRFUNC,C'2'            Invoked after transaction end?
+         BE    TRANTERM                .. Yes, perform any housekeeping
+         CLI   DYRFUNC,C'3'            Invoked for static route
+         BE    RTNOTIFY                .. Yes, perform any housekeeping
+         CLI   DYRFUNC,C'4'            Invoked after transaction abend?
+         BE    RTABEND                 .. Yes, perform any housekeeping
+         CLI   DYRFUNC,C'5'            Invoked at transaction          *
+                                       initiation?
+         BE    RTINIT                  ..Yes, perform any housekeeping
+         CLI   DYRFUNC,C'6'            Invoked once the transaction has*
+                                       been routed to the target?
+         BE    RTRTD                   ..Yes, perform any housekeeping
+*
+         MVC   DYRRETC,RETCOD8         Invalid request.
+         B     FINISHED                Should never get this far!
+         SPACE 1
+*
+***********************************************************************
+*        PERFORM ANY ROUTING FUNCTION REQUIRED                        *
+***********************************************************************
+*
+*        Return code set as for default
+*
+RTSELECT DS    0H
+         MVC   DYRRETC,RETCOD0         Set return code to zero, (ok)
+         B     FINISHED
+         SPACE 1
+*
+***********************************************************************
+*        HANDLE ANY RE-ROUTING REQUIRED AFTER A SELECTION ERROR       *
+***********************************************************************
+*
+RTERROR  DS    0H
+         MVC   DYRRETC,RETCOD8         Make the request unroutable
+         B     FINISHED                (error message will be issued)
+         SPACE 1
+*
+***********************************************************************
+*        PERFORM ANY POST TRANSACTION                                 *
+***********************************************************************
+*
+TRANTERM DS    0H                      (Should not get here in sample)
+         MVC   DYRRETC,RETCOD8
+         CLI   DYRTYPE,C'6'            Is this a dynamic start
+         BNE   FINISHED                yes, change
+         MVC   DYRRETC,RETCOD0         zeroise r/c
+         B     FINISHED
+         SPACE 1
+*
+***********************************************************************
+*        PERFORM ANY NOTIFICATION PROCESSING                          *
+***********************************************************************
+*
+*        Return code set as for default
+*
+RTNOTIFY DS    0H
+         MVC   DYRRETC,RETCOD0         Set return code to zero, (ok)
+         B     FINISHED
+         SPACE 1
+*
+***********************************************************************
+*        PERFORM ANY ABEND NOTIFICATION PROCESSING                    *
+***********************************************************************
+*
+RTABEND  DS    0H                      (Should not get here in sample)
+         MVC   DYRRETC,RETCOD8
+         CLI   DYRTYPE,C'6'            Is this a dynamic start
+         BNE   FINISHED                yes
+         MVC   DYRRETC,RETCOD0         zeroise r/c
+         B     FINISHED
+         SPACE 1
+*
+***********************************************************************
+*        PERFORM ANY INITIATE NOTIFICATION PROCESSING                 *
+***********************************************************************
+*
+RTINIT   DS    0H                      (Should not get here in sample)
+         MVC   DYRRETC,RETCOD8
+         CLI   DYRTYPE,C'6'            Is this a dynamic start
+         BNE   FINISHED                yes
+         MVC   DYRRETC,RETCOD0         zeroise r/c
+         B     FINISHED
+         SPACE 1
+*
+***********************************************************************
+*        PERFORM ANY ROUTED PROCESSING                                *
+***********************************************************************
+*
+*        Return code set as for default
+*
+RTRTD    DS    0H
+         MVC   DYRRETC,RETCOD0         Set return code to zero, (ok)
+         B     FINISHED
+         SPACE 1
+*
+***********************************************************************
+*        DEFINE CONSTANTS                                             *
+***********************************************************************
+*
+RETCOD0  DC    F'0'                    Return code zero, (ok)
+RETCOD8  DC    F'8'                    Return code eight, (error)
+         SPACE 1
+*
+***********************************************************************
+*        RETURN CONTROL TO CALLER                                     *
+***********************************************************************
+*
+FINISHED DS    0H
+         EXEC CICS RETURN
+         END   DFHDSRP

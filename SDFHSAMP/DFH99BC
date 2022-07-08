@@ -1,0 +1,143 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99BC     TITLE 'DFH99BC - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - CONVERSION TO BINARY TARGET'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99BC                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Conversion to Binary Target                      *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* FUNCTION: TO CREATE TEXT UNIT VALUES FROM TEXT-TYPE VALUES IN       *
+*           PARENS FOLLOWING OPERAND KEYWORD.                         *
+*                                                                     *
+* INPUT:    TOKADDR ->LEFT PAREN (NOT USED FOR RETND VALUE)  USE/SET  *
+*           TUSPACE ->START OF TEXT UNIT                     USE      *
+*           TULEN   = CUMULATIVE LENGTH OF TEXT UNIT SO FAR  USE/SET  *
+*           DESCRIPT->OPERAND DESCRIPTION IN KEYTAB          USE      *
+*                                                                     *
+* OUTPUT:   VALUES WITH THEIR PREFIX LENGTHS ARE ADDED TO THE         *
+*           CURRENT TEXT UNIT. TULEN IS UPDATED TO COUNT THE          *
+*           STORAGE CONSUMED.                                         *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99BC),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99BC  CSECT
+DFH99BC  DFH99M PROLOG,                                                *
+               REGS=(T,            CURRENT TOKEN                       *
+               TU,                 START OF CURRENT TEXT UNIT          *
+               VU,                 START OF CURRENT VALUE SPACE        *
+               D,                  CURRENT OPERAND DESCRIPTION         *
+               W,                  WORK, VALUE & MSG BUILDING          *
+               X,                  WORK, VALUE & MSG BUILDING          *
+               M,                  MASK FOR VALUE                      *
+               L),                 LENGTH OF CURRENT VALUE             *
+               PARMS=NO,MAP=S99
+DWORD    DFH99M AUTO,D             FOR CVB
+         L     D,DESCR             D->OPND DESCRIPTION
+         USING DESCRIPT,D
+         L     VU,TUSPACE          VU->START OF TEXT UNIT
+         USING S99TUNIT,VU
+         LA    VU,S99TUENT         POINT AT FIRST VALUE SPACE
+         USING S99TUFLD,VU
+         TM    DSFLAG,DSRET        ARE WE TO PROVIDE SPACE
+         BO    BINRET              FOR A RETURNED VALUE?
+NEXTVAL  DFH99M NEXTOK,T,RP=ENDVAL,HELP=HELP
+* T NOW POINTS AT A VALUE. CHECK IT IS VALID.
+         SR    L,L                 CLEAR LENGTH REG
+         IC    L,1(,T)             PICK UP CURRENT TEXT LENGTH
+         CLI   0(T),TNUM           IS NUMERIC VALUE PROVIDED?
+         BE    CHKLEN
+         DFH99M ID,3051
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(NOT,NUMERIC)
+         DFH99M FILE
+         B     NEXTVAL
+CHKLEN   CH    L,=H'15'            IS LENGTH TOO BIG?
+         BNH   CONVERT
+         DFH99M ID,3052
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(LONGER,THAN,15,DIGITS)
+         DFH99M FILE
+         B     NEXTVAL
+* NOW CONVERT THE VALUE TO BINARY
+CONVERT  BCTR  L,0
+         EX    L,PACK
+         CP    DWORD,=P'2147483647' TOO BIG FOR CVB?
+         BNH   CVB                 BR IF NOT
+         ZAP   DWORD,=P'2147483647' SET TO MAXIMUM
+         DFH99M ID,2054
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(TOO,BIG.,SET,TO,2147483647)
+         DFH99M FILE
+CVB      CVB   W,DWORD
+         B     CONVERT1
+* FOR RETURNED VALUE, PROVIDE A ZERO VALUE
+BINRET   SR    W,W
+* NOW PICK UP THE MASK FROM THE DESCRIPTION, AND CHECK OVERFLOW
+CONVERT1 IC    M,DSVTYPE           PICK UP TARGET TYPE
+         N     M,=F'15'            GET JUST THE MASK BITS
+         SR    X,X                 CLEAR BEFORE ICM
+         EX    M,ICM               PICK UP MAX VALUE
+         CLR   W,X                 IF W > MAX VALUE
+         BNH   VALOK               ISSUE MSG AND TRUNCATE
+         DFH99M ID,2053
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(TOO,BIG.,SET,TO)
+         DFH99M INSERT,(X),FORMAT=BIN
+         DFH99M FILE
+         LR    W,X
+* NOW PUT THE VALUE INTO THE TEXT UNIT
+VALOK    EX    M,STCM              SET VALUE
+         SR    L,L
+         IC    L,LEN(M)            DECODE MASK TO LENGTH
+         STCM  L,B'0011',S99TULEN  SET IN TEXT UNIT
+         LA    VU,L'S99TULEN(VU,L) BUMP TO NEXT VALUE SPACE
+* UPDATE TULEN, THE LENGTH OF THE CURRENT TEXT UNIT.
+         A     L,TULEN
+         LA    L,L'S99TULEN(,L)
+         ST    L,TULEN
+         TM    DSFLAG,DSRET        WAS IT A RETURNED VALUE?
+         BNO   NEXTVAL             IF NOT, LOOP FOR NEXT VALUE.
+         B     BINRETN
+HELP     L     W,OPERAND           OPERAND KEYWORD
+         DFH99M ID,4999
+         DFH99M INSERT,(W),FORMAT=TOKEN
+         DFH99M TEXT,(OPERAND,IS:)
+         DFH99M FILE
+         DFH99M INVOKE,DFH99VH     VALHELP
+         B     NEXTVAL
+PACK     PACK  DWORD,2(0,T)
+ICM      ICM   X,0,=X'FFFFFFFF'
+STCM     STCM  W,0,S99TUPRM
+LEN      DC    X'00010002000000030000000000000004'
+*                0 1 2 3 4 5 6 7 8 9 A B C D E F
+ENDVAL   DFH99M NEXTOK,T           BUMP TO NEXT KWD OPND
+         ST    T,TOKADDR
+BINRETN  DFH99M EPILOG
+         END

@@ -1,0 +1,196 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99ML     TITLE 'DFH99ML - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - BUILD MESSAGE TEXT FROM TOKENLIST'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99ML                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Build Message Text From Tokenlist                *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* BUILDS TEXT FROM A TOKENLIST.                                       *
+* INPUT: R1-> A(VARIABLE LENGTH PARMLIST)   USE                       *
+*             EACH ADDRESS IS THE ADDRESS OF A TOKEN.                 *
+*             THE TOKENS ARE TAKEN IN ORDER, CONVERTED TO DISPLAY     *
+*             FORM, AND TEXTPUT IS CALLED TO ADD EACH TO THE OUTPUT.  *
+*                                                                     *
+*        SINCE THE TOKENLIST CAN CONTAIN A TOKENLIST TOKEN, THIS      *
+*        PROCEDURE IS RECURSIVE.                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99ML),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99ML  CSECT
+DFH99ML  DFH99M PROLOG,PARMS=(VLLIST),REGS=(T,L,TX,TL,B,LISTPTR)
+         SPACE 3
+CTEXT    DFH99M AUTO,CL256         SPACE TO CONVERT INTO
+         LA    TX,CTEXT            OUTPUT TEXT POSITION
+         L     LISTPTR,VLLIST      TOKENLIST CURSOR
+* LOOP FOR EACH PARAMETER IN LIST
+LOOP     SR    TL,TL               NO CURRENT LENGTH
+         L     T,0(,LISTPTR)       POINT AT NEXT TOKEN
+         CLI   0(T),TNUM
+         BNH   TEXTTYPE            BR IF KWD OR NUMERIC
+         CLI   0(T),TLP
+         BE    LPTYPE              BR IF (
+         CLI   0(T),TRP
+         BE    RPTYPE              BR IF )
+         CLI   0(T),TLIST
+         BE    LISTTYPE            BR IF TOKENLIST
+         CLI   0(T),TBIN1
+         BE    BINTYPE             BR IF BINARY TYPE
+         CLI   0(T),TBIN2
+         BE    BINTYPE             BR IF BINARY TYPE
+         CLI   0(T),TBIN3
+         BE    BINTYPE             BR IF BINARY TYPE
+         CLI   0(T),TBIN4
+         BE    BINTYPE             BR IF BINARY TYPE
+         CLI   0(T),THEX1
+         BL    NOTHEX              BR IF NOT HEX
+         CLI   0(T),THEX4
+         BNH   HEXTYPE             BR IF HEX TYPE
+NOTHEX   CLI   0(T),TEND
+         BE    ENDTYPE             BR IF END TYPE
+         B     UNKNOWN             BR FOR UNKNOWN TYPE
+***********************************************************************
+* KEYWORD, TEXT, DISPLAY NUMERIC TOKENS (TEXT TYPE)                   *
+***********************************************************************
+TEXTTYPE SR    TL,TL               CLEAR LENGTH REG
+         IC    TL,1(,T)            PICK UP TEXT LENGTH
+         BCTR  TL,0                TAKE 1 OFF FOR MVC
+         EX    TL,TEXTMVC          MOVE TO MESSAGE
+         LA    TL,1(,TL)           ADD 1 BACK FOR TRUE LENGTH
+         B     NEXT
+TEXTMVC  MVC   0(0,TX),2(T)        MOVE TEXT FROM TOKEN TO MESSAGE
+***********************************************************************
+* LEFT PAREN                                                          *
+***********************************************************************
+LPTYPE   MVI   0(TX),C'('          SET ( IN OUTPUT TEXT
+         LA    TL,1                SET LENGTH
+         B     NEXT
+***********************************************************************
+* RIGHT PAREN                                                         *
+***********************************************************************
+RPTYPE   MVI   0(TX),C')'          SET ) IN OUTPUT TEXT
+         LA    TL,1                SET LENGTH
+         B     NEXT
+***********************************************************************
+* TOKENLIST TYPE - RECURSIVE CALL                                     *
+***********************************************************************
+LISTTYPE ICM   1,15,1(T)           PICK UP LIST ADDRESS
+         ST    1,LISTLIST          SET A(TOKENLIST) IN PARM 2
+         LA    1,LISTLIST          PASS PARMS TO SELF
+         DFH99M INVOKE,DFH99ML     MSGLIST
+         B     NEXT
+LISTLIST DFH99M AUTO,A             A(LIST)
+***********************************************************************
+* BINARY TYPE                                                         *
+***********************************************************************
+BINTYPE  IC    TL,0(,T)            PICK UP TYPE (MASK)
+         N     TL,=F'15'           LEAVE ICM MASK BITS
+         SR    B,B                 CLEAR VALUE REG
+         EX    TL,BINICM           PICK UP VALUE
+         CVD   B,DWORD             GET DECIMAL VALUE
+         MVC   EDVAL,EDMASK
+         LA    1,EDVAL+L'EDVAL-1   SET R1 IN CASE SIGNIFICANCE FORCED
+         LR    TL,1                POINT AT LAST EDVAL CHARACTER
+         EDMK  EDVAL,DWORD         EDIT, NOTE SIGNIFICANCE START
+         BNM   BNOTNEG             BR IF NOT NEGATIVE
+         BCTR  1,0                 POINT TO SLOT FOR '-'
+         MVI   0(1),C'-'           SET LEADING - SIGN
+* CALCULATE LENGTH TO MOVE
+BNOTNEG  SR    TL,1                TL HAS LENGTH-1
+         EX    TL,BMVC             MOVE VALUE TO OUTPUT
+         LA    TL,1(,TL)           GET TRUE LENGTH
+         B     NEXT
+BMVC     MVC   0(0,TX),0(1)
+EDMASK   DC    X'40202020202020202020202020202120' 15 DIGITS
+DWORD    DFH99M AUTO,D             FOR CVD INSTRN
+EDVAL    DFH99M AUTO,CL(L'EDMASK)
+BINICM   ICM   B,0,1(T)
+***********************************************************************
+* HEX TYPE     1-4 BYTE HEX INSERT                                    *
+***********************************************************************
+HEXTYPE  MVC   0(2,TX),=C'X'''     ENCLOSE VALUE AS X' '
+         ICM   B,15,1(T)           B->DATA
+         UNPK  HEXCONV,0(5,B)      UNPACK FIVE BYTES TO GET NINE
+         TR    HEXCONV(8),TABLE-C'0' TRANSLATE TO 0-F
+         MVC   2(8,TX),HEXCONV     PUT 8 BYTES IN TEXT AREA
+         CLI   0(T),THEX1          DETERMINE WHERE THE
+         BE    HEX1                 TRAILING QUOTE SHOULD GO
+         CLI   0(T),THEX2           AND WHAT THE LENGTH SHOULD BE,
+         BE    HEX2                 DEPENDING ON ORIGINAL TOKEN
+         B     HEX4                 TYPE.
+* ONE BYTE HEX INSERT
+HEX1     MVI   4(TX),C''''         TRAILING QUOTE
+         LA    TL,5                LENGTH INSERTED
+         B     NEXT
+* TWO BYTE HEX INSERT
+HEX2     MVI   6(TX),C''''         TRAILING QUOTE
+         LA    TL,7                LENGTH INSERTED
+         B     NEXT
+* FOUR BYTE HEX INSERT
+HEX4     MVI   10(TX),C''''        TRAILING QUOTE
+         LA    TL,11               LENGTH INSERTED
+         B     NEXT
+HEXCONV  DFH99M AUTO,CL9
+TABLE    DC    C'0123456789ABCDEF'
+***********************************************************************
+* END-OF-TEXT TYPE                                                    *
+***********************************************************************
+ENDTYPE  MVC   0(L'ETX,TX),ETX     MOVE END-OF-TEXT LITERAL
+         LA    TL,L'ETX            TRUE LENGTH
+         B     NEXT
+ETX      DC    C'''END-OF-TEXT'''
+***********************************************************************
+* UNKNOWN TOKEN TYPE                                                  *
+***********************************************************************
+UNKNOWN  MVC   0(L'UNK,TX),UNK     MOVE UNKNOWN LITERAL
+         LA    TL,L'UNK            TRUE LENGTH
+         B     NEXT
+UNK      DC    C'''UNKNOWN-TOKEN-TYPE'''
+***********************************************************************
+* CURRENT TOKEN HAS BEEN PROCESSED. UPDATE OUTPUT POINTERS, INSERT    *
+* AN EXTRA BLANK, THEN CHECK IF END, AND LOOP BACK FOR NEXT TOKEN.    *
+***********************************************************************
+NEXT     AR    TX,TL               BUMP OUTPUT POINTER
+         MVI   0(TX),C' '          APPEND A BLANK
+         LA    TL,1(,TL)           ALLOW FOR IT
+         LA    TX,CTEXT            READY FOR NEXT TOKEN
+TXTPUTP  DFH99M AUTO,2A
+         ST    TX,TXTPUTP+0        TEXT ADDRESS
+         ST    TL,TXTPUTP+4        TEXT LENGTH
+         LA    1,TXTPUTP
+         DFH99M INVOKE,DFH99TX     TEXTPUT
+         TM    0(LISTPTR),X'80'    IF NOT LAST PARM,
+         LA    LISTPTR,4(,LISTPTR)     BUMP TO NEXT
+         BZ    LOOP                    AND LOOP BACK.
+***********************************************************************
+* END OF LIST                                                         *
+***********************************************************************
+         DFH99M EPILOG
+         END

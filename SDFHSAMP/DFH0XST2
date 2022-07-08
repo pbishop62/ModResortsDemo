@@ -1,0 +1,234 @@
+            CBL CICS('COBOL3,SP')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0XST2                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = SAML token IVP                             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 2000, 2015"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      *   To aid the customer in validating the installation of the   *
+      *   CICS Security Token Service and understanding how it        *
+      *   converts SAML tokens into containers, CICS provides a       *
+      *   sample transaction XST1 and two COBOL2 programs DFH0XST1/2. *
+      *                                                               *
+      *   XST1 is run from a 3270 screen.                             *
+      *   If successful it will send a message to the screen.         *
+      *   If unsuccessful it will abend.                              *
+      *   The parsed containers will be returned in TSQ DFH0XSTO.     *
+      *   If the request is unsuccessful look at the DFHSAML-RESPONSE *
+      *   container to find the reason for the error. These are       *
+      *   documented in the infocentre.                               *
+      *                                                               *
+      *   Progam DFH0XST1 reads a SAML token from the specified       *
+      *   doctemplate (by default a zFS file defined in               *
+      *   doctemplate DFH0XSTI), writes it to TSQ DFH0XSTI            *
+      *   then calls program DFH0XST2 to process this request.        *
+      *                                                               *
+      *   Program DFH0XST2 reads the EBCDIC SAML token from           *
+      *   TSQ DFH0XSTI, puts it into the DFHSAML-TOKEN container,     *
+      *   then LINKs to the DFHSAML program to validate the token     *
+      *   and extract it into containers. It then writes these        *
+      *   containers to TSQ DFH0XSTO.                                 *
+      *                                                               *
+      *   The IVP uses the default options for the JVMSERVER          *
+      *   and doesn't perform any signature validation.               *
+      *   The sample SAML token is not signed.                        *
+      *   If this doesn't match your configuration you will need      *
+      *   to modify DFH0XST2.                                         *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *  $MOD(DFH0XST2),COMP(SAMPLES),PROD(CICS TS ):                 *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      *      R34328 670 130404 HDDLCRP : SAML Feature Pack            *
+      *      D79725 690 131015 HDIYAJL : IVP changes                  *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0XST2.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *****************************************************************
+      * DFHSAML Interface Copy Book.
+      *****************************************************************
+       COPY DFHSAMLO.
+
+      *****************************************************************
+      * Input and output TS Queues.
+      *****************************************************************
+       77  TSQ-INPUT              PIC X(8)  VALUE 'DFH0XSTI'.
+       77  TSQ-OUTPUT             PIC X(8)  VALUE 'DFH0XSTO'.
+
+      *****************************************************************
+      * SAML Channel (any name can be used)
+      *****************************************************************
+       77  SAML-CHANNEL           PIC X(16) VALUE 'SAML            '.
+
+      *****************************************************************
+      * SAML JVMSERVER (replace with your own name if not the default)
+      *****************************************************************
+       77  SAML-JVMSERVER         PIC X(8)  VALUE 'DFHXSTS '.
+
+      *****************************************************************
+      * Various variables used throughout the program.
+      *****************************************************************
+       77 SAML-TOKEN-PTR           POINTER.
+       77 SAML-TOKEN-LEN           PIC S9(8) COMP.
+       77 SAML-RESPONSE            PIC S9(8) COMP.
+       77 SAML-RESPONSE-LEN        PIC S9(8) COMP.
+       77 SAML-CONTAINER           PIC X(16).
+       77 SAML-BROWSETOKEN         PIC S9(8) COMP.
+       77 CONTAINER-LENGTH         PIC S9(8) COMP.
+       77 TSQ-DATA-LENGTH          PIC S9(4) COMP.
+
+       01 TSQ-DATA.
+         03 CONTAINER-NAME         PIC X(16).
+         03 FILLER                 PIC X(3) VALUE ' : '.
+         03 CONTAINER-DATA         PIC X(32740).
+
+       LINKAGE SECTION.
+
+       01 SAML-TOKEN               PIC X(32740).
+
+      *****************************************************************
+      ***             Write SAML token to TSQ                       ***
+      *****************************************************************
+       PROCEDURE DIVISION USING DFHEIBLK.
+
+      *---------------------------------------------------------------*
+      * Main processing starts here.
+      *---------------------------------------------------------------*
+
+       MAIN-PROCESSING SECTION.
+
+      *****************************************************************
+      * Read EBCDIC SAML token from input queue and put into container
+      *****************************************************************
+           EXEC CICS READQ TS QUEUE(TSQ-INPUT)
+                SET(SAML-TOKEN-PTR)
+                LENGTH(TSQ-DATA-LENGTH)
+           END-EXEC
+           SET ADDRESS OF SAML-TOKEN TO SAML-TOKEN-PTR
+           MOVE TSQ-DATA-LENGTH TO SAML-TOKEN-LEN
+           EXEC CICS PUT CONTAINER(DFHSAML-TOKEN)
+                CHANNEL(SAML-CHANNEL)
+                FROM(SAML-TOKEN)
+                FLENGTH(SAML-TOKEN-LEN)
+                CHAR
+                FROMCCSID(1047)
+           END-EXEC
+
+      *****************************************************************
+      * Do not perform signature validation.
+      * If you have replaced the sample SAML token with your
+      * own signed token, you can delete this the following
+      * and use the default which requires the signature to be signed.
+      *****************************************************************
+           EXEC CICS PUT CONTAINER(DFHSAML-SIGNED)
+                CHANNEL(SAML-CHANNEL)
+                FROM(SAML-IGNORED)
+                FLENGTH(LENGTH OF SAML-IGNORED)
+                CHAR
+           END-EXEC
+
+      *****************************************************************
+      * If you do not use the default JVMSERVER
+      * uncomment the following code and rename the SAML-JVMSERVER
+      * with your own JVMSERVER name.
+      *****************************************************************
+      *    EXEC CICS PUT CONTAINER(DFHSAML-JVMSERVR)
+      *         CHANNEL(SAML-CHANNEL)
+      *         FROM(SAML-JVMSERVER)
+      *         FLENGTH(LENGTH OF SAML-JVMSERVER)
+      *         CHAR
+      *    END-EXEC
+
+      *****************************************************************
+      * Process SAML token
+      *****************************************************************
+           EXEC CICS LINK PROGRAM('DFHSAML')
+                CHANNEL(SAML-CHANNEL)
+           END-EXEC
+
+      *****************************************************************
+      * Output all containers to the TSQ
+      *****************************************************************
+           EXEC CICS STARTBROWSE CONTAINER CHANNEL(SAML-CHANNEL)
+                BROWSETOKEN(SAML-BROWSETOKEN)
+           END-EXEC
+           PERFORM READ-CONTAINERS
+             UNTIL EIBRESP NOT = DFHRESP(NORMAL).
+           EXEC CICS ENDBROWSE CONTAINER
+                BROWSETOKEN(SAML-BROWSETOKEN)
+           END-EXEC
+
+      *****************************************************************
+      * Check response
+      *****************************************************************
+           MOVE LENGTH OF SAML-RESPONSE TO SAML-RESPONSE-LEN
+           EXEC CICS GET CONTAINER(DFHSAML-RESPONSE)
+                CHANNEL(SAML-CHANNEL)
+                INTO(SAML-RESPONSE)
+                FLENGTH(SAML-RESPONSE-LEN)
+           END-EXEC
+           IF SAML-RESPONSE NOT = 0 THEN
+             EXEC CICS ABEND ABCODE('SAM1')
+             END-EXEC
+           END-IF
+
+      *****************************************************************
+      * End the program and return to CICS.
+      *****************************************************************
+           EXEC CICS RETURN
+           END-EXEC.
+
+       MAIN-PROCESSING-EXIT.
+           GOBACK.
+           EJECT.
+
+      *****************************************************************
+      * Read a container and output to TSQ
+      *****************************************************************
+       READ-CONTAINERS SECTION.
+           EXEC CICS GETNEXT CONTAINER(SAML-CONTAINER)
+                BROWSETOKEN(SAML-BROWSETOKEN)
+                NOHANDLE
+           END-EXEC
+           IF EIBRESP = DFHRESP(NORMAL) THEN
+             MOVE SAML-CONTAINER TO CONTAINER-NAME
+             MOVE LENGTH OF CONTAINER-DATA TO CONTAINER-LENGTH
+             EXEC CICS GET CONTAINER(CONTAINER-NAME)
+                CHANNEL(SAML-CHANNEL)
+                INTO(CONTAINER-DATA)
+                FLENGTH(CONTAINER-LENGTH)
+             END-EXEC
+             MOVE CONTAINER-LENGTH TO TSQ-DATA-LENGTH
+             ADD 19 TO TSQ-DATA-LENGTH
+             EXEC CICS WRITEQ TS QUEUE(TSQ-OUTPUT)
+                  FROM(TSQ-DATA)
+                  LENGTH(TSQ-DATA-LENGTH)
+             END-EXEC
+           END-IF.

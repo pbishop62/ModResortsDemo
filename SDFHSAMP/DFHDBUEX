@@ -1,0 +1,235 @@
+**********************************************************************
+*                                                                    *
+*   MODULE NAME = DFHDBUEX                                           *
+*                                                                    *
+*   DESCRIPTIVE NAME = CICS/ESA  DBCTL User-replaceable program      *
+*                                                                    *
+*   TRANSACTION NAME = Runs as part of:                              *
+*               1.The CICS-DBCTL Control Transaction - CDBO          *
+*               2.The CICS-DBCTL Disconnection Transaction - CDBT    *
+*                                                                    *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1987, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                    *
+*   STATUS = 7.2.0                                                   *
+*                                                                    *
+*   FUNCTION =                                                       *
+*        To invoke user supplied code whenever CICS successfully     *
+*        connects to DBCTL and whenever CICS disconnects from        *
+*        DBCTL.                                                      *
+*                                                                    *
+*        THIS IS A PRODUCT SENSITIVE SAMPLE.                         *
+*        REFER TO PRODUCT DOCUMENTATION.                             *
+*                                                                    *
+*        This program forms part of the support for the CICS-DBCTL   *
+*        Interface. It runs in a CICS application environment.       *
+*                                                                    *
+*        Input to the program is a parameter list addressed by       *
+*        DFHEICAP.                                                   *
+*                                                                    *
+*        This program is invoked for CONNECT when:                   *
+*          1. CICS has connected to DBCTL successfully.              *
+*             This occurs after a connection request has been issued *
+*             from CICS to DBCTL. The Control Exit (DFHDBCTX) will   *
+*             then be invoked by the DRA for initialization complete.*
+*             In this case the Control exit posts the Control        *
+*             transaction (CDBO). The Control Program (DFHDBCT) will *
+*             then invoke this program.                              *
+*                                                                    *
+*        This program is invoked for DISCONNECT when:                *
+*          1. A request has been issued to disconnect from DBCTL.    *
+*             This program is invoked after the CICS-DBCTL Menu      *
+*             program (DFHDBME) has started the Disconnection        *
+*             Transaction (CDBT) to disconnect from DBCTL.           *
+*             The disconnection program (DFHDBDSC) invokes this      *
+*             program.                                               *
+*                                                                    *
+*          2. The Control Transaction (CDBO) has been notified of one*
+*             of the following events:                               *
+*             2.1 A checkpoint freeze request has been input to DBCTL*
+*             2.2 The DRA has abnormally terminated.                 *
+*             2.3 DBCTL has abnormally terminated.                   *
+*             In the above three cases, the Control Program (DFHDBCT)*
+*             will invoke this program.                              *
+*                                                                    *
+*   NOTES :                                                          *
+*    DEPENDENCIES = S/370                                            *
+*          The DFHDBUEX program must be defined in the CSD.          *
+*    RESTRICTIONS = None                                             *
+*    REGISTER CONVENTIONS =                                          *
+*    MODULE TYPE = Executable                                        *
+*    PROCESSOR = CICS Translator + Assembler                         *
+*    ATTRIBUTES = Read only, Serially Reusable.                      *
+*                 AMODE 31, RMODE ANY.                               *
+*                                                                    *
+*--------------------------------------------------------------------*
+*                                                                    *
+*   ENTRY POINT = DFHDBUEX                                           *
+*                                                                    *
+*     PURPOSE = All Functions                                        *
+*                                                                    *
+*     LINKAGE = DFHPC LINK_URM                                       *
+*                     PROGRAM(DFHDBUEX)                              *
+*                     COMMAREA(ADDRESS(DFHDBUCA))                    *
+*                     COMMAREAL(LENGTH(DFHDBUCA))              @L1C  *
+*                                                                    *
+*     INPUT =                                                        *
+*         Layout of DFHDBUCA (the input parameter list):             *
+*                                                                    *
+*           DBUREQT (Byte 1) : Request Type                          *
+*                values  :                                           *
+*                DBUCONN : Connect                                   *
+*                DBUDISC : Disconnect                                *
+*                                                                    *
+*           DBUCOMP (BYTE 2/3) : Set to constant representing CICS   *
+*                                Component                           *
+*                value   : 'DB'                                @L1A  *
+*                                                                    *
+*           dummy (Byte 4) : Reserved                          @L1A  *
+*                                                                    *
+*           DBUREAS (Byte 5) : Reason for Disconnection        @L1C  *
+*                values  :                                           *
+*                DBUMENU : Disconnected from menu                    *
+*                DBUDBCC : Checkpoint Freeze input to DBCTL          *
+*                DBUDRAF : DRA Failure has taken place               *
+*                DBUDBCF : DBCTL Failure has taken place             *
+*                                                                    *
+*     OUTPUT =                                                       *
+*                                                                    *
+*     EXIT-NORMAL = EXEC CICS RETURN                                 *
+*                                                                    *
+*     EXIT-ERROR  = EXEC CICS RETURN                                 *
+*                                                                    *
+*--------------------------------------------------------------------*
+*                                                                    *
+*   EXTERNAL REFERENCES = None                                       *
+*                                                                    *
+*     ROUTINES =                                                     *
+*         DFHEJECT                                                   *
+*         DFHEISTG                                                   *
+*         DFHREGS                                                    *
+*         EXEC CICS RETURN                                           *
+*                                                                    *
+*     DATA AREAS = None                                              *
+*                                                                    *
+*     CONTROL BLOCKS = None                                          *
+*                                                                    *
+*     GLOBAL VARIABLES = None                                        *
+*                                                                    *
+*   TABLES = None                                                    *
+*                                                                    *
+*   MACROS =                                                         *
+*                                                                    *
+*--------------------------------------------------------------------*
+*                                                                    *
+*                                                                    *
+* DESCRIPTION                                                        *
+*                                                                    *
+* A check is made to ensure the presence of the input parameters     *
+* (passed via COMMAREA). If these do not exist, then return is made  *
+* to the calling program.                                            *
+*                                                                    *
+* The type of request(CONNECTION|DISCONNECTION)is then determined,   *
+* a branch is taken to the appropriate function routine (CONPROC|    *
+* DISPROC).                                                          *
+*                                                                    *
+*                                                                    *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+**                                                                    *
+*        $MOD(DFHDBUEX),COMP(DL/I),PROD(CICS TS ):                    *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $01  Reserved for APAR fix                                       *
+*    $02  Reserved for APAR fix                                       *
+*    $03  Reserved for APAR fix                                       *
+*    $D1  Reserved for DCR                                            *
+*    $D2  Reserved for DCR                                            *
+*    $D3  Reserved for DCR                                            *
+*    $H1  Reserved for hardware support                               *
+*    $H2  Reserved for hardware support                               *
+*    $H3  Reserved for hardware support                               *
+*    $L0= DC1    310 870114 HD2DSM : Create DFHDBUEX                  *
+*    $L1= 549    320 891020 HD4DSMB: Now invoked with DFHPC LINK_URM  *
+*    $P1= M16293 610 000929 HD7OPJW : Binder error messages           *
+*    $P2= D01120 620 010622 HDFVGMB : Correct Web samples             *
+*    $L2  Reserved for line item                                      *
+*    $L3  Reserved for line item                                      *
+*    $P1  Reserved for PTM                                            *
+*    $P2  Reserved for PTM                                            *
+*    $P3  Reserved for PTM                                            *
+*                                                                     *
+***********************************************************************
+**********************************************************************
+DFHEISTG DSECT
+         DFHEJECT                                                  @L1A
+         COPY DFHDBUCA             include the DFHDBUCA dsect      @L1A
+         DFHEJECT
+DFHDBUEX CSECT
+DFHDBUEX AMODE 31                                                  @P1A
+DFHDBUEX RMODE ANY                                                 @P1A
+***********************************************************************
+* *                   i n i t i a l i z a t i o n                   * *
+* *                   ---------------------------                   * *
+* *                                                                 * *
+***********************************************************************
+         DFHREGS                   equate registers
+         EXEC CICS HANDLE ABEND LABEL(ERROR)
+         LH    R2,EIBCALEN                                         @P2A
+         LTR   R2,R2               any commarea?                   @P2A
+         BZ    RETURN              ...no, get out
+         L     R2,DFHEICAP         address input parameter list
+         USING DFHDBUCA,R2         base dsect                      @L1C
+         CLI   DBUREQT,DBUCONN     connection request?
+         BNE   DISPROC             ...no, check if disconnection
+         DFHEJECT
+***********************************************************************
+* *          c o n n e c t i o n  p r o c e s s i n g               * *
+* *          ----------------------------------------               * *
+* *                                                                 * *
+***********************************************************************
+CONPROC  DS    0H
+**************************************
+* ==> put connection code here e.g.
+*        exec cics set transaction(trxn) status(enabled)
+*        where transaction trxn has been set to disabled in the csd
+**************************************
+         B     RETURN              leave program
+*
+*
+*
+         DFHEJECT
+***********************************************************************
+* *  d i s c o n n e c t i o n    p r o c e s s i n g               * *
+* *  ------------------------------------------------               * *
+* *                                                                 * *
+***********************************************************************
+DISPROC  DS    0H
+         CLI   DBUREQT,DBUDISC     disconnection request?
+         BNE   RETURN              ...no, error, exit
+**************************************
+* ==> put disconnection code here e.g.
+*        exec cics set transaction(trxn) status(disabled)
+*        where transaction trxn has been set to disabled in the csd
+**************************************
+         B     RETURN              exit program
+*
+         DFHEJECT
+*
+ERROR    DS    0H
+         EXEC CICS RETURN
+*
+RETURN   DS    0H
+         EXEC CICS RETURN
+         END   DFHDBUEX

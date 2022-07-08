@@ -1,0 +1,116 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99LK     TITLE 'DFH99LK - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - SEARCHES A KEYSET FOR A GIVEN TOKEN'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99LK                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Search Keyset for a Given Token                  *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* GIVEN AN INPUT TOKEN AND THE ADDRESS OF A KEYSET, DETERMINES ALL THE*
+* MATCHING KEYWORDS (IDEALLY JUST ONE).                               *
+*                                                                     *
+* INPUT:      REG1 -> A(TOKEN)                                        *
+*                     A(KEYSET)                                       *
+*                     A(ANSWER AREA - 128 BYTES)                      *
+* OUTPUT:     REG15 = 0   EXACTLY ONE HIT                             *
+*                     4   MULTIPLE HITS                               *
+*                     8   NO HIT                                      *
+*                                                                     *
+*             THE ANSWER AREA IS USED TO SET UP A LIST OF             *
+*             POINTERS TO HITS IN THE KEYSET. X'80' IS SET IN THE LAST*
+*             ADDRESS ONLY IF MULTIPLE HITS.                          *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99LK),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99LK  CSECT
+***********************************************************************
+*            WONT HANDLE EMPTY KEYSET
+***********************************************************************
+         EJECT
+DFH99LK  DFH99M PROLOG,PARMS=(TOKEN,KSET,ANSWER),REGS=(T,KS,N,A,L)
+* SET UP FOR SCAN OF KEYSET
+         L     T,TOKEN             SEARCH ARGUMENT TOKEN
+         L     KS,KSET             KEYSET TO SEARCH
+         USING KEYSET,T
+         CLI   KSTOK,TNUM          IF TOKEN IS NOT KEYWORD TYPE
+         BH    NOHITS              THEN NO HITS ARE POSSIBLE
+MATCHP1  DFH99M AUTO,A
+MATCHP2  DFH99M AUTO,A
+         ST    T,MATCHP1           FIRST ARGT TO MATCH IS TOKEN
+         DROP  T
+         USING KEYSET,KS
+         SR    N,N                 CLEAR HIT COUNT
+         L     A,ANSWER            A -> ANSWER AREA
+         SH    A,=H'4'             VIRTUAL ORIGIN OF ANSWER ARRAY
+         LA    1,MATCHP1           POINT AT PARMLIST FOR MATCH
+* LOOP FOR EACH ENTRY IN KEYSET
+LOOP     ST    KS,MATCHP2          CURRENT KEYWORD FOR MATCH
+***********************************************************************
+* CHECK FIRST FOR EXACT MATCH
+***********************************************************************
+         CLC   1(1,T),1(KS)        SEE IF LENGTH SAME
+         BNE   TRYAB               NO, CANT BE EXACT
+         IC    L,1(,T)             GET LENGTH
+         BCTR  L,0                 -1 FOR EXECUTE
+         EX    L,KCLC
+         BNE   TRYAB               NOT SAME
+* EXACT MATCH ADDRESSED BY KS.
+         ST    KS,4(,A)            GIVE ANSWER
+         B     ONEHIT              MAKE IT THE ONLY ONE
+KCLC     CLC   2(0,T),2(KS)        EXECUTED
+***********************************************************************
+* NOT EXACT MATCH, SEE IF ABBREVIATED MATCH
+***********************************************************************
+TRYAB    DFH99M INVOKE,DFH99MT     MATCH
+         LTR   15,15               IF IT MATCHES
+         BNZ   NOMATCH             THEN DO
+* MATCHES
+         LA    N,4(,N)             ADD TO HIT INDEX
+         ST    KS,0(N,A)           SET HIT ADDRESS IN ANSWER
+         CH    N,=H'128'           IF LAST RETURNABLE HIT
+         BE    FINISH              GIVE UP
+*BUMP TO NEXT KEYSET MEMBER             END
+NOMATCH  LA    KS,KSNEXT
+         CLI   KSTOK,TEND          IF END OF KEYSET
+         BE    FINISH              THEN STOP
+         B     LOOP                ELSE LOOP FOR NEXT KEYWORD
+* FINISHED CHECKING KEYSET.
+FINISH   CH    N,=H'4'             SEE HOW MANY HITS
+         BL    NOHITS
+         BE    ONEHIT
+MANYHITS LA    15,4                SET 'MANY'
+         ALR   A,N                 POINT AT LAST ANSWER
+         OI    0(A),X'80'          SET ITS VL BIT
+         B     RET
+ONEHIT   SR    15,15               SET 'ONE'
+         B     RET
+NOHITS   LA    15,8                SET 'NONE'
+RET      DFH99M EPILOG,RC=(15)
+         END

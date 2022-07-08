@@ -1,0 +1,241 @@
+       CBL CICS('COBOL3') APOST
+      *****************************************************************
+      *                                                               *
+      *  MODULE NAME = DFH0XPOW                                       *
+      *                                                               *
+      *  DESCRIPTIVE NAME = CICS TS  (Samples) Example Application -  *
+      *                     Wrapper program for Place Order           *
+      *                     web service enablement
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *      Licensed Materials - Property of IBM                     *
+      *                                                               *
+      *      "Restricted Materials of IBM"                            *
+      *                                                               *
+      *      5655-Y04                                                 *
+      *                                                               *
+      *      (C) Copyright IBM Corp. 2005, 2010"                      *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *  STATUS = 7.2.0                                               *
+      *                                                               *
+      *  TRANSACTION NAME = n/a                                       *
+      *                                                               *
+      *  FUNCTION =                                                   *
+      *  This module is the is an example of the method for mapping   *
+      *  an incoming web service request to existing logic            *
+      *                                                               *
+      *-------------------------------------------------------------  *
+      *  CHANGE ACTIVITY :                                            *
+      *                                                               *
+      *                                                               *
+      *  ENTRY POINT = DFH0XPOW                                       *
+      *     $MOD(DFH0XPOW),COMP(SAMPLES),PROD(CICS TS ):              *
+      *                                                               *
+      *     PN= REASON REL YYMMDD HDXXIII : REMARKS                   *
+      *     $D0= I07544 640 050112 HDIPCB  : Example App Cics Client  *
+      *    $P1= D17575 670 100730 HDJTIMH : Bad embedded ctl character*
+      *                                                               *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0XPOW.
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *----------------------------------------------------------------*
+      * Common defintions                                              *
+      *----------------------------------------------------------------*
+      * Run time (debug) infomation for this invocation
+        01  WS-HEADER.
+           03 WS-EYECATCHER            PIC X(16)
+                                        VALUE 'DFH0XPOW------WS'.
+           03 WS-TRANSID               PIC X(4).
+           03 WS-TERMID                PIC X(4).
+           03 WS-TASKNUM               PIC 9(7).
+           03 WS-CALEN                 PIC S9(4) COMP.
+
+      * Variables for time/date processing
+       01  ABS-TIME                    PIC S9(8) COMP VALUE +0.
+       01  TIME1                       PIC X(8)  VALUE SPACES.
+       01  DATE1                       PIC X(10) VALUE SPACES.
+
+      * Error Message structure
+       01  ERROR-MSG.
+           03 EM-DATE                  PIC X(8)  VALUE SPACES.
+           03 FILLER                   PIC X     VALUE SPACES.
+           03 EM-TIME                  PIC X(6)  VALUE SPACES.
+           03 FILLER                   PIC X     VALUE SPACES.
+           03 EM-DETAIL                PIC X(50) VALUE SPACES.
+
+      * Working variables
+       01 WORKING-VARIABLES.
+           03 WS-RESP                  PIC S9(8) COMP.
+
+      * Key into the configuration file
+       01 EXAMPLE-APP-CONFIG       PIC X(9)
+               VALUE 'EXMP-CONF'.
+
+      * Format of the configuration file
+       01 APP-CONFIG.
+           03 FILE-KEY                 PIC X(9).
+           03 FILLER                   PIC X(8).
+           03 CATMAN-PROG              PIC X(8).
+           03 FILLER                   PIC X(55).
+
+      * Data structures to hold the input and output data
+      * Due to copy books containing 'SYNC' members must be held
+      * individually with an 01 level structure to ensure they are
+      * aligned on a double word boundry
+       01 REQUEST-CONTAINER-DATA.
+           COPY DFH0XWC5.
+       01 RESPONSE-CONTAINER-DATA.
+           COPY DFH0XWC6.
+
+      * Data structure to hold the commarea for the catalog manager
+       01 CATALOG-COMMAREA.
+           COPY DFH0XCP1.
+
+      *-----------------------------------------------------------
+
+      ******************************************************************
+      *    L I N K A G E   S E C T I O N
+      ******************************************************************
+       LINKAGE SECTION.
+
+      ******************************************************************
+      *    P R O C E D U R E S
+      ******************************************************************
+       PROCEDURE DIVISION.
+
+      *----------------------------------------------------------------*
+       MAINLINE SECTION.
+
+      *----------------------------------------------------------------*
+      * Common code                                                    *
+      *----------------------------------------------------------------*
+      * initialize working storage variables
+           INITIALIZE APP-CONFIG.
+           INITIALIZE ERROR-MSG.
+
+      * set up general variable
+           MOVE EIBTRNID TO WS-TRANSID.
+           MOVE EIBTRMID TO WS-TERMID.
+           MOVE EIBTASKN TO WS-TASKNUM.
+
+      *-----------------------------------------------------------
+      * Read in configuration file and set up program names
+      *----------------------------------------------------------------*
+           EXEC CICS READ FILE('EXMPCONF')
+                          INTO(APP-CONFIG)
+                          RIDFLD(EXAMPLE-APP-CONFIG)
+                          RESP(WS-RESP)
+           END-EXEC
+
+           IF WS-RESP NOT EQUAL DFHRESP(NORMAL)
+
+      *        Set up the Error message for the response
+               MOVE '51' TO returnCode
+               MOVE 'APPLICATION ERROR OPENING CONFIGURATION FILE'
+                   TO responseMessage
+      *        Put the response in a container on the channel
+               EXEC CICS PUT CONTAINER('DFHWS-DATA')
+                         FROM(placeOrderResponse)
+               END-EXEC
+      *        Return to the web service layer to send the response
+               EXEC CICS RETURN END-EXEC
+           END-IF
+
+      *---------------------------------------------------------------*
+      * Get the input data from the supplied container                *
+      *---------------------------------------------------------------*
+
+           EXEC CICS GET CONTAINER('DFHWS-DATA')
+                     INTO(placeOrderRequest)
+                     RESP(WS-RESP)
+           END-EXEC
+
+           IF WS-RESP NOT EQUAL DFHRESP(NORMAL)
+
+      *        Set up the Error message for the response
+               MOVE '61' TO returnCode
+               MOVE 'Example App Internal Error: Get Container'
+                   TO responseMessage
+      *        Put the response in a container on the channel
+               EXEC CICS PUT CONTAINER('DFHWS-DATA')
+                         FROM(placeOrderResponse)
+               END-EXEC
+      *        Return to the web service layer to send the response
+               EXEC CICS RETURN END-EXEC
+           END-IF
+
+      * Copy the data to the commarea structure to call catalog manager
+           INITIALIZE CATALOG-COMMAREA
+           MOVE userId TO CA-USERID
+           MOVE chargeDepartment TO CA-CHARGE-DEPT
+           MOVE itemReference TO CA-ITEM-REF-NUMBER
+           MOVE quantityRequired TO CA-QUANTITY-REQ
+
+      * Add the request ID for a place order request
+           MOVE '01ORDR' TO CA-REQUEST-ID
+
+      * Link to the main catalog manager program (exisitng logic)
+           EXEC CICS LINK PROGRAM(CATMAN-PROG)
+                          COMMAREA(CATALOG-COMMAREA)
+           END-EXEC
+
+      * Move response into data area to send back to client
+           MOVE CA-RETURN-CODE TO returnCode
+           MOVE CA-RESPONSE-MESSAGE TO responseMessage
+
+           EXEC CICS PUT CONTAINER('DFHWS-DATA')
+                         FROM(placeOrderResponse)
+                         RESP(WS-RESP)
+           END-EXEC
+
+           IF WS-RESP NOT EQUAL DFHRESP(NORMAL)
+
+      *        Set up the Error message for the response
+               MOVE '62' TO returnCode
+               MOVE 'Example App Internal Error: Put Container'
+                   TO responseMessage
+      *        Put the response in a container on the channel
+               EXEC CICS PUT CONTAINER('DFHWS-DATA')
+                         FROM(placeOrderResponse)
+               END-EXEC
+      *        Return to the web service layer to send the response
+               EXEC CICS RETURN END-EXEC
+           END-IF
+
+      * Return to caller
+           EXEC CICS RETURN END-EXEC.
+
+       MAINLINE-EXIT.
+           EXIT.
+      *----------------------------------------------------------------*
+
+      *================================================================*
+      * Procedure to write error message to TD QUEUE(CSMT)             *
+      *   message will include Date, Time, Program Name,               *
+      *   and error details.                                           *
+      *================================================================*
+       WRITE-ERROR-MESSAGE.
+      * Obtain and format current time and date
+           EXEC CICS ASKTIME ABSTIME(ABS-TIME)
+           END-EXEC
+           EXEC CICS FORMATTIME ABSTIME(ABS-TIME)
+                     MMDDYYYY(DATE1)
+                     TIME(TIME1)
+           END-EXEC
+           MOVE DATE1 TO EM-DATE
+           MOVE TIME1 TO EM-TIME
+      * Write output message to TDQ
+           EXEC CICS WRITEQ TD QUEUE('CSMT')
+                     FROM(ERROR-MSG)
+                     LENGTH(LENGTH OF ERROR-MSG)
+           END-EXEC.
+           EXIT.

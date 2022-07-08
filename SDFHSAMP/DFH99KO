@@ -1,0 +1,247 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99KO     TITLE 'DFH99KO - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - DRIVER FOR PROCESSING OPERAND KEYWORDS'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99KO                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Driver for Processing Operand Keywords           *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* GIVEN THE ADDRESS OF THE FIRST OPERAND KEYWORD, DRIVES THE          *
+* PROCESSING OF ALL OPERANDS, AND THE BUILDING OF TEXT UNITS.         *
+* INPUT: TOKADDR  A(CURRENT TOKEN)                      USE/SET       *
+*        OPKSET   A(OPERAND KEYSET)                     USE           *
+*        IN RB    A(TEXT UNIT POINTER LIST)             USE           *
+*        TUPLIX   F'INDEX INTO TEXT UNIT POINTER LIST'  USE/SET       *
+*        TUSPACE  A(SPACE FOR BUILDING TEXT UNITS)      USE/SET       *
+* OUTPUT:    CREATES A NEW TEXT UNIT FOR THE CURRENT KEYWORD,         *
+*            SETS THE CURRENT ELEMENT IN THE TEXT UNIT POINTER LIST,  *
+*            BUMPS THE INDEX INTO THE TUPL,                           *
+*            BUMPS THE CURRENT TOKEN POINTER.                         *
+*                                                                     *
+* IN ADDITION, MESSAGES MAY BE FILED FOR ERROR CONDITIONS FOUND       *
+* WHILE PROCESSING THE OPERAND KEYWORD/VALUE.                         *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99KO),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99KO  CSECT
+DFH99KO  DFH99M PROLOG,                                                *
+               PARMS=NO,MAP=S99,                                       *
+               REGS=(T,            -> CURRENT TOKEN                    *
+               KS,                 -> KEYSET FOR OPERAND KEYWORD       *
+               DSCR,               -> DESCRIPTION FOR CURRENT OPND     *
+               W,                  WORK                                *
+               TU,                 -> CURRENT TEXT UNIT                *
+               TUPL,               -> TUPL                             *
+               TUPLX)              INDEX INTO TUPL
+***********************************************************************
+* TOKADDR ADDRESSES WHAT SHOULD BE A VALID OPERAND KEYWORD OF
+*   THE CURRENT VERB, OR END-OF-TEXT TOKEN.
+* IT IS IDENTIFIED, USING LOOKUP TO FIND IT IN THE OPERAND KEYSET.
+***********************************************************************
+LOOKP3   DFH99M AUTO,32A           ANSWER AREA FOR LOOKUP
+NEXTKEY  L     T,TOKADDR
+         CLI   0(T),TEND
+         BE    SKIPEND             EXIT IF END-OF-TEXT
+         DFH99M INVOKE,DFH99LK,((T),>OPKSET,LOOKP3) LOOKUP
+         B     *+4(15)
+         B     UNIQUE              ONE HIT
+         B     AMBIG               MULTIPLE HITS
+         B     NOTFOUND            NO HITS
+***********************************************************************
+* IF IT IS FOUND UNIQUELY, A TEXT UNIT IS STARTED,
+*   AND IS INITIALISED WITH THE OPERAND KEYWORD CODED VALUE,
+*   AND A LENGTH FOR NO VALUES.
+*   THE ADDRESS OF THE TEXT UNIT IS PLACED IN THE TUPL, AND THE
+*   TUPL INDEX IS BUMPED.
+*   THEN THE DESCRIPTION IS ANALYSED, TO DETERMINE WHETHER ANY
+*   OPERANDS PRESENT ARE ALLOWED, AND TO ROUTE THEIR CONVERSION.
+*   AFTER CONVERSION, TOKADDR POINTS AT THE NEXT
+*   PUTATIVE OPERAND KEYWORD, AND THE TEXT UNIT IS COMPLETE.
+*   TUSPACE IS UPDATED OVER THE TEXT UNIT JUST BUILT.
+***********************************************************************
+UNIQUE   DS    0H
+* SAVE OPERAND IN COMM, AND ITS DESCRIPTION.
+         L     KS,LOOKP3           KS -> OPERAND KEYSET ENTRY
+         ST    KS,OPERAND          SAVE IN COMM
+         USING KEYSET,KS
+         MVC   DESCR,KSPTR         COMM.DESCR -> OPERAND DESCRIPTION
+* INITIALISE NEW TEXT UNIT & ENTER ITS ADDRESS INTO TUPL.
+         L     TU,TUSPACE          TU -> START OF TEXT UNIT
+         USING S99TUNIT,TU
+         MVC   S99TUKEY,KSCKW      SET TEXT UNIT KEY
+         XC    S99TUNUM,S99TUNUM   SET 0 VALUE ENTRIES
+         MVC   TULEN,=AL4(S99TUENT-S99TUNIT) CURRENT LENGTH USED
+         L     TUPL,RB+S99TXTPP-S99RB ADDRESS THE TUPL
+         USING S99TUPL,TUPL
+         L     TUPLX,TUPLIX        GET TUPL INDEX
+         ST    TU,S99TUPTR(TUPLX)  SET TUPL TO -> TU
+         DROP  TUPL
+         LA    TUPLX,4(,TUPLX)     BUMP TUPL INDEX
+         ST    TUPLX,TUPLIX        .. TO NEXT SLOT.
+***********************************************************************
+* ANALYSE THE DESCRIPTION, TO DIRECT THE CONVERSION                   *
+*                                                                     *
+*                      NUMBER OF OPERAND VALUES      ERROR CASES      *
+* DESCRIPTION            0          1         >1                      *
+*                                                                     *
+* ALLOWED               OK         OK         OK                      *
+* NOT ALLOWED           OK        ERROR      ERROR  IF >0 & NOTALLOW  *
+*                                                                     *
+* REQUIRED             ERROR       OK         OK    IF =0 & REQUIRED  *
+* OPTIONAL              OK         OK         OK                      *
+*                                                                     *
+* SINGLE                OK         OK        ERROR  IF >1 & SINGLE    *
+* MULTIPLE              OK         OK         OK                      *
+*                                                                     *
+***********************************************************************
+         L     DSCR,DESCR          ADDRESS THE DESCRIPTION
+         USING DESCRIPT,DSCR
+         DFH99M NEXTOK,T,LP=OPNDS
+***********************************************************************
+* NO OPERANDS - CHECK IF THERE SHOULD BE
+***********************************************************************
+NOOPNDS  DS    0H
+         ST    T,TOKADDR           NEXT KEYWORD, SAVE ITS PLACE
+         TM    DSFLAG,DSREQ        IF VALUE REQUIRED
+         BZ    NOOPOK              THEN DIAGNOSE
+         L     W,OPERAND           KEYWORD
+         DFH99M ID,3021
+         DFH99M TEXT,(VALUE,REQUIRED,FOR)
+         DFH99M INSERT,(W),FORMAT=TOKEN
+         DFH99M FILE
+NOOPOK   DS    0H                  CHECK FOR RETURNED VALUES
+         TM    DSFLAG,DSRET        IF VALUE TO BE RETURNED
+         BO    VALPROC1            THEN GO PROCESS SPACE FOR IT.
+         B     TUDONE              ELSE GIVE UP THIS KEYWD
+***********************************************************************
+* OPERANDS - CHECK IF THEY ARE ALLOWED
+***********************************************************************
+OPNDS    DS    0H
+         CLI   2(T),1              SEE HOW MANY OPND VALUES
+         BL    NOOPNDS             NONE
+         TM    DSFLAG,DSALLOW      IF OPND VALUES ALLOWED
+         BO    OPNDALLW            CONTINUE
+         L     W,OPERAND           KEYWORD
+         DFH99M ID,3022            ELSE DIAGNOSE
+         DFH99M TEXT,(VALUE,NOT,ALLOWED,FOR)
+         DFH99M INSERT,(W),FORMAT=TOKEN
+         DFH99M FILE
+SKIPVAL  DFH99M NEXTOK,T,RP=NOTREQ,HELP=HELP
+         DFH99M ID,3023
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,SKIPPED
+         DFH99M FILE
+         B     SKIPVAL
+HELP     DFH99M INVOKE,DFH99VH     VALHELP
+         B     SKIPVAL
+NOTREQ   DFH99M NEXTOK,T,RP=NOTREQ,END=SKIPEND
+         ST    T,TOKADDR
+         B     TUDONE
+OPNDALLW CLI   2(T),1              IF MORE THAN 1 VALUE
+         BE    VALPROC             THEN
+         TM    DSFLAG,DSMULT       IF MULTIPLE ALLOWED
+         BO    VALPROC             THEN CONTINUE
+         L     W,OPERAND           KEYWORD
+         DFH99M ID,3024            ELSE DIAGNOSE
+         DFH99M TEXT,(ONLY,ONE,VALUE,ALLOWED,FOR)
+         DFH99M INSERT,(W),FORMAT=TOKEN
+         DFH99M FILE
+         B     SKIPVAL             IGNORE ALL VALUES
+***********************************************************************
+* VALUES CHECKED. DIRECT THEIR CONVERSION.                            *
+* ON ENTRY TO THIS SECTION, TOKADDR->LEFT PAREN AT START OF VALUES.   *
+***********************************************************************
+VALPROC  DS    0H
+         MVC   S99TUNUM+L'S99TUNUM-1(1),2(T) SET # OF VALUE ENTRIES
+         B     VALPROC2
+* ENTER HERE WHEN A RETURNED VALUE IS TO BE CATERED FOR.
+VALPROC1 MVC   S99TUNUM,=AL(L'S99TUNUM)(1) SET ONE VALUE RETURNED.
+         DFH99M CHAINRET,TU        REMEMBER RETURNED VALUE
+VALPROC2 TM    DSFLAG,DSRTN        IF THERE IS AN EXPLICIT
+         BZ    IMPLRTN             VALUE PROCESSOR
+         ICM   15,B'0111',DSARTN   INVOKE IT
+         DFH99M INVOKE,(15)
+         B     TUDONE              AND EXIT
+IMPLRTN  TM    DSFLAG,DSVAL        IF KEYWORD OPERAND
+         BO    NONKEY              THEN INVOKE
+         DFH99M INVOKE,DFH99KC     KEYCONV, KEYWORD VALUE PROCESSOR
+         B     TUDONE              AND EXIT
+NONKEY   CLI   DSVTYPE,TNUM        IF TEXT TYPE
+         BH    BINTYPE             THEN INVOKE
+         DFH99M INVOKE,DFH99CC     CHARCONV, TEXT TYPE VALUE PROCESSOR
+         B     TUDONE              AND EXIT
+BINTYPE  DFH99M INVOKE,DFH99BC     ELSE BINCONV, BINARY VALUE PROCESSOR
+*                                  AND EXIT
+***********************************************************************
+* UPON RETURN, UPDATE TUSPACE, USING TULEN ACCUMULATED BY VALUE PROC.
+***********************************************************************
+TUDONE   A     TU,TULEN
+         ST    TU,TUSPACE
+* CHECK TUSPACE NOT EXCEEDED. FIX BY UPPING EQUATE IN DFH99MM.
+         C     TU,TUSPEND
+         BNH   NEXTKEY
+         EXEC CICS ABEND ABCODE('ATUF')
+***********************************************************************
+* IF THE OPERAND KEYWORD IS NOT FOUND UNIQUELY,
+*   A MESSAGE IS ISSUED, AND THE KEYWORD AND ANY PARENTHESISED LIST
+*   FOLLOWING IT ARE SKIPPED.
+***********************************************************************
+NOTFOUND DFH99M ID,3001
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(NOT,A,KEYWORD)
+         DFH99M FILE
+         B     SKIPKWD
+AMBIG    LA    W,LOOKP3
+         DFH99M ID,3002
+         DFH99M TEXT,(AMBIGUOUS,KEYWORD)
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(,MIGHT,BE)
+         DFH99M INSERT,(W),FORMAT=TOKENLIST
+         DFH99M FILE
+SKIPKWD  DFH99M NEXTOK,                                                *
+               T,LP=SKIPRP,        SKIP PARENTHESISED ITEMS            *
+               KW=NEXTOPND,        RESUME FOR KEYWORD                  *
+               END=SKIPEND
+SKIPRP   DFH99M NEXTOK,                                                *
+               T,RP=SKIPKWD,       SKIP UNTIL RIGHT PAREN              *
+               END=SKIPERR         DIAGNOSE IF END-OF-TEXT ENCOUNTERED
+         B     SKIPRP              CONTINUE SKIPPING
+SKIPERR  DFH99M ID,4020
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(FOUND,WHILE,SKIPPING)
+         DFH99M FILE
+         B     SKIPEND
+* PROCESSING CONTINUES WITH THE NEXT KEYWORD, UNTIL END-OF-TEXT.
+NEXTOPND DFH99M ERRSTOP,D,SKIPEND
+         ST    T,TOKADDR
+         B     NEXTKEY
+SKIPEND  DS    0H                  END OF TEXT
+         DFH99M EPILOG
+         END

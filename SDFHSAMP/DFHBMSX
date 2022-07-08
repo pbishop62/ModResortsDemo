@@ -1,0 +1,284 @@
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFHBMSX                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = BMS 3270 protection URM                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2016, 2016"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION = Provides user input for BMS 3270 protection              *
+*                                                                     *
+*        If checking is enabled then the function is called if an     *
+*        overwrite of a protected field is detected then the URM      *
+*        can select the action required.                              *
+*        The URM can also perform its own logging or other actions.   *
+*                                                                     *
+*        A parameter list is provided as input to the program. The    *
+*        parameter list is passed to the program via the commarea.    *
+*        The parameter list is defined in DFHBMSXD.                   *
+*        The parameter list is addressed by the program using the     *
+*        normal conventions for a commarea.                           *
+*                                                                     *
+* NOTES :                                                             *
+*                                                                     *
+*    THIS IS A PRODUCT SENSITIVE SAMPLE.                              *
+*    REFER TO PRODUCT DOCUMENTATION.                                  *
+*                                                                     *
+*    DEPENDENCIES = S/390                                             *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFHBMSX                                              *
+*                                                                     *
+*     PURPOSE = All functions                                         *
+*                                                                     *
+*     LINKAGE =                                                       *
+*         This entry point is called by the autoinstall function      *
+*         to link to the program autoinstall exit program.            *
+*         The parameters are passed to the exit program via the       *
+*         commarea. The control block for the parameter list is in    *
+*         DFHBMSXD.                                                   *
+*                                                                     *
+*-------------------------------------------------------------------- *
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+*         None.                                                       *
+*                                                                     *
+*     ROUTINES =                                                      *
+*         EXEC CICS RETURN - return to the calling program.           *
+*                                                                     *
+*     CONTROL BLOCKS =                                                *
+*         The BMSX control block, which includes the input and        *
+*         output parameters, is in DFHBMSXD.                          *
+*                                                                     *
+*-------------------------------------------------------------------- *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFHBMSX),COMP(BMS),PROD(CICS TS ):                      *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*        PI50363 660 150501 HDDLCRP : BMS 3270 Protection             *
+*        R109931 710 161123 HDDLCRP : BMS 3270 Protection             *
+*                                                                     *
+***********************************************************************
+* HOW TO USE THIS SAMPLE                                              *
+***********************************************************************
+* This sample URM allows installations to validate the 3270 data
+* stream returned to CICS by a 3270 emulator for BMS transactions.
+* There are lines commented (1) to (4) which are used to configure
+* this URM.
+*
+* Basic Configuration
+*
+* (1) To enable 3270 datastream validation change NOCHECK to CHECK
+* (2) By default validation errors are traced with exception trace
+*     entry AP 1708, and logged in message DFHTF0200.
+*     You can change this behaviour by changing LOG to ABEND or IGNORE.
+*     Abend will also ABEND the transaction ABSX.
+*     Ignore will only issues the exception trace.
+*
+* Advanced Configuration
+*
+* (3) If you experience a large number of DFHTF0200 messages this
+*     may be as a result of application error. Each error would
+*     need to be investigated.
+*     To minimise the number of errors reported uncomment the
+*     BAL to the UNIQUE routine. This will mean that each unique
+*     error is only reported once.
+*     To use this function it is necessary to setup the VSAM file
+*     DFHBMSX. To capture unique instances over a PLEX define
+*     the file as RLS or configure in an FOR.
+* (4) To investigate errors without the need to look at dumps or trace
+*     the diagnostics can be written to TSQ DFHBMSX.
+*     To use this function uncomment the BAL to the LOGTSQ routine.
+*
+***********************************************************************
+* Definition of the DFHBMSX file                                      *
+***********************************************************************
+*
+* DEFINE      CLUSTER (                              -
+*                      NAME(dsn)                     -
+*                      KEYS(15 16)                   -
+*                      RECORDS(1000,1000)            -
+*                      FREESPACE(10,10)              -
+*                      LOG(NONE)                     -
+*                     )                              -
+*             DATA  (                                -
+*                    NAME(dsn.DATA)                  -
+*                    UNIQUE                          -
+*                    RECSZ(128 4096)                 -
+*                    CISZ(2048)                      -
+*                   )                                -
+*             INDEX (                                -
+*                    NAME(dsn.INDEX)                 -
+*                    SHAREOPTIONS(2 3)               -
+*                    UNIQUE                          -
+*                   )
+*
+* DEFINE FILE(DFHBMSX) GROUP()
+*        DSNAME(dsn)
+*        RLSACCESS(YES)
+*        RECORDSIZE(4096) KEYLENGTH(15)
+*        STRINGS(5)
+*        ADD(YES)
+*
+***********************************************************************
+DFHEISTG DSECT
+         COPY DFHBMSXD                BMS 3270 detection commarea
+*
+V        DSECT
+VAR      DS   CL8
+*
+***********************************************************************
+DFHBMSX CSECT
+DFHBMSX AMODE 31
+DFHBMSX RMODE ANY
+         DFHREGS
+*
+*        If there is no commarea, return
+         OC    EIBCALEN,EIBCALEN
+         BZ    RETURN0
+*
+*        Address the commarea
+         L     R2,DFHEICAP
+         USING BMSX,R2
+***********************************************************************
+*        Check function, and select action, ignore if invalid
+***********************************************************************
+*
+*        The URM can override the configuration default set
+*        in the featuretoggle.properties file.
+*        Set to the value in (1) to CHECK or NOCHECK.
+*
+         CLI   BMSX_FUNCTION,BMSX_FUNCTION_INIT
+         BE    RETURN0                                     (1)   <=====
+*
+*        Only other action should be overwrite if not leave
+*
+         CLI   BMSX_FUNCTION,BMSX_FUNCTION_OVERWRITE
+         BNE   RETURN0
+***********************************************************************
+*        Overwrite Detected
+***********************************************************************
+*
+*        Report all instances or just unique map and mapset instances.
+*        If you only want to report unique ones
+*        you must setup and install the VSAM file DFHBMSX.
+*        To activate this uncomment the following line.
+*
+**       BAL   R5,UNIQUE                                   (3)   <=====
+*
+*        Write details about overwrite to TSQ DFHBMSX.
+*        To activate this uncomment the following line.
+*
+**       BAL   R5,LOGTSQ                                   (4)   <=====
+*
+*        The URM can override the configuration default set
+*        in the featuretoggle.properties file.
+*        Action when detection occurs
+*        B     LOG        Write a message DFHTF0200 to MSGUSER
+*        B     ABEND      Transaction abend ABSX
+*        B     IGNORE     Do nothing
+*
+         B     RETURN0                                     (2)   <=====
+***********************************************************************
+*        Check if this overwrite is unique. If not ignore it.
+***********************************************************************
+UNIQUE   DS 0H
+         EXEC CICS WRITE FILE('DFHBMSX')                               *
+                         RIDFLD(BMSX_OMAPSET)                          *
+                         FROM(BMSX_HEADER)                             *
+                         LENGTH(BMSX_SIZE+2)                           *
+                         NOHANDLE
+*
+*        NORMAL means new instance which will result in logging/abend
+*        Ignore DUPREC for previously seen instance
+*        All other errors, such as dataset closed will also be ignored
+*
+         CLC   EIBRESP,DFHRESP(NORMAL)
+         BNE   IGNORE
+         BR    R5
+***********************************************************************
+*        Capture the commarea data and output and input fields.
+*        Write data to TSQ for quick analysis to see
+*        what data changed.
+*        Output fields are only captured if they are MDT.
+***********************************************************************
+LOGTSQ   EXEC CICS WRITEQ TS QNAME('DFHBMSX')                          *
+                         FROM(BMSX_HEADER)                             *
+                         LENGTH(BMSX_SIZE+2)                           *
+                         NOHANDLE
+         USING V,R4
+         CLC   BMSX_OLEN,=H'0'
+         BE    NOODATA
+         L     R4,BMSX_ODATA_PTR
+         LTR   R4,R4
+         BZ    NOODATA
+         EXEC CICS WRITEQ TS QNAME('DFHBMSX')                          *
+                         FROM(VAR)                                     *
+                         LENGTH(BMSX_OLEN)                             *
+                         NOHANDLE
+NOODATA  DS    0H
+         CLC   BMSX_ILEN,=H'0'
+         BE    NOIDATA
+         L     R4,BMSX_IDATA_PTR
+         LTR   R4,R4
+         BZ    NOIDATA
+         EXEC CICS WRITEQ TS QNAME('DFHBMSX')                          *
+                         FROM(VAR)                                     *
+                         LENGTH(BMSX_ILEN)                             *
+                         NOHANDLE
+NOIDATA  DS    0H
+         BR    R5
+***********************************************************************
+*        Set responses in commarea and exit URM
+***********************************************************************
+*
+*        Ignore the overwrite
+IGNORE   DS    0H
+         MVI   BMSX_ACTION,BMSX_ACTION_IGNORE
+         B     RETURN0
+*
+*        Log the first overwrite only
+LOG      DS    0H
+         MVI   BMSX_ACTION,BMSX_ACTION_LOG
+         MVI   BMSX_LOGACTION,BMSX_LOGACTION_FIRST
+         B     RETURN0
+*
+*        Abend the task after logging all overwrites
+ABEND    DS    0H
+         MVI   BMSX_ACTION,BMSX_ACTION_ABEND
+         MVI   BMSX_LOGACTION,BMSX_LOGACTION_ALL
+         B     RETURN0
+*
+*        BMS 3270 protection enabled
+CHECK    DS    0H
+         MVI   BMSX_ACTION,BMSX_ACTION_CHECK
+         B     RETURN0
+*
+*        BMS 3270 protection not enabled
+NOCHECK  DS    0H
+         MVI   BMSX_ACTION,BMSX_ACTION_NOCHECK
+         B     RETURN0
+*
+RETURN0  DS    0H
+         EXEC CICS RETURN
+         END   DFHBMSX

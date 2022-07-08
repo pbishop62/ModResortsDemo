@@ -1,0 +1,132 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99GI     TITLE 'DFH99GI - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - FORMAT DISPLAY AND GET INPUT'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99GI                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Format Display and Get Input                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* SEND CURRENT COMMAND TO INPUT AREA IF NECESSARY.                    *
+* READ IN COMMAND FROM INPUT AREA.                                    *
+* SET START AND END POINTERS AT INPUT OBTAINED.                       *
+* OUTPUT:      TXTSTART            SET                                *
+*              TXTEND              SET                                *
+*              R15 = 0 SUCCESSFUL, START/END HAVE BEEN SET.           *
+*                  = 4 RESERVED                                       *
+*                  = 8 NO COMMAND AVAILABLE.                          *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99GI),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99GI  CSECT
+         SPACE 3
+DFH99GI  DFH99M PROLOG,PARMS=NO,REGS=(WA,TS,TE)
+***********************************************************************
+*   BUFFER DESCRIPTION FOR INPUT SECTION OF BUFFER.
+*   THE INPUT SECTION IS WRITTEN FROM THE BEGINNING,
+*   BUT READ IN OFFSETTED, SO THAT THE DATA DOESN'T HAVE TO MOVE.
+***********************************************************************
+INBUF    DSECT ,                  INPUT BUFFER FORMAT
+INOSBA   DS    XL3                 SBA FOR OUTPUT
+INISBA   DS    0XL3                SBA FOR INPUT
+INOSF    DS    X                   START FIELD FOR OUTPUT
+INOATTR  DS    X                   ATTRIBUTE FOR OUTPUT
+INOIC    DS    X                   INSERT CURSOR FOR OUTPUT
+INDATA   DS    0C                  START OF DATA INPUT OR OUTPUT
+SBA      EQU   X'11'               SET BUFFER ADDRESS
+IC       EQU   X'13'               INSERT CURSOR
+SF       EQU   X'1D'               START FIELD
+INMDT    EQU   X'C1'               INPUT ATTRIBUTE
+DFH99GI  CSECT
+CLEARSW  DFH99M AUTO,X             X'FF' IF CLEAR KEY HIT
+         MVI   CLEARSW,0           SET SWITCH OFF
+         LH    0,INBUFU            LENGTH IN USE IN INPUT BUFFER
+         LTR   0,0                 HAS A READ BEEN DONE?
+         BNZ   JUSTREAD            ONLY READ IF SO.
+         LA    0,INDATA-INISBA     SET NONE USED ..
+         STH   0,INBUFU            .. FIRST TIME ONLY.
+***********************************************************************
+*   FORMAT THE INPUT BUFFER FOR WRITING, WITH ATTRIBUTES, ETC
+***********************************************************************
+CLEAR1   L     WA,SCRBUFI          WA->BUFFER
+         USING INBUF,WA
+         MVI   INOSBA,SBA          SBA ORDER
+         MVC   INOSBA+1(2),INSBA   SBA ADDRESS
+         MVI   INOSF,SF            START FIELD ORDER
+         MVI   INOATTR,INMDT       ATTRIBUTE
+         MVI   INOIC,IC            IC ORDER
+         LH    0,INBUFU            0=LENGTH USED IN BUFFER
+         AH    0,=Y(L'INOSBA)      PLUS CONTROLS FOR OUTPUT
+         STH   0,BUFL              SAVE LENGTH
+BUFL     DFH99M AUTO,H             LENGTH TO READ OR WRITE
+         CLI   CLEARSW,0           WAS CLEAR KEY HIT?
+         BE    JUSTREAD            BR IF NOT.
+         B     CLEAR2              GO REFORMAT SCREEN.
+***********************************************************************
+*   INPUT BUFFER WRITE. OUTPUT BUFFER ALSO REWRITTEN, TO GET RIGHT
+*   UNPROTECTED LENGTH FOR INPUT AREA.
+***********************************************************************
+CLEAR    MVI   CLEARSW,X'FF'       SET SWITCH
+         B     CLEAR1              AND RE-INIT.
+CLEAR2   EXEC CICS SEND FROM(INOSBA) LENGTH(BUFL) WAIT CTLCHAR(X'40')
+         SR    1,1                 OUTPUT BUFFER..
+         DFH99M INVOKE,DFH99MP     ..WRITE.
+         MVI   CLEARSW,0           SET SWITCH OFF
+***********************************************************************
+*      READ THE INPUT FIELDS FROM THE SCREEN
+***********************************************************************
+JUSTREAD L     WA,SCRBUFI          WA->BUFFER
+         EXEC CICS HANDLE AID CLEAR(CLEAR) PA1(RECV) PA2(RECV)
+RECV     DS    0H                  RESET OUTPUT CONTROLS
+         MVC   BUFL,SCRBUFSZ+2     SET MAX LENGTH
+         MVI   INOSF,SF            START FIELD ORDER
+         MVI   INOATTR,INMDT       ATTRIBUTE
+         MVI   INOIC,IC            IC ORDER
+         EXEC CICS CONVERSE FROM(INOSBA) FROMLENGTH(=Y(INDATA-INOSBA)) *
+               INTO(INISBA) TOLENGTH(BUFL)
+         DROP  WA
+***********************************************************************
+*      SET START/END POINTERS FOR THIS STRING
+***********************************************************************
+         L     TE,SCRBUFI          TE->BUFFER
+         USING INBUF,TE
+         LA    TS,INDATA           TS->START OF TEXT
+         DROP  TE
+         AH    TE,BUFL             TE->END OF DATA + 1
+         LA    TE,INISBA-INBUF-1(,TE) TE->END OF DATA
+         CR    TS,TE               IS THERE ANY TEXT?
+         BNH   ISTEXT              BR IF SO
+         LA    15,8                SHOW NO INPUT FOUND
+         B     INEND
+ISTEXT   ST    TS,TXTSTART         SET START
+         ST    TE,TXTEND           SET END
+         MVC   INBUFU,BUFL         SAVE BUFFER LENGTH USED
+         SR    15,15               SHOW SUCCESSFUL
+INEND    DFH99M EPILOG,RC=(15)
+         END

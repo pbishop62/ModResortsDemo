@@ -1,0 +1,561 @@
+             CBL CICS('COBOL3') APOST
+      *****************************************************************
+      *                                                               *
+      *  MODULE NAME = DFH0XECC                                       *
+      *                                                               *
+      *  DESCRIPTIVE NAME = CICS TS  (Samples) Example Application -  *
+      *                     Web Service Client INVOKE WEBSERVICE      *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *      Licensed Materials - Property of IBM                     *
+      *                                                               *
+      *      "Restricted Materials of IBM"                            *
+      *                                                               *
+      *      5655-Y04                                                 *
+      *                                                               *
+      *      (C) Copyright IBM Corp. 2005, 2008"                      *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *  STATUS = 7.2.0                                               *
+      *                                                               *
+      *  TRANSACTION NAME = n/a                                       *
+      *                                                               *
+      *  FUNCTION =                                                   *
+      *  This module contains the logic to handle the clients INVOKE  *
+      *  WEBSERVICE calls to the example application                  *
+      *                                                               *
+      *-------------------------------------------------------------  *
+      *                                                               *
+      *  ENTRY POINT = DFH0XECC                                       *
+      *                                                               *
+      *-------------------------------------------------------------  *
+      *                                                               *
+      *  CHANGE ACTIVITY :                                            *
+      *                                                               *
+      *      $MOD(DFH0XECC),COMP(STARTER),PROD(CICS TS ):             *
+      *                                                               *
+      *   PN= REASON REL YYMMDD HDXXIII : REMARKS                     *
+      *  $01= A60058 660 080728 HDBGNRB : Migrate PK60058 from SPA R65*
+      *  $D0= I07544 640 050113 HDIPCB  : ExampleApp CICS client code *
+      *  $D1= I07544 640 050118 HDIPCB  : ExampleApp Add sample JCL an*
+      *  $P1= D16115 650 061207 HDHCPC  : Error messages for sample ap*
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0XECC.
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *----------------------------------------------------------------*
+      * Common defintions                                              *
+      *----------------------------------------------------------------*
+      * Run time (debug) infomation for this invocation
+        01  WS-HEADER.
+           03 WS-EYECATCHER            PIC X(16)
+                                        VALUE 'DFH0XECC------WS'.
+           03 WS-TRANSID               PIC X(4).
+           03 WS-TERMID                PIC X(4).
+           03 WS-TASKNUM               PIC 9(7).
+           03 WS-CALEN                 PIC S9(4) COMP.
+
+      * Variables for time/date processing
+       01  ABS-TIME                    PIC S9(8) COMP VALUE +0.
+       01  TIME1                       PIC X(8)  VALUE SPACES.
+       01  DATE1                       PIC X(10) VALUE SPACES.
+
+      * Error Message structure
+       01  ERROR-MSG.
+           03 EM-DATE                  PIC X(8)  VALUE SPACES.
+           03 FILLER                   PIC X     VALUE SPACES.
+           03 EM-TIME                  PIC X(6)  VALUE SPACES.
+           03 FILLER                   PIC X(9)  VALUE ' DFH0XECC'.
+           03 FILLER                   PIC X     VALUE SPACES.
+           03 EM-DETAIL                PIC X(50) VALUE SPACES.
+
+      * Working variables
+       01 WORKING-VARIABLES.
+           03 WS-REQUEST-ID            PIC X(6).
+           03 WS-RESP                  PIC S9(8) COMP.
+           03 WS-RESP2                 PIC S9(8) COMP.
+           03 WS-OPERATION             PIC X(255).
+           03 WS-SERVICE-CONT-NAME     PIC X(16).
+           03 WS-CHANNELNAME           PIC X(16).
+           03 WS-ENDPOINT-URI          PIC X(255).
+
+      * Data area for webservice request
+       01 INQUIRE-CATALOG-REQUEST.
+           COPY DFH0XCPA.
+       01 INQUIRE-CATALOG-RESPONSE.
+           COPY DFH0XCPB.
+       01 INQUIRE-SINGLE-REQUEST.
+           COPY DFH0XCPC.
+       01 INQUIRE-SINGLE-RESPONSE.
+           COPY DFH0XCPD.
+       01 PLACE-ORDER-REQUEST.
+           COPY DFH0XCPE.
+       01 PLACE-ORDER-RESPONSE.
+           COPY DFH0XCPF.
+
+      * Key into the configuration file
+       01 EXAMPLE-APP-CONFIG       PIC X(9)
+               VALUE 'WS-SERVER'.
+
+      * Format of the configuration file
+       01 APP-CONFIG.
+           03 FILE-KEY             PIC X(9).
+           03 FILLER               PIC X.
+           03 SERVER-LOCATION      PIC X(200).
+
+      *----------------------------------------------------------------*
+
+      ******************************************************************
+      *    L I N K A G E   S E C T I O N
+      ******************************************************************
+       LINKAGE SECTION.
+       01 DFHCOMMAREA.
+           COPY DFH0XCP1.
+
+      ******************************************************************
+      *    P R O C E D U R E S
+      ******************************************************************
+       PROCEDURE DIVISION.
+
+      *----------------------------------------------------------------*
+       MAINLINE SECTION.
+
+      *----------------------------------------------------------------*
+      * Common code                                                    *
+      *----------------------------------------------------------------*
+      * initialize working storage variables
+           INITIALIZE APP-CONFIG
+           INITIALIZE ERROR-MSG
+           INITIALIZE INQUIRE-CATALOG-REQUEST
+           INITIALIZE INQUIRE-CATALOG-RESPONSE
+           INITIALIZE INQUIRE-SINGLE-REQUEST
+           INITIALIZE INQUIRE-SINGLE-RESPONSE
+           INITIALIZE PLACE-ORDER-REQUEST
+           INITIALIZE PLACE-ORDER-RESPONSE
+           INITIALIZE WORKING-VARIABLES
+
+      * set up general variable
+           MOVE EIBTRNID TO WS-TRANSID
+           MOVE EIBTRMID TO WS-TERMID
+           MOVE EIBTASKN TO WS-TASKNUM
+
+      *---------------------------------------------------------------*
+      * Check commarea and obtain required details                    *
+      *---------------------------------------------------------------*
+      * If NO commarea received issue an ABEND
+           IF EIBCALEN IS EQUAL TO ZERO
+               MOVE ' NO COMMAREA RECEIVED' TO EM-DETAIL
+               PERFORM WRITE-ERROR-MESSAGE
+               EXEC CICS ABEND ABCODE('EXCA') NODUMP END-EXEC
+           END-IF
+
+      * Initalize commarea return code to zero
+           MOVE '00' TO CA-RETURN-CODE IN DFHCOMMAREA
+           MOVE EIBCALEN TO WS-CALEN.
+
+      *----------------------------------------------------------------*
+      * Read in configuration file and set server address
+      *----------------------------------------------------------------*
+           EXEC CICS READ FILE('EXMPCONF')
+                          INTO(APP-CONFIG)
+                          RIDFLD(EXAMPLE-APP-CONFIG)
+                          RESP(WS-RESP)
+           END-EXEC
+
+           IF WS-RESP NOT EQUAL DFHRESP(NORMAL)
+               MOVE '51' TO CA-RETURN-CODE IN DFHCOMMAREA
+               MOVE 'APPLICATION ERROR OPENING CONFIGURATION FILE'
+                   TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+               EXEC CICS RETURN END-EXEC
+           END-IF
+
+      *---------------------------------------------------------------*
+      * Set up the data for the web service call
+      *---------------------------------------------------------------*
+
+      *    'DFHWS-DATA' is the name of the container that will store
+      *    the data to make the webservice request
+           MOVE 'DFHWS-DATA' TO WS-SERVICE-CONT-NAME
+
+      *    'SERVICE-CHANNEL' is the name of the channel we will pass to
+      *    the web service call
+           MOVE 'SERVICE-CHANNEL' TO WS-CHANNELNAME
+
+      *----------------------------------------------------------------*
+      * Check which operation in being requested
+      *----------------------------------------------------------------*
+      * Uppercase the value passed in the Request Id field
+           MOVE FUNCTION UPPER-CASE(CA-REQUEST-ID IN DFHCOMMAREA)
+                           TO WS-REQUEST-ID
+
+           EVALUATE WS-REQUEST-ID
+               WHEN '01INQC'
+      *        Call routine to perform for inquire
+                   PERFORM CATALOG-INQUIRE
+
+               WHEN '01INQS'
+      *        Call routine to perform for inquire for single item
+                   PERFORM SINGLE-INQUIRE
+
+               WHEN '01ORDR'
+      *        Call routine to place order
+                   PERFORM PLACE-ORDER
+
+               WHEN OTHER
+      *        Request is not recognised or supported
+                   PERFORM REQUEST-NOT-RECOGNISED
+
+           END-EVALUATE
+
+      * Return to caller
+           EXEC CICS RETURN END-EXEC.
+
+       MAINLINE-EXIT.
+           EXIT.
+      *----------------------------------------------------------------*
+
+      *================================================================*
+      * Procedure to write error message to TD QUEUE(CSMT)             *
+      *   message will include Date, Time, Program Name,               *
+      *   and error details.                                           *
+      *================================================================*
+       WRITE-ERROR-MESSAGE.
+      * Obtain and format current time and date
+           EXEC CICS ASKTIME ABSTIME(ABS-TIME)
+           END-EXEC
+           EXEC CICS FORMATTIME ABSTIME(ABS-TIME)
+                     MMDDYYYY(DATE1)
+                     TIME(TIME1)
+           END-EXEC
+           MOVE DATE1 TO EM-DATE
+           MOVE TIME1 TO EM-TIME
+      * Write output message to TDQ
+           EXEC CICS WRITEQ TD QUEUE('CSMT')
+                     FROM(ERROR-MSG)
+                     LENGTH(LENGTH OF ERROR-MSG)
+           END-EXEC.
+           EXIT.
+
+      *================================================================*
+      * Procedure tomake a Web service call to inquire                 *
+      *   on the catalog data                                          *
+      *================================================================*
+        CATALOG-INQUIRE.
+
+      *    Move the data from the input commarea to the
+      *    'inquireCatalogRequest' variable ready to put in a container
+           MOVE CA-REQUEST-ID IN DFHCOMMAREA
+               TO caXrequestXid IN INQUIRE-CATALOG-REQUEST
+           MOVE 00 TO caXreturnXcode IN INQUIRE-CATALOG-REQUEST
+           MOVE CA-LIST-START-REF IN DFHCOMMAREA
+               TO caXlistXstartXref IN INQUIRE-CATALOG-REQUEST
+
+      *---------------------------------------------------------------*
+      * Place the request data into a container on a channel
+      * WS-SERVICE-CONT-NAME   =   'DFHWS-DATA'
+      * WS-CHANNELNAME         =   'SERVICE-CHANNEL'
+      *---------------------------------------------------------------*
+           EXEC CICS PUT CONTAINER(WS-SERVICE-CONT-NAME)
+                         CHANNEL(WS-CHANNELNAME)
+                         FROM(INQUIRE-CATALOG-REQUEST)
+           END-EXEC
+
+      *---------------------------------------------------------------*
+      * Build the URI from the server name in the VSAM file and
+      * the local URI for the inquire catalog service
+      *---------------------------------------------------------------*
+
+           STRING  'http://'
+                   SERVER-LOCATION
+                   '/exampleApp/inquireCatalog'
+               DELIMITED BY SPACE
+               INTO WS-ENDPOINT-URI
+           END-STRING
+
+      *---------------------------------------------------------------*
+      * Invoke the webservice
+      * WS-CHANNELNAME         =   'SERVICE-CHANNEL'
+      * Operation below changed by PK60058                            *
+      *---------------------------------------------------------------*
+           MOVE 'DFH0XCMNOperation' TO WS-OPERATION
+
+           EXEC CICS INVOKE WEBSERVICE('inquireCatalogClient')
+                     CHANNEL(WS-CHANNELNAME)
+                     URI(WS-ENDPOINT-URI)
+                     OPERATION(WS-OPERATION)
+                     RESP(WS-RESP) RESP2(WS-RESP2)
+           END-EXEC.
+
+      * Check the return code was normal
+
+           EVALUATE WS-RESP
+               WHEN DFHRESP(NORMAL)
+      *            Normal response populate commarea and return
+
+      *            Get the response container off the channel
+                   EXEC CICS GET CONTAINER(WS-SERVICE-CONT-NAME)
+                             CHANNEL(WS-CHANNELNAME)
+                             INTO(INQUIRE-CATALOG-RESPONSE)
+                   END-EXEC
+
+                   MOVE caXreturnXcode IN INQUIRE-CATALOG-RESPONSE
+                        TO CA-RETURN-CODE IN DFHCOMMAREA
+
+                   MOVE caXresponseXmessage IN INQUIRE-CATALOG-RESPONSE
+                        TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+
+      *            Check the return code
+                   IF caXreturnXcode IN INQUIRE-CATALOG-RESPONSE
+                     EQUAL 00
+      *                Response is okay, copy data across to commarea
+                       MOVE caXinquireXrequest
+                               IN INQUIRE-CATALOG-RESPONSE
+                       TO   CA-INQUIRE-REQUEST IN DFHCOMMAREA
+                   END-IF
+
+               WHEN DFHRESP(INVREQ)
+                   MOVE
+                   'Error calling inquire catalog service - INVREQ'
+                       TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+                   MOVE 30 TO CA-RETURN-CODE IN DFHCOMMAREA
+
+               WHEN DFHRESP(NOTFND)
+                   MOVE
+                   'Error calling inquire catalog service - NOT FOUND'
+                       TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+                   MOVE 31 TO CA-RETURN-CODE IN DFHCOMMAREA
+
+               WHEN OTHER
+                   MOVE
+                   'Error calling inquire catalog service'
+                       TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+                   MOVE 32 TO CA-RETURN-CODE IN DFHCOMMAREA
+           END-EVALUATE.
+
+           EXIT.
+
+      *================================================================*
+      * Procedure tomake a Web service call to inquire                 *
+      *   on the catalog data                                          *
+      *================================================================*
+        SINGLE-INQUIRE.
+
+      *    Move the data from the input commarea to the
+      *    'inquireSingleRequest' variable ready to put in a container
+           MOVE CA-REQUEST-ID IN DFHCOMMAREA
+               TO caXrequestXid IN INQUIRE-SINGLE-REQUEST
+           MOVE 00 TO caXreturnXcode IN INQUIRE-SINGLE-REQUEST
+           MOVE CA-ITEM-REF-REQ IN DFHCOMMAREA
+               TO caXitemXrefXreq IN INQUIRE-SINGLE-REQUEST
+
+      *---------------------------------------------------------------*
+      * Place the request data into a container on a channel
+      * WS-SERVICE-CONT-NAME   =   'DFHWS-DATA'
+      * WS-CHANNELNAME         =   'SERVICE-CHANNEL'
+      *---------------------------------------------------------------*
+           EXEC CICS PUT CONTAINER(WS-SERVICE-CONT-NAME)
+                         CHANNEL(WS-CHANNELNAME)
+                         FROM(INQUIRE-SINGLE-REQUEST)
+           END-EXEC
+
+      *---------------------------------------------------------------*
+      * Build the URI from the server name in the VSAM file and
+      * the local URI for the inquire catalog service
+      *---------------------------------------------------------------*
+
+           STRING  'http://'
+                   SERVER-LOCATION
+                   '/exampleApp/inquireSingle'
+               DELIMITED BY SPACE
+               INTO WS-ENDPOINT-URI
+           END-STRING
+
+      *---------------------------------------------------------------*
+      * Invoke the webservice
+      * WS-CHANNELNAME         =   'SERVICE-CHANNEL'
+      * Operation below changed by PK60058                            *
+      *---------------------------------------------------------------*
+           MOVE 'DFH0XCMNOperation' TO WS-OPERATION
+
+           EXEC CICS INVOKE WEBSERVICE('inquireSingleClient')
+                     CHANNEL(WS-CHANNELNAME)
+                     URI(WS-ENDPOINT-URI)
+                     OPERATION(WS-OPERATION)
+                     RESP(WS-RESP) RESP2(WS-RESP2)
+           END-EXEC.
+
+      * Check the return code was normal
+
+           EVALUATE WS-RESP
+               WHEN DFHRESP(NORMAL)
+      *            Normal response populate commarea and return
+
+      *            Get the response container off the channel
+                   EXEC CICS GET CONTAINER(WS-SERVICE-CONT-NAME)
+                             CHANNEL(WS-CHANNELNAME)
+                             INTO(INQUIRE-SINGLE-RESPONSE)
+                   END-EXEC
+
+                   MOVE caXreturnXcode IN INQUIRE-SINGLE-RESPONSE
+                        TO CA-RETURN-CODE IN DFHCOMMAREA
+
+                   MOVE caXresponseXmessage IN INQUIRE-SINGLE-RESPONSE
+                        TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+
+      *            Check the return code
+                   IF caXreturnXcode IN INQUIRE-SINGLE-RESPONSE
+                     EQUAL 00
+      *                Response is okay, copy data across to commarea
+                       MOVE caXsingleXitem
+                               IN INQUIRE-SINGLE-RESPONSE
+                       TO   CA-SINGLE-ITEM IN DFHCOMMAREA
+                   END-IF
+
+               WHEN DFHRESP(INVREQ)
+                   MOVE
+                   'Error calling inquire single service - INVREQ'
+                       TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+                   MOVE 30 TO CA-RETURN-CODE IN DFHCOMMAREA
+
+               WHEN DFHRESP(NOTFND)
+                   MOVE
+                   'Error calling inquire single service - NOT FOUND'
+                       TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+                   MOVE 31 TO CA-RETURN-CODE IN DFHCOMMAREA
+
+               WHEN OTHER
+                   MOVE
+                   'Error calling inquire single service'
+                       TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+                   MOVE 32 TO CA-RETURN-CODE IN DFHCOMMAREA
+           END-EVALUATE.
+
+           EXIT.
+
+      *================================================================*
+      * Procedure to make a Web service call to place an order         *
+      *   on the catalog data                                          *
+      *================================================================*
+        PLACE-ORDER.
+      *    Move the data from the input commarea to the
+      *    'placeOrderRequest' variable ready to put in a container
+           MOVE CA-REQUEST-ID IN DFHCOMMAREA
+               TO caXrequestXid IN PLACE-ORDER-REQUEST
+           MOVE 00 TO caXreturnXcode IN PLACE-ORDER-REQUEST
+           MOVE CA-USERID IN DFHCOMMAREA
+               TO caXuserid IN PLACE-ORDER-REQUEST
+           MOVE CA-CHARGE-DEPT IN DFHCOMMAREA
+               TO caXchargeXdept IN PLACE-ORDER-REQUEST
+           MOVE CA-ITEM-REF-NUMBER IN DFHCOMMAREA
+               TO caXitemXrefXnumber IN PLACE-ORDER-REQUEST
+           MOVE CA-QUANTITY-REQ IN DFHCOMMAREA
+               TO caXquantityXreq IN PLACE-ORDER-REQUEST
+
+
+      *---------------------------------------------------------------*
+      * Place the request data into a container on a channel
+      * WS-SERVICE-CONT-NAME   =   'DFHWS-DATA'
+      * WS-CHANNELNAME         =   'SERVICE-CHANNEL'
+      *---------------------------------------------------------------*
+           EXEC CICS PUT CONTAINER(WS-SERVICE-CONT-NAME)
+                         CHANNEL(WS-CHANNELNAME)
+                         FROM(PLACE-ORDER-REQUEST)
+           END-EXEC
+
+      *---------------------------------------------------------------*
+      * Build the URI from the server name in the VSAM file and
+      * the local URI for the inquire catalog service
+      *---------------------------------------------------------------*
+
+           STRING  'http://'
+                   SERVER-LOCATION
+                   '/exampleApp/placeOrder'
+               DELIMITED BY SPACE
+               INTO WS-ENDPOINT-URI
+           END-STRING
+
+      *---------------------------------------------------------------*
+      * Invoke the webservice
+      * WS-CHANNELNAME         =   'SERVICE-CHANNEL'
+      * Operation below changed by PK60058                            *
+      *---------------------------------------------------------------*
+           MOVE 'DFH0XCMNOperation' TO WS-OPERATION
+
+           EXEC CICS INVOKE WEBSERVICE('placeOrderClient')
+                     CHANNEL(WS-CHANNELNAME)
+                     URI(WS-ENDPOINT-URI)
+                     OPERATION(WS-OPERATION)
+                     RESP(WS-RESP) RESP2(WS-RESP2)
+           END-EXEC.
+
+      * Check the return code was normal
+
+           EVALUATE WS-RESP
+               WHEN DFHRESP(NORMAL)
+      *            Normal response populate commarea and return
+
+      *            Get the response container off the channel
+                   EXEC CICS GET CONTAINER(WS-SERVICE-CONT-NAME)
+                             CHANNEL(WS-CHANNELNAME)
+                             INTO(PLACE-ORDER-RESPONSE)
+                   END-EXEC
+
+                   MOVE caXreturnXcode IN PLACE-ORDER-RESPONSE
+                        TO CA-RETURN-CODE IN DFHCOMMAREA
+
+                   MOVE caXresponseXmessage IN PLACE-ORDER-RESPONSE
+                        TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+
+      *            Check the return code
+                   IF caXreturnXcode IN PLACE-ORDER-RESPONSE
+                     EQUAL 00
+      *                Response is okay, copy data across to commarea
+                       MOVE caXorderXrequest
+                               IN PLACE-ORDER-RESPONSE
+                       TO   CA-ORDER-REQUEST IN DFHCOMMAREA
+                   END-IF
+
+               WHEN DFHRESP(INVREQ)
+                   MOVE
+                   'Error calling place order service - INVREQ'
+                       TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+                   MOVE 30 TO CA-RETURN-CODE IN DFHCOMMAREA
+
+               WHEN DFHRESP(NOTFND)
+                   MOVE
+                   'Error calling place order service - NOT FOUND'
+                       TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+                   MOVE 31 TO CA-RETURN-CODE IN DFHCOMMAREA
+
+               WHEN OTHER
+                   MOVE
+                   'Error calling place order service'
+                       TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+                   MOVE 32 TO CA-RETURN-CODE IN DFHCOMMAREA
+           END-EVALUATE.
+
+           EXIT.
+
+
+      *================================================================*
+      * Procedure to handle unknown requests                           *
+      *================================================================*
+        REQUEST-NOT-RECOGNISED.
+           MOVE '99' TO CA-RETURN-CODE IN DFHCOMMAREA
+
+           STRING ' UNKNOWN REQUEST ID RECEIVED - '
+               CA-REQUEST-ID IN DFHCOMMAREA
+               DELIMITED BY SIZE
+               INTO EM-DETAIL
+           END-STRING
+
+           MOVE 'OPERATION UNKNOWN'
+               TO CA-RESPONSE-MESSAGE IN DFHCOMMAREA
+           EXIT.

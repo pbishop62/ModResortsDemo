@@ -1,0 +1,98 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99TX     TITLE 'DFH99TX - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - TEXT DISPLAY ROUTINE - BUILDS LINES'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99TX                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Text Display Routine                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ADDS TEXT TO OUTPUT BUFFER, MOVING TO NEXT LINE IF TEXT WON'T       *
+*        FIT ON CURRENT LINE.                                         *
+* INPUT: R1-> A(TEXT) - DISPLAY FORM OF A SINGLE TOKEN                *
+*             F(LENGTH OF TEXT) ZERO ON NEWLINE REQUEST               *
+*                               NEGATIVE ON END-OF-JOB REQUEST        *
+*        IF THE LENGTH IS NOT > 0, THE CURRENT LINE IS TRUNCATED      *
+*        IF THE CURRENT LINE IS SHORT ENOUGH, THE TEXT IS ADDED TO IT *
+*        OTHERWISE, THE TEXT IS PLACED ON THE NEXT LINE.              *
+*        WHEN THE OUTPUT BUFFER IS FULL, THE DISPLAY IS CHANGED TO    *
+*        BRIGHT, AND NO FURTHER TEXT IS ADDED TO THE BUFFER.          *
+*        THE BUFFER IS FREED BY MAIN, BY SETTING OUTUSED TO 0.        *
+* THE BUFFER IS ACTUALLY DISPLAYED BY MSGPROC.                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99TX),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99TX  CSECT
+DFH99TX  DFH99M PROLOG,PARMS=(TEXT,LENGTH),REGS=(T,L,TX,TL,W)
+         ICM   TL,15,LENGTH        IS IT ADD-TEXT CALL?
+         BP    ADDTEXT             YES, GO DO IT
+NEWLINE  DS    0H                  (TEXT LENGTH = 0)
+* INITIALISE FOR NEXT LINE.
+TRUNC    DS    0H
+         LH    L,OUTBUFU           ANYTHING IN LINE?
+         LTR   L,L
+         BZ    QLIN                BR IF NOT
+         B     BUMP                GO BUMP TO NEXT LINE
+BUMP     LH    L,OUTUSED
+         LA    L,1(,L)             BUMP OUTUSED TO NEXT LINE
+         STH   L,OUTUSED
+         XC    OUTBUFU,OUTBUFU     START NEXT LINE WITH 0 USED.
+* HAVING COMPLETED CURRENT LINE,
+*   IF LENGTH IS > 0, MORE TEXT TO ADD.
+*   ELSE RETURN
+QLIN     LTR   TL,TL
+         BZ    RET
+         CH    TL,SCRNWD           IF TEXT TOO LONG
+         BNH   ADDTEXT             THEN CHOP TO SCREEN WIDTH
+         LH    TL,SCRNWD
+* ADD TEXT TO CURRENT LINE
+ADDTEXT  CLC   OUTUSED,OUTLINES+2  IF OUTPUT AREA FULL..
+         BL    NOTFULL             ..THEN DON'T ADD MORE
+* OUTPUT DATA BUFFER IS FULL. DIAGNOSE (SET DISPLAY BRIGHT) AND RETURN.
+         MVC   OUTBUFU,SCRNWD      ENSURE LINE REALLY FULL
+         L     L,OUTBUFD           START OF DATA IN O/P AREA
+         BCTR  L,0                 BACK OFF TO ATTRIBUTE
+         MVI   0(L),BRIGHT         SET TO BRIGHT
+BRIGHT   EQU   X'E8'               ATTRIBUTE VALUE
+         B     RET
+NOTFULL  LH    L,OUTBUFU           PICK UP CURRENT LENGTH
+         LA    W,0(L,TL)           W = LENGTH PLUS CURRENT SEGMENT
+         CH    W,SCRNWD            BIGGER THAN LINE?
+         BH    TRUNC               IF TOO MUCH, PUT OUT CURRENT BUFFER
+         L     TX,TEXT             POINT AT TEXT
+         LH    T,OUTUSED           POINT AT BUFFER SPACE
+         MH    T,SCRNWD            AND WORK OUT WHERE
+         AR    T,L                 THIS TEXT SHOULD GO
+         A     T,OUTBUFD
+         BCTR  TL,0                -1 FOR MVC
+         EX    TL,MOVEBUFF         MOVE TO BUFFER
+         STH   W,OUTBUFU           UPDATE LENGTH USED IN CURRENT LINE
+RET      DFH99M EPILOG
+MOVEBUFF MVC   0(0,T),0(TX)        MOVE TEXT TO BUFFER
+         END

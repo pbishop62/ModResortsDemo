@@ -1,0 +1,115 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99MP     TITLE 'DFH99MP - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - MESSAGE FILING ROUTINE'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99MP                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Message Filing                                   *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* FILES A MESSAGE, DISPLAYS OUTPUT.                                   *
+* INPUT: R1-> VARIABLE LENGTH PARMLIST.                               *
+*             EACH ADDRESS IS THE ADDRESS OF A TOKEN.                 *
+*             THE TOKENS ARE TAKEN IN ORDER, CONVERTED TO DISPLAY     *
+*             FORM, AND ADDED TO A MESSAGE BEING BUILT UP.            *
+*        R1=0 THE OUTPUT BUFFER IS DISPLAYED.                         *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99MP),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99MP  CSECT
+DFH99MP  DFH99M PROLOG,PARMS=(TOKLIST),REGS=(W,S)
+         L     W,SCRBUFO           W->BUFFER
+         USING OUTBUF,W
+***********************************************************************
+*   BUFFER DESCRIPTION FOR OUTPUT SECTION OF DISPLAY
+***********************************************************************
+OUTBUF   DSECT ,                  OUTPUT BUFFER FORMAT
+OUTASBA  DS    3X                  SBA
+OUTASF   DS    X                   START FIELD
+OUTAATTR DS    X                   ATTRIBUTE
+OUTDATA  DS    0C                  FIRST LINE OF OUTPUT AREA
+SBA      EQU   X'11'               SET BUFFER ADDRESS
+IC       EQU   X'13'               INSERT CURSOR
+SF       EQU   X'1D'               START FIELD
+OUTNORM  EQU   X'60'               OUTPUT ATTRIBUTE
+DFH99MP  CSECT
+         OC    OUTBUFSZ,OUTBUFSZ   IF NEW OUTPUT BUFFER
+         BZ    FORMAT              THEN ..
+         LTR   PARMR,PARMR         IS IT THE DISPLAY CALL?
+         BZ    DISPLAY             YES, GO DO IT
+         B     ADD                 ELSE JUST ADD ANOTHER MESSAGE.
+***********************************************************************
+*   FORMAT THE OUTPUT DISPLAY WITH ATTRIBUTES, ETC
+* THIS MUST BE DONE AGAIN, IN CASE OUTATTR WAS SET TO BRIGHT.
+***********************************************************************
+FORMAT   MVI   OUTASBA,SBA         SBA ORDER
+         MVC   OUTASBA+1(2),OUTSBA SBA ADDRESS
+         MVI   OUTASF,SF           START FIELD ORDER
+         MVI   OUTAATTR,OUTNORM    ATTRIBUTE
+         LA    0,OUTDATA           CLEAR ..
+         ST    0,OUTBUFD                   CATCH A(DATA PART)
+         LH    1,SCRNWD            OUTPUT ..
+         MH    1,OUTLINES+2        DATA ..
+         LA    S,OUTDATA-OUTBUF(,1)        CATCH SIZE TO WRITE
+         STH   S,OUTBUFSZ                  AND SAVE IT.
+         LR    14,0                BUFFER ..
+         SR    15,15               DATA ..
+         MVCL  0,14                TO ZEROS.
+         XC    OUTUSED,OUTUSED     NO LINES USED YET.
+         XC    OUTBUFU,OUTBUFU     0 CHARS USED IN FIRST LINE.
+         LTR   PARMR,PARMR         IS IT THE DISPLAY CALL?
+         BZ    DISPLAY             YES, GO DO IT (FORMATTING ONLY).
+***********************************************************************
+*   BUILD MESSAGE IN NEXT LINE(S) OF OUTPUT AREA
+***********************************************************************
+ADD      DFH99M INVOKE,DFH99ML,(TOKLIST) MSGLIST
+         LA    1,TXTPUT1           PARMLIST FOR NEWLINE
+         DFH99M INVOKE,DFH99TX     TEXTPUT
+         B     RET
+***********************************************************************
+*   DISPLAY THE OUTPUT AREA
+***********************************************************************
+DISPLAY  TM    STATF1,EOJ          TERMINATING?
+         BO    DISPLAY2            BR IF SO
+         TM    STATF1,INITERAS     HAS INITIAL ERASE BEEN DONE?
+         BO    DISPLAY1            BR IF SO
+* INITIAL DISPLAY CLEARS SCREEN, KEEPS KEYBOARD LOCKED
+         EXEC CICS SEND FROM(OUTBUF) LENGTH(OUTBUFSZ) WAIT ERASE       *
+               CTLCHAR(X'40')
+         OI    STATF1,INITERAS     INITIAL ERASE NOW DONE
+         B     RET
+* NORMAL DISPLAY KEEPS KEYBOARD LOCKED
+DISPLAY1 EXEC CICS SEND FROM(OUTBUF) LENGTH(OUTBUFSZ) WAIT             *
+               CTLCHAR(X'40')
+         B     RET
+* FINAL DISPLAY UNLOCKS KEYBOARD
+DISPLAY2 EXEC CICS SEND FROM(OUTBUF) LENGTH(OUTBUFSZ) WAIT
+RET      DFH99M EPILOG
+TXTPUT1  DC    2F'0'
+         END

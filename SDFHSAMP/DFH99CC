@@ -1,0 +1,145 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99CC     TITLE 'DFH99CC - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - CHARACTER AND NUMERIC STRING CONVERSION'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99CC                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Character and Numeric String Conversion          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* FUNCTION: TO CREATE TEXT UNIT VALUES FROM TEXT-TYPE VALUES IN       *
+*           PARENS FOLLOWING OPERAND KEYWORD.                         *
+*                                                                     *
+* INPUT:    TOKADDR ->LEFT PAREN (NOT USED FOR RETND VALUE)  USE/SET  *
+*           TUSPACE ->START OF TEXT UNIT                     USE      *
+*           TULEN   = CUMULATIVE LENGTH OF TEXT UNIT SO FAR  USE/SET  *
+*           DESCRIPT->OPERAND DESCRIPTION IN KEYTAB          USE      *
+*                                                                     *
+* OUTPUT:   VALUES WITH THEIR PREFIX LENGTHS ARE ADDED TO THE         *
+*           CURRENT TEXT UNIT. TULEN IS UPDATED TO COUNT THE          *
+*           STORAGE CONSUMED.                                         *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99CC),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99CC  CSECT
+DFH99CC  DFH99M PROLOG,                                                *
+               REGS=(T,            CURRENT TOKEN                       *
+               TU,                 START OF CURRENT TEXT UNIT          *
+               VU,                 START OF CURRENT VALUE SPACE        *
+               D,                  CURRENT OPERAND DESCRIPTION         *
+               W,                  WORK, MSG BUILDING                  *
+               L),                 LENGTH OF CURRENT VALUE             *
+               PARMS=NO,MAP=S99
+         L     D,DESCR             D->OPND DESCRIPTION
+         USING DESCRIPT,D
+         L     VU,TUSPACE          VU->START OF TEXT UNIT
+         USING S99TUNIT,VU
+         LA    VU,S99TUENT         POINT AT FIRST VALUE SPACE
+         USING S99TUFLD,VU
+         TM    DSFLAG,DSRET        IF WE ARE MAKING SPACE FOR A
+         BO    CHARRET             RETURNED VALUE, GO DO IT
+NEXTVAL  DFH99M NEXTOK,T,RP=ENDVAL,HELP=HELP
+***********************************************************************
+* T NOW POINTS AT A VALUE. CHECK IT IS VALID.
+***********************************************************************
+         CLI   0(T),TNUM           CHECK STRING TYPE
+         BNH   STRING              CONTINUE IF OK
+* DIAGNOSE NON-STRING VALUE
+         L     W,OPERAND           OPERAND KEYWORD
+         DFH99M ID,3040
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(INVALID,AFTER)
+         DFH99M INSERT,(W),FORMAT=TOKEN
+         DFH99M FILE
+         B     NEXTVAL
+HELP     L     W,OPERAND           OPERAND KEYWORD
+         DFH99M ID,4999
+         DFH99M INSERT,(W),FORMAT=TOKEN
+         DFH99M TEXT,(OPERAND,IS:)
+         DFH99M FILE
+         DFH99M INVOKE,DFH99VH     VALHELP
+         B     NEXTVAL
+STRING   SR    L,L                 CLEAR LENGTH REG
+         IC    L,1(,T)             PICK UP CURRENT TEXT LENGTH
+         SR    W,W
+         IC    W,DSMAX             PICK UP MAX LENGTH
+         CR    L,W                 IS LENGTH TOO BIG?
+         BNH   NOTBIG
+         DFH99M ID,2041
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(LONGER,THAN,MAXIMUM)
+         DFH99M INSERT,(W),FORMAT=BIN
+         DFH99M FILE
+NOTBIG   IC    W,DSMIN             PICK UP MIN LENGTH
+         CR    L,W                 IS LENGTH TOO SMALL?
+         BNL   NOTSMALL
+         DFH99M ID,2042
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(SHORTER,THAN,MINIMUM)
+         DFH99M INSERT,(W),FORMAT=BIN
+         DFH99M FILE
+NOTSMALL CLI   DSVTYPE,TNUM        IS NUMERIC VALUE REQUIRED?
+         BNE   SETVAL
+         CLI   0(T),TNUM           IS NUMERIC VALUE PROVIDED?
+         BE    SETVAL
+         DFH99M ID,2043
+         DFH99M INSERT,(T),FORMAT=TOKEN
+         DFH99M TEXT,(NOT,NUMERIC)
+         DFH99M FILE
+***********************************************************************
+* NOW PUT THE VALUE INTO THE TEXT UNIT
+***********************************************************************
+SETVAL   STCM  L,B'0011',S99TULEN  SET VALUE LENGTH
+         BCTR  L,0
+         EX    L,MOVEVAL           SET VALUE
+         LA    VU,L'S99TULEN+1(VU,L) BUMP VU TO NEXT SPACE
+* UPDATE TULEN, THE LENGTH OF THE CURRENT TEXT UNIT.
+         A     L,TULEN
+         LA    L,L'S99TULEN+1(,L)  PAY BACK FOR BCTR
+         ST    L,TULEN
+         B     NEXTVAL
+MOVEVAL  MVC   S99TUPRM(0),2(T)    MOVE VALUE FROM TEXT
+***********************************************************************
+*   PREPARE SPACE FOR RETURNED VALUE
+***********************************************************************
+NULLVAL  XC    S99TUPRM(0),S99TUPRM CLEAR FOR RETND VALUE
+CHARRET  SR    L,L                 PICK UP MAX LENGTH
+         IC    L,DSMAX
+         STCM  L,B'0011',S99TULEN  SET LENGTH IN TXT UNIT
+         BCTR  L,0
+         EX    L,NULLVAL           CLEAR VALUE SPACE
+* UPDATE TULEN, THE LENGTH OF THE CURRENT TEXT UNIT.
+         A     L,TULEN
+         LA    L,L'S99TULEN+1(,L)  PAY BACK FOR BCTR
+         ST    L,TULEN
+         B     CHARRETN
+ENDVAL   DFH99M NEXTOK,T           BUMP TO NEXT KWD OPND
+         ST    T,TOKADDR
+CHARRETN DFH99M EPILOG
+         END

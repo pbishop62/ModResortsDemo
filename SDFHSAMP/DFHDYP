@@ -1,0 +1,236 @@
+DYP      TITLE 'CUSTOMER INFORMATION CONTROL SYSTEM  -  DYNAMIC ROUTING*
+                SAMPLE EXIT PROGRAM'
+         SPACE 2
+*
+**********************************************************************
+*                                                                    *
+* MODULE NAME = DFHDYP                                               *
+*                                                                    *
+* DESCRIPTIVE NAME = CICS TS  DYNAMIC ROUTING PROGRAM                *
+*                    (DEFAULT/SAMPLE ASSEMBLER VERSION)              *
+*                                                                    *
+*                                                                     *
+*                                                                     *
+*       Licensed Materials - Property of IBM                          *
+*                                                                     *
+*       "Restricted Materials of IBM"                                 *
+*                                                                     *
+*       5655-Y04                                                      *
+*                                                                     *
+*       (C) Copyright IBM Corp. 1987, 2004"                           *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                    *
+* STATUS = 7.2.0                                                     *
+*                                                                    *
+* FUNCTION =                                                         *
+*                                                                    *
+*    To enable routing of transactions or DPL requests between       *
+*    systems to be done dynamically i.e. at run time.                *
+*                                                                    *
+*    When invoked, the Dynamic Router's function depends upon the    *
+*    value held in the 'DYRFUNC' field of the commarea DSECT passed  *
+*    to it by CICS (DFHAPRT or DFHEPC).                              *
+*    It may take 1 of 5 values:                                      *
+*                                                                    *
+*    DYRFUNC = C'0' When the Router is invoked initially             *
+*            = C'1' If the Router has been invoked due to a route    *
+*                   selection error                                  *
+*            = C'2' If the Router has been invoked at routed         *
+*                   transaction or program termination               *
+*            = C'3' If the router is being invoked to notify it      *
+*                   that a transaction or DPL request is being       *
+*                   statically routed                                *
+*            = C'4' If the router is being invoked to notify it      *
+*                   that the transaction or DPL request abended      *
+*            = C'7' If DYRUOWAF was set to 'Y' this call is to       *
+*                   notify that a uow is ending.                     *
+*                                                                    *
+*    This sample Router accepts the default SYSID & remote TRANID    *
+*    passed to it on initial invocation and sets the return code to  *
+*    zero.                                                           *
+*    It chooses not to be invoked when the transaction / DPL request *
+*    terminates.                                                     *
+*    If invoked due to a route selection error, the router cancels   *
+*    the transaction / DPL request and returns control to the caller.*
+*    For DPL requests DFHEPC ends the link with a PGMIDERR condition *
+*    and EIBRESP2 set to 27.                                         *
+*                                                                    *
+* NOTES :                                                            *
+*    DEPENDENCIES = S/370                                            *
+*    RESTRICTIONS = None                                             *
+*    REGISTER CONVENTIONS = Standard exec interface convention       *
+*    MODULE TYPE  = Executable                                       *
+*    PROCESSOR    = Assembler                                        *
+*    ATTRIBUTES   = Read only, Serially Reusable                     *
+*                                                                    *
+* -------------------------------------------------------------------*
+*                                                                    *
+* ENTRY POINT = DFHDYP                                               *
+*                                                                    *
+*     PURPOSE = All Functions                                        *
+*                                                                    *
+*     LINKAGE = From DFHAPRT or DFHEPC via DFHPC TYPE=LINK_URM       *
+*               with Commarea                                        *
+*                                                                    *
+*     INPUT   = See COMMAREA structure in copybook DFHDYPDS A        *
+*                                                                    *
+* -------------------------------------------------------------------*
+*                                                                    *
+* CHANGE ACTIVITY :                                                  *
+*                                                                    *
+*        $MOD(DFHDYP),COMP(ISC),PROD(CICS TS ):                      *
+*                                                                    *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                         *
+*    $01= A81378 640 040212 HDBGNRB: Migrate PQ81378 from SPA R630   *
+*    $L0= IR1    310 8701   HD3VAO : Create Program                  *
+*    $L1= 549    320 900116 HD5ZJD : DFHPC LINK_URM CHANGES          *
+*    $L2= 642    410 930112 HD3YIJM : Add new parameters             *
+*    $L3= 707    530 971015 HDFVGMB : Include DPL requests           *
+*    $L4= R00434 670 091230 HDDLCRP: UOW Affinity                    *
+*    $P1= M83008 410 930628 HD3YIJM : Removing references to DFHCRP  *
+*    $P2= M83615 410 930823 HD4OGB  : Fix Change Descriptors         *
+*    $D1= I03312 310 871208 HD3VAO : Cope with LU6.2 Sessions        *
+*    $D2= I07303 630 030113 HDFVGMB: Implement new user exits        *
+*                                                                    *
+**********************************************************************
+*
+***********************************************************************
+*        REGISTER DEFINITIONS                                         *
+***********************************************************************
+*
+UAPTR    EQU   8                       Pointer to userarea        @01A
+COMPTR   EQU   10                      Pointer to commarea passed
+         SPACE 1
+*
+***********************************************************************
+*        COMMAREA DSECT                                               *
+***********************************************************************
+*
+         COPY  DFHDYPDS                Include DSECT to map commarea
+         EJECT
+*
+***********************************************************************
+*        DYNAMIC ROUTING PROGRAM CONTROL SECTION                      *
+***********************************************************************
+*
+DFHDYP   CSECT
+DFHDYP   AMODE 31                      Can addr storage above the line
+DFHDYP   RMODE ANY                     Sample can run above the line
+*
+         L     COMPTR,DFHEICAP         Establish addressability to the
+         USING DFHDYPDS,COMPTR         commarea passed from relay prog
+         L     UAPTR,DYRUAPTR          Establish addressabilit    @01A
+         USING DYRUAREA,UAPTR          to user area               @01A
+         SPACE 1
+*
+***********************************************************************
+*        CHECK THAT THE COMMAREA HAS ACTUALLY BEEN PASSED             *
+***********************************************************************
+*
+         MVC   DYRRETC,RETCOD8         Set return code anticipating
+*                                      bad commarea. Will be set to
+*                                      zero value later on if ok
+         CLC   EIBCALEN,=AL2(DYRCLEN)  Is commarea correct length?
+         BNE   FINISHED                .. No, exit from router
+         SPACE 1
+*
+***********************************************************************
+*        SELECT WHICH FUNCTION IS REQUIRED OF THE ROUTER              *
+***********************************************************************
+*
+         CLI   DYRFUNC,C'0'            Initial invocation of router?
+         BE    RTSELECT                .. Yes, perform route selection
+         CLI   DYRFUNC,C'1'            Invoked due to routing error?
+         BE    RTERROR                 .. Yes, handle this condition
+         CLI   DYRFUNC,C'2'            Invoked after transaction end?
+         BE    TRANTERM                .. Yes, perform any housekeeping
+         CLI   DYRFUNC,C'3'            Invoked for static route
+         BE    RTNOTIFY                .. Yes, perform any housekeeping
+         CLI   DYRFUNC,C'4'            Invoked after AOR abend
+         BE    RTABEND                 .. Yes, perform any housekeeping
+         CLI   DYRFUNC,C'7'            Invoked at end of UOW      @L4A
+         BE    RTENDUOW                .. Yes, perform housekeepin@L4A
+*
+         MVC   DYRRETC,RETCOD8         Invalid request.
+         B     FINISHED                Should never get this far!
+         SPACE 1
+*
+***********************************************************************
+*        PERFORM ANY ROUTING FUNCTION REQUIRED                        *
+***********************************************************************
+*
+*        No alterations made to commarea for SYSID & remote TRANID.
+*        Termination option & return code set as for default
+*
+RTSELECT DS    0H
+         MVI   DYROPTER,C'N'           Set for no re-invocation
+         MVC   DYRRETC,RETCOD0         Set return code to zero, (ok)
+         B     FINISHED
+         SPACE 1
+*
+***********************************************************************
+*        HANDLE ANY RE-ROUTING REQUIRED AFTER A SELECTION ERROR       *
+***********************************************************************
+*
+RTERROR  DS    0H
+         MVC   DYRRETC,RETCOD8         Cancel the transaction or DPL
+*                                      request.
+         B     FINISHED                (error message will be issued)
+         SPACE 1
+*
+***********************************************************************
+*        PERFORM ANY POST TRANSACTION/DPL PROCESSING                  *
+***********************************************************************
+*
+TRANTERM DS    0H                      (Should not get here in sample)
+         MVI   DYROPTER,C'N'
+         MVC   DYRRETC,RETCOD0
+         B     FINISHED
+         SPACE 1
+*
+***********************************************************************
+*        PERFORM ANY NOTIFICATION PROCESSING                          *
+***********************************************************************
+*
+RTNOTIFY DS    0H                      (Should not get here in sample)
+         MVI   DYROPTER,C'N'
+         MVC   DYRRETC,RETCOD0
+         B     FINISHED
+         SPACE 1
+*
+***********************************************************************
+*        PERFORM ANY ABEND NOTIFICATION PROCESSING                    *
+***********************************************************************
+*
+RTABEND  DS    0H                      (Should not get here in sample)
+         MVI   DYROPTER,C'N'
+         MVC   DYRRETC,RETCOD8
+         B     FINISHED
+         SPACE 1
+*
+***********************************************************************
+*        PERFORM END UOW Processing                                   *
+***********************************************************************
+*
+RTENDUOW DS    0H                                                 @L4A
+         MVC   DYRRETC,RETCOD0                                    @L4A
+         B     FINISHED                                           @L4A
+         SPACE 1
+*
+***********************************************************************
+*        DEFINE CONSTANTS                                             *
+***********************************************************************
+*
+RETCOD0  DC    F'0'                    Return code zero, (ok)
+RETCOD8  DC    F'8'                    Return code eight, (error)
+         SPACE 1
+*
+***********************************************************************
+*        RETURN CONTROL TO CALLER                                     *
+***********************************************************************
+*
+FINISHED DS    0H
+         EXEC CICS RETURN
+         END   DFHDYP

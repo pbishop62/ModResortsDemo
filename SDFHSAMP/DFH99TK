@@ -1,0 +1,191 @@
+* ASM CICS ( NOPROLOG NOEPILOG)
+99TK     TITLE 'DFH99TK - CICS DYNAMIC ALLOCATION SAMPLE PROGRAM (MVS) *
+               - TOKENISE INPUT COMMAND'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH99TK                                               *
+*                                                                     *
+* DESCRIPTIVE NAME = Dynamic Allocation Sample Program                *
+*                    Tokenise Input Command                           *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1980, 1991"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* INPUT:                                                              *
+*  TXTSTART = ADDR(FIRST INPUT CHARACTER)                             *
+*  TXTEND   = ADDR(LAST  INPUT CHARACTER)                             *
+*  TOKADDR  = ADDR(FIRST OUTPUT POSITION)                             *
+*                                                                     *
+* OUTPUT:                                                             *
+*  TOKENISED TEXT, STARTING AT ADDRESS IN TOKADDR.                    *
+*  KWDCOUNT SET TO NO. OF LEVEL 1 KEYWORDS FOUND.                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+* $MOD(DFH99TK),COMP(SAMPLES),PROD(CICS TS ):                         *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $P0= Mnnnnn 170 800925 HDZZUNK: Created.                         *
+*    $P1= M90474 330 910807 HDBWSH : Prologue fixed.                  *
+*                                                                     *
+***********************************************************************
+DFH99TK  CSECT
+         SPACE 3
+DFH99TK  DFH99M PROLOG,PARMS=NO,REGS=(I,O,T,ONE,N,P,KWC,LPC)
+         SPACE 3
+* INITIALISATION
+         NI    DYNF1,255-NOSVC99   INITIALLY PERMIT ISSUING SVC
+         L     I,TXTSTART
+         L     O,TOKADDR
+         LA    ONE,1               SET UNIT REGISTER
+         LR    T,O                 FIRST OUTPUT TOKEN POSITION
+         SR    N,N                 NO CHARS IN CURRENT TOKEN
+         SR    P,P                 PAREN COUNT ZERO
+         SR    KWC,KWC             KEYWORD COUNT ZERO
+         SPACE 3
+***********************************************************************
+NEXTIN   DS    0H                  EXAMINE NEXT INPUT CHARACTER
+*IF INPUT CHARACTER IS A DELIMITER, TERMINATE CURRENT TOKEN
+         CLI   0(I),C'?'           HELP?
+         BE    DLM                 BRANCH IF DELIMITER
+         CLI   0(I),C'('           LEFT PAREN?
+         BE    DLM                 BRANCH IF DELIMITER
+         CLI   0(I),C')'           RIGHT PAREN?
+         BE    DLM                 BRANCH IF DELIMITER
+         CLI   0(I),C','           COMMA?
+         BE    DLM                 BRANCH IF DELIMITER
+         CLI   0(I),C' '           BLANK?
+         BNE   BYDLM               SKIP IF NOT DELIMITER
+***********************************************************************
+DLM      DS    0H
+* IF N ^= 0 THERE IS A TEXT TOKEN TO FINISH OFF
+         LTR   N,N
+         BZ    QPAREN              SKIP IF NO CURRENT TOKEN
+* IF CURRENT O/P TOKEN IS A KEYWORD AND NOT IN PARENS, COUNT IT.
+         CLI   0(T),TKW            IF TOKEN IS KEYWORD
+         BNE   DLM1
+         LTR   P,P                 AND PAREN COUNT IS ZERO
+         BNZ   DLM1
+         AR    KWC,ONE             THEN COUNT IT.
+DLM1     DS    0H
+         CH    N,=H'255'           IS TEXT TOO BIG?
+         BNH   DLM2                BR IF NOT
+* TEXT TOKEN CANNOT REPRESENT A STRING LONGER THAN 255
+* THIS MUST BE FIXED UP BEFORE TOKENISING CAN BE DONE
+TOOLONG  DFH99M ID,4003
+         DFH99M TEXT,(WORD,LONGER,THAN,255)
+         DFH99M FILE
+         B     ENDTOKNZ            GIVE UP
+DLM2     STC   N,1(,T)             SET LENGTH OF CURRENT TOKEN
+         SR    N,N                 RESET FOR NEXT TOKEN
+         LR    T,O                 BUMP OVER OUTPUT TOKEN
+         AR    LPC,ONE             COUNT ARGT IN CASE IN PARENS
+QPAREN   DS    0H                  CHECK FOR PAREN TOKENS
+         CLI   0(I),C'('           LEFT PAREN?
+         BNE   BYLP                SKIP IF NOT.
+         MVI   0(O),TLP            SET OUTPUT ( TOKEN
+         MVI   1(O),1              SET COUNT LENGTH 1
+         MVI   2(O),0              SET COUNT ZERO
+         AR    P,ONE               BUMP PAREN COUNT
+         LA    O,3(,O)             BUMP OUTPUT CHAR PTR
+         SR    LPC,LPC             LEFT PAREN ARGT COUNT ZERO
+         ST    T,LPAT              SAVE LEFT PAREN ADDRESS
+LPAT     DFH99M AUTO,A             LEFT PAREN ADDRESS
+         LR    T,O                 BUMP OUTPUT TOKEN PTR
+         B     BUMPIN
+BYLP     DS    0H
+         CLI   0(I),C'?'           HELP?
+         BNE   BYHELP
+         OI    DYNF1,NOSVC99       INHIBIT ISSUING SVC WHEN HELP
+         MVI   0(O),THELP          SET OUTPUT HELP TOKEN
+         AR    O,ONE               BUMP OUTPUT CHAR PTR
+         LR    T,O                 BUMP OUTPUT TOKEN PTR
+         AR    LPC,ONE             COUNT ARGT IN CASE IN PARENS
+         B     BUMPIN
+BYHELP   CLI   0(I),C')'           RIGHT PAREN?
+         BNE   BUMPIN              DELIMITER SKIPPED IF NOT.
+         MVI   0(O),TRP            SET OUTPUT ) TOKEN
+         SR    P,ONE               DECREMENT PAREN COUNT
+         BM    PARENERR            ERROR IF NEGATIVE
+         AR    O,ONE               BUMP OUTPUT CHAR PTR
+         L     T,LPAT              POINT AT LAST LEFT PAREN
+         STC   LPC,2(,T)           SET ITS COUNT
+         LR    T,O                 BUMP OUTPUT TOKEN PTR
+         B     BUMPIN
+***********************************************************************
+BYDLM    DS    0H
+* TEXT TOKEN. IF N=0, START A NEW ONE, ELSE ADD TO OLD ONE.
+         LTR   N,N
+         BNZ   ADDTOK              GO ADD TO OLD TOKEN
+         MVI   0(T),TNUM           SET NUMERIC TEXT TOKEN TYPE
+         LA    O,2(,T)             O -> START OF O/P TEXT
+ADDTOK   DS    0H
+         MVC   0(1,O),0(I)         COPY I/P CHAR TO O/P
+         AR    N,ONE               COUNT TEXT CHAR
+* CHECK FOR NUMERIC, IF NOT, SET TOKEN TYPE TO CHAR TEXT TYPE
+         CLI   0(O),C'0'
+         BL    SETNONUM            SET CHAR IF < '0'
+         CLI   0(O),C'9'
+         BNH   BUMPOUT             SKIP IF =< '9'
+SETNONUM MVI   0(T),TKW
+BUMPOUT  AR    O,ONE               BUMP OUTPUT PTR
+***********************************************************************
+* END OF LOOP. BUMP INPUT PTR AND CHECK FOR END OF INPUT.
+***********************************************************************
+BUMPIN   AR    I,ONE               BUMP INPUT PTR
+         C     I,TXTEND            IF NOT END OF INPUT
+         BNH   NEXTIN                THEN GO EXAMINE NEXT CHAR.
+***********************************************************************
+* TERMINATION ROUTINES
+***********************************************************************
+* IF N ^= 0 THERE IS A CURRENT TOKEN TO FINISH
+         LTR   N,N
+         BZ    SETEND
+* IF CURRENT O/P TOKEN IS A KEYWORD AND NOT IN PARENS, COUNT IT.
+         CLI   0(T),TKW            IF TOKEN IS KEYWORD
+         BNE   END1
+         LTR   P,P                 AND PAREN COUNT IS ZERO
+         BNZ   END1
+         AR    KWC,ONE             THEN COUNT IT.
+END1     DS    0H
+         CH    N,=H'255'           IS TEXT TOO BIG?
+         BH    TOOLONG             BR IF SO
+         STC   N,1(,T)             SET LENGTH IN LAST TOKEN
+SETEND   MVI   0(O),TEND           SET END TOKEN
+* END OF TOKENISING. CHECK FOR EXCESS LEFT PARENS.
+         LTR   P,P
+         BZ    ENDTOKNZ
+***********************************************************************
+* FILE DISASTER MESSAGES FOR UNBALANCED PARENTHESES
+* OTHER ROUTINES REQUIRE PROPER PARENS, SO THIS ERROR MUST BE
+* FIXED FIRST.
+         DFH99M ID,4001
+         DFH99M TEXT,(TOO,MANY,'(')
+         DFH99M FILE
+         B     ENDTOKNZ
+PARENERR S     I,TXTSTART          CALCULATE POSITION WHERE
+         AR    I,ONE               ERROR DISCOVERED.
+         DFH99M ID,4002
+         DFH99M TEXT,(TOO,MANY,')',AT,POSITION)
+         DFH99M INSERT,(I),FORMAT=BIN
+         DFH99M FILE
+         SPACE 3
+***********************************************************************
+ENDTOKNZ ST    KWC,KWDCOUNT        SET KEYWORD COUNT IN COMM.
+         DFH99M EPILOG
+         END
