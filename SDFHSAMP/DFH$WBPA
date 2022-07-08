@@ -1,0 +1,315 @@
+*ASM     XOPTS(CICS,SP)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$WBPA                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (WB) Web Pipelining Sample              *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2006, 2007"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION = CICS Assembler Program that performs PIPELINING to a     *
+*            web server.                                              *
+*                                                                     *
+*   Versions of this program in other languages are also provided:    *
+*     C     - DFH$WBPC                                                *
+*     COBOL - DFH0WBPO                                                *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+* This program is a sample version in assembler of a client web       *
+* application that is invoked by a CICS Transaction.  It              *
+* demonstrates how to construct a pipelining application that         *
+* uses a Client URIMAP.  The server application that is used by       *
+* this sample is DFH$WB1A(the supplied sample that is used for        *
+* Web Support IVP).                                                   *
+*                                                                     *
+* The Client URIMAP DFH$URI2 needs to be setup before installing and  *
+* configuring the server attribute.                                   *
+*                                                                     *
+* Pipelining allows a client to make multiple requests without        *
+* waiting for each response, allowing a single TCP connection to      *
+* be used much more efficiently, with much lower elapsed time.        *
+*                                                                     *
+* For more information on Chunking see RFC2616                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$WBPA),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 873    650 060314 HDJBAC  : 3 - Pipelining Samples          *
+*    $L1= 873    650 060713 HDJBAC  : Web Samples of Chunking         *
+*    $P1= D18453 650 070403 HD4EPEA : Show status code & status text  *
+***********************************************************************
+           EJECT
+           DFHREGS
+*---------------------------------------------------------------------*
+*    Working Storage                                                  *
+*---------------------------------------------------------------------*
+DFHEISTG   DSECT
+APPLID     DS  CL8              APPLID of this CICS
+RESP       DS  F                RESP Value
+RESP2      DS  F                RESP2 Value
+DOCTOKEN   DS  16C              Document Token
+CURSOR     DS  H                Current cursor location
+SESSTOKEN  DS  8C               WEB OPEN Sesstoken
+STATUSLEN  DS  F                Status Text length
+RECLEN     DS  F                Received Data length
+MAXLEN     DS  F                Max receive data length
+RECDATA    DS  CL200            Received Data
+STATUS     DS  H                Status returned from Server
+STATUSTXT  DS  CL50             Status Text returned from Server
+RECMEDIA   DS  CL56             MediaType for received data
+RESPZONE   DS  D                Floating Point Resp value
+STATZONE   DS  D                Floating Point Resp value
+ERRTXT     DS  0CL27            Structure to hold Error message
+MSG1       DS  CL12             Text part of Error message
+TXTRESP    DS  CL4              Holds Text Resp value
+MSG2       DS  CL7              Text part of Error message
+TXTRESP2   DS  CL4              Holds Text Resp2 Value
+NORMTXT    DS  0CL41            Structure to hold Error message
+NORMMSG1   DS  CL38             Text part of Error message
+TXTSTATUS  DS  CL3              Holds Text Status Code
+STATUSTX   DS  0CL73            Structure to hold Error message
+STATMSG1   DS  CL23             Text part of Error message
+STATUST    DS  CL50             Holds Status Text
+*
+*---------------------------------------------------------------------*
+* Start of program code                                               *
+*---------------------------------------------------------------------*
+DFH$WBPA CSECT
+DFH$WBPA AMODE 31
+DFH$WBPA RMODE ANY
+*
+*---------------------------------------------------------------------*
+* Open a Session to the Remote Server using WEB OPEN and a client     *
+* URIMAP                                                              *
+*---------------------------------------------------------------------*
+OPEN     DS    0H
+         MVC   CURSOR,=H'0'
+         EXEC CICS WEB OPEN URIMAP(URIMAP) SESSTOKEN(SESSTOKEN)        x
+                   RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Create a Doctemplate and using EXEC CICS ASSIGN extract the CICS    *
+* APPLID and set the APPLID Symbol in the Document Template. Finally  *
+* Construct a Doctemplate to use on the WEB SEND COMMAND              *
+*---------------------------------------------------------------------*
+DOCTEMP  DS    0H
+         EXEC CICS DOCUMENT CREATE DOCTOKEN(DOCTOKEN)
+         EXEC CICS ASSIGN APPLID(APPLID)
+         EXEC CICS DOCUMENT SET DOCTOKEN(DOCTOKEN) SYMBOL(SYMBOL)      x
+                   VALUE(APPLID) LENGTH(=AL4(L'APPLID)) RESP(RESP)     x
+                   RESP2(RESP2)
+         EXEC CICS DOCUMENT INSERT DOCTOKEN(DOCTOKEN) FROM(DOCTEXT)    x
+                   LENGTH(=AL4(L'DOCTEXT)) RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Send the Doctemplate using WEB SEND COMMAND                         *
+*---------------------------------------------------------------------*
+SENDONE  DS    0H
+         BAL   R10,SEND_CON
+         EXEC CICS SEND FROM(#SEND_ONE) LENGTH(=AL2(L'#SEND_ONE))
+         EXEC CICS WEB SEND POST DOCTOKEN(DOCTOKEN) RESP(RESP)         x
+                   RESP2(RESP2) MEDIATYPE(MEDIATYPE)                   x
+                   SESSTOKEN(SESSTOKEN)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Send Data from a data area using WEB SEND COMMAND                   *
+*---------------------------------------------------------------------*
+SENDTWO  DS    0H
+
+         BAL   R10,SEND_CON
+         EXEC CICS SEND FROM(#SEND_TWO) LENGTH(=AL2(L'#SEND_TWO))
+         EXEC CICS WEB SEND POST FROM(TEST_DATA)                       x
+                   FROMLENGTH(=AL4(L'TEST_DATA))                       x
+                   MEDIATYPE(MEDIATYPE) SESSTOKEN(SESSTOKEN)           x
+                   RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Send Data from a data area using WEB SEND COMMAND                   *
+*---------------------------------------------------------------------*
+SENDTHR  DS    0H
+
+         BAL   R10,SEND_CON
+         EXEC CICS SEND FROM(#SEND_THR) LENGTH(=AL2(L'#SEND_THR))
+         EXEC CICS WEB SEND POST FROM(TEST_DATA)                       x
+                   FROMLENGTH(=AL4(L'TEST_DATA))                       x
+                   MEDIATYPE(MEDIATYPE) SESSTOKEN(SESSTOKEN)           x
+                   RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Receive the first response - Response to Document Send              *
+*---------------------------------------------------------------------*
+RECEONE  DS    0H
+         MVC   STATUSLEN,=F'50'  STATUSLEN needs loading with 50
+         MVC   RECLEN,=F'200'    RECLEN needs loading with 200
+         MVC   MAXLEN,=F'200'    MAXLEN needs loading with 200
+         BAL   R10,SEND_CON
+         EXEC CICS SEND FROM(#RECE_ONE) LENGTH(=AL2(L'#RECE_ONE))
+         EXEC CICS WEB RECEIVE STATUSCODE(STATUS) STATUSTEXT(STATUSTXT)x
+                   STATUSLEN(STATUSLEN) MEDIATYPE(RECMEDIA)            x
+                   INTO(RECDATA) LENGTH(RECLEN) SESSTOKEN(SESSTOKEN)   x
+                   MAXLENGTH(MAXLEN) RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*---------------------------------------------------------------------*
+* Send status code and status text to the screen                      *
+*---------------------------------------------------------------------*
+         BAL   R10,SEND_CON
+         BAL   R6,SEND_STA
+*---------------------------------------------------------------------*
+* Receive the second response - Response to First data area send      *
+*---------------------------------------------------------------------*
+RECETWO  DS    0H
+         MVC   STATUSLEN,=F'50'  Load STATUSLEN with 50
+         MVC   RECLEN,=F'200'    Load RECLEN with 200
+         MVC   MAXLEN,=F'200'    Load MAXLEN with 200
+         BAL   R10,SEND_CON
+         EXEC CICS SEND FROM(#RECE_TWO) LENGTH(=AL2(L'#RECE_TWO))
+         EXEC CICS WEB RECEIVE STATUSCODE(STATUS) STATUSTEXT(STATUSTXT)x
+                   STATUSLEN(STATUSLEN) MEDIATYPE(RECMEDIA)            x
+                   INTO(RECDATA) LENGTH(RECLEN) SESSTOKEN(SESSTOKEN)   x
+                   MAXLENGTH(MAXLEN) RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*---------------------------------------------------------------------*
+* Send status code and status text to the screen                      *
+*---------------------------------------------------------------------*
+         BAL   R10,SEND_CON
+         BAL   R6,SEND_STA
+*---------------------------------------------------------------------*
+* Receive the third response - Response to Second data area send      *
+*---------------------------------------------------------------------*
+RECETHR  DS    0H
+         MVC   STATUSLEN,=F'50'  Load STATUSLEN with 50
+         MVC   RECLEN,=F'200'    Load RECLEN with 200
+         MVC   MAXLEN,=F'200'    Load MAXLEN with 200
+         BAL   R10,SEND_CON
+         EXEC CICS SEND FROM(#RECE_THR) LENGTH(=AL2(L'#RECE_THR))
+         EXEC CICS WEB RECEIVE STATUSCODE(STATUS) STATUSTEXT(STATUSTXT)x
+                   STATUSLEN(STATUSLEN) MEDIATYPE(RECMEDIA)            x
+                   INTO(RECDATA) LENGTH(RECLEN) SESSTOKEN(SESSTOKEN)   x
+                   MAXLENGTH(MAXLEN) RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*---------------------------------------------------------------------*
+* Send status code and status text to the screen                      *
+*---------------------------------------------------------------------*
+         BAL   R10,SEND_CON
+         BAL   R6,SEND_STA
+*
+*---------------------------------------------------------------------*
+* Close the Session to Remote Server                                  *
+*---------------------------------------------------------------------*
+CLOSE    DS    0H
+         EXEC CICS WEB CLOSE SESSTOKEN(SESSTOKEN) RESP(RESP)           x
+                   RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+         EXEC CICS RETURN
+*
+*---------------------------------------------------------------------*
+*    Send control information to move cursor on screen                *
+*---------------------------------------------------------------------*
+SEND_CON DS    0H
+         LH    R1,CURSOR
+         AHI   R1,80
+         STH   R1,CURSOR
+         EXEC CICS SEND CONTROL CURSOR(CURSOR)
+         BR    10
+*
+*---------------------------------------------------------------------*
+*    Send status code and status text to the screen                   *
+*---------------------------------------------------------------------*
+SEND_STA DS    0H
+         MVC   NORMTXT,#COMPLETE          Load template in NORMTXT
+         SR    R5,R5
+         LH    R5,STATUS                  Load status code to R5
+         CVD   R5,STATZONE                Convert to float
+         OI    STATZONE+7,X'0F'           Sort out the Sign
+         UNPK  TXTSTATUS,STATZONE         Unpack it for display
+         EXEC CICS SEND FROM(NORMTXT) LENGTH(=AL2(L'NORMTXT))
+         BAL   R10,SEND_CON
+         MVC   STATUSTX,#STATUSTX         Load template in STATUSTX
+         MVC   STATUST,STATUSTXT          Load Status Text
+         EXEC CICS SEND FROM(STATUSTX) LENGTH(=AL2(L'STATUSTX))
+         BR    6
+*
+*---------------------------------------------------------------------*
+*    Output Error message                                             *
+*---------------------------------------------------------------------*
+OUTERR   DS    0H
+         BAL   R10,SEND_CON                  Move Cursor
+         MVC   ERRTXT,#TEMPLATE              Load template in ERRTXT
+         CVD   R5,RESPZONE                   Convert resp in to float
+         OI    RESPZONE+7,X'0F'              Sort out the Sign
+         UNPK  TXTRESP,RESPZONE              Unpack it for display
+         L     R5,RESP2                      Load Resp2 into R5
+         CVD   R5,RESPZONE                   Convert resp in to Packed
+         OI    RESPZONE+7,X'0F'              Sort out the Sign
+         UNPK  TXTRESP2,RESPZONE             Unpack it for display
+         EXEC CICS SEND FROM(ERRTXT) LENGTH(=AL2(L'ERRTXT))
+         EXEC CICS RETURN
+*
+*---------------------------------------------------------------------*
+*    Character constant definitions                                   *
+*---------------------------------------------------------------------*
+MEDIATYPE DC    CL56'application/x-www-form-urlencoded'
+CHARSET   DC    CL40'ISO-8859-1'
+DOCTEXT   DC    CL15'applid=&&APPLID;'
+SYMBOL    DC    CL32'APPLID'
+URIMAP    DC    CL8'DFH$URI2'
+TEST_DATA DC    CL9'Test=Data'
+#SEND_ONE DC    C'DFH$WBPA - Send first request'
+#SEND_TWO DC    C'DFH$WBPA - Send second request'
+#SEND_THR DC    C'DFH$WBPA - Send third request'
+#RECE_ONE DC    C'DFH$WBPA - Receive first response'
+#RECE_TWO DC    C'DFH$WBPA - Receive second response'
+#RECE_THR DC    C'DFH$WBPA - Receive third response'
+#COMPLETE DC    C'DFH$WBPA - Completed with status code:   '
+#STATUSTX DC    C'DFH$WBPA - Status text:                              x
+                    '
+#TEMPLATE DC    CL27'ERROR: RESP      RESP2    '
+          END

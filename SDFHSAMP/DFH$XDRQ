@@ -1,0 +1,307 @@
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$XDRQ                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  ....                                    *
+*        Sample user exit program for the XDUREQ exit .               *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1996, 2014"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+* FUNCTION =                                                          *
+*                                                                     *
+*        Primarily to demonstrate the dump table manipulation         *
+*        features of the XDUREQ exit.  We don't suggest you'd really  *
+*        want to treat dumps in this way!                             *
+*                                                                     *
+*        There are two static lists defined in the code which         *
+*        contain dump codes for which you will *ALWAYS* want a dump.  *
+*        The lists start at:                                          *
+*          TRANCTAB for transaction dump codes, each is 4 bytes       *
+*          SYSCTAB  for system dump codes, each of which is 8 bytes   *
+*          You can add your own dump codes to the lists if required.  *
+*                                                                     *
+*        For transaction dumps:                                       *
+*          The first time a dump code is seen, take a system dump     *
+*          aswell.                                                    *
+*          Subsequently, if the dumpcode is in a list, always take    *
+*          the dump.  Otherwise suppress the dump using the dump      *
+*          table entry.                                               *
+*          NOTE: the exit is not called for a dump suppressed by a    *
+*                dump table entry.                                    *
+*                                                                     *
+*        For system dumps:                                            *
+*          For the first dump: take the dump with NODAE               *
+*                  second dump: take the dump with DAE                *
+*          For subsequent dumps, only suppress if not in a list.      *
+*          Suppress using the exit, so every 50th dump we can         *
+*          let it be written out.                                     *
+*                                                                     *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = None                                              *
+*    RESTRICTIONS = None                                              *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Rentrant                                 *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* ENTRY POINT = DFH$XDRQ                                              *
+*                                                                     *
+*     LINKAGE = Invoked from the XDUREQ user exit call.               *
+*                                                                     *
+*     INPUT = Register 1 - address of DFHUEPAR                        *
+*                                                                     *
+*         DFHUEPAR contains the following exit specific parameters    *
+*                                                                     *
+*         UEPTRANID   Address of the 4-byte transaction ID.           *
+*                                                                     *
+*         UEPUSER     Address of the 8-byte user ID.                  *
+*                                                                     *
+*         UEPTERM     Address of the 4-byte terminal ID.              *
+*                                                                     *
+*         UEPPROG     Address of the 8-byte application program name. *
+*                                                                     *
+*         UEPDUMPC    Address of copy of the 8-byte dump code.        *
+*                                                                     *
+*         UEPABCDE    Address of a copy of the 8-byte Kernel error    *
+*                     code in the format xxx/yyyy.                    *
+*                                                                     *
+*         UEPDUMPT    Address of the 1-byte dump type. Either:        *
+*           UEPDTRAN  Transaction dump requested                      *
+*           UEPDSYST  System dump requested                           *
+*                                                                     *
+* The following fields represent the dump table entry for the         *
+* dumpcode at UEPDUMPC.                                               *
+*                                                                     *
+*         UEPXDSCP    Address of a 1-byte DUMPSCOPE setting. Either   *
+*           UEPXDLOC  Dump only on local MVS image                    *
+*           UEPXDREL  Dumps taken on related MVS images               *
+*                                                                     *
+*         UEPXDTXN    Address of a 1-byte TRANDUMP setting. Either:   *
+*           UEPXDYES  A transaction dump would be taken               *
+*           UEPXDNO   A transaction dump would not be taken           *
+*                                                                     *
+*         UEPXDSYS    Address of a 1-byte SYSDUMP setting.  Either:   *
+*           UEPXDYES  A system dump would be taken                    *
+*           UEPXDNO   A system dump would not be taken                *
+*                                                                     *
+*         UEPXDTRM    Address of a 1-byte SHUTDOWN setting.  Either:  *
+*           UEPXDYES  The CICS system will shutdown                   *
+*           UEPXDNO   The CICS system will not shutdown               *
+*                                                                     *
+*         UEPXDMAX    Address of a 4-byte MAXIMUM dumps value         *
+*                                                                     *
+*         UEPXDCNT    Address of a 4-byte CURRENT dumps value         *
+*                                                                     *
+*         UEPXDTST    Address of 16-byte dump stats area.             *
+*                     4 contiguous fullwords represent:               *
+*                     Number of transaction dumps taken               *
+*                     Number of transaction dumps suppressed          *
+*                     Number of system dumps taken                    *
+*                     Number of system dumps suppressed               *
+*                                                                     *
+*         UEPXDDAE    Address of a 1-byte DAEOPTION setting. Either:  *
+*           UEPXDYES  The dump is eligible for DAE suppression        *
+*           UEPXDNO   The dump wont be suppressed by DAE              *
+*                                                                     *
+*                                                                     *
+*     OUTPUT = Register 15 - Return code (UERCNORM or UERCMEA)        *
+*                                                                     *
+*              The following fields which represent dump table        *
+*              settings may be modified and the modified values will  *
+*              be written back into the dump table entry for the      *
+*              current dumpcode.  See the Customization Guide for     *
+*              further information.                                   *
+*                UEPXDSCP                                             *
+*                UEPXDTXN                                             *
+*                UEPXDSYS                                             *
+*                UEPXDTRM                                             *
+*                UEPXDMAX                                             *
+*                UEPXDDAE                                             *
+*                                                                     *
+*                                                                     *
+*     EXIT-NORMAL = RETURN (14,12),RC=UERCNORM (continue dump)        *
+*                   RETURN (14,12),RC=UERCBYP  (suppress dump)        *
+*                                                                     *
+*     EXIT-ERROR = N/A                                                *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$XDRQ),COMP(TRACE),PROD(CICS TS ):                   *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $P0= M96312 510 960118 HDEWJPR : To define sample program DFH$XD *
+*                                                                     *
+***********************************************************************
+*
+         EJECT
+***********************************************************************
+* Set up the Global User Exit environment :-                          *
+*     Identify the user exit point                                    *
+*     Set up equates for registers                                    *
+***********************************************************************
+*
+         DFHUEXIT TYPE=EP,ID=(XDUREQ)
+*
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2                   User exit parm list reg
+R3       EQU   3
+R4       EQU   4                   increment and..
+R5       EQU   5                   ..limit for BXLE
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12                  Base reg
+R13      EQU   13                  Register save area address
+R14      EQU   14
+R15      EQU   15
+         EJECT
+*
+***********************************************************************
+* Main line code starts here                                          *
+***********************************************************************
+*
+DFH$XDRQ CSECT
+DFH$XDRQ AMODE 31
+DFH$XDRQ RMODE ANY
+         USING *,R15
+         B     AROUND
+         DC    CL8'DFH$XDRQ'
+         DC    CL8'&SYSDATE'
+AROUND   DS    0H
+         DROP  R15
+         SAVE  (14,12)             Save REGS
+         LR    R12,R15             Set-up base register
+         USING DFH$XDRQ,R12
+*
+         LR    R2,R1               set up addressability to
+         USING DFHUEPAR,R2         user exit parm list
+*
+         L     R1,UEPDUMPT         Address the dump type value
+         CLI   0(R1),UEPDSYST      Is this a system dump?
+         BE    XDRQSYST            ..yes, do system dump logic
+*
+XDRQTRAN DS    0H                  ..no, transaction dump
+         L     R1,UEPXDCNT         Address the count
+         CLC   =F'1',0(R1)         Is this the first dump?
+         BNE   XDRQTOTH            ..no, do subsequent processing
+*
+*  This is the first dump so indicate that we want a system dump too
+*
+         L     R1,UEPXDSYS         Address sysdump parm
+         MVI   0(R1),UEPXDYES      indicate we want a system dump
+         B     XDRQCONT            leave exit, continue with dump
+*
+*  Second or subsequent tran dump
+*  Reset the system dump required indicator
+*  Check whether the dumpcode is in table
+*
+XDRQTOTH DS    0H
+         L     R1,UEPXDSYS         Address SYSDUMP parm
+         MVI   0(R1),UEPXDNO       indicate no system dump reqd
+*
+         L     R1,UEPDUMPC         Address the dump code
+         LA    R3,TRANCTAB         Address dumpcode table
+         LA    R4,4                Length of tran dump code
+         LA    R5,TRANCTAE-4       Last entry in list
+XDRQLP1  DS    0H
+         CLC   0(4,R1),0(R3)       Is the dump code in the list?
+         BE    XDRQCONT            ..yes, continue with dump
+         BXLE  R3,R4,XDRQLP1       R4 is increment, R5 is limit
+*                                  Drop through if not in table
+         L     R1,UEPXDMAX         Address max dumps field
+         MVC   0(4,R1),=F'5'       Set to max of 5 dumps
+         B     XDRQCONT
+*
+* End of transaction dump processing
+*
+XDRQSYST DS    0H
+         L     R1,UEPXDCNT         Address count of dumps field
+         CLC   =F'2',0(R1)         Is this the second?
+         BE    XDRQSYS2            ..yes
+         BH    XDRQSNSP            ..first time for this code
+*
+* This is not first or second time for a dumpcode so check the list
+*
+         L     R1,UEPDUMPC         Address the dumpcode
+         LA    R3,SYSCTAB          Address sysdumpcode table
+         LA    R4,8                Index
+         LA    R5,SYSCTABE-8       Address last entry
+XDRQSLP1 DS    0H
+         CLC   0(8,R1),0(R3)       Is the dumpcode in the table?
+         BE    XDRQSNSP            ..yes, don't suppress
+         BXLE  R3,R4,XDRQSLP1      try the next entry
+*
+* The system dumpcode was not in the table so dump every 50th
+*
+         L     R5,UEPXDTST         Address statistics fields
+         L     R1,X'C'(,R5)        Load number of dumps suppressed
+         A     R1,8(,R5)           Add number of dumps taken
+         XR    R0,R0               Clear high word
+         D     R0,=F'50'           Divide by 50
+         LTR   R0,R0               Test the remainder
+         BZ    XDRQCONT            If zero then dump
+         B     XDRQSUPR            otherwise suppress
+*
+* For system dumps in table, or first timers turn off DAE and CICS
+* suppression
+*
+XDRQSNSP DS    0H
+         L     R1,UEPXDDAE         Address DAE field
+         MVI   0(R1),UEPXDNO       No DAE suppression
+         B     XDRQCONT            No CICS suppression
+*
+* For second dump with this code, we'll let the dump happen, but set
+* DAE suppression active so DAE can decide whether to suppress this
+* dump
+*
+XDRQSYS2 DS    0H
+         L     R1,UEPXDDAE
+         MVI   0(R1),UEPXDYES      Allow DAE suppression
+         B     XDRQCONT            But no CICS suppression
+*
+XDRQCONT DS    0H
+         L     R13,UEPEPSA         load address of the reg save area
+         RETURN (14,12),RC=UERCNORM Restore regs and return normal
+*
+XDRQSUPR DS    0H
+         L     R13,UEPEPSA         load address of the reg save area
+         RETURN (14,12),RC=UERCBYP Restore regs and return 'suppress'
+*
+* Lists of dump codes for which we always want dumps
+*
+TRANCTAB DS    0H                  Transaction dump codes
+         DC    CL4'ASRA'           Each must be 4 bytes
+         DC    CL4'ATCU'
+         DC    CL4'ATCV'
+         DC    CL4'ASPL'
+         DC    CL4'AFCZ'
+         DC    CL4'ADLS'
+TRANCTAE DS    0H                  This label marks the table's end
+*
+SYSCTAB  DS    0H                  System dump codes
+         DC    CL8'SM0102'         Each must be 8 bytes
+         DC    CL8'MT0001'
+         DC    CL8'TS1310'
+SYSCTABE DS    0H                  This label marks the table's end
+         DROP  R2,R12
+         END   DFH$XDRQ

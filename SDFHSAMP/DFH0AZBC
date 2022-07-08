@@ -1,0 +1,499 @@
+*ASM XOPTS(FEPI)
+         TITLE 'DFH0AZBC - FEPI Sample: CICS back-end application'
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1994"                                   *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*   STATUS = 7.2.0                                                    *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*   $MOD(DFH0AZBC),COMP(FEPI),PROD(CICS TS ):                         *
+*                                                                     *
+*  PN= REASON REL YYMMDD HDXXIII : REMARKS                            *
+* $L0= Base   410 94     HD5VDLA : Base                               *
+*                                                                     *
+***********************************************************************
+*                                                                     *
+*  MODULE NAME = DFH0AZBC                                             *
+*                                                                     *
+*  DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample Program:               *
+*                     CICS back-end application.                      *
+*                     Assembler version                               *
+*                                                                     *
+*                                                                     *
+*  FUNCTION = This program is the CICS back-end application           *
+*             used by the FEPI sample programs.                       *
+*                                                                     *
+*  TRANSACTION NAME = CZBC                                            *
+*                                                                     *
+*  ABEND CODE       = USZA                                            *
+*                                                                     *
+*  MAP NAME = DFH0MZ3                                                 *
+*                                                                     *
+*                                                                     *
+*  OVERVIEW                                                           *
+*                                                                     *
+*       On the first invocation of the transaction, a map is sent     *
+*       to the terminal.                                              *
+*                                                                     *
+*       When there is input from the terminal, CICS reinvokes the     *
+*       transaction.  The customer data for the customer number from  *
+*       the input is found and sent to the terminal, and further      *
+*       input is awaited.  PF3 or CLEAR ends the transaction.         *
+*                                                                     *
+*       Certain customer numbers cause special processing such as     *
+*       abends and delays, to show how a front-end application could  *
+*       manage such events.  The valid customer numbers are:          *
+*          0001-0005   normal                                         *
+*          0006        delayed response                               *
+*          0007        abend before send                              *
+*          0008        abend after send                               *
+*                                                                     *
+*                                                                     *
+*  PROGRAM LOGIC                                                      *
+*                                                                     *
+*    Main procedure:                                                  *
+*                                                                     *
+*       Set up exceptional condition handling:                        *
+*           Map error - SEND_NEW_MAP                                  *
+*           CLEAR/PF3 - END_PROG                                      *
+*                                                                     *
+*       Test COMMAREA                                                 *
+*       If transaction not previously invoked                         *
+*           Call SEND_NEW_MAP                                         *
+*                                                                     *
+*       RECEIVE map                                                   *
+*       If customer number not valid                                  *
+*           SEND message                                              *
+*           RETURN                                                    *
+*                                                                     *
+*       If customer type is 'ABEND before MAP'                        *
+*           ABEND                                                     *
+*       Build map with customer data                                  *
+*       If customer type is 'LONG DELAY'                              *
+*           DELAY                                                     *
+*       SEND map                                                      *
+*       If customer type is 'ABEND after MAP'                         *
+*           ABEND                                                     *
+*                                                                     *
+*       RETURN                                                        *
+*                                                                     *
+*    SEND_NEW_MAP routine:                                            *
+*                                                                     *
+*       SEND new map                                                  *
+*       RETURN                                                        *
+*                                                                     *
+*    END_PROG routine:                                                *
+*                                                                     *
+*       Clear terminal                                                *
+*       RETURN                                                        *
+*                                                                     *
+*
+*
+*=====================================================================*
+*=       Working storage                                             =*
+*=====================================================================*
+*
+DFHEISTG DSECT ,
+*
+* W02 is the customer number.
+*
+W02_CUSTNO             DS    CL4
+*
+* W03 is other customer information.
+*
+W03_DATE               DS    CL8
+W03_BALANCE            DS    CL8
+*
+* Editing field for EDMK instruction
+*
+W05_EDIT               DS    CL10
+*
+* Subroutine return address save areas.
+*
+RET_D_FORMAT_MAP       DS    A
+*
+* DFH0BZ3A defines the layout of the terminal map.
+*
+DFH0MZ3A DS    0D
+         COPY  DFH0BZ3A
+*
+* W04 defines the layout of the customer table.
+*
+W04_CUST_ENTRY         DSECT ,
+                       DS    0H
+W04_CUST_KEY           DS    CL4
+W04_CUST_NAME          DS    CL28
+W04_CUST_ADDR1         DS    CL32
+W04_CUST_ADDR2         DS    CL32
+W04_CUST_ADDR3         DS    CL32
+W04_CUST_TDATE         DS    0CL6
+W04_CUST_TDATE_MM      DS    CL2
+W04_CUST_TDATE_DD      DS    CL2
+W04_CUST_TDATE_YY      DS    CL2
+W04_CUST_BAL           DS    PL4
+W04_CUST_PROC          DS    C
+W04_NEXT_ENTRY         DS    0H
+                       USING W04_CUST_ENTRY,R4
+*
+* The COMMAREA is used to pass the transaction ID between
+* invocations of the transaction.
+*
+COMMAREA               DSECT ,
+COMMAREA_TRANSID       DS    CL4
+                       USING COMMAREA,R3
+*
+*
+*=====================================================================*
+*=       Registers                                                   =*
+*=====================================================================*
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+*
+*=====================================================================*
+*=       Initialization                                              =*
+*=====================================================================*
+*
+DFH0AZBC DFHEIENT CODEREG=(R9),                                        +
+               DATAREG=(R10),                                          +
+               EIBREG=(R11)
+*
+DFH0AZBC AMODE 31
+DFH0AZBC RMODE ANY
+*
+         B     A_MAIN
+W01_PROGID             DC    CL8'DFH0AZBC'
+*
+*
+*=====================================================================*
+*=       Main procedure                                              =*
+*=====================================================================*
+*
+* This section controls processing.
+*
+A_MAIN   DS    0H
+*
+* Set up handling for map errors and special keys (PF3, CLEAR).
+*
+         EXEC  CICS HANDLE CONDITION                                   +
+               MAPFAIL(Z_SEND_NEW_MAP)
+*
+         EXEC  CICS HANDLE AID                                         +
+               PF3(Z_END_PROG)                                         +
+               CLEAR(Z_END_PROG)
+*
+* If this transaction has not been previously invoked,
+* send the new map to the terminal.
+*
+         CLC   EIBCALEN,=H'4'
+         BNE   Z_SEND_NEW_MAP
+         L     R3,DFHEICAP
+         CLC   DFH0BZCA_BACKEND_TRANSID,COMMAREA_TRANSID
+         BNE   Z_SEND_NEW_MAP
+*
+* Map already sent to terminal:  get input from it.
+*
+         EXEC  CICS RECEIVE MAP(C03_MAPNAME)                           +
+               INTO(DFH0MZ3A)
+*
+* Get entered customer number.
+*
+         MVC   W02_CUSTNO,MCUSTNOI
+*
+* Tidy map:  clear it and reset values.
+*
+         LA    R0,0                From address - not relevant
+         LA    R1,0                From length=0, pad='00'X
+         LA    R14,DFH0MZ3A        To address=map
+         LA    R15,DFH0MZ3L        To length=map length
+         MVCL  R14,R0              Clear map
+         MVC   MCUSTNOL,=H'-1'     Length not set
+         MVI   MMSG2O,C' '         Blank message
+         MVC   MMSG2O+1(L'MMSG2O-1),MMSG2O
+*
+* Validate customer number:  check if key is in file.
+*
+         LA    R0,C04_CUST_COUNT
+         LA    R4,C04_CUST_TAB
+A_300    DS    0H
+         CLC   W02_CUSTNO,W04_CUST_KEY
+         BE    A_400
+         LA    R4,W04_NEXT_ENTRY
+         BCT   R0,A_300
+*
+* Key is not in file:  send error message.
+*
+         MVC   MMSG2O(DFH0BZMA_MSGLEN),DFH0BZMA_MSGO
+         MVC   MCUSTNOO,W02_CUSTNO
+         EXEC  CICS SEND MAP(C03_MAPNAME)                              +
+               FROM(DFH0MZ3O)                                          +
+               ERASE                                                   +
+               CURSOR
+         B     A_900
+*
+* Valid key has been entered.
+* Unless immediate abend is indicated, format map.
+*
+A_400    DS    0H
+         CLI   W04_CUST_PROC,C04_ABEND_BEFORE_MAP
+         BNE   A_410
+         EXEC  CICS ABEND ABCODE(C03_ABEND)
+*
+A_410    DS    0H
+         BAL   R14,D_FORMAT_MAP
+*
+* Delay if indicated, then send map data.
+*
+         CLI   W04_CUST_PROC,C04_LONG_DELAY
+         BNE   A_510
+         EXEC  CICS DELAY INTERVAL(C03_DELAY)
+*
+A_510    DS    0H
+         EXEC  CICS SEND MAP(C03_MAPNAME)                              +
+               FROM(DFH0MZ3O)                                          +
+               DATAONLY                                                +
+               CURSOR
+*
+* Abend if indicated.
+*
+         CLI   W04_CUST_PROC,C04_ABEND_AFTER_MAP
+         BNE   A_690
+         EXEC  CICS ABEND ABCODE(C03_ABEND)
+*
+A_690    DS    0H
+*
+* Return to CICS.
+*
+A_900    DS    0H
+         EXEC  CICS RETURN                                             +
+               TRANSID(COMMAREA_TRANSID)                               +
+               COMMAREA(COMMAREA_TRANSID)
+*
+A_EXIT   DS    0H
+*
+*
+*=====================================================================*
+*=       Format map routine                                          =*
+*=====================================================================*
+*
+* This section formats the map to send to the terminal.
+*
+D_FORMAT_MAP           DS    0H
+         ST    R14,RET_D_FORMAT_MAP
+*
+* Customer number, name, address.
+*
+         MVC   MCUSTNOO,W04_CUST_KEY
+         MVC   MCUSTNMO,W04_CUST_NAME
+         MVC   MCUSTA1O,W04_CUST_ADDR1
+         MVC   MCUSTA2O,W04_CUST_ADDR2
+         MVC   MCUSTA3O,W04_CUST_ADDR3
+*
+* Last transaction date:  insert date punctuation.
+*
+         MVC   MLTDO+0(2),W04_CUST_TDATE_MM
+         MVI   MLTDO+2,C'/'
+         MVC   MLTDO+3(2),W04_CUST_TDATE_DD
+         MVI   MLTDO+5,C'/'
+         MVC   MLTDO+6(2),W04_CUST_TDATE_YY
+*
+* Current balance:  insert currency symbol and decimal point.
+*
+         MVC   W05_EDIT,=X'4020206B2021204B2020'
+         LA    R1,W05_EDIT+6
+         EDMK  W05_EDIT,W04_CUST_BAL
+         BCTR  R1,0
+         MVI   0(R1),C'$'
+         MVC   MCUSTBAO,W05_EDIT+1
+*
+D_900    DS    0H
+         L     R14,RET_D_FORMAT_MAP
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Send new map routine                                        =*
+*=====================================================================*
+*
+* This section sends a new map to the terminal and returns to CICS.
+* It is invoked when the transaction is first started and if there
+* is a map failure.
+*
+Z_SEND_NEW_MAP         DS    0H
+*
+         EXEC  CICS SEND MAP(C03_MAPNAME)                              +
+               MAPSET(C03_MAPSETNAME)                                  +
+               MAPONLY                                                 +
+               ERASE
+*
+         EXEC  CICS RETURN                                             +
+               TRANSID(DFH0BZCA_BACKEND_TRANSID)                       +
+               COMMAREA(DFH0BZCA_BACKEND_TRANSID)
+*
+*
+*=====================================================================*
+*=       End program routine                                         =*
+*=====================================================================*
+*
+* This section ends the transaction when PF3 or CLEAR is used.
+* It clears the terminal and returns to CICS.
+*
+Z_END_PROG             DS    0H
+*
+         EXEC  CICS SEND FROM(C03_SPACE)                               +
+               LENGTH(1)                                               +
+               ERASE
+*
+         EXEC  CICS RETURN
+*
+*
+*=====================================================================*
+*=       Constants                                                   =*
+*=====================================================================*
+*
+* DFH0BZCA defines the customizable constants used by the
+* FEPI sample programs.
+*
+         COPY  DFH0BZCA
+*
+* DFH0BZMA defines the messages and other text used by the
+* FEPI sample programs.
+*
+         COPY  DFH0BZMA
+*
+* Constants used in this program.
+*
+C03_MAPNAME       DC    CL7'DFH0MZ3'
+C03_MAPSETNAME    DC    CL7'DFH0MZ3'
+C03_DELAY         DC    PL4'30'
+C03_ABEND         DC    CL4'USZA'
+C03_SPACE         DC    CL1' '
+*
+* Customer table (simulates a file).
+* These names are a subset of those used by the basic CICS samples.
+*
+C04_CUST_TAB      DS    0H
+*
+C04_CUST_0001     DS    0H
+                  DC    CL4'0001'
+                  DC    CL28'Eric Graham                 '
+                  DC    CL32'2 West Way                      '
+                  DC    CL32'Wickham                         '
+                  DC    CL32'Hampshire                       '
+                  DC    CL6'020592'
+                  DC    PL4'0223173'
+                  DC    AL1(C04_NORMAL)
+*
+C04_CUST_0002     DS    0H
+                  DC    CL4'0002'
+                  DC    CL28'Cindy Thompson              '
+                  DC    CL32'67 Shawford Close               '
+                  DC    CL32'Bramdean                        '
+                  DC    CL32'Hampshire                       '
+                  DC    CL6'030192'
+                  DC    PL4'0015970'
+                  DC    AL1(C04_NORMAL)
+*
+C04_CUST_0003     DS    0H
+                  DC    CL4'0003'
+                  DC    CL28'Jan Zeigler                 '
+                  DC    CL32'77 West Street                  '
+                  DC    CL32'Mitcham                         '
+                  DC    CL32'Surrey                          '
+                  DC    CL6'060692'
+                  DC    PL4'0094050'
+                  DC    AL1(C04_NORMAL)
+*
+C04_CUST_0004     DS    0H
+                  DC    CL4'0004'
+                  DC    CL28'Chris Graham                '
+                  DC    CL32'Surridge Farm                   '
+                  DC    CL32'Lymington                       '
+                  DC    CL32'Hampshire                       '
+                  DC    CL6'070891'
+                  DC    PL4'0046230'
+                  DC    AL1(C04_NORMAL)
+*
+C04_CUST_0005     DS    0H
+                  DC    CL4'0005'
+                  DC    CL28'Philip Sparks               '
+                  DC    CL32'167 Hobart Street               '
+                  DC    CL32'Dorking                         '
+                  DC    CL32'Surrey                          '
+                  DC    CL6'110491'
+                  DC    PL4'0035235'
+                  DC    AL1(C04_NORMAL)
+*
+C04_CUST_0006     DS    0H
+                  DC    CL4'0006'
+                  DC    CL28'Tim Robinson                '
+                  DC    CL32'Houseboat 3, Hamble Marina      '
+                  DC    CL32'Hamble                          '
+                  DC    CL32'Hampshire                       '
+                  DC    CL6'010592'
+                  DC    PL4'0087210'
+                  DC    AL1(C04_LONG_DELAY)
+*
+C04_CUST_0007     DS    0H
+                  DC    CL4'0007'
+                  DC    CL28'John Becker                 '
+                  DC    CL32'46 Orchard Grove                '
+                  DC    CL32'Guildford                       '
+                  DC    CL32'Surrey                          '
+                  DC    CL6'040292'
+                  DC    PL4'0093450'
+                  DC    AL1(C04_ABEND_BEFORE_MAP)
+*
+C04_CUST_0008     DS    0H
+                  DC    CL4'0008'
+                  DC    CL28'Fiona Williams              '
+                  DC    CL32'21 Chalgrove Road               '
+                  DC    CL32'Chilbolton                      '
+                  DC    CL32'Hampshire                       '
+                  DC    CL6'030592'
+                  DC    PL4'0005140'
+                  DC    AL1(C04_ABEND_AFTER_MAP)
+*
+                  DS    0H
+*
+C04_CUST_COUNT         EQU   8
+C04_NORMAL             EQU   C'0'
+C04_ABEND_BEFORE_MAP   EQU   C'1'
+C04_ABEND_AFTER_MAP    EQU   C'2'
+C04_LONG_DELAY         EQU   C'3'
+*
+         LTORG ,
+*
+***********************************************************************
+*        End of program DFH0AZBC                                      *
+***********************************************************************
+*
+         END   DFH0AZBC

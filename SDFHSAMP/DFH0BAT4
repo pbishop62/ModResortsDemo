@@ -1,0 +1,269 @@
+      CBL CICS('COBOL3,SP')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0BAT4                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Batch Enabling Sample BAT1                 *
+      *                    Disable Transactions Program               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      *   To aid the customer in the preparation for running non-RLS  *
+      *   VSAM batch jobs against a group of data sets, CICS          *
+      *   provides a suite of sample COBOL2 programs called DFH0BATx. *
+      *                                                               *
+      *   For an overview of the DFH0BATx suite, refer to the prolog  *
+      *   of program DFH0BAT1.                                        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      *   This program is part of a suite of programs DFH0BATx which  *
+      *   is intended to aid the user in the identification and       *
+      *   resolution of VSAM RLS retained locks. It may be modified   *
+      *   as required by the customer.                                *
+      *                                                               *
+      *   This program disables a set of named transactions.          *
+      *   It is called remotely by coordinating program DFH0BAT1      *
+      *   using DPL. Any errors encountered disabling the             *
+      *   transactions are written to remote TS queue DFH0BQ1 which   *
+      *   resides on the coordinating region.                         *
+      *                                                               *
+      *   The names of the transactions to be disabled are obtained   *
+      *   by reading a remote extra-partition TD queue 'BATX' which   *
+      *   resides on the coordinating region.                         *
+      *                                                               *
+      *   The name of the remote TD queue that resides on the         *
+      *   coordinating region is passed to DFH0BAT4 in a commarea.    *
+      *   If DFH0BAT4 detects that there is no commarea,              *
+      *   or that it has an unexpected length,                        *
+      *   the application is abnormally terminated with an abend code *
+      *   of BT41.                                                    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *  $MOD(DFH0BAT4),COMP(SAMPLES),PROD(CICS TS ):                 *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $L0= 654    510 941010 HDMMFM  : Created                      *
+      * $L1= 654 510 950210 HDMMFM  : Code Review work forBatch Enabl-
+      * $P1= M95974 510 960209 HDMMFM  : PTM 95974                    *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0BAT4.
+
+       ENVIRONMENT DIVISION.
+           EJECT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *****************************************************************
+      * Record for transids TD queue.
+      *****************************************************************
+       01  TDQ-TRAN-RECORD.
+         03  TDQ-TRANSID               PIC X(4).
+         03  FILLER                    PIC X(76).
+      *****************************************************************
+      * Copy book for record for TS queue DFH0BQ1. A record is written
+      * to this queue when an error is encountered disabling a
+      * transaction.
+      *****************************************************************
+       COPY DFH0BC11.
+      *****************************************************************
+      * Various variables used throughout the program.
+      *****************************************************************
+       77  TRANSIDS-REMAINING          PIC X.
+
+       77  SET-RESP                    PIC S9(8) COMP.
+       77  SET-RESP2                   PIC S9(8) COMP.
+       77  READQ-RESP                  PIC S9(8) COMP.
+       77  READQ-RESP2                 PIC S9(8) COMP.
+       77  ASSIGN-RESP                 PIC S9(8) COMP.
+
+       77  OUR-APPLID                  PIC X(8).
+       77  OUR-SYSID                   PIC X(4).
+       77  COORD-SYSID                 PIC X(4).
+       77  ABEND-CODE                  PIC X(4).
+       77  BT41                        PIC X(4) VALUE 'BT41'.
+
+       LINKAGE SECTION.
+      *****************************************************************
+      * Copy book for commarea passed to DFH0BAT4.
+      *****************************************************************
+       COPY DFH0BC12 REPLACING ==COMMAREA-1.== BY
+                               ==COMMAREA-1 REDEFINES DFHCOMMAREA.==.
+           EJECT.
+
+      *****************************************************************
+      ***               Batch Enabling Sample BAT1                  ***
+      ***              Disable Transactions Program                 ***
+      *****************************************************************
+       PROCEDURE DIVISION USING DFHEIBLK DFHCOMMAREA.
+
+       MAIN-PROCESSING SECTION.
+
+      *****************************************************************
+      * Check that we have been passed the correct commarea.
+      * If not return immediately.
+      *****************************************************************
+           IF EIBCALEN NOT = LENGTH OF COMMAREA-1 THEN
+             MOVE BT41 TO ABEND-CODE
+             EXEC CICS ABEND
+                  ABCODE(ABEND-CODE)
+             END-EXEC
+           ELSE
+      *****************************************************************
+      * First find the sysid of the coordinating CICS region.
+      * Then read the remote transids TD queue and disable
+      * all the transactions named therein.
+      *****************************************************************
+             PERFORM FIND-COORD-SYSID
+             MOVE 'Y' TO TRANSIDS-REMAINING
+             PERFORM DISABLE-TRANSACTIONS
+               UNTIL TRANSIDS-REMAINING = 'N'
+           END-IF.
+      *****************************************************************
+      * End the program and return to CICS.
+      *****************************************************************
+           EXEC CICS RETURN
+           END-EXEC.
+
+       MAIN-PROCESSING-EXIT.
+           GOBACK.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedures start here.
+      *---------------------------------------------------------------*
+
+      *---------------------------------------------------------------*
+      * Procedure to work out if we are running locally on the
+      * coordinating region, or remotely via DPL, and to set up
+      * the SYSID for use on subsequent TS and TD commands.
+      *---------------------------------------------------------------*
+       FIND-COORD-SYSID SECTION.
+           EXEC CICS ASSIGN
+                APPLID(OUR-APPLID)
+                SYSID(OUR-SYSID)
+                PRINSYSID(COORD-SYSID)
+                RESP(ASSIGN-RESP)
+           END-EXEC.
+      *****************************************************************
+      * A response of INVREQ caused by the PRINSYSID option means
+      * that we are running locally.
+      *****************************************************************
+           EVALUATE ASSIGN-RESP
+             WHEN DFHRESP(NORMAL)
+               CONTINUE
+             WHEN OTHER
+               MOVE OUR-SYSID TO COORD-SYSID
+           END-EVALUATE.
+
+       FIND-COORD-SYSID-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to read the remote transids TD queue.
+      * For each transid we attempt to disable it.
+      *---------------------------------------------------------------*
+       DISABLE-TRANSACTIONS SECTION.
+      *****************************************************************
+      * Read the next transid off the TD queue. We have been passed
+      * the queue name in the commarea. The TD queue may be remote so
+      * the READQ TD command may be function shipped.
+      *****************************************************************
+           MOVE SPACES TO TDQ-TRAN-RECORD
+           EXEC CICS READQ TD
+                QUEUE(CA-TDQ-TRAN)
+                SYSID(COORD-SYSID)
+                INTO(TDQ-TRAN-RECORD)
+                LENGTH(LENGTH OF TDQ-TRAN-RECORD)
+                RESP(READQ-RESP)
+                RESP2(READQ-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If the read was successful then disable the transaction.
+      * Otherwise assume we have reached the end of the transids
+      * TD queue. A serious error causes a message to be written to the
+      * TS queue.
+      *****************************************************************
+           EVALUATE READQ-RESP
+             WHEN DFHRESP(NORMAL)
+               PERFORM DISABLE-TRANSACTION
+             WHEN DFHRESP(LENGERR)
+               PERFORM DISABLE-TRANSACTION
+             WHEN DFHRESP(QZERO)
+               MOVE 'N' TO TRANSIDS-REMAINING
+             WHEN OTHER
+               MOVE OUR-APPLID TO TSQ-APPLID
+               MOVE BATX-FAILURE TO TSQ-ERR-MSG
+               MOVE READQ-RESP TO TSQ-RESP
+               MOVE READQ-RESP2 TO TSQ-RESP2
+               PERFORM WRITE-TSQ-RECORD
+               MOVE 'N' TO TRANSIDS-REMAINING
+           END-EVALUATE.
+
+       DISABLE-TRANSACTIONS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to disable a transaction.
+      *---------------------------------------------------------------*
+       DISABLE-TRANSACTION SECTION.
+           EXEC CICS SET TRANSACTION(TDQ-TRANSID)
+                DISABLED
+                RESP(SET-RESP)
+                RESP2(SET-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If the disable was successful, move onto the next one.
+      * Otherwise assume we have failed to disable, and write a
+      * message to the TS queue.
+      *****************************************************************
+           IF SET-RESP NOT = DFHRESP(NORMAL)
+             MOVE OUR-APPLID TO TSQ-APPLID
+             MOVE TDQ-TRANSID TO TSQ-TRANSID
+             MOVE SPACES TO TSQ-ERR-MSG
+             MOVE SET-RESP TO TSQ-RESP
+             MOVE SET-RESP2 TO TSQ-RESP2
+             PERFORM WRITE-TSQ-RECORD
+           END-IF.
+
+       DISABLE-TRANSACTION-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to write a TS record to DFH0BQ1. As this may be
+      * remote, the WRITEQ TS command may be function shipped.
+      *---------------------------------------------------------------*
+       WRITE-TSQ-RECORD SECTION.
+           EXEC CICS WRITEQ TS
+                QUEUE(TSQ-DISABLE-NAME)
+                FROM(TSQ-DISABLE-RECORD)
+                LENGTH(LENGTH OF TSQ-DISABLE-RECORD)
+                SYSID(COORD-SYSID)
+           END-EXEC.
+
+       WRITE-TSQ-RECORD-EXIT.
+           EXIT.

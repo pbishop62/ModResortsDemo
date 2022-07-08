@@ -1,0 +1,1027 @@
+      CBL CICS('COBOL3,SP')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0BAT2                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Batch Enabling Sample BAT2                 *
+      *                    Inquire Retained Locks Coordinator         *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      *   To aid the customer in the preparation for running non-RLS  *
+      *   VSAM batch jobs against a group of data sets, CICS          *
+      *   provides a suite of sample COBOL2 programs called DFH0BATx. *
+      *                                                               *
+      *   For an overview of the DFH0BATx suite, refer to the         *
+      *   prolog of program DFH0BAT1                                  *
+      *   which also contains some general comments regarding the     *
+      *   options which might be considered for the definition of     *
+      *   the required TD queues.                                     *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      *   This program is part of a suite of programs DFH0BATx which  *
+      *   is intended to aid the user in the identification and       *
+      *   resolution of VSAM RLS retained locks. It may be modified   *
+      *   as required by the customer.                                *
+      *                                                               *
+      *   This program coordinates the gathering of retained lock     *
+      *   information for a set of named data sets on a group of      *
+      *   named CICS regions. It is the top-level                     *
+      *   program for transaction BAT2. It should be run on one       *
+      *   CICS region in the sysplex, and uses DPL to run programs    *
+      *   DFH0BAT7 and DFH0BAT5 on the other CICS regions.            *
+      *   DFH0BAT7 initiates a retry of backouts that had previously  *
+      *   failed, for a given data set. DFH0BAT5 gathers retained     *
+      *   lock information for a given data set. The retained lock    *
+      *   information from DFH0BAT5 invocations is received via       *
+      *   a temporary storage queue DFH0BQ2 and is displayed using    *
+      *   a BMS mapset DFH0BM2.                                       *
+      *                                                               *
+      *   The program is structured as a loop through all the data    *
+      *   sets we are interested in. For each data set, DFH0BAT7 is   *
+      *   called to retry backout failures on each CICS region,       *
+      *   then DFH0BAT5 is called to gather retained lock information *
+      *   on each CICS region, then the information is displayed on   *
+      *   the map. Then we do the same for the next data set.         *
+      *                                                               *
+      *   The names of the data sets that we are interested in are    *
+      *   obtained by reading extra-partition TD queue 'BATD'.        *
+      *   The specific applids of the CICS regions are obtained       *
+      *   by reading extra-partition TD queue 'BATA'.                 *
+      *                                                               *
+      *   MRO links are assumed to exist from the coordinating CICS   *
+      *   region, ie, that running DFH0BAT2, and all the other CICS   *
+      *   regions, ie, those running DFH0BAT5/7.                      *
+      *    these samples assume that there is only one connection     *
+      *    associated with a given netname.                           *
+      *    if there is a desire to say, have a LU6.2,                 *
+      *    as well as a MRO, connection associated with a             *
+      *    given netname then it will be necessary to modify          *
+      *    THIS CODE.                                                 *
+      *    One might, for instance, following an INQUIRE CONNECTION   *
+      * with a response which is not 'normal', decide to brows the    *
+      *    connections associated with the co-ordinating region,      *
+      *    until one is found which has the required netname,         *
+      *    is of type MRO and is available for use.                   *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *  $MOD(DFH0BAT2),COMP(SAMPLES),PROD(CICS TS ):                 *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $L0= 654    510 941010 HDMMFM  : Created                      *
+      * $L1= 654    510 941202 HD9ZSMH : Use new INQ NETNAME for MRO  *
+      * $L2= 654    510 950209 HDMMFM  : Code Review work             *
+      * $P1= M95451 510 950925 HDAVCMM : Correct some comments        *
+      * $P2= M95973 510 951211 HDMMFM  : PTM 95973                    *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $P3= M96436 510 960201 HD6ACPA : SMALL FIX TO SAMPLES.        *
+      * $P5= M95974 510 960212 HDMMFM  : PTM 95974                    *
+      * $P6= M96562 510 960307 HDMMFM  : PTM 96562                    *
+      * $P7= M96627 510 960419 HDMMFM  : Distinguish repeatable read  *
+      * $P8= M96537 510 960422 HDMMFM  : VSAM Lock Structure Full     *
+      * $P4= M96353 510 960202 HDMMFM  : PTM 96353                    *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0BAT2.
+
+       ENVIRONMENT DIVISION.
+           EJECT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *****************************************************************
+      * Names for the extra-partition TD queues.
+      * Two TD queues are used. One contains the data set names of
+      * the data sets we are interested in. The other contains the
+      * applids of the CICS regions which use the data sets.
+      *****************************************************************
+       77  TDQ-APPL-NAME             PIC X(4) VALUE 'BATA'.
+       77  TDQ-DSET-NAME             PIC X(4) VALUE 'BATD'.
+      *****************************************************************
+      * Record for applids TD queue
+      *****************************************************************
+       01  TDQ-APPL-RECORD.
+         03  TDQ-APPLID    PIC X(8).
+         03  FILLER        PIC X(72).
+      *****************************************************************
+      * Record for data sets TD queue
+      *****************************************************************
+       01  TDQ-DSET-RECORD.
+         03  TDQ-DSNAME    PIC X(44).
+         03  FILLER        PIC X(36).
+      *****************************************************************
+      * Copy book for record for TS queue DFH0BQ2. A record is
+      * written to this queue for each item of retained lock
+      * information we discover about a data set. It is also used
+      * to report any errors that arise when doing this.
+      *****************************************************************
+       COPY DFH0BC21.
+      *****************************************************************
+      * Various variables used throughout the program.
+      *****************************************************************
+       77  APPL-REMAINING            PIC X.
+       77  DSET-REMAINING            PIC X.
+       77  BMS-REMAINING             PIC X.
+       77  ANY-BMS-OUTPUT            PIC X.
+       77  CONNECTION-GOOD           PIC X.
+       77  VALID-INPUT               PIC X.
+
+       77  REMOTE-APPLID             PIC X(8).
+       77  REMOTE-SYSID              PIC X(4).
+       77  COORD-SYSID               PIC X(4).
+       77  COORD-APPLID              PIC X(8).
+       77  NEXT-SYSID                PIC X(4).
+       77  NEXT-APPLID               PIC X(8).
+       77  CONN-STAT                 PIC S9(8) COMP.
+       77  SERV-STAT                 PIC S9(8) COMP.
+       77  RLS-STATUS                  PIC S9(8) COMP.
+
+       77  TDQ-NAME                  PIC X(4).
+       77  DPL-PROG-NAME             PIC X(8).
+       77  LINK-RESP                 PIC S9(8) COMP.
+       77  LINK-RESP2                PIC S9(8) COMP.
+       77  INQ-RESP                  PIC S9(8) COMP.
+       77  INQ-RESP2                 PIC S9(8) COMP.
+       77  READQ-RESP                PIC S9(8) COMP.
+       77  READQ-RESP2               PIC S9(8) COMP.
+
+       77  MAPSET-NAME               PIC X(8).
+       77  MAP-NAME                  PIC X(8).
+       77  BMS-ELEMENTS              PIC 99 COMP.
+       77  DSET-SCRN-COUNT           PIC S9(4) COMP.
+       77  DSET-SCRN-TOTAL           PIC S9(4) COMP.
+       77  NUM-ITEMS                 PIC S9(4) COMP.
+       77  CURR-DSNAME               PIC X(44).
+       77  MAP-CAUSE                 PIC X(12).
+       77  MAP-CAUSE-COLOR           PIC X.
+       77  MAP-REASON                PIC X(12).
+       77  MAP-APPLID                PIC X(8).
+       01  MAP-ACTION.
+         03  MAP-ACTION1             PIC X(9).
+         03  MAP-ACTION2             PIC X(8).
+         03  FILLER                  PIC X(25).
+      *****************************************************************
+      * Error indicator constants
+      *****************************************************************
+       77  BATA-FAILURE              PIC X(12)
+               VALUE 'BATA failure'.
+       77  BATD-FAILURE              PIC X(12)
+               VALUE 'BATD failure'.
+       77  DPL-FAILURE               PIC X(12)
+               VALUE 'DPL failure '.
+       77  BAD-NETNAME               PIC X(12)
+               VALUE 'Bad netname '.
+       77  CONNECT-OUT               PIC X(12)
+               VALUE 'Connect out '.
+      *****************************************************************
+      * Screen output messages
+      *****************************************************************
+       77  ENDED-MESSAGE             PIC X(35)
+               VALUE 'Inquire retained locks sample ended'.
+       77  INVALID-MESSAGE           PIC X(19)
+               VALUE 'Invalid key pressed'.
+       77  NO-RETLOCKS-MESSAGE       PIC X(30)
+               VALUE 'No retained locks for data set'.
+       77  PROCESSING-MESSAGE        PIC X(38)
+               VALUE 'Processing next data set...please wait'.
+      *****************************************************************
+      * Copy books for BMS mapset DFH0BM2. Map BAM21 displays retained
+      * lock information that was written to TS queue DFH0BQ2
+      *****************************************************************
+       COPY DFH0BM2O.
+       COPY DFH0BM2O REPLACING ==BAM21I== BY ==TMP21I==
+                               ==BAM21O== BY ==TMP21O==.
+       COPY DFH0BC23.
+       COPY DFHAID.
+       COPY DFHBMSCA.
+      *****************************************************************
+      * Copy book for commarea to be passed to DFH0BAT5/7.
+      *****************************************************************
+       COPY DFH0BC22.
+
+       LINKAGE SECTION.
+           EJECT.
+
+      *****************************************************************
+      ***                 Batch Enabling Sample 2                   ***
+      ***           Inquire Retained Locks Coordinator              ***
+      *****************************************************************
+       PROCEDURE DIVISION USING DFHEIBLK.
+
+      *---------------------------------------------------------------*
+      * Main processing starts here.
+      *---------------------------------------------------------------*
+
+       MAIN-PROCESSING SECTION.
+
+      *****************************************************************
+      * Carry out any initialization.
+      *****************************************************************
+           PERFORM INITIALIZATION.
+      *****************************************************************
+      * Gather retained lock information for all data sets on all
+      * CICS regions and display the results on the map.
+      *****************************************************************
+           MOVE 'Y' TO DSET-REMAINING.
+           PERFORM PROCESS-DATA-SETS
+             UNTIL DSET-REMAINING = 'N'.
+      *****************************************************************
+      * Output termination message.
+      *****************************************************************
+           EXEC CICS SEND TEXT
+                FROM(ENDED-MESSAGE)
+                ERASE
+           END-EXEC.
+      *****************************************************************
+      * End the program and return to CICS.
+      *****************************************************************
+           EXEC CICS RETURN
+           END-EXEC.
+
+       MAIN-PROCESSING-EXIT.
+           GOBACK.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedures start here.
+      *---------------------------------------------------------------*
+
+      *---------------------------------------------------------------*
+      * Procedure to carry out any initialization.
+      *---------------------------------------------------------------*
+       INITIALIZATION SECTION.
+      *****************************************************************
+      * Initialise the commarea to be passed to DFH0BAT5/7.
+      *****************************************************************
+           MOVE SPACES TO COMMAREA-2.
+      *****************************************************************
+      * Get the applid and sysid of our own CICS region.
+      *****************************************************************
+           EXEC CICS ASSIGN
+                APPLID(COORD-APPLID)
+                SYSID(COORD-SYSID)
+           END-EXEC.
+      *****************************************************************
+      * Reset the data sets TD queue to the beginning. This TD queue
+      * is only read locally.
+      *****************************************************************
+           MOVE TDQ-DSET-NAME TO TDQ-NAME.
+           PERFORM RESET-TD-QUEUE.
+
+       INITIALIZATION-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to read the data set TD queue. For each data set
+      * we retry backout failures and gather retained lock
+      * information on all the CICS regions.
+      *---------------------------------------------------------------*
+       PROCESS-DATA-SETS SECTION.
+      *****************************************************************
+      * Read the next data set name off the TD queue.
+      *****************************************************************
+           MOVE SPACES TO TDQ-DSET-RECORD.
+           EXEC CICS READQ TD
+                QUEUE(TDQ-DSET-NAME)
+                INTO(TDQ-DSET-RECORD)
+                LENGTH(LENGTH OF TDQ-DSET-RECORD)
+                RESP(READQ-RESP)
+                RESP2(READQ-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If the read was successful, then retry backout failures and
+      * gather retained lock information for the data set.
+      * Otherwise assume that we have reached the end of the data sets
+      * TD queue. Any serious error causes a message to be written
+      * to the TS queue.
+      *****************************************************************
+           EVALUATE READQ-RESP
+             WHEN DFHRESP(NORMAL)
+               PERFORM INQUIRE-RETLOCKS
+             WHEN DFHRESP(LENGERR)
+               PERFORM INQUIRE-RETLOCKS
+             WHEN DFHRESP(QZERO)
+               MOVE 'N' TO DSET-REMAINING
+             WHEN OTHER
+               MOVE SPACES TO TSQ-APPLID
+               MOVE BATD-FAILURE TO TSQ-ERR-MSG
+               MOVE TDQ-DSNAME TO TSQ-DSNAME
+               MOVE READQ-RESP TO TSQ-RESP
+               MOVE READQ-RESP2 TO TSQ-RESP2
+               PERFORM WRITE-TSQ-RECORD
+               MOVE 'N' TO DSET-REMAINING
+           END-EVALUATE.
+
+       PROCESS-DATA-SETS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to retry backout failures and gather retained lock
+      * information on each CICS region, for a given data set.
+      *---------------------------------------------------------------*
+       INQUIRE-RETLOCKS SECTION.
+      *****************************************************************
+      * Set the data set name in the commarea for DFH0BAT5/7.
+      *****************************************************************
+           MOVE TDQ-DSNAME TO CURR-DSNAME.
+           MOVE TDQ-DSNAME TO CA-DSNAME.
+      *****************************************************************
+      * Output that we are starting processing the next data set
+      *****************************************************************
+           EXEC CICS SEND TEXT
+                FROM(PROCESSING-MESSAGE)
+                ERASE
+                WAIT
+           END-EXEC.
+      *****************************************************************
+      * Delete the TS queue to remove information for any previous
+      * data set.
+      *****************************************************************
+           PERFORM DELETE-TSQ.
+      *****************************************************************
+      * Reset the applids TD queue to the beginning. This TD queue
+      * is only read locally.
+      *****************************************************************
+           MOVE TDQ-APPL-NAME TO TDQ-NAME.
+           PERFORM RESET-TD-QUEUE.
+      *****************************************************************
+      * Read all the applid records in the TD queue.
+      * For each applid found perform a DPL link to DFH0BAT7 to
+      * retry backout failures for the data set.
+      * Any error messages will be written to the TS queue.
+      *****************************************************************
+           MOVE 'DFH0BAT7' TO DPL-PROG-NAME.
+           MOVE 'Y' TO APPL-REMAINING.
+           PERFORM PROCESS-APPLIDS
+             UNTIL APPL-REMAINING = 'N'.
+      *****************************************************************
+      * Retrying backout failures is an asynchronous operation.
+      * So delay for a short while to let this complete throughout
+      * the sysplex. The customer can change this time if desired.
+      *****************************************************************
+           EXEC CICS DELAY
+                FOR SECONDS(10)
+           END-EXEC.
+      *****************************************************************
+      * Reset the applids TD queue to the beginning again.
+      *****************************************************************
+           MOVE TDQ-APPL-NAME TO TDQ-NAME.
+           PERFORM RESET-TD-QUEUE.
+      *****************************************************************
+      * Read all the applid records in the TD queue.
+      * For each applid found perform a DPL link to DFH0BAT5 to
+      * gather retained lock information for the data set.
+      * Any such information will be written to the TS queue.
+      *****************************************************************
+           MOVE 'DFH0BAT5' TO DPL-PROG-NAME.
+           MOVE 'Y' TO APPL-REMAINING.
+           PERFORM PROCESS-APPLIDS
+             UNTIL APPL-REMAINING = 'N'.
+      *****************************************************************
+      * If there are messages on the TS queue, display
+      * them via mapset DFH0BM2 (map BAM21).
+      *****************************************************************
+           MOVE 'Y' TO BMS-REMAINING.
+           MOVE 'N' TO ANY-BMS-OUTPUT.
+           MOVE 0 TO BMS-ELEMENTS.
+           PERFORM CALCULATE-SCREENS.
+           MOVE LOW-VALUES TO BAM21O.
+           PERFORM PROCESS-BMS
+             UNTIL BMS-REMAINING = 'N'.
+      *****************************************************************
+      * If there were no messages on the TS queue, send map BAM21
+      * with a no retained locks message.
+      *****************************************************************
+           IF ANY-BMS-OUTPUT = 'N'
+             MOVE DFHNEUTR TO MSGLINC OF BAM21O
+             MOVE NO-RETLOCKS-MESSAGE TO MSGLINO OF BAM21O
+             PERFORM SEND-BMS
+           END-IF.
+      *****************************************************************
+      * Delete the TS queue ready for the next data set
+      *****************************************************************
+           PERFORM DELETE-TSQ.
+
+       INQUIRE-RETLOCKS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to read the applid TD queue. For each applid,
+      * we DPL to DFH0BAT5/7 on the remote CICS region corresponding
+      * to the applid.
+      *---------------------------------------------------------------*
+       PROCESS-APPLIDS SECTION.
+      *****************************************************************
+      * Read the next applid off the TD queue.
+      *****************************************************************
+           MOVE SPACES TO TDQ-APPL-RECORD.
+           EXEC CICS READQ TD
+                QUEUE(TDQ-APPL-NAME)
+                INTO(TDQ-APPL-RECORD)
+                LENGTH(LENGTH OF TDQ-APPL-RECORD)
+                RESP(READQ-RESP)
+                RESP2(READQ-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If the read was successful, then get ready to call DFH0BAT5/7
+      * on the remote system. Otherwise assume that we have reached
+      * the end of the applids TD queue. Any serious error causes a
+      * message to be written to the TS queue.
+      *****************************************************************
+           EVALUATE READQ-RESP
+             WHEN DFHRESP(NORMAL)
+               PERFORM DPL-LINK
+             WHEN DFHRESP(LENGERR)
+               PERFORM DPL-LINK
+             WHEN DFHRESP(QZERO)
+               MOVE 'N' TO APPL-REMAINING
+             WHEN OTHER
+               MOVE TDQ-APPLID TO TSQ-APPLID
+               MOVE BATA-FAILURE TO TSQ-ERR-MSG
+               MOVE CURR-DSNAME TO TSQ-DSNAME
+               MOVE READQ-RESP TO TSQ-RESP
+               MOVE READQ-RESP2 TO TSQ-RESP2
+               PERFORM WRITE-TSQ-RECORD
+               MOVE 'N' TO APPL-REMAINING
+           END-EVALUATE.
+
+       PROCESS-APPLIDS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to perform a DPL to DFH0BAT5/7 on the remote
+      * CICS region. (If our own applid, this boils down to a local
+      * LINK).
+      *---------------------------------------------------------------*
+       DPL-LINK SECTION.
+      *****************************************************************
+      * Before we call DFH0BAT5/7, convert the applid to a sysid. We
+      * must do this because DPL requires a sysid, and it also lets us
+      * check that the connection to the remote system exists and is
+      * working. (No need to do this if applid is our own).
+      *****************************************************************
+           MOVE TDQ-APPLID TO REMOTE-APPLID.
+           IF REMOTE-APPLID NOT = COORD-APPLID
+             PERFORM CHECK-CONNECTION
+           ELSE
+             MOVE 'Y' TO CONNECTION-GOOD
+             MOVE COORD-SYSID TO REMOTE-SYSID
+           END-IF.
+      *****************************************************************
+      * If the connection is ok then DPL to DFH0BAT5/7.
+      * The commarea contains the name of the data set.
+      *****************************************************************
+           IF CONNECTION-GOOD = 'Y'
+             EXEC CICS LINK
+                  PROGRAM(DPL-PROG-NAME)
+                  COMMAREA(COMMAREA-2)
+                  LENGTH(LENGTH OF COMMAREA-2)
+                  SYSID(REMOTE-SYSID)
+                  RESP(LINK-RESP)
+                  RESP2(LINK-RESP2)
+             END-EXEC
+      *****************************************************************
+      * If the DPL failed, write this to the TS queue, so it will be
+      * displayed later on in the map.
+      *****************************************************************
+             IF LINK-RESP NOT = DFHRESP(NORMAL)
+               MOVE DPL-FAILURE TO TSQ-ERR-MSG
+               MOVE REMOTE-APPLID TO TSQ-APPLID
+               MOVE CURR-DSNAME TO TSQ-DSNAME
+               MOVE LINK-RESP TO TSQ-RESP
+               MOVE LINK-RESP2 TO TSQ-RESP2
+               PERFORM WRITE-TSQ-RECORD
+             END-IF
+           END-IF.
+
+       DPL-LINK-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to check if a connection to a remote CICS region
+      * exists and is both in service and acquired.
+      *---------------------------------------------------------------*
+       CHECK-CONNECTION SECTION.
+      *****************************************************************
+      * Assume connection is not ok.
+      *****************************************************************
+           MOVE 'N' TO CONNECTION-GOOD.
+           MOVE BAD-NETNAME TO TSQ-ERR-MSG.
+      *****************************************************************
+      * Use the applid to obtain the sysid. If no sysid can be found
+      * then no connection exists to the remote region.
+      *****************************************************************
+           EXEC CICS INQUIRE NETNAME(REMOTE-APPLID)
+                REMOTESYSTEM(REMOTE-SYSID)
+                RESP(INQ-RESP)
+                RESP2(INQ-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If a connection exists to the remote region, use the sysid
+      * to see if the connection is in service and acquired.
+      *****************************************************************
+           IF INQ-RESP = DFHRESP(NORMAL)
+             MOVE CONNECT-OUT TO TSQ-ERR-MSG
+             EXEC CICS INQUIRE CONNECTION(REMOTE-SYSID)
+                  CONNSTATUS(CONN-STAT)
+                  SERVSTATUS(SERV-STAT)
+                  RESP(INQ-RESP)
+                  RESP2(INQ-RESP2)
+             END-EXEC
+      *****************************************************************
+      * If the connection is ok, set the connection ok flag.
+      *****************************************************************
+             IF INQ-RESP = DFHRESP(NORMAL)
+               IF CONN-STAT = DFHVALUE(ACQUIRED) AND
+                  SERV-STAT = DFHVALUE(INSERVICE)
+                 MOVE 'Y' TO CONNECTION-GOOD
+               END-IF
+             END-IF
+           END-IF.
+      *****************************************************************
+      * If the connection ok flag is not set, the connection is not
+      * available. Write this to the TS queue, so it will be
+      * displayed later on in the map. (The message text is already
+      * set up in TSQ-ERR-MSG - see above).
+      *****************************************************************
+           IF CONNECTION-GOOD = 'N'
+             MOVE REMOTE-APPLID TO TSQ-APPLID
+             MOVE CURR-DSNAME TO TSQ-DSNAME
+             MOVE INQ-RESP TO TSQ-RESP
+             MOVE INQ-RESP2 TO TSQ-RESP2
+             PERFORM WRITE-TSQ-RECORD
+           END-IF.
+
+       CHECK-CONNECTION-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to reset a TD queue back to the beginning.
+      * This is achieved by setting it closed and open.
+      *---------------------------------------------------------------*
+       RESET-TD-QUEUE SECTION.
+           EXEC CICS SET TDQUEUE(TDQ-NAME)
+                ENABLED
+                CLOSED
+           END-EXEC.
+           EXEC CICS SET TDQUEUE(TDQ-NAME)
+                ENABLED
+                OPEN
+           END-EXEC.
+
+       RESET-TD-QUEUE-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to read a record from the TS queue containing
+      * retained lock information and display the results on a map.
+      * The map is sent either when it is full or when the retained
+      * lock information is exhausted.
+      *---------------------------------------------------------------*
+       PROCESS-BMS SECTION.
+      *****************************************************************
+      * Read the next record from the TS queue
+      *****************************************************************
+           EXEC CICS READQ TS
+                QUEUE(TSQ-RETLOCKS-NAME)
+                INTO(TSQ-RETLOCKS-RECORD)
+                RESP(READQ-RESP)
+           END-EXEC.
+      *****************************************************************
+      * If the read was successful then build the map. Otherwise
+      * assume that we have reached the end of the queue.
+      *****************************************************************
+           IF READQ-RESP = DFHRESP(NORMAL)
+             MOVE 'Y' TO ANY-BMS-OUTPUT
+             PERFORM BUILD-BMS
+           ELSE
+      *****************************************************************
+      * We have reached the end of the TS queue. Send the map as it
+      * currently stands if it is not empty.
+      *****************************************************************
+             IF BMS-ELEMENTS > 0
+               PERFORM SEND-BMS
+             END-IF
+             MOVE 'N' TO BMS-REMAINING
+           END-IF.
+
+       PROCESS-BMS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to add a message to the map. The map is displayed
+      * if it has filled up.
+      *---------------------------------------------------------------*
+       BUILD-BMS SECTION.
+           IF BMS-ELEMENTS = 10
+             PERFORM SEND-BMS
+           END-IF.
+           PERFORM BUILD-MAP-ENTRY.
+           PERFORM BUILD-MAP.
+
+       BUILD-BMS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to send map BAM21 and receive it back again until
+      * valid input has been received.
+      *---------------------------------------------------------------*
+       SEND-BMS SECTION.
+      *****************************************************************
+      * Fill in the remaining map fields.
+      * When complete save the map in case we need to redisplay.
+      *****************************************************************
+           MOVE 0 TO BMS-ELEMENTS.
+           ADD 1 TO DSET-SCRN-COUNT.
+           MOVE DSET-SCRN-COUNT TO DSETCNTO OF BAM21O.
+           MOVE DSET-SCRN-TOTAL TO DSETTOTO OF BAM21O.
+           MOVE CURR-DSNAME TO DSNAMEO OF BAM21O.
+           MOVE COORD-APPLID TO MYAPPLO OF BAM21O.
+           MOVE 'DFH0BM2' TO MAPSET-NAME.
+           MOVE 'BAM21' TO MAP-NAME.
+           MOVE BAM21O TO TMP21O.
+      *****************************************************************
+      * Send the map.
+      *****************************************************************
+           EXEC CICS SEND
+                MAP(MAP-NAME)
+                MAPSET(MAPSET-NAME)
+                FROM(BAM21O)
+                ERASE
+                FREEKB
+           END-EXEC.
+      *****************************************************************
+      * Receive the map until valid input has been entered.
+      *****************************************************************
+           MOVE 'N' TO VALID-INPUT.
+           PERFORM WITH TEST AFTER
+             UNTIL VALID-INPUT = 'Y'
+             EXEC CICS RECEIVE
+                  MAP(MAP-NAME)
+                  MAPSET(MAPSET-NAME)
+                  INTO(BAM21I)
+                  NOHANDLE
+             END-EXEC
+      *****************************************************************
+      * If F3 or F12 has been pressed, flag the end of all processing.
+      * If F8 has been pressed, continue. If F4 has been pressed,
+      * skip to the next data set. Anything else is invalid -
+      * resend the map.
+      *****************************************************************
+             EVALUATE EIBAID
+               WHEN DFHPF3
+                 MOVE 'N' TO BMS-REMAINING
+                 MOVE 'N' TO DSET-REMAINING
+                 MOVE 'Y' TO VALID-INPUT
+               WHEN DFHPF12
+                 MOVE 'N' TO BMS-REMAINING
+                 MOVE 'N' TO DSET-REMAINING
+                 MOVE 'Y' TO VALID-INPUT
+               WHEN DFHPF4
+                 MOVE 'N' TO BMS-REMAINING
+                 MOVE 'Y' TO VALID-INPUT
+               WHEN DFHPF8
+                 MOVE 'Y' TO VALID-INPUT
+               WHEN OTHER
+                 MOVE TMP21O TO BAM21O
+                 MOVE DFHYELLO TO MSGLINC OF BAM21O
+                 MOVE INVALID-MESSAGE TO MSGLINO OF BAM21O
+                 EXEC CICS SEND
+                      MAP(MAP-NAME)
+                      MAPSET(MAPSET-NAME)
+                      FROM(BAM21O)
+                      ALARM
+                      FREEKB
+                 END-EXEC
+             END-EVALUATE
+           END-PERFORM.
+      *****************************************************************
+      * Clear the current contents of map BAM21.
+      *****************************************************************
+           MOVE LOW-VALUES TO BAM21O.
+
+       SEND-BMS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to build a map entry from TS queue information.
+      *---------------------------------------------------------------*
+       BUILD-MAP-ENTRY SECTION.
+      *****************************************************************
+      * Check whether the TS queue record is for retained lock
+      * information or for an error. It is for an error if
+      * TSQ-ERR-MSG is non-blank.
+      *****************************************************************
+           MOVE TSQ-APPLID TO MAP-APPLID.
+           IF TSQ-ERR-MSG = SPACES
+      ****************************************************************
+      * TS queue record is for a retained lock. Translate the
+      * EXEC CICS INQ UOWDSNFAIL CAUSE and REASON fields into text
+      * for map BAM21, and add a suggested action to resolve
+      * the problem. For each CAUSE there may be one or more possible
+      * REASONs. For a CAUSE of CONNECTION (ie, indoubt) then
+      * the applids of the two CICS regions involved are displayed.
+      * Copybook DFH0BC23 contains the texts for the map.
+      ****************************************************************
+             MOVE DFHNEUTR TO MAP-CAUSE-COLOR
+             EVALUATE TSQ-CAUSE-CODE
+               WHEN DFHVALUE(CACHE)
+                 MOVE CAUSE-TEXT(1) TO MAP-CAUSE
+                 MOVE REASON-TEXT(1) TO MAP-REASON
+                 MOVE ACTION-TEXT(1) TO MAP-ACTION
+               WHEN DFHVALUE(RLSSERVER)
+                 EVALUATE TSQ-REASON-CODE
+                   WHEN DFHVALUE(RLSGONE)
+                     MOVE CAUSE-TEXT(2) TO MAP-CAUSE
+                     MOVE REASON-TEXT(2) TO MAP-REASON
+                     MOVE ACTION-TEXT(2) TO MAP-ACTION
+                   WHEN DFHVALUE(COMMITFAIL)
+                     MOVE CAUSE-TEXT(3) TO MAP-CAUSE
+                     MOVE REASON-TEXT(3) TO MAP-REASON
+                     MOVE ACTION-TEXT(3) TO MAP-ACTION
+                   WHEN DFHVALUE(RRCOMMITFAIL)
+                     MOVE CAUSE-TEXT(4) TO MAP-CAUSE
+                     MOVE REASON-TEXT(4) TO MAP-REASON
+                     MOVE ACTION-TEXT(4) TO MAP-ACTION
+                   WHEN OTHER
+                     MOVE CAUSE-TEXT(16) TO MAP-CAUSE
+                     MOVE REASON-TEXT(16) TO MAP-REASON
+                     MOVE ACTION-TEXT(16) TO MAP-ACTION
+                 END-EVALUATE
+               WHEN DFHVALUE(CONNECTION)
+                 EVALUATE TSQ-REASON-CODE
+                   WHEN DFHVALUE(INDOUBT)
+                     MOVE CAUSE-TEXT(5) TO MAP-CAUSE
+                     MOVE REASON-TEXT(5) TO MAP-REASON
+                     MOVE ACTION-TEXT(5) TO INDOUBT-ACTION
+                     MOVE TSQ-INDOUBT-APPL1 TO INDOUBT-APPLID1
+                     MOVE TSQ-INDOUBT-APPL2 TO INDOUBT-APPLID2
+                     MOVE INDOUBT-ACTION TO MAP-ACTION
+                   WHEN DFHVALUE(RRINDOUBT)
+                     MOVE CAUSE-TEXT(6) TO MAP-CAUSE
+                     MOVE REASON-TEXT(6) TO MAP-REASON
+                     MOVE ACTION-TEXT(6) TO MAP-ACTION
+                   WHEN OTHER
+                     MOVE CAUSE-TEXT(16) TO MAP-CAUSE
+                     MOVE REASON-TEXT(16) TO MAP-REASON
+                     MOVE ACTION-TEXT(16) TO MAP-ACTION
+                 END-EVALUATE
+               WHEN DFHVALUE(DATASET)
+                 EVALUATE TSQ-REASON-CODE
+                   WHEN DFHVALUE(IOERROR)
+                     MOVE CAUSE-TEXT(7) TO MAP-CAUSE
+                     MOVE REASON-TEXT(7) TO MAP-REASON
+                     MOVE ACTION-TEXT(7) TO MAP-ACTION
+                   WHEN DFHVALUE(BACKUPNONBWO)
+                     MOVE CAUSE-TEXT(8) TO MAP-CAUSE
+                     MOVE REASON-TEXT(8) TO MAP-REASON
+                     MOVE ACTION-TEXT(8) TO MAP-ACTION
+                   WHEN DFHVALUE(FAILEDBKOUT)
+                     MOVE CAUSE-TEXT(9) TO MAP-CAUSE
+                     MOVE REASON-TEXT(9) TO MAP-REASON
+                     MOVE ACTION-TEXT(9) TO MAP-ACTION
+                   WHEN DFHVALUE(DATASETFULL)
+                     MOVE CAUSE-TEXT(10) TO MAP-CAUSE
+                     MOVE REASON-TEXT(10) TO MAP-REASON
+                     MOVE ACTION-TEXT(10) TO MAP-ACTION
+                   WHEN DFHVALUE(INDEXRECFULL)
+                     MOVE CAUSE-TEXT(11) TO MAP-CAUSE
+                     MOVE REASON-TEXT(11) TO MAP-REASON
+                     MOVE ACTION-TEXT(11) TO MAP-ACTION
+                   WHEN DFHVALUE(OPENERROR)
+                     MOVE CAUSE-TEXT(12) TO MAP-CAUSE
+                     MOVE REASON-TEXT(12) TO MAP-REASON
+                     MOVE ACTION-TEXT(12) TO MAP-ACTION
+                   WHEN DFHVALUE(DELEXITERROR)
+                     MOVE CAUSE-TEXT(13) TO MAP-CAUSE
+                     MOVE REASON-TEXT(13) TO MAP-REASON
+                     MOVE ACTION-TEXT(13) TO MAP-ACTION
+                   WHEN DFHVALUE(LCKSTRUCFULL)
+                     MOVE CAUSE-TEXT(14) TO MAP-CAUSE
+                     MOVE REASON-TEXT(14) TO MAP-REASON
+                     MOVE ACTION-TEXT(14) TO MAP-ACTION
+                   WHEN OTHER
+                     MOVE CAUSE-TEXT(16) TO MAP-CAUSE
+                     MOVE REASON-TEXT(16) TO MAP-REASON
+                     MOVE ACTION-TEXT(16) TO MAP-ACTION
+                 END-EVALUATE
+               WHEN DFHVALUE(UNDEFINED)
+                 MOVE CAUSE-TEXT(15) TO MAP-CAUSE
+                 MOVE REASON-TEXT(15) TO MAP-REASON
+                 MOVE ACTION-TEXT(15) TO MAP-ACTION
+               WHEN OTHER
+                 MOVE CAUSE-TEXT(16) TO MAP-CAUSE
+                 MOVE REASON-TEXT(16) TO MAP-REASON
+                 MOVE ACTION-TEXT(16) TO MAP-ACTION
+             END-EVALUATE
+           ELSE
+      ****************************************************************
+      * TS queue record is for an error.
+      * The cause, reason and action fields on the map are used
+      * for error text, EIBRESP and EIBRESP2 values respectively.
+      ****************************************************************
+             MOVE DFHYELLO TO MAP-CAUSE-COLOR
+             MOVE TSQ-ERR-MSG TO MAP-CAUSE
+             MOVE SPACES TO MAP-ACTION
+             MOVE 'EIBRESP2=' TO MAP-ACTION1
+             MOVE TSQ-RESP2 TO MAP-ACTION2
+             EVALUATE TSQ-RESP
+               WHEN DFHRESP(NORMAL)
+                 MOVE SPACES TO MAP-REASON
+                 MOVE SPACES TO MAP-ACTION
+               WHEN DFHRESP(INVREQ)
+                 MOVE 'INVREQ' TO MAP-REASON
+               WHEN DFHRESP(NOTAUTH)
+               MOVE 'NOTAUTH' TO MAP-REASON
+               WHEN DFHRESP(LENGERR)
+                 MOVE 'LENGERR' TO MAP-REASON
+               WHEN DFHRESP(PGMIDERR)
+                 MOVE 'PGMIDERR' TO MAP-REASON
+               WHEN DFHRESP(SYSIDERR)
+                 MOVE 'SYSIDERR' TO MAP-REASON
+               WHEN DFHRESP(TERMERR)
+                 MOVE 'TERMERR' TO MAP-REASON
+               WHEN DFHRESP(TERMIDERR)
+                 MOVE 'TERMIDERR' TO MAP-REASON
+               WHEN DFHRESP(DSNNOTFOUND)
+                 MOVE 'DSNNOTFOUND' TO MAP-REASON
+               WHEN DFHRESP(DISABLED)
+                 MOVE 'DISABLED' TO MAP-REASON
+               WHEN DFHRESP(IOERR)
+                 MOVE 'IOERR' TO MAP-REASON
+               WHEN DFHRESP(QIDERR)
+                 MOVE 'QIDERR' TO MAP-REASON
+               WHEN DFHRESP(NOTOPEN)
+                 MOVE 'NOTOPEN' TO MAP-REASON
+               WHEN DFHRESP(ISCINVREQ)
+                 MOVE 'ISCINVREQ' TO MAP-REASON
+               WHEN DFHRESP(END)
+                 MOVE SPACES TO MAP-REASON
+                 MOVE SPACES TO MAP-ACTION
+               WHEN OTHER
+                 MOVE '??????' TO MAP-REASON
+             END-EVALUATE
+             EVALUATE MAP-CAUSE
+               WHEN BATD-FAILURE
+                 MOVE 'review TDQ definitions' TO MAP-ACTION
+               WHEN DPL-FAILURE
+                 MOVE 'review connections' TO MAP-ACTION
+               WHEN BAD-NETNAME
+                 MOVE 'review MRO links & APPLID list' TO MAP-ACTION
+               WHEN CONNECT-OUT
+                 MOVE 'review status of MRO links' TO MAP-ACTION
+               WHEN BATA-FAILURE
+                 MOVE 'review TDQ definitions' TO MAP-ACTION
+               WHEN INQ-RETLOCKS
+                 MOVE 'investigate INQ DSNAME RETLOCKS failure'
+                   TO MAP-ACTION
+               WHEN RETRY-FAILED
+                 MOVE 'investigate SET DSNAME RETRY failure'
+                   TO MAP-ACTION
+               WHEN OTHER
+                 CONTINUE
+             END-EVALUATE
+           END-IF.
+
+       BUILD-MAP-ENTRY-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to add a map entry to the map.
+      *---------------------------------------------------------------*
+       BUILD-MAP SECTION.
+           ADD 1 TO BMS-ELEMENTS.
+           EVALUATE BMS-ELEMENTS
+             WHEN 1
+               MOVE MAP-REASON TO REASON1O OF BAM21O
+               MOVE MAP-CAUSE TO CAUSE1O OF BAM21O
+               MOVE MAP-CAUSE-COLOR TO CAUSE1C OF BAM21O
+               MOVE MAP-APPLID TO APPLID1O OF BAM21O
+               MOVE MAP-ACTION TO ACTION1O OF BAM21O
+             WHEN 2
+               MOVE MAP-REASON TO REASON2O OF BAM21O
+               MOVE MAP-CAUSE TO CAUSE2O OF BAM21O
+               MOVE MAP-CAUSE-COLOR TO CAUSE2C OF BAM21O
+               MOVE MAP-APPLID TO APPLID2O OF BAM21O
+               MOVE MAP-ACTION TO ACTION2O OF BAM21O
+             WHEN 3
+               MOVE MAP-REASON TO REASON3O OF BAM21O
+               MOVE MAP-CAUSE TO CAUSE3O OF BAM21O
+               MOVE MAP-CAUSE-COLOR TO CAUSE3C OF BAM21O
+               MOVE MAP-APPLID TO APPLID3O OF BAM21O
+               MOVE MAP-ACTION TO ACTION3O OF BAM21O
+             WHEN 4
+               MOVE MAP-REASON TO REASON4O OF BAM21O
+               MOVE MAP-CAUSE TO CAUSE4O OF BAM21O
+               MOVE MAP-CAUSE-COLOR TO CAUSE4C OF BAM21O
+               MOVE MAP-APPLID TO APPLID4O OF BAM21O
+               MOVE MAP-ACTION TO ACTION4O OF BAM21O
+             WHEN 5
+               MOVE MAP-REASON TO REASON5O OF BAM21O
+               MOVE MAP-CAUSE TO CAUSE5O OF BAM21O
+               MOVE MAP-CAUSE-COLOR TO CAUSE5C OF BAM21O
+               MOVE MAP-APPLID TO APPLID5O OF BAM21O
+               MOVE MAP-ACTION TO ACTION5O OF BAM21O
+             WHEN 6
+               MOVE MAP-REASON TO REASON6O OF BAM21O
+               MOVE MAP-CAUSE TO CAUSE6O OF BAM21O
+               MOVE MAP-CAUSE-COLOR TO CAUSE6C OF BAM21O
+               MOVE MAP-APPLID TO APPLID6O OF BAM21O
+               MOVE MAP-ACTION TO ACTION6O OF BAM21O
+             WHEN 7
+               MOVE MAP-REASON TO REASON7O OF BAM21O
+               MOVE MAP-CAUSE TO CAUSE7O OF BAM21O
+               MOVE MAP-CAUSE-COLOR TO CAUSE7C OF BAM21O
+               MOVE MAP-APPLID TO APPLID7O OF BAM21O
+               MOVE MAP-ACTION TO ACTION7O OF BAM21O
+             WHEN 8
+               MOVE MAP-REASON TO REASON8O OF BAM21O
+               MOVE MAP-CAUSE TO CAUSE8O OF BAM21O
+               MOVE MAP-CAUSE-COLOR TO CAUSE8C OF BAM21O
+               MOVE MAP-APPLID TO APPLID8O OF BAM21O
+               MOVE MAP-ACTION TO ACTION8O OF BAM21O
+             WHEN 9
+               MOVE MAP-REASON TO REASON9O OF BAM21O
+               MOVE MAP-CAUSE TO CAUSE9O OF BAM21O
+               MOVE MAP-CAUSE-COLOR TO CAUSE9C OF BAM21O
+               MOVE MAP-APPLID TO APPLID9O OF BAM21O
+               MOVE MAP-ACTION TO ACTION9O OF BAM21O
+             WHEN 10
+               MOVE MAP-REASON TO REASON0O OF BAM21O
+               MOVE MAP-CAUSE TO CAUSE0O OF BAM21O
+               MOVE MAP-CAUSE-COLOR TO CAUSE0C OF BAM21O
+               MOVE MAP-APPLID TO APPLID0O OF BAM21O
+               MOVE MAP-ACTION TO ACTION0O OF BAM21O
+           END-EVALUATE.
+
+       BUILD-MAP-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to write a TS record to DFH0BQ2.
+      *---------------------------------------------------------------*
+       WRITE-TSQ-RECORD SECTION.
+           EXEC CICS WRITEQ TS
+                QUEUE(TSQ-RETLOCKS-NAME)
+                FROM(TSQ-RETLOCKS-RECORD)
+                LENGTH(LENGTH OF TSQ-RETLOCKS-RECORD)
+           END-EXEC.
+
+       WRITE-TSQ-RECORD-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to delete TS queue DFH0BQ2.
+      *---------------------------------------------------------------*
+       DELETE-TSQ SECTION.
+           EXEC CICS DELETEQ TS
+                QUEUE(TSQ-RETLOCKS-NAME)
+                NOHANDLE
+           END-EXEC.
+
+       DELETE-TSQ-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to calculate the number of screens that will
+      * result from the data in the TS queue.
+      *---------------------------------------------------------------*
+       CALCULATE-SCREENS SECTION.
+           MOVE 0 TO DSET-SCRN-COUNT.
+           MOVE 1 TO DSET-SCRN-TOTAL.
+           EXEC CICS INQUIRE TSQUEUE(TSQ-RETLOCKS-NAME)
+                NUMITEMS(NUM-ITEMS)
+                RESP(INQ-RESP)
+           END-EXEC.
+           IF INQ-RESP = DFHRESP(NORMAL)
+             IF NUM-ITEMS > 0
+               ADD 9 TO NUM-ITEMS
+               DIVIDE NUM-ITEMS BY 10 GIVING DSET-SCRN-TOTAL
+             END-IF
+           END-IF.
+
+       CALCULATE-SCREENS-EXIT.
+           EXIT.

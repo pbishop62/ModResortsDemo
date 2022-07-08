@@ -1,0 +1,2072 @@
+*ASM XOPTS(SP NOPROLOG NOEPILOG)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$W2TS                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Web 2.0 Sample - Atom TSqueue service program    *
+*                                                                     *
+*    Licensed Materials - Property of IBM                             *
+*                                                                     *
+*    CICS SupportPac CA8K                                             *
+*                                                                     *
+*    (c) Copyright IBM Corporation 2008 All Rights Reserved           *
+*    US Government Users Restricted Rights - Use, duplication         *
+*    or disclosure restricted by GSA ADP Schedule Contract            *
+*    with IBM Corporation                                             *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION = Return the Atom content for a CICS TSqueue               *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = z/Arch                                            *
+*    RESTRICTIONS =                                                   *
+*    REGISTER CONVENTIONS = See "Register Usage" below                *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = HLASM V5                                             *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*    This program manages the reading and writing of a CICS           *
+*    temporary storage queue in response to an Atom request processed *
+*    by module DFH$W2FD.                                              *
+*                                                                     *
+* Register Usage:                                                     *
+*  R0    Volatile work register                                       *
+*  R1    Parameter list pointer and volatile work register            *
+*        (Note that all 64 bits of R0 and R1 are used, and no attempt *
+*         is made to save and restore the high-order fullwords.       *
+*         This is deemed to be unimportant as R0 and R1 are volatile  *
+*         over most interfaces.)                                      *
+*  R13   Address of DFHEISTG and savearea                             *
+*  R14   Linkage register and volatile work register                  *
+*  R15   Return code and volatile work register                       *
+*                                                                     *
+*  All registers except R0 and R1 are used in 32-bit mode only:       *
+*  the high order fullwords of all these registers are preserved.     *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFH$W2TS),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*   PN= REASON REL YYMMDD HDXR12I : REMARKS                           *
+*  $D0= I07937 640 071102 HD2JPEH : SupportPac CA8K sample programs   *
+*                                                                     *
+***********************************************************************
+         COPY  DFH$W2MC                Define common macros
+&MODNAME SETC  'DFH$W2TS'
+&CRLF    SETC  X2C('0D25')             Set CRLF as characters
+DFH$W2TS CSECT ,                       Initialize main CSECT
+DFH$W2TS AMODE 31
+DFH$W2TS RMODE ANY
+         PRINT OFF
+         COPY  DFHKEBRC                Redefine branches as relative
+         COPY  GXLYXR                  Parser return code values
+         DFHREGS ,                     Define CICS registers
+         CVT   DSECT=YES               Map z/OS CVT
+         PRINT ON,GEN
+         GXLYXEC ,                     Parser equates
+         GXLYXEH ,
+         COPY  DFH$W2CD                Define constants
+         COPY  DFH$W2PD                ATOMPARAMETERS definition
+         COPY  DFH$W2LD                Define Resource Layout Mapping
+DFH$W2TS CSECT ,                       Resume main CSECT
+         DFHEIENT CODEREG=0,STATREG=R12,EIBREG=R9,STATIC=W2STATIC
+         MVI   RESPCODE,0              Initalize return code
+         MVC   RESOURCE,SPACES         Initialize TSQ resource name
+         MVC   IDFIELD,SPACES          Initialize atom:id fieldname
+         MVC   UPDFIELD,SPACES         Initialize updated fieldname
+         MVC   KEYFIELD,SPACES         Initialize key fieldname
+         MVC   TTLFIELD,SPACES         Initialize title fieldname
+         MVC   STLFIELD,SPACES         Initialize subtitle fieldname
+         MVC   SUMFIELD,SPACES         Initialize summary fieldname
+         EXEC  CICS GET CONTAINER('ATOMPARAMETERS')                    *
+               SET(R11) FLENGTH(PLISTLEN)
+         USING ANASTORD,ANASTORE       Address the Analyze workarea
+         MVC   URMPLIST(URMPLLEN),0(R11)  Copy parameters
+         USING ATMP_PARAMETER_LIST,URMPLIST  Address ATOMPARAMETERS
+         L     R14,ATMP_RESPONSE       Address response/reason dblwd
+         ST    R14,RESP_PTR            Save for return processing
+         L     R14,ATMP_RESNAME        Address the resource pointer
+         LM    R14,R15,0(R14)          Address and length of TSQname
+         AHI   R15,-1                  Decrement qname length
+         LA    R2,RESOURCE             Address resourcename field
+         EX    R15,COPYTEXT            Copy TSQname
+         L     R14,ATMP_SELECTOR       Address the selector pointer
+         MVC   SELECTOR(8),0(R14)      Copy selector pointers
+         SR    R0,R0                   Set item number to zero
+         LM    R5,R6,SELECTOR          Load selector pointers
+         AHI   R6,-1                   Decrement for execute
+         JM    SAVEITEM                If none supplied, save zero
+         EX    R6,PACKNUMB             Pack the item number
+         CVB   R0,PWORK                Convert to binary
+SAVEITEM STH   R0,QSELITEM             Save selected item number
+         L     R14,ATMP_ETAGVAL        Address the If-match Etag ptr
+         LM    R14,R15,0(R14)          Get ptr/length of If-match value
+         MVC   ETAGVIN,0(R14)          Save as inbound Etag value
+         MVC   0(L'ETAGVAL,R14),SPACES Overlay with spaces for outbound
+         L     R14,ATMP_RLM            Address the RLM pointer
+         L     R8,0(,R14)              Address the RLM
+         ST    R8,RLM_PTR              Save the RLM pointer
+         L     R14,ATMP_UPDATED        Address RFC3339 timestamp ptr
+         LM    R14,R15,0(R14)          Get ptr/length of timestamp
+         ST    R14,TIME_PTR            Save ptr in local storage
+         MVC   0(32,R14),SPACES        Initialize to spaces
+         L     R14,ATMP_HTTPMETH       Address the HTTP method ptr
+         LM    R14,R15,0(R14)          Get ptr/length of HTTP method
+         MVC   HTTPMETH,0(R14)         Copy to local storage
+         MVI   OUTTYPE,OUTXML          Initialize outbound type to XML
+         L     R14,ATMP_MTYPEOUT       Address outbound mediatype
+         LM    R14,R15,0(R14)          Get ptr/length of mediatype
+         AHI   R15,-1                  Decrement length
+         JM    SKIPMTYP                Skip if no mediatype
+         CLC   =C'text/xml',0(R14)     Is it XML?
+         JE    SKIPMTYP                Yes, already set
+         MVI   OUTTYPE,OUTHTML         Reset type to HTML
+         CLC   =C'html',0(R14)         Is it HTML?
+         JE    SKIPMTYP                Yes
+         MVI   OUTTYPE,OUTXHTML        Reset type to XHTML
+         CLC   =C'xhtml',0(R14)        Is it XHTML
+         JE    SKIPMTYP                Yes, already set
+         MVI   OUTTYPE,OUTPLAIN        Reset type to plain text
+SKIPMTYP EQU   *                       Exit for mediatype query
+         L     R14,ATMP_WINSIZE        Address WINSIZE pointer
+         LM    R14,R15,0(R14)          Get ptr/length of window size
+         LHI   R0,1                    Initialize window size to one
+         AHI   R15,-1                  Decrement winsize length
+         JM    SETNENTS                Skip if no window size
+         EX    R15,PACKTEXT            Pack the window size
+         CVB   R0,PWORK                Convert window size to binary
+SETNENTS STH   R0,NUMENTS              Save number of entries per feed
+         LA    R2,IDFIELD              Address IDFIELD
+         L     R14,ATMP_ID_FLD         Load parameter 19 (IDFIELD)
+         LM    R14,R15,0(R14)          Load ptr/len of IDFIELD
+         AHI   R15,-1                  Decrement
+         JM    *+8                     Skip if negative
+         EX    R15,COPYTEXT
+         LA    R2,UPDFIELD             Address UPDFIELD
+         L     R14,ATMP_UPDATED_FLD    Load parameter 20 (updated)
+         LM    R14,R15,0(R14)          Load ptr/len of UPDFIELD
+         AHI   R15,-1                  Decrement
+         JM    *+8                     Skip if negative
+         EX    R15,COPYTEXT
+         LA    R2,KEYFIELD             Address KEYIELD
+         L     R14,ATMP_KEY_FLD        Load parameter 21 (key)
+         LM    R14,R15,0(R14)          Load ptr/len of KEYFIELD
+         AHI   R15,-1                  Decrement
+         JM    *+8                     Skip if negative
+         EX    R15,COPYTEXT
+         LA    R2,TTLFIELD             Address TTLFIELD
+         L     R14,ATMP_TITLE_FLD      Load parameter 22 (title)
+         LM    R14,R15,0(R14)          Load ptr/len of TTLFIELD
+         AHI   R15,-1                  Decrement
+         JM    *+8                     Skip if negative
+         EX    R15,COPYTEXT
+         LA    R2,STLFIELD             Address STLFIELD
+         L     R14,ATMP_SUBTITLE_FLD   Load parameter 23 (subtitle)
+         LM    R14,R15,0(R14)          Load ptr/len of STLFIELD
+         AHI   R15,-1                  Decrement
+         JM    *+8                     Skip if negative
+         EX    R15,COPYTEXT
+         LA    R2,SUMFIELD             Address SUMFIELD
+         L     R14,ATMP_SUMMARY_FLD    Load parameter 24 (summary)
+         LM    R14,R15,0(R14)          Load ptr/len of SUMFIELD
+         AHI   R15,-1                  Decrement
+         JM    *+8                     Skip if negative
+         EX    R15,COPYTEXT
+         MVC   ETAGVAL,SPACES          Clear Etag value to spaces
+         USING DFHRLM_HEADER,R8
+         L     R0,RLM_LENGTH           Get the length of the RLM
+         ALR   R0,R8                   Add the start address
+         ST    R0,RLM_END              Save as the end address
+         AHI   R8,DFHRLM_HEADER__LEN   Bump over RLM header
+         USING DFHRLM_ENTRY,R8
+         USING DFHRLM_DATA_ENTRY,DFHRLM_ENTRY
+*
+*  Get storage in which to return the selector values for the
+*  Atom Publishing Protocol's first, last, current, previous,
+*  and next URLs. The storage is acquired here and not freed,
+*  so there is a potential for a storage leak. But the storage
+*  amount is small and it will be released at end of task.
+*
+         EXEC  CICS GETMAIN FLENGTH(=A(SELSTORL)) INITIMG(C' ') SET(R4)
+         ST    R4,SELSTORP             Save the pointer
+*
+*  Get storage for, and then build, the atom content response
+*  We get 64K of storage for this, which is only an estimate.
+*  If you want to use this for resources with many fields or
+*  a large record size this may not be enough.
+*
+         EXEC  CICS GETMAIN FLENGTH(65536) SET(R2)
+         ST    R2,CONT_PTR             Save container pointer
+         XC    QCOUNTER,QCOUNTER       Clear current queue item number
+         MVI   SIGNFLAG,0              Clear the sign flag
+         CLC   HTTPMETH,=CL8'GET'      GET request?
+         JE    GETTSQ
+         CLC   HTTPMETH,=CL8'PUT'      PUT request?
+         JE    PUTTSQ
+         CLC   HTTPMETH,=CL8'POST'     POST request?
+         JE    POSTTSQ
+         CLC   HTTPMETH,=CL8'DELETE'   DELETE request?
+         JE    DELETTSQ
+         J     INVMETH                 Unknown HTTP method
+*
+*  The return code set in R15 is not returned to the invoker of
+*  EXEC CICS LINK, so the response code is returned as a parameter.
+*
+RETNRESP SR    R15,R15                 Clear return code
+         IC    R15,RESPCODE            Insert return code
+         L     R14,RESP_PTR            Address response code
+         ST    R15,0(,R14)             Set return code
+FINISHUP DFHEIRET LITERALS=NO,RCREG=15 Return to CICS
+         EJECT ,
+***********************************************************************
+*
+*  Process a GET request for a Temporary Storage Queue
+*  First find the first and last records on the queue that have not
+*  been logically deleted, to be returned as the last and first
+*  selector values.
+*
+***********************************************************************
+GETTSQ   DS    0H
+         LH    R0,QCOUNTER             Load current item number
+         AHI   R0,1                    Bump to next item
+         STH   R0,QCOUNTER             Save new item number
+         JAS   R14,READITEM            Read a queue item
+         LTR   R5,R5                   Does it exist?
+         JZ    GETTSQ                  No, skip deleted item
+         JM    ITEMNFND                No, reached end of queue
+         MVC   QFIRST,QCOUNTER         Save first valid item number
+         MVC   QLAST,QMAXNUM           Save ending item number
+GETFINAL MVC   QCOUNTER,QLAST          Save current last item number
+         JAS   R14,READITEM            Read last queue item
+         LTR   R5,R5                   Does it exist?
+         JP    GETSELEC                Yes, get selected item
+         LH    R0,QLAST                No, load current last item
+         AHI   R0,-1                   Decrement
+         STH   R0,QLAST                Save new last item
+         J     GETFINAL                Try earlier record
+*
+*  If the item number was supplied in the select value, use it.
+*  Otherwise retrieve the last item (the most recent) on the queue.
+*
+GETSELEC SR    R0,R0                   Clear the item number
+         ICM   R0,3,QSELITEM           Load and test the item number
+         JNZ   READQ                   Use if non-zero item
+         MVC   QSELITEM,QLAST          Otherwise use last item
+*
+*  Read the requested item from the queue
+*
+READQ    MVC   QCOUNTER,QSELITEM       Copy the item to be read
+         JAS   R14,READITEM            Read the item
+         LTR   R5,R5                   Was an item returned?
+         JNZ   FORMATQ                 Yes, so format it
+         MVI   RESPCODE,RESPNFND       No, record is logically deleted
+         J     ITEMNFND                So return a 'not found' response
+FORMATQ  JAS   R14,MAKEETAG            Create an Etag value
+         L     R2,CONT_PTR             Reload container pointer
+         JAS   R14,BGNCONTE            Begin content markup
+         JAS   R14,MAPRESRC            Map the CICS resource
+         JAS   R14,ENDCONTE            End content markup
+SETCONTL LR    R0,R2                   Get current output position
+         L     R2,CONT_PTR             Reload container address
+         SR    R0,R2                   Calculate container length
+         ST    R0,CONT_LEN             Save the length
+RETNTIME EQU   *
+         L     R10,TIME_PTR            Address the update time buffer
+         CLI   0(R10),C' '             Has update time been set?
+         JNE   RETNCONT                Yes, don't overwrite
+         EXEC  CICS ASKTIME ABSTIME(CICSTIME)
+         JAS   R14,CONVTIME            Convert to RFC3339 format
+         MVC   0(25,R10),RFC3339       Copy timed response
+RETNCONT EXEC  CICS PUT CONTAINER('ATOMCONTENT') FROMCCSID(1047)       *
+               FROM(0(,R2)) FLENGTH(CONT_LEN) NOHANDLE
+         EXEC  CICS FREEMAIN DATA(0(,R2)) NOHANDLE
+         L     R14,ATMP_ETAGVAL        Address the Etag pointer
+         LM    R14,R15,0(R14)          Get ptr/length of Etag response
+         MVC   0(8,R14),ETAGVAL        Return the Etag value
+*
+*  Set the next and previous item numbers by adding and subtracting
+*  one from QSELITEM and then validating the resulting item
+*  numbers by attempting to read the items off the queue.
+*  If the item numbers go outside the range QFIRST::QLAST, set to zero.
+*
+         LH    R0,QSELITEM             Get currently selected item
+CNTQPREV AHI   R0,-1                   Decrement by one
+         STH   R0,QCOUNTER             Save for READITEM
+         CH    R0,QFIRST               Compare item with QFIRST
+         JE    SETQPREV                If equal, no need to read
+         JH    CHKQPREV                If high, check if it exists
+         SR    R0,R0                   If low, set item invalid
+         J     SETQPREV                And go save it
+CHKQPREV JAS   R14,READITEM            Read supposed previous item
+         LH    R0,QCOUNTER             Reload item just read
+         LTR   R5,R5                   Is item valid?
+         JZ    CNTQPREV                No, try an earlier Q item
+SETQPREV STH   R0,QPREV                Save previous item number
+         LH    R0,QSELITEM             Reload currently selected item
+CNTQNEXT AHI   R0,1                    Increment by one
+         STH   R0,QCOUNTER             Save for READITEM
+         CH    R0,QLAST                Compare item with QLAST
+         JE    SETQNEXT                If equal, no need to read
+         JL    CHKQNEXT                If low, check if it exists
+         SR    R0,R0                   If high, set item invalid
+         J     SETQNEXT                And go save it
+CHKQNEXT JAS   R14,READITEM            Read supposed next item
+         LH    R0,QCOUNTER             Reload item just read
+         LTR   R5,R5                   Is item valid?
+         JZ    CNTQNEXT                No, try a later Q item
+SETQNEXT STH   R0,QNEXT                Save next item number
+*
+*  Return the selector values for the browse URLs required by
+*  the Atom Publishing Protocol: first, last, previous, and next.
+*  As Atom prefers the items to be returned in reverse chronological
+*  order (most recent first), the values returned reflect this.
+*  That is, the next and previous item selectors are returned in
+*  the parameters for previous and next, respectively, and the
+*  first and last item selectors are returned in the parameters
+*  for last and first, respectively.
+*
+         L     R4,SELSTORP             Point to the selector store
+         USING SELSTORE,R4             Establish addressability
+         LH    R0,QPREV                Load the previous item number
+         LA    R2,SELPREV              Address previous selector
+         L     R15,ATMP_NEXTSEL        Address NEXTSEL parameter
+         JAS   R14,STORESEL            Store the selector
+         LH    R0,QNEXT                Load the next item number
+         LA    R2,SELNEXT              Address prev selector
+         L     R15,ATMP_PREVSEL        Address PREVSEL parameter
+         JAS   R14,STORESEL            Store the selector
+         LH    R0,QLAST                Load the last item number
+         LA    R2,SELLAST              Address last selector
+         L     R15,ATMP_FIRSTSEL       Address FIRSTSEL parameter
+         JAS   R14,STORESEL            Store the selector
+         LH    R0,QFIRST               Load the first item number
+         LA    R2,SELFIRST             Address first selector
+         L     R15,ATMP_LASTSEL        Address LASTSEL parameter
+         JAS   R14,STORESEL            Store the selector
+         J     RETNRESP                Return to caller
+         DROP  R4
+         SPACE 3
+         EJECT ,
+***********************************************************************
+*
+*  Process a POST request for a Temporary Storage Queue
+*  This is used to add a new entry to the TSqueue.
+*
+***********************************************************************
+POSTTSQ  EQU   *
+*
+*  Read in the HTTP request body from container DFHREQUEST
+*
+         EXEC  CICS GET CONTAINER('DFHREQUEST')                        *
+               SET(R2) FLENGTH(HCONTLEN) NOHANDLE
+         ICM   R15,15,EIBRESP          Check response
+         ST    R2,HCONTPTR             Save container address
+*
+*  Parse the request body
+*
+         JAS   R14,PARSEREQ            Parse the request body
+*
+*  Get storage for the output record
+*  Storage size is 36K, even though a TSqueue record can only
+*  be a maximum of 32K. This should help avoid overruns.
+*
+         EXEC  CICS GETMAIN FLENGTH(36864) INITIMG(X'00') SET(R2)
+         ST    R2,RECD_PTR
+*
+*  Analyse the parsed response
+*
+         LA    R14,OUTBUFFP            Address the response buffer ptr
+         L     R0,OUTBUFFL             Get total length of output buff
+         S     R0,OUREMAIN             Subtract length remaining
+         ST    R0,OUTBUFFN             Save as current length
+         LA    R15,OUTBUFFN            Address the response buffer len
+         STM   R14,R15,XMLPARM7        Save in PARM 7 and 8 slots
+         LA    R1,XMLPARM7             Address those parms
+         L     R15,AANALREQ            Address the Analyze request func
+         BASR  R14,R15                 Analyze the parsed response
+         CLC   HTTPMETH,=CL8'PUT'      Is this a PUT request?
+         JE    REWRITEQ                Yes, use rewrite command
+*
+*  Write the TSQueue record that was built from the parsed response
+*
+         L     R2,RECD_PTR             Reload TSQ record address
+         EXEC  CICS WRITEQ TS QNAME(RESOURCE) NUMITEMS(QSELITEM)       *
+               FROM(0(R2)) LENGTH(QRECLEN)
+*
+*  Free the TSQ record and the parsed response
+*
+         EXEC  CICS FREEMAIN DATAPOINTER(R2) NOHANDLE
+         L     R2,OUTBUFFP             Address parser output buffer
+         EXEC  CICS FREEMAIN DATAPOINTER(R2) NOHANDLE
+*
+*  Return the item number just created in the SELECTOR parameter
+*
+         L     R4,SELSTORP             Point to the selector store
+         USING SELSTORE,R4             Establish addressability
+         LA    R2,SELCURR              Address current selector
+         LH    R0,QSELITEM             Load the latest item number
+         L     R15,ATMP_SELECTOR       Address the selector parameter
+         JAS   R14,STORESEL            Store the selector
+         DROP  R4
+*
+*  Set the HTTP status to 201 to show we successfully created the item
+*
+         MVC   HTTPSTAT(L'HTTPCREA),HTTPCREA
+         MVC   RESPBUFL,=A(L'HTTPCREA)
+         EXEC  CICS PUT CONTAINER('DFHHTTPSTATUS') FROMCCSID(1047)     *
+               FROM(HTTPSTAT) FLENGTH(RESPBUFL) NOHANDLE
+         J     GETTSQ                  Return the TSQ record just added
+         EJECT ,
+***********************************************************************
+*
+*  Process a DELETE request for a Temporary Storage Queue
+*  Just like the other requests, this HTTP request is presumed to
+*  apply to one tsqueue record only. But the CICS API does not
+*  actually allow the physical deletion of a single TSQ record.
+*  So we implement a "logical delete" by rewriting an existing queue
+*  record with a single byte X'FF.
+*
+***********************************************************************
+DELETTSQ EQU   *
+         SR    R0,R0                   Clear the item number
+         ICM   R0,3,QSELITEM           Load and test the item number
+         JNZ   DELITEM                 Use if non-zero item
+*
+*  If the item number was not supplied as a parameter, use INQUIRE
+*  to find the last item (the most recent) on the queue.
+*
+         EXEC  CICS INQUIRE TSQNAME(RESOURCE)                          *
+               NUMITEMS(QSELITEM) NOHANDLE
+         ICM   R15,15,EIBRESP
+         JZ    DELITEM
+         ICM   R0,15,EIBRESP2
+         J     RESPERR                 Give error response
+*
+*  Rewrite the requested item with a single X'FF' byte
+*
+DELITEM  EXEC  CICS WRITEQ TS QNAME(RESOURCE) ITEM(QSELITEM)           *
+               FROM(HIGHBYTE) LENGTH(1) REWRITE
+         J     RETNRESP                Return without content
+***********************************************************************
+*
+*  Process a PUT request for a Temporary Storage Queue.
+*  If an Etag value is received the PUT is conditional and should
+*  only be performed if the received Etag matches the existing Etag.
+*  Unlike File Control, there is no READ FOR UPDATE function for TSQs
+*  so we cannot perform an absolutely pure atomic update.
+*  Better serialization could be achieved using ENQ and DEQ, but that
+*  is left as an exercise for the implementor.
+*
+***********************************************************************
+PUTTSQ   EQU   *
+         ICM   R0,3,QSELITEM           Item number supplied?
+         JZ    ITEMNFND                No, but required for PUT
+         EXEC  CICS READQ TS QNAME(RESOURCE) ITEM(QSELITEM)            *
+               SET(R5) LENGTH(QRECLEN) NOHANDLE
+         ICM   R15,15,EIBRESP
+         JZ    CHKPUTDL
+         ICM   R0,15,EIBRESP2
+         J     RESPERR                 Give error response
+CHKPUTDL ST    R5,RECD_PTR             Save address of returned record
+         LH    R0,QRECLEN              Get length of record read
+         CHI   R0,1                    Is length exactly one?
+         JNE   CHKETAG                 No, check the Etag value
+         CLI   0(R5),X'FF'             Is it a single X'FF' byte?
+         JNE   CHKETAG                 No, try matching Etags
+         MVI   RESPCODE,RESPNFND       Yes, record is logically deleted
+         J     ITEMNFND                So return a 'not found' response
+CHKETAG  CLC   ETAGVIN(2),=C'* '       Is Etag a single asterisk?
+         JE    POSTTSQ                 Yes, skip conditional processing
+         JAS   R14,MAKEETAG            Create Etag for old record
+         CLC   ETAGVAL,ETAGVIN         Old Etag matches request Etag?
+         JNE   ETAGFAIL                No, Etags don't match
+         J     POSTTSQ                 PUT is similar to POST
+*
+*  Rewrite the TSQueue record that was built from the parsed response
+*
+REWRITEQ EQU   *                       Return for REWRITE
+         L     R2,RECD_PTR             Reload TSQ record address
+         EXEC  CICS WRITEQ TS QNAME(RESOURCE) ITEM(QSELITEM)           *
+               FROM(0(R2)) LENGTH(QRECLEN) REWRITE
+*
+*  Free the TSQ record and the parsed response
+*
+         EXEC  CICS FREEMAIN DATAPOINTER(R2) NOHANDLE
+         L     R2,OUTBUFFP             Address parser output buffer
+         EXEC  CICS FREEMAIN DATAPOINTER(R2) NOHANDLE
+         J     GETTSQ                  Return the current TSQ item
+*
+*  Set the HTTP status to 412 (Precondition failed) to show that
+*  the conditional PUT was unsuccessful.
+*
+ETAGFAIL MVC   HTTPSTAT(L'HTTPPREF),HTTPPREF
+         EXEC  CICS PUT CONTAINER('DFHHTTPSTATUS') FROMCCSID(1047)     *
+               FROM(HTTPSTAT) FLENGTH(L'HTTPPREF) NOHANDLE
+         J     GETTSQ                  Return the current TSQ item
+*
+*  Subroutine to make an Etag for the currently accessed queue record
+*
+MAKEETAG EQU   *
+         ST    R14,SAVELNK1            Save the link register
+         L     R14,RECD_PTR            Address the TSQ record
+         LH    R15,QRECLEN             Get its length
+         SR    R0,R0                   Initialize checksum accumulator
+         CKSM  R0,R14                  Calculate checksum of response
+         JO    *-4                     Loop until complete
+         STCM  R0,15,ZWORK             Save result in workarea
+         UNPK  PWORK(9),ZWORK(5)       Unpack the checksum
+         TR    PWORK,HEXCONV           Translate to hex
+         MVC   ETAGVAL(8),PWORK        Return as our Etag
+         ICM   R15,15,EIBRESP
+         L     R14,SAVELNK1
+         BR    R14
+         EJECT ,
+*
+*  Read a single item (QCOUNTER) off the queue and check to see if
+*  it is logically deleted (a single X'FF' byte). The queue record
+*  address is returned in R5, which is set to zero if the record
+*  is deleted.
+*
+READITEM EQU   *
+         ST    R14,SAVELNK2            Save link
+         EXEC  CICS READQ TS QNAME(RESOURCE) ITEM(QCOUNTER)            *
+               SET(R5) LENGTH(QRECLEN) NUMITEMS(QMAXNUM) NOHANDLE
+         ICM   R15,15,EIBRESP          If read was OK
+         JZ    READIDEL                Check for logically deleted
+         ICM   R0,15,EIBRESP2          Otherwise load the RESP2 value
+         J     RESPERR                 Give error response
+READIDEL LH    R0,QRECLEN              Get length of record read
+         CHI   R0,1                    Is length exactly one?
+         JNE   READITEX                No, return normally
+         CLI   0(R5),X'FF'             Is it a single X'FF' byte?
+         JNE   READITEX                No, return normally
+         SR    R5,R5                   Yes, clear record address
+READITEX ST    R5,RECD_PTR             Save address of returned record
+         L     R14,SAVELNK2            Restore link
+         BR    R14
+*
+*  Save the selector for a specific TS queue item number. The item
+*  number is converted to decimal and output as a character string.
+*
+*  Input:  R0  -- item number to be returned as a selector
+*          R2  -- address of space in which to return selector
+*          R15 -- address of a double word in which to return
+*                 the pointer and length of the selector
+*
+STORESEL EQU   *                       Store selector
+         ST    R14,SAVELNK2            Save link register
+         MVC   0(8,R2),SPACES          Clear the selector
+         XC    0(8,R15),0(R15)         Clear the pointers
+         LTR   R0,R0                   Is item number positive?
+         BNPR  R14                     No, omit selector
+         CVD   R0,PWORK                Convert to decimal
+         MVC   EWORK,=X'402020202120'  Set up an edit mask
+         LA    R1,EWORK+5              Address forced significance
+         EDMK  EWORK,PWORK+5           Edit the selector value
+         LA    R3,EWORK+L'EWORK        Address end of EWORK
+         SLR   R3,R1                   Get length of selector
+         STM   R2,R3,0(R15)            Save the new selector pointers
+         LR    R14,R1                  Copy address within EWORK
+         BCTR  R3,0                    Decrement selector length
+         EX    R3,COPYTEXT             Copy the new selector
+         L     R14,SAVELNK2            Restore link register
+         BR    R14                     Return
+         EJECT ,
+***********************************************************************
+*
+*  Common service routine subroutines
+*
+***********************************************************************
+*:refstep.w2samp_parse_request_body *********************** DFHW2SAM **
+*                                                                     *
+* Licensed Materials - Property of IBM                                *
+*                                                                     *
+* 5655-Y04                                                            *
+*                                                                     *
+* (C) Copyright IBM Corp. 2007, 2014 All Rights Reserved.             *
+*                                                                     *
+* Generated from file:                                                *
+* /com.ibm.cics.web.web2                                              *
+*    /DESIGN                                                          *
+*       /DFHW2SAM.DESIGN                                              *
+*                                                                     *
+* Change activity from DFHW2SAM.DESIGN:                               *
+*   $D0= I07937 660 071119 HD2JPEH : Web 2.0 SupportPac               *
+*   $P1= D21936 660 080902 HD2JPEH : CA8K beta customer defects       *
+*        D30794 680 111202 HDLHJJH : Remove check for unsupported OS  *
+*                                                                     *
+* Parse the HTTP request body that was obtained from DFHREQUEST.      *
+*                                                                     *
+***********************************************************************
+PARSEREQ DS    0D
+         ST    R14,SAVELNK1            Save the link register
+*
+*  Obtain a Parse Instance Memory Area
+*
+         MVC   PIMASIZE,=A(XEC_MIN_PIMA_SIZE)  Set PIMA size
+         EXEC  CICS GETMAIN FLENGTH(PIMASIZE) SET(R2)
+         XC    0(64,R2),0(R2)          Clear the start of the PIMA
+         ST    R2,PIMA_PTR             Save PIMA address
+         ST    R2,XMLPARM1             Save address in plist
+*
+*  Initialize the XML System Services Parser
+*
+         LA    R0,PIMASIZE             Address PIMA size
+         ST    R0,XMLPARM2             Save in parmlist
+         LA    R0,CCSIDVAL             Address CCSID
+         ST    R0,XMLPARM3             Save in parmlist
+         LA    R0,PARSFEAT             Address (null) feature word
+         ST    R0,XMLPARM4             Save in parmlist
+         LA    R0,NULLVECT             Address (null) system vector
+         ST    R0,XMLPARM5             Save in parmlist
+         LA    R0,PARSPARM             Address custom parameter list
+         ST    R0,XMLPARM6             Save in parmlist
+         LA    R0,PARSRESP             Address parser return code
+         ST    R0,XMLPARM7             Save in parmlist
+         LA    R0,PARSREAS             Address reason code
+         ST    R0,XMLPARM8             Save in parmlist
+         LA    R1,XMLPLIST             Address GXL1INI parameter list
+         L     R15,AGXL1INI            Address GXL1INI
+         BASR  R14,R15                 Call GXL1INI
+         LTR   R15,R15                 Test return code
+         JNZ   IPARSERR                Abend if not zero
+*
+*  Obtain storage for the output parsed structure
+*
+         MVC   OUTBUFFL,OBUFSIZE       Set length of output buffer
+         EXEC  CICS GETMAIN FLENGTH(OUTBUFFL) SET(R2)
+         ICM   R15,15,EIBRESP          Check response
+         ST    R2,OUTBUFFP             Save for freemain
+         ST    R2,OUBUFFPT             Save for parser
+         MVC   OUREMAIN,OUTBUFFL       Save output remainder count
+*
+*  Set up parameter list for GXL1PRS parse function
+*
+         XC    XMLPLIST+4(XMLPLLEN-4),XMLPLIST+4  Clear the plist
+         LA    R0,OPTSNULL             Address null options word
+         ST    R0,XMLPARM2             Save in parmlist
+         LA    R0,INBUFFPT             Address input buffer pointer
+         ST    R0,XMLPARM3             Save in parmlist
+         LA    R0,INREMAIN             Address input remainder count
+         ST    R0,XMLPARM4             Save in parmlist
+         LA    R0,OUBUFFPT             Address output buffer pointer
+         ST    R0,XMLPARM5             Save in parmlist
+         LA    R0,OUREMAIN             Address output remainder count
+         ST    R0,XMLPARM6             Save in parmlist
+         LA    R0,PARSRESP             Address return code
+         ST    R0,XMLPARM7             Save in parmlist
+         LA    R0,PARSREAS             Address reason code
+         ST    R0,XMLPARM8             Save in parmlist
+*
+*  Call the XML System Services GXL1PRS parse function
+*
+         XC    PARSREAS,PARSREAS       Clear the parse reason code
+         MVC   INBUFFPT,HCONTPTR       Point to container
+         MVC   INREMAIN,HCONTLEN       Save input remainder length
+         LA    R1,XMLPLIST             Address GXL1PRS parameter list
+         L     R15,AGXL1PRS            Address GXL1PRS
+         BASR  R14,R15                 Call GXL1PRS
+         JAS   R14,SENDMSG             Display response codes
+*
+*  Terminate the XML System Services Parser
+*
+XMLTERM  DS    0Y                      Clean up the parser state
+         XC    XMLPLIST+4(XMLPLLEN-4),XMLPLIST+4  Clear the plist
+         XC    PARSREAS,PARSREAS
+         LA    R0,PARSRESP
+         ST    R0,XMLPARM2
+         LA    R0,PARSREAS
+         ST    R0,XMLPARM3
+         LA    R1,XMLPLIST             Address GXL1TRM parameter list
+         L     R15,AGXL1TRM            Address GXL1TRM
+         BASR  R14,R15                 Call GXL1TRM
+         JAS   R14,SENDMSG             Display response codes
+         L     R2,PIMA_PTR             Load PIMA address
+         EXEC  CICS FREEMAIN DATAPOINTER(R2) NOHANDLE
+         L     R14,SAVELNK1
+         BR    R14
+*:erefstep.w2samp_parse_request_body **********************************
+*:refstep.w2samp_resource_conversion_routines ************* DFHW2SAM **
+*                                                                     *
+***********************************************************************
+*
+*  Step through the field descriptors in the RLM and output
+*  the contents of the CICS resource record.
+*
+MAPRESRC ST    R14,SAVELNK1            Save the link register
+NEXTRLM  CL    R8,RLM_END              Reached end of RLM?
+         JNL   MAPRESRX                Yes, exit
+         CLI   RLM_ENTRY_TYPE,X'01'    Data entry?
+         JNE   MAPRESRX
+         JAS   R14,BGNFIELD            Output field beginning markup
+         JAS   R14,CNVFIELD            Convert the record field
+         JAS   R14,ENDFIELD            Output field ending markup
+         AHI   R8,DFHRLM_DATA_ENTRY__LEN  Step up to next RLM
+         J     NEXTRLM                 Process next RLM
+MAPRESRX EQU   *
+         L     R14,SAVELNK1            Restore the link register
+         BR    R14                     Return
+RESPERR  EQU   *
+         C     R15,DFHRESP(ITEMERR)    If response is ITEMERR
+         JE    ITEMNFND                Signal resource not found
+         C     R15,DFHRESP(QIDERR)     If response is QIDERR
+         JE    QUEUNFND                Signal resource not found
+         J     QIOERROR                Treat any other error as I/O err
+ITEMNFND EQU   *
+         L     R2,CONT_PTR             Reset start of container storage
+         ADD_TEXT INVQITEM,INVQITEL    Return error message
+         MVI   RESPCODE,RESPNFND       Set resource not found
+         J     SETCONTL                Go and set up container length
+QUEUNFND EQU   *
+         L     R2,CONT_PTR             Reset start of container storage
+         ADD_TEXT INVQNAME,INVQNAML    Return error message
+         MVI   RESPCODE,RESPNFND       Set resource not found
+         J     SETCONTL                Go and set up container length
+QIOERROR EQU   *
+         L     R2,CONT_PTR             Reset start of container storage
+         ADD_TEXT ERRCONTE,ERRCONTL    Return error message
+         MVI   RESPCODE,RESPIOER       Set I/O error response
+         J     SETCONTL                Go and set up container length
+*
+*  This routine outputs the markup for the start of the content element
+*
+BGNCONTE DS    0H                      Begin Content markup
+         ST    R14,SAVELNK1            Save the link register
+         CLI   OUTTYPE,OUTXML          Is output XML?
+         JNE   BGNCHTML                No, try HTML
+         ADD_TEXT '<content type="text/xml">&CRLF'
+         J     BGNCEXIT
+BGNCHTML CLI   OUTTYPE,OUTHTML         Is output HTML?
+         JNE   BGNCXHTM                No, try XHTML
+         ADD_TEXT '<content type="html">&CRLF'
+         ADD_TEXT '&&lt;table&&gt;&CRLF',15 Output a table tag
+         J     BGNCEXIT
+BGNCXHTM CLI   OUTTYPE,OUTXHTML        Is output XHTML?
+         JNE   BGNCTEXT                No, assume plain text
+         ADD_TEXT '<content type="xhtml">&CRLF'
+         ADD_TEXT '<div>&CRLF<table>&CRLF' Output div and table tags
+         J     BGNCEXIT
+BGNCTEXT ADD_TEXT '<content type="text">&CRLF' Set default content tag
+BGNCEXIT L     R14,SAVELNK1            Restore the link register
+         BR    R14
+*
+*  This routine outputs the markup for the end of the content element
+*
+ENDCONTE DS    0H                      End Content markup
+         ST    R14,SAVELNK1            Save the link register
+         CLI   OUTTYPE,OUTHTML         Is output HTML?
+         JNE   ENDCXHTM                No, try XHTML
+         ADD_TEXT '&&lt;/table&&gt;&CRLF',16 Close the table element
+         J     ENDCEXIT
+ENDCXHTM CLI   OUTTYPE,OUTXHTML        Is output XHTML?
+         JNE   ENDCEXIT                No, assume no special markup
+         ADD_TEXT '</table>&CRLF</div>&CRLF' Close table and div
+ENDCEXIT ADD_TEXT '</content>&CRLF'    Close the content element
+         L     R14,SAVELNK1            Restore the link register
+         BR    R14
+*
+*  This routine outputs the markup for the beginning of
+*  a distinct field from the resource.
+*  For XML this is the opening tag for the element
+*  For HTML it is markup for a table row
+*  For plain text it is nothing.
+*
+BGNFIELD DS    0H                      Begin the output filed
+         ST    R14,SAVELNK2            Save link register
+         MVC   TAGNAME,SPACES          Clear current tagname
+         LH    R15,RLM1_LOCAL_NAME_LEN  Length of tagname
+         L     R14,RLM1_LOCAL_NAME_PTR  Address of tagname
+         AHI   R15,-1                  Decrement for Execute
+         EX    R15,SAVETAGN            Save the current tagname
+         CLI   OUTTYPE,OUTXML          Is output XML?
+         JNE   BGNFHTML                No, try HTML
+         ADD_TEXT '<'                  Output tag start
+         ADD_TEXT *                    Output the tagname
+         ADD_TEXT '>'                  Close the tag
+         J     BGNFEXIT
+BGNFHTML CLI   OUTTYPE,OUTHTML         Is output HTML?
+         JNE   BGNFXHTM                No, try XHTML
+         ADD_TEXT '&&lt;tr&&gt;&&lt;td&&gt;',20   Output <tr><td>
+         ADD_TEXT *                               Output the tag name
+         ADD_TEXT '&&lt;/td&&gt;&&lt;td&&gt;',21  Output </td><td>
+         J     BGNFEXIT
+BGNFXHTM CLI   OUTTYPE,OUTXHTML        Is output XHTML?
+         JNE   BGNFTEXT                No, assume plain text
+         ADD_TEXT '<tr><td>'           Output <tr><td>
+         ADD_TEXT *                    Output the tag name
+         ADD_TEXT '</td><td>'          Output </td><td>
+         J     BGNFEXIT
+BGNFTEXT EQU   *                       Plain text: output nothing
+BGNFEXIT L     R14,SAVELNK2            Restore link register
+         BR    R14
+*
+*  This routine outputs the markup for the end of
+*  a distinct field from the resource.
+*  For XML this is the closing tag for the element
+*  For HTML it is markup cloding a table row
+*  For plain text it is a single CRLF.
+*
+ENDFIELD DS    0H                      Begin the output filed
+         ST    R14,SAVELNK2            Save link register
+         MVC   TAGNAME,SPACES          Clear current tagname
+         LH    R15,RLM1_LOCAL_NAME_LEN  Length of tagname
+         L     R14,RLM1_LOCAL_NAME_PTR  Address of tagname
+         AHI   R15,-1                  Decrement for Execute
+         EX    R15,SAVETAGN            Save the current tagname
+         CLI   OUTTYPE,OUTXML          Is output XML?
+         JNE   ENDFHTML                No, try HTML
+         ADD_TEXT '</'                 Output ending tag start
+         ADD_TEXT *                    Output the tagname
+         ADD_TEXT '>&CRLF'                  Close the tag
+         J     ENDFEXIT
+ENDFHTML CLI   OUTTYPE,OUTHTML         Is output HTML?
+         JNE   ENDFXHTM                No, try XHTML
+         ADD_TEXT '&&lt;/td&&gt;&&lt;/tr&&gt;&CRLF',24 Send </td></tr>
+         J     ENDFEXIT
+ENDFXHTM CLI   OUTTYPE,OUTXHTML        Is output XHTML?
+         JNE   ENDFTEXT                No, assume plain text
+         ADD_TEXT '</td></tr>&CRLF'    Send </td></tr>
+         J     ENDFEXIT
+ENDFTEXT ADD_TEXT '&CRLF'              Plain text: output CRLF
+ENDFEXIT L     R14,SAVELNK2            Restore link register
+         BR    R14
+*
+*  The value in CICSTIME is assumed to be the local time in ABSTIME
+*  format. This has to be adjusted to GMT with CVTTZ, which is the
+*  time zone offset in 1.048576 second TOD clock units.
+*  This is positive East of Greenwich and negative West of Greenwich.
+*
+CONVTIME DS    0H
+         ST    R14,SAVELNK3            Save link register
+         L     R1,16                   Load CVT address
+         L     R0,CVTTZ-CVTMAP(,R1)    Get timezone offset in TOD units
+*
+*  The following shifts the contents of R0 multiplied by 1048576
+*  (2**20) into R1. This puts the result into the double register
+*  R0:R1 ready for the divide instruction.
+*
+         SRDA  R0,44                   Mult by 1048576 to get microsecs
+         D     R0,=F'1000'             Divide by 1000 to get millisecs
+         CVD   R1,PWORK                Convert to packed
+         SP    CICSTIME,PWORK          Convert local ABSTIME to GMT
+         MVC   RFC3339,=CL32'0000-00-00T00:00:00Z' Set RFC3339 string
+         EXEC  CICS FORMATTIME ABSTIME(CICSTIME)                       *
+               YYYYMMDD(RFC3339) DATESEP('-')                          *
+               TIME(RFC3339+11)  TIMESEP(':')
+         L     R14,SAVELNK3            Restore link register
+         BR    R14                     Return
+*
+*  Convert a 64-bit TOD clock value in R0 into an ABSTIME in CICSTIME
+*  The TOD clock is in GMT but abstime is in local time, so adjust.
+*  (The adjustment will be reversed when the ABSTIME is converted.)
+*
+CNVCLOCK EQU   *                       Convert TOD clock to ABSTIME
+         L     R1,16                   Load CVT address
+         L     R1,CVTEXT2-CVTMAP(,R1)  Get CVT extension address
+         SG    R0,CVTLSO-CVTXTNT2(,R1) Subtract leap seconds
+         AG    R0,CVTLDTO-CVTXTNT2(,R1) Adjust clock to local time
+         SRLG  R1,R0,12                Convert clock units to microsecs
+         DSGF  R0,=F'1000'             Convert microsecs to millisecs
+         CVDG  R1,QWORK                Convert milliseconds to decimal
+         ZAP   CICSTIME,PWORK          Move into CICSTIME
+         BR    R14
+         EJECT ,
+*
+*  This subroutine converts the field in the resource record
+*  into its character representation, suitable for insertion into
+*  an XML or JSON document.
+*
+*  At present, floating point, 64-bit, hexstring, and base64
+*  conversions are unsupported.
+*
+CNVFIELD EQU   *                       Convert a field in a record
+         ST    R14,SAVELNK2            Save the link register
+         NI    SIGNFLAG,255-SIGNED     Clear signed flag
+         SGR   R0,R0                   Clear 64 bits of R0
+         SR    R1,R1                   Clear convert code register
+         IC    R1,RLM1_CONVERT_TYPE    Pick up the convert code
+         SLL   R1,2                    Get jump table index
+         CHI   R1,INVCODE-JMPTABLE     Is offset too high?
+         JH    INVCODE                 Yes, it's an error
+         LARL  R14,CNVNUMBR            Set exit for binary converts
+         LARL  R15,JMPTABLE            Address the jump table
+         ALR   R15,R1                  Index into the jump table
+         BR    R15                     Jump to it
+JMPTABLE J     INVCODE                 00 Invalid
+         J     CNVCHAR                 01 Char string
+         J     CNVHEXS                 02 Hex string
+         J     CNVSBYTE                03 Signed byte
+         J     CNVUBYTE                04 Unsigned byte
+         J     CNVSSHRT                05 Signed short
+         J     CNVUSHRT                06 Unsigned short
+         J     CNVSINT                 07 Signed int
+         J     CNVUINT                 08 Unsigned int
+         J     CNVSLONG                09 Signed long
+         J     CNVULONG                10 Unsigned long
+         J     INVCODE                 11 Reserved
+         J     CNVBOOLE                12 Boolean
+         J     CNVBFLOA                13 Binary floating point single
+         J     CNVBFLOD                14 Binary floating point double
+         J     CNVSPACK                15 Signed packed decimal
+         J     CNVUPACK                16 Unsigned packed decimal
+         J     CNVBAS64                17 Base64 string
+         J     CNVSZONE                18 Zoned decimal
+         J     CNVUZONE                19 Unsigned zoned decimal
+         J     CNVHFLOA                20 Hex floating point single
+         J     CNVHFLOD                21 Hex floating point double
+         J     CNVABSTM                22 CICS abstime
+         J     CNVTODCL                23 System z TOD clock
+INVCODE  EQU   *                       Unrecognized conversion code
+CNVHEXS  EQU   *                       Hex string
+CNVBAS64 EQU   *                       Base64 string
+CNVBFLOA EQU   *                       Binary floating point single
+CNVBFLOD EQU   *                       Binary floating point double
+CNVHFLOA EQU   *                       Hex floating point single
+CNVHFLOD EQU   *                       Hex floating point double
+         EXEC  CICS ABEND ABCODE('W2C0') . Unsupported conversion
+INVMETH  EXEC  CICS ABEND ABCODE('W2E5') . Unrecognized HTTP method
+IPARSERR EXEC  CICS ABEND ABCODE('W2P3') . Parser initialization failed
+XPARSERR EXEC  CICS ABEND ABCODE('W2P4') . Parser execution failed
+*
+*  The following binary conversion routines get the binary number
+*  into R0, and then drop through into the decimal conversion.
+*
+CNVSBYTE EQU   *                       Signed byte (8 bit)
+         OI    SIGNFLAG,SIGNED         Set signed flag
+         ICM   R0,8,0(R5)              Get the single byte
+         SRA   R0,24                   Shift with sign
+         AHI   R5,1                    Bump over single byte
+         BR    R14
+CNVUBYTE EQU   *                       Unsigned byte (8 bit)
+         SR    R0,R0                   Clear register
+         IC    R0,0(,R5)               Insert the single byte
+         AHI   R5,1                    Bump over single byte
+         BR    R14
+CNVSSHRT EQU   *                       Signed short (16 bit)
+         OI    SIGNFLAG,SIGNED         Set signed flag
+         LH    R0,0(,R5)               Load the halfword value
+         AHI   R5,2                    Bump over halfword
+         BR    R14
+CNVUSHRT EQU   *                       Unsigned short (16 bit)
+         SR    R0,R0                   Clear register
+         ICM   R0,3,0(R5)              Insert the unsigned halfword
+         AHI   R5,2                    Bump over halfword
+         BR    R14
+CNVSLONG EQU   *                       Signed long (64 bit)
+         ICMH  R0,15,0(R5)             Load the first fullword
+         AHI   R5,4                    Bump over first fullword
+CNVSINT  EQU   *                       Signed int (32 bit)
+         ICM   R0,15,0(R5)             Load fullword value
+         AHI   R5,4                    Bump over fullword
+         OI    SIGNFLAG,SIGNED         Set signed flag
+         BR    R14
+CNVULONG EQU   *                       Unsigned long (64 bit)
+         LG    R0,0(,R5)               Load 64-bit integer
+         AHI   R5,8                    Bump over doubleword
+         BR    R14
+CNVUINT  EQU   *                       Unsigned int (32 bit)
+         ICM   R0,15,0(R5)             Load fullword value
+         AHI   R5,4                    Bump over fullword
+         BR    R14
+*
+*  Convert the binary number in R0 to packed decimal
+*
+CNVNUMBR SR    R15,R15                 Clear conversion-type index
+         IC    R15,RLM1_CONVERT_TYPE   Insert conversion type
+         ALR   R15,R15                 Double for halfword indexing
+         LH    R15,TYPELEN(R15)        Get length for convert type
+         CHI   R15,8                   Is it a 64-bit integer?
+         JE    CNVBIGNO                Yes, make a larger adjustment
+         XC    QWORK,QWORK             Clear quadword workarea
+         CVD   R0,PWORK                Convert 32 bit number
+         TM    SIGNFLAG,SIGNED         Is sign to be preserved?
+         JO    CNVPACKD                Yes, so preserve it
+         LTR   R0,R0                   Is number apparently negative?
+         JNM   CNVPACKD                No, signed is same as unsigned
+         AP    PWORK,=P'4294967296'    Add 2**32 to make unsigned
+         J     CNVPACKD                Convert the packed num to char
+CNVBIGNO CVDG  R0,QWORK                Convert binary number to decimal
+         TM    SIGNFLAG,SIGNED         Is sign to be preserved?
+         JO    CNVPACKD                Yes, so preserve it
+         LTGR  R0,R0                   Is number apparently negative?
+         JNM   CNVPACKD                No, signed is same as unsigned
+         AP    QWORK,=P'18446744073709551616' Add 2**64 to get unsigned
+         J     CNVPACKD                Convert packed number to char
+CNVSPACK EQU   *                       Signed packed decimal
+         OI    SIGNFLAG,SIGNED         Set signed flag
+CNVUPACK EQU   *                       Unsigned packed decimal
+         SR    R0,R0                   Clear fraction digit count
+         IC    R0,RLM1_DATA_FRACT      Get digits in decimal fraction
+         LH    R15,RLM1_DATA_COUNT     Get digits in decimal integer
+         AR    R15,R0                  Get total decimal digits
+         SRL   R15,1                   Halve to get mach length for ZAP
+         EX    R15,ZAPNUMB             Zap variable length to fixed
+         LA    R5,1(R15,R5)            Bump over the packed data
+         J     CNVPACKD                Convert fixed-length packed dec
+CNVSZONE EQU   *                       Zoned decimal
+         OI    SIGNFLAG,SIGNED         Set signed flag
+CNVUZONE EQU   *                       Unsigned zoned decimal
+         SR    R0,R0                   Clear fraction digit count
+         IC    R0,RLM1_DATA_FRACT      Get digits in decimal fraction
+         LH    R15,RLM1_DATA_COUNT     Get digits in decimal integer
+         AR    R15,R0                  Get total decimal digits
+         AHI   R15,-1                  Decrement for Execute
+         EX    R15,PACKNUMB            Pack zoned number
+         LA    R5,1(R15,R5)            Bump over the zoned data
+CNVPACKD MVI   NWORK,C' '              Set initial space
+         MVI   NWORK+1,X'20'           Set EDMK selector byte
+         MVC   NWORK+2(L'NWORK-2),NWORK+1  Create EDMK mask
+         SR    R15,R15                 Clear fraction digit count
+         IC    R15,RLM1_DATA_FRACT     Get fraction digit count
+         LCR   R15,R15                 Negate fraction digit count
+         LA    R15,NWORK+30(R15)       Address significance trigger
+         MVI   0(R15),X'21'            Insert EDMK significance trigger
+         LA    R1,0(,R15)              Address forced significance
+         EDMK  NWORK,QWORK             Convert the number
+         LR    R15,R1                  Save address of signific digit
+         JZ    CNVPNSGN                If zero, omit sign processing
+         BCTR  R1,0                    Address byte before significance
+         MVI   0(R1),C'+'              Prefix a plus
+         JP    CNVPTSGN                Skip minus sign if positive
+         MVI   0(R1),C'-'              Prefix a minus
+CNVPTSGN TM    SIGNFLAG,SIGNED         Is this a signed field?
+         JO    CNVPNSGN                Yes, keep the sign
+         AHI   R1,1                    No, omit the sign
+CNVPNSGN EQU   *
+         LA    R15,NWORK+31            Address last byte of NWORK
+         SR    R15,R1                  Calculate mach length of result
+         SR    R14,R14                 Clear fraction digits
+         ICM   R14,1,RLM1_DATA_FRACT   Get number of fraction digits
+         JNZ   CNVFRACT                If any, convert with fraction
+         EX    R15,COPYNUMB            Output converted number
+         LA    R2,1(R15,R2)            Bump over converted number
+         J     CNVFEXIT
+CNVFRACT EQU   *
+         SR    R15,R14                 Decrement by fraction length
+         EX    R15,COPYNUMB            Output integer part
+         LA    R2,1(R15,R2)            Bump over integer part
+         MVI   0(R2),C'.'              Output decimal point
+         AHI   R2,1                    Bump over decimal point
+         AHI   R14,-1                  Decrement fraction length
+         LA    R1,1(R15,R1)            Address fraction part
+         EX    R14,COPYNUMB            Copy decimal fraction
+         LA    R2,1(R14,R2)            Bump over fraction
+         J     CNVFEXIT
+CNVBOOLE EQU   *                       Boolean
+         TM    0(R5),X'80'             Is binary boolean value set
+         LA    R5,1(,R5)               Bump over boolean and keep CC
+         JO    CNVBOOLT                Yes, go process as true
+         MVC   0(5,R2),=C'false'       No, output "false"
+         AHI   R2,5                    Bump over "false" string
+         J     CNVFEXIT
+CNVBOOLT MVC   0(4,R2),=C'true'        Output "true"
+         AHI   R2,4                    Bump over "true" string
+         J     CNVFEXIT
+CNVCHAR  EQU   *                       Character string
+         JAS   R14,SPECIALK            Handle special keywords
+         LR    R14,R5                  Address the character string
+         LH    R15,RLM1_DATA_COUNT     Load string length
+         LR    R0,R2                   Set target for MVCL
+         LR    R1,R15                  Source length same as target
+         AR    R5,R15                  Advance location pointer
+         MVCL  R0,R14                  Copy the character string
+         LR    R2,R0                   Update output pointer
+         J     CNVFEXIT
+CNVTODCL EQU   *                       Convert TOD clock
+         ICMH  R0,15,0(R5)             Insert first fullword of clock
+         ICM   R0,15,4(R5)             Insert second fullword of clock
+         JAS   R14,CNVCLOCK            Convert TOD clock to abstime
+         J     CNVCTIME                Jump to common time code
+CNVABSTM EQU   *                       Convert CICS abstime
+         ZAP   CICSTIME,0(8,R5)        Zap abstime into CICSTIME
+CNVCTIME AHI   R5,8                    Bump over the clock field
+         JAS   R14,CONVTIME            Convert abstime to RFC3339
+         JAS   R14,SPECIALK            Check for special keyword
+         MVC   0(L'RFC3339,R2),RFC3339 Copy converted timestamp
+         AHI   R2,20                   Bump by length of timestamp
+CNVFEXIT EQU   *                       Exit from field conversion
+         L     R14,SAVELNK2            Restore the link register
+         BR    R14                     Return
+*
+*  The following routine is used to identify some special fields
+*  in the resource record whose content has to be output into other
+*  interface parameters as well as thier normal place in the
+*  content structure. These are:
+*    ATOMID   which is returned into the entry's atom:id element
+*    UPDATED  which is returned into the entry's atome:updated element
+*    KEY      which is returned into the URL selector field
+*
+SPECIALK EQU   *                       Special keyword handler
+         ST    R14,SAVELNK3            Save the link register
+         L     R3,ATMP_OPTIONS         Address of options bitstrip
+         CLC   TAGNAME,IDFIELD         Is current field for atom:id?
+         JE    SPKIDFLD                Yes, handle the id field
+         CLC   TAGNAME,UPDFIELD        Is current field for updated?
+         JE    SPKUPFLD                Yes, handle the updated field
+         CLC   TAGNAME,KEYFIELD        Is current field for file key?
+         JE    SPKKYFLD                Yes, handle the key field
+         CLC   TAGNAME,TTLFIELD        Is current field for title?
+         JE    SPKTITLE                Yes, handle the title field
+         CLC   TAGNAME,STLFIELD        Is current field for subtitle?
+         JE    SPKSUBTI                Yes, handle the subtitle field
+         CLC   TAGNAME,SUMFIELD        Is current field for summary?
+         JE    SPKSUMMA                Yes, handle the summary field
+SPKEXIT  L     R14,SAVELNK3            Restore link register
+         BR    R14                     Return
+* The atom:id field must be a character string, so is returned as such
+SPKIDFLD L     R1,ATMP_ATOMID          Address the atom:id parameter
+         CLI   RLM1_CONVERT_TYPE,CTYP_CHAR_STRING Character string?
+         JNE   INVFLDTY                No, abend: Invalid field type
+SPKCHAR  LM    R0,R1,0(R1)             Load parameter string pointers
+         LR    R14,R5                  Address the character string
+         LH    R15,RLM1_DATA_COUNT     Load string length
+         ICM   R15,8,=C' '             Insert padding character
+         MVCL  R0,R14                  Copy the character string
+         J     SPKEXIT
+* The file key field, used as a URL selector, must also be characters,
+* though we might later want to use a binary value returned as a
+* hexadecimal or base64 string.
+SPKKYFLD L     R1,ATMP_SELECTOR        Address selector keyword
+         CLI   RLM1_CONVERT_TYPE,CTYP_CHAR_STRING Character string?
+         JE    SPKCHAR                 Yes, process as characters
+         J     INVFLDTY                No, abend: Invalid field type
+* The update timestamp field can be in one of a number of formats,
+* characters (assumed to be a correct RFC3339 timestamp),
+* or CICS abstime, or System/z TOD clock.
+SPKUPFLD L     R1,ATMP_UPDATED         Address update-timestamp parm
+         CLI   RLM1_CONVERT_TYPE,CTYP_CHAR_STRING Character string?
+         JE    SPKCHAR                 Yes, process as characters
+         CLI   RLM1_CONVERT_TYPE,CTYP_TOD_CLOCK  System/z TOD clock?
+         JE    SPKUPCLK                Yes, conversion already done
+         CLI   RLM1_CONVERT_TYPE,CTYP_CICS_ABSTIME CICS abstime?
+         JNE   INVFLDTY                No, abend: Invalid field type
+SPKUPCLK LM    R14,R15,0(R1)           Load parameter string pointers
+         MVC   0(20,R14),RFC3339       Copy the timestamp
+         J     SPKEXIT
+         USING ATMP_OPTIONS_BITS,R3    Addressing for options mapping
+SPKTITLE LA    R10,=CL16'ATOMTITLE'
+         JAS   R14,OUTCONTN            Put title into container
+         OI    ATMP_OUTOPT_BYTE1,OPTTITLE Flag title container usage
+         J     SPKEXIT
+SPKSUBTI LA    R10,=CL16'ATOMSUBTITLE'
+         JAS   R14,OUTCONTN            Put subtitle into container
+         OI    ATMP_OUTOPT_BYTE1,OPTSUBTI Flag subtitle container usage
+         J     SPKEXIT
+SPKSUMMA LA    R10,=CL16'ATOMSUMMARY'
+         JAS   R14,OUTCONTN            Put summary into container
+         OI    ATMP_OUTOPT_BYTE1,OPTSUMMA Flag summary container usage
+         J     SPKEXIT
+OUTCONTN EQU   *                       Put string into container
+         ST    R14,SAVELNK4            Save link register
+         LH    R0,RLM1_DATA_COUNT      Load string length
+         ST    R0,CONT_LEN             Save as fullword
+         EXEC  CICS PUT CONTAINER(0(,R10)) FROMCCSID(1047)             *
+               FROM(0(,R5)) FLENGTH(CONT_LEN) NOHANDLE
+         ICM   R15,15,EIBRESP          Load and test response
+         L     R14,SAVELNK4            Restore link register
+         BR    R14
+         DROP  R3,R8
+*:erefstep.w2samp_resource_conversion_routines ************************
+*:refstep.w2samp_analyze_parsed_request_body ************** DFHW2SAM **
+*                                                                     *
+* Analyze routine.                                                    *
+*                                                                     *
+* This routine analyzes the tokenized response from the XML Parser    *
+* and saves the content (as pointer+length) of all the elements.      *
+*                                                                     *
+***********************************************************************
+ANALREQ  DC    0D'0'
+         STM   R14,R12,12(R13)         Save caller's registers
+         USING DFHEISTG,R13            Address EISTG
+         USING ANASTORD,ANASTORE       Address the Analyze workarea
+         MVC   ANASAVEA(72),0(R13)     Copy savearea
+         LARL  R12,ANSTATIC            Address analyzer static
+         USING ANSTATIC,R12            Establish addressability
+         LR    R11,R1                  Save parmlist address
+*
+*  Initialize pointers to the record structure returned by the parser.
+*
+         LM    R14,R15,0(R11)          Address buffer ptr and length
+         L     R5,0(,R14)              Get address of response buffer
+         SR    R6,R6                   Clear JXLE stride register
+         LR    R7,R5                   Copy start address
+         AL    R7,0(,R15)              Add length to get end addr
+         BCTR  R7,0                    Address last byte of response
+         LA    R0,ELEMSTCK-ELSTKLEN    Address element stack
+         ST    R0,CURRELPT             Save current pointer
+         USING XEH_RECORD,R5
+         USING XEH_VALUE,XEH_VALUES
+*
+*  Examine each record returned by the parser.
+*  Note that the records are not necessarily on word boundaries.
+*
+EXAMRECD EQU   *                       Examine parse response record
+         SR    R1,R1                   Clear for insertion
+         ICM   R1,3,XEH_TOKTYPE        Insert record type
+         ICM   R6,15,XEH_RECLEN        Get the record length
+         TMLL  R1,X'F00F'              Is this a valid record id?
+         JNO   INVTOKEN                No, it's an error
+         NILL  R1,X'0FF0'              Isolate functional bits
+         SRL   R1,2                    Convert to jumptable offset
+         CHI   R1,NEXTITEM-JUMPTABL    Is offset too high?
+         JH    INVTOKEN                Yes, it's an error
+         LARL  R14,NEXTITEM            Set return address
+         LARL  R15,JUMPTABL            Address the jump table
+         ALR   R15,R1                  Index into the jump table
+         BR    R15                     Jump to it
+JUMPTABL J     NEXTITEM                F00F - Buffer information
+         J     NEXTITEM                F01F - XML declaration
+         J     ELEMSTRT                F02F - Start element
+         J     ELEMEND                 F03F - End element
+         J     ATTRIBNM                F04F - Attribute name
+         J     ATTRVALU                F05F - Attribute value
+         J     NEXTITEM                F06F - Namespace declaration
+         J     CHARDATA                F07F - Character data
+         J     NEXTITEM                F08F - Start CDATA
+         J     NEXTITEM                F09F - End CDATA
+         J     NEXTITEM                F0AF - Whitespace
+         J     NEXTITEM                F0BF - Processing instruction
+         J     NEXTITEM                F0CF - Comment
+         J     NEXTITEM                F0DF - DTD data
+         J     NEXTITEM                F0EF - Unresolved reference
+ATTRIBNM EQU   *
+ATTRVALU EQU   *
+INVTOKEN EQU   *
+NEXTITEM JXLE  R5,R6,EXAMRECD          Examine next record
+         SPACE 3
+ANRETURN LM    R14,R12,ANASAVEA+12     Restore registers
+         BR    R14                     Return
+*
+*  Start of an element.
+*  Save element pointers on the stack.
+*  Detect and signal the start of an atom:content tag.
+*  Everything within the atom:content element is a candidate for
+*  storing in the resource, so flag entry into content.
+*
+ELEMSTRT EQU   *
+         L     R2,CURRELPT             Get current stack pointer
+         LR    R1,R2                   Copy stack pointer
+         AHI   R1,ELSTKLEN             Add stack length
+         ST    R1,CURRELPT             Refresh pointer
+         LA    R10,XEH_VALTEXT         Get address of local name
+         L     R11,XEH_VALLEN          Get length of element name
+         STM   R10,R11,0(R1)           Save ptr/length in the stack
+         LA    R10,XEH_VALTEXT(R11)    Address end of local name
+         L     R11,XEH_VALLEN-XEH_VALUE(,R10)  Get length of namespace
+         LA    R10,XEH_VALTEXT-XEH_VALUE(,R10) Get addr of namespace
+         STM   R10,R11,8(R1)           Save ptr/length in the stack
+         CHI   R11,L'NSATOM            Correct length for atom nmspace?
+         BNER  R14                     No, return
+         CLC   NSATOM,0(R10)           NSATOM Atom namespace?
+         BNER  R14                     No, return
+         LM    R10,R11,0(R1)           Restore local name pointers
+         CLC   0(6,R10),=C'content'    Start of atom:content?
+         BNER  R14                     No, return
+         OI    FLAGS,INCONTEN          Mark as within content
+         BR    R14                     Go to next record
+***********************************************************************
+*
+*  End of an element.
+*  Pop the last element from the element stack.
+*
+***********************************************************************
+ELEMEND  EQU   *
+         L     R1,CURRELPT             Get current stack pointer
+         LM    R10,R11,0(R1)           Load local name pointers
+         CLC   0(6,R10),=C'content'    End of content element?
+         JNE   ELEMCLR                 No, just clear
+         LM    R10,R11,8(R1)           Is it end of atom:content?
+         JNE   ELEMCLR                 No, just clear
+         NI    FLAGS,255-INCONTEN      Signal end of content
+ELEMCLR  XC    0(ELSTKLEN,R1),0(R1)    Clear current element
+         AHI   R1,-ELSTKLEN            Subtract stack length
+         ST    R1,CURRELPT             Update current stack pointer
+         BR    R14
+***********************************************************************
+*
+*  Character data (Element content) encountered.
+*  Ignore unless inside a content element
+*
+***********************************************************************
+CHARDATA EQU   *
+         TM    FLAGS,INCONTEN          Within content?
+         BZR   R14                     No, ignore
+         JAS   R14,OUTFIELD            Output the XML element
+         L     R1,CURRELPT             Get current stack pointer
+         LM    R10,R11,0(R1)           Get ptr/length of element name
+         J     NEXTITEM                Process next
+***********************************************************************
+*
+*  Output the contents of an XML element into the resource record,
+*  after performing an appropriate conversion.
+*
+***********************************************************************
+OUTFIELD EQU   *                       Output element into resrce field
+         ST    R14,SAVELNK1            Save link register
+         L     R1,CURRELPT             Get current stack pointer
+         LM    R10,R11,0(R1)           Get ptr/len of element name
+         JAS   R14,GETOFFST            Get offset to field
+         L     R2,RECD_PTR             Address the resource record
+         LTR   R8,R15                  Address located RLM entry
+         JZ    OUTFEXIT                None found, ignore content
+         USING DFHRLM_DATA_ENTRY,R8
+         ALR   R2,R0                   Apply the offset
+         SGR   R0,R0                   Clear all 64 bits of R0
+         LA    R10,XEH_VALTEXT         Get address of content
+         L     R11,XEH_VALLEN          Get length of content
+         SR    R1,R1                   Clear convert code register
+         IC    R1,RLM1_CONVERT_TYPE    Pick up the convert code
+         SLL   R1,2                    Get jump table index
+         CHI   R1,RCVINVAL-RCVJTABL    Is offset too high?
+         JH    RCVINVAL                Yes, it's an error
+         LARL  R14,OUTFEXIT            Set exit address
+         LARL  R15,RCVJTABL            Address the jump table
+         ALR   R15,R1                  Index into the jump table
+         BR    R15                     Jump to it
+OUTFEXIT L     R14,SAVELNK1            Restore link register
+         S     R2,RECD_PTR             Offset to end of field just done
+         CH    R2,QRECLEN              Higher than current record len?
+         BNHR  R14                     No, don't adjust
+         STH   R2,QRECLEN              Yes, update high water mark
+         BR    R14
+         SPACE 2
+RCVJTABL J     RCVINVAL                00 Invalid
+         J     RCVCHAR                 01 Char string
+         J     RCVHEXS                 02 Hex string
+         J     RCVSBYTE                03 Signed byte
+         J     RCVUBYTE                04 Unsigned byte
+         J     RCVSSHRT                05 Signed short
+         J     RCVUSHRT                06 Unsigned short
+         J     RCVSINT                 07 Signed int
+         J     RCVUINT                 08 Unsigned int
+         J     RCVSLONG                09 Signed long
+         J     RCVULONG                10 Unsigned long
+         J     RCVINVAL                11 Reserved
+         J     RCVBOOLE                12 Boolean
+         J     RCVBFLOA                13 Binary floating point single
+         J     RCVBFLOD                14 Binary floating point double
+         J     RCVSPACK                15 Signed packed decimal
+         J     RCVUPACK                16 Unsigned packed decimal
+         J     RCVBAS64                17 Base64 string
+         J     RCVSZONE                18 Zoned decimal
+         J     RCVUZONE                19 Unsigned zoned decimal
+         J     RCVHFLOA                20 Hex floating point single
+         J     RCVHFLOD                21 Hex floating point double
+         J     RCVABSTM                22 CICS abstime
+         J     RCVTODCL                23 System z TOD clock
+RCVINVAL EQU   *                       Invalid
+RCVHEXS  EQU   *                       Hex string
+RCVBFLOA EQU   *                       Binary floating point single
+RCVBFLOD EQU   *                       Binary floating point double
+RCVBAS64 EQU   *                       Base64 string
+RCVHFLOA EQU   *                       Hex floating point single
+RCVHFLOD EQU   *                       Hex floating point double
+         J     RCVUNSUP                Conversions above not supported
+         SPACE 2
+RCVSBYTE EQU   *                       Signed byte
+         JAS   R14,RCVSIGND            Convert signed string
+         STC   R0,0(,R2)               Save result
+         AHI   R2,1                    Address end of stored data
+         J     OUTFEXIT
+RCVSSHRT EQU   *                       Signed short
+         JAS   R14,RCVSIGND            Convert signed string
+         STCM  R0,3,0(R2)              Save result
+         AHI   R2,2                    Address end of stored data
+         J     OUTFEXIT
+RCVSINT  EQU   *                       Signed int
+         JAS   R14,RCVSIGND            Convert signed string
+         STCM  R0,15,0(R2)             Save result
+         AHI   R2,4                    Address end of stored data
+         J     OUTFEXIT
+RCVSLONG EQU   *                       Signed long
+         JAS   R14,RCVSIGND            Convert signed string
+         STG   R0,0(,R2)               Save result
+         AHI   R2,8                    Address end of stored data
+         J     OUTFEXIT
+RCVUBYTE EQU   *                       Unsigned byte
+         JAS   R14,RCVUNSIG            Convert unsigned string
+         STC   R0,0(,R2)               Save result
+         AHI   R2,1                    Address end of stored data
+         J     OUTFEXIT
+RCVUSHRT EQU   *                       Unsigned short
+         JAS   R14,RCVUNSIG            Convert unsigned string
+         STCM  R0,3,0(R2)              Save result
+         AHI   R2,2                    Address end of stored data
+         J     OUTFEXIT
+RCVUINT  EQU   *                       Unsigned int
+         JAS   R14,RCVUNSIG            Convert unsigned string
+         STCM  R0,15,0(R2)             Save result
+         AHI   R2,4                    Address end of stored data
+         J     OUTFEXIT
+RCVULONG EQU   *                       Unsigned long
+         JAS   R14,RCVUNSIG            Convert unsigned string
+         STG   R0,0(,R2)               Save result
+         AHI   R2,8                    Address end of stored data
+         J     OUTFEXIT
+RCVSPACK EQU   *                       Signed packed decimal
+         JAS   R14,RCVSIGND            Convert signed string
+         SR    R15,R15                 Clear digit counter
+         IC    R15,RLM1_DATA_FRACT     Insert fraction digits
+         AH    R15,RLM1_DATA_COUNT     Add integer digits
+         SRL   R15,1                   Halve to get mach len for ZAP
+         LR    R1,R15                  Copy machine length
+         SLL   R1,4                    Get 16*(mach len) for Execute
+         EX    R1,ZAPWORK              Zap result into record field
+         LA    R2,1(R15,R2)            Address end of stored data
+         J     OUTFEXIT
+RCVUPACK EQU   *                       Unsigned packed decimal
+         JAS   R14,RCVUNSIG            Convert unsigned string
+         SR    R15,R15                 Clear digit counter
+         IC    R15,RLM1_DATA_FRACT     Insert fraction digits
+         AH    R15,RLM1_DATA_COUNT     Add integer digits
+         SRL   R15,1                   Halve to get mach len for ZAP
+         LR    R1,R15                  Copy machine length
+         SLL   R1,4                    Get 16*(mach len) for Execute
+         EX    R1,ZAPWORK              Zap result into record field
+         LA    R2,1(R15,R2)            Address end of stored data
+         J     OUTFEXIT
+*
+*  Create a decimal zoned number from the packed number in QWORK.
+*  To allow for the maximum size zoned number of 32 bytes, the UNPKA
+*  (UNPACK ASCII) instruction is used. This sets all the zones to 3
+*  instead of F, so an OC instruction is used to reset them to EBCDIC.
+*  The UNPKA instruction does not propagate the sign nibble like UNPK,
+*  but sets the condition code instead. Propagate the sign by using
+*  the old UNPK instruction on the very last byte.
+*
+RCVSZONE EQU   *                       Signed zoned decimal
+         JAS   R14,RCVSIGND            Convert signed string to packed
+         SR    R15,R15                 Clear digit counter
+         IC    R15,RLM1_DATA_FRACT     Insert fraction digits
+         AH    R15,RLM1_DATA_COUNT     Add integer digits
+         BCTR  R15,0                   Decrement for EXECUTE
+         EX    R15,UNPKWORK            Unpack QWORK to ASCII
+         EX    R15,EBCDNUMB            Convert ASCII numerics to EBCDIC
+         LA    R2,0(R15,R2)            Address last byte of zoned numb
+         UNPK  0(1,R2),QWORK+15(1)     Unpack last byte the old way
+         AHI   R2,1                    Bump over the last byte
+         J     OUTFEXIT
+RCVUZONE EQU   *                       Unsigned zoned decimal
+         JAS   R14,RCVUNSIG            Cnvert unsigned string to packed
+         SR    R15,R15                 Clear digit counter
+         IC    R15,RLM1_DATA_FRACT     Insert fraction digits
+         AH    R15,RLM1_DATA_COUNT     Add integer digits
+         BCTR  R15,0                   Decrement for EXECUTE
+         EX    R15,UNPKWORK            Unpack QWORK to ASCII
+         EX    R15,EBCDNUMB            Convert ASCII numerics to EBCDIC
+         LA    R2,1(R15,R2)            Address end of stored data
+         J     OUTFEXIT
+RCVCHAR  EQU   *                       Char string
+         LR    R0,R10                  Source address
+         LR    R1,R11                  Source length
+         ICM   R1,8,=C' '              Pad with space
+         LH    R3,RLM1_DATA_COUNT      Get destination length of string
+         MVCL  R2,R0                   Copy the string and update R2
+         BR    R14
+RCVBOOLE EQU   *                       Boolean
+         SR    R0,R0                   Clear R0 (boolean false)
+         CLI   0(R10),C'0'             Is source equal to zero?
+         JE    RCVSVBOO                Yes, save the value
+         CLC   0(5,R10),=C'false'      Is source equal to false?
+         JE    RCVSVBOO                Yes, save the value
+         LHI   R0,1                    Change R0 to 1 (boolean true)
+         CLI   0(R10),C'1'             Is source equal to one?
+         JE    RCVSVBOO                Yes, save the value
+         CLC   0(4,R10),=C'true'       Is source equal to true?
+         JE    RCVSVBOO                Yes, save the value
+RCVSVBOO STC   R0,0(,R2)               Save the boolean value
+         AHI   R2,1                    Address end of stored data
+         BR    R14
+*
+*  Convert a signed string of digits to a signed packed decimal number
+*
+RCVSIGND EQU   *                       Convert signed string
+         ST    R14,SAVELNK2            Save link register
+         MVI   SIGNCHAR,C'+'           Assume sign is plus
+         TM    0(R10),X'F0'            Is first character numeric?
+         JO    RCVINTUN                Yes, leading sign is omitted
+         MVC   SIGNCHAR,0(R10)         Save initial sign character
+         AHI   R10,1                   Bump over the sign character
+         AHI   R11,-1                  Decrement digit counter
+RCVINTUN JAS   R14,RCVUNSIG            Interpret unsigned number
+         CLI   SIGNCHAR,C'+'           Is sign a plus?
+         JE    RCVSIGNX                Yes, exit signed number convert
+         CLI   SIGNCHAR,C'-'           Is sign a minus?
+         JNE   RCVERROR                No, invalid data
+         OI    QWORK+15,X'0D'          Yes, change decimal sign to -ve
+         LNR   R0,R0                   Change binary to negative
+RCVSIGNX L     R14,SAVELNK2            Restore link register
+         BR    R14
+*
+*  Convert an unsigned string of digits to a positive decimal number
+*
+RCVUNSIG EQU   *                       Convert signed string
+         ST    R14,SAVELNK3            Save link register
+         SGR   R0,R0                   Clear binary accumulator
+         ZAP   QWORK,=P'0'             Clear decimal accumulator
+         SR    R3,R3                   Clear shadow digit counter
+         IC    R3,RLM1_DATA_FRACT      Expected fraction digit count
+         AR    R3,R11                  Add actual length of number
+RCVDSCAN TM    0(R10),X'F0'            Numeric digit?
+         JO    RCVDACCU                Yes, accumulate the number
+         CLI   0(R10),C'.'             Decimal point in number?
+         JNE   RCVNEXIT                No, ignore invalid delimiter
+         AHI   R10,1                   Bump over the decimal point
+         IC    R3,RLM1_DATA_FRACT      Expected fraction digit count
+         AHI   R11,-1                  Adjust count for decimal point
+         JNP   RCVTRAIL                If no digits, append shadows
+         CR    R11,R3                  More digits than expected?
+         JNH   RCVFRACT                No, retain actual digit count
+         LR    R11,R3                  Yes, set expected fraction digts
+RCVFRACT LTR   R11,R11                 Now are there any digits left?
+         JNP   RCVTRAIL                Exit if no fraction expected
+RCVDACCU MVO   QWORK,QWORK             Multiply accumulator by ten
+         IC    R15,0(R10)              Get current digit
+         SLL   R15,4                   Shift to high nibble of low byte
+         AHI   R15,X'0C'               Append positive sign
+         STC   R15,QWORK+15            Save low-order digit with sign
+RCVDNEXT AHI   R10,1                   Increment digit pointer
+         AHI   R3,-1                   Decrement shadow digit counter
+         AHI   R11,-1                  Decrement actual digit counter
+         JP    RCVDSCAN                Continue scan if any digits left
+RCVTRAIL LTR   R3,R3                   Any omitted trailing fract digts
+         JNP   RCVNEXIT                No, exit scan
+RCVZSCAN MVO   QWORK,QWORK             Yes continue multiplying by ten
+         MVI   QWORK+15,X'0C'          Append the signed zero
+         JCT   R3,RCVZSCAN             Consume shadow digits
+RCVNEXIT L     R14,SAVELNK3            Restore link register
+         LG    R0,=X'7FFFFFFFFFFFFFF'  Load highest +ve binary integer
+         CP    QWORK,=P'9223372036854775807'  Does QWORK exceed this?
+         BHR   R14                     Yes, don't try conversion
+         CVBG  R0,QWORK                Convert decimal result to binary
+         BR    R14                     Return
+* Convert an xs:dateTime (or RFC3339) date into abstime
+* xs:dateTime format is yyyy-mm-ddThh:mm:ssZ
+RCVABSTM EQU   *                       CICS abstime
+RCVTODCL EQU   *                       System z TOD clock
+         MVC   DATEWORK(19),0(R10)     Copy the xs:dateTime string
+*                               y y y y - m m - d d T h h : m m : s s
+         NC    DATEWORK(19),=X'F0F0F0F0FFF0F0FFF0F0FFF0F0FFF0F0FFF0F0'
+         CLC   DATEWORK(19),=C'0000-00-00T00:00:00'
+         JNE   RCVERROR                No, can't convert clock value
+*  The CICS CONVERTTIME function doesn't support RFC3339 dates,
+*  so convert it into an RFC1123 date first.
+         LHI   R0,15                   Get mask to clear zone nibble
+         IC    R14,5(,R10)             Get first digit of month
+         NR    R14,R0                  Clear zone
+         MHI   R14,10                  Multiply by 10
+         IC    R15,6(,R10)             Get second digit of month
+         NR    R15,R0                  Clear zone
+         AR    R14,R15                 Add in to total
+         MHI   R14,3                   Multiply by length of monthname
+         LA    R15,=C'JanFebMarAprMayJunJulAugSepOctNovDec'-3(R14)
+         MVC   DATEWORK(32),=CL32' '   Clear the date workspace
+         MVC   DATEWORK+32(32),=CL32' ' Clear the date workspace
+         MVC   DATEWORK+00(2),8(R10)   Copy day number
+         MVC   DATEWORK+03(3),0(R15)   Copy month name
+         MVC   DATEWORK+07(4),0(R10)   Copy year number
+         MVC   DATEWORK+12(8),11(R10)  Copy complete timestamp
+         MVC   DATEWORK+21(3),=C'GMT'  Copy GMT timezone name
+         EXEC  CICS CONVERTTIME DATESTRING(DATEWORK) ABSTIME(PWORK)
+         MVC   0(8,R2),PWORK           Output the abstime
+         CLI   RLM1_CONVERT_TYPE,CTYP_TOD_CLOCK Is TOD clock required?
+         JNE   RCVTABSX                No
+         XC    QWORK(8),QWORK          Clear high-order doubleword
+         CVBG  R0,QWORK                Convert abstime to bin millisecs
+         MSGF  R0,=F'1000'             Convert to binary microsecs
+         SLLG  R0,R0,12                Convert microsecs to clock units
+         L     R1,16                   Load CVT address
+         L     R1,CVTEXT2-CVTMAP(,R1)  Get CVT extension address
+         SG    R0,CVTLDTO-CVTXTNT2(,R1) Adjust local time back to GMT
+         AG    R0,CVTLSO-CVTXTNT2(,R1) Add in leap seconds
+         STCMH R0,15,0(R2)             Save high order word of R0
+         STCM  R0,15,4(R2)             Save low order word of R0
+RCVTABSX AHI   R2,8                    Bump over clock value
+         J     OUTFEXIT
+         SPACE 3
+         DROP  R8
+RCVUNSUP EXEC  CICS ABEND ABCODE('W2C0') . Unsupported conversion
+RCVERROR EXEC  CICS ABEND ABCODE('W2C1') . Invalid data for conversion
+INVRLMEN EXEC  CICS ABEND ABCODE('W2E4') . Invalid RLM entry type
+INVFLDTY EXEC  CICS ABEND ABCODE('W2E6') . Special field invalid type
+*:erefstep.w2samp_analyze_parsed_request_body *************************
+*:refstep.w2samp_get_offset ******************************* DFHW2SAM **
+*                                                                     *
+* Find the offset to the named output field by searching through all  *
+* the preceding fields in the Resource Layout Mapping structure. If   *
+* the number of fields is large, it might be worth creating a         *
+* fieldname lookup index first, but if only a few fields are expected *
+* this is probably not worth the effort.                              *
+*                                                                     *
+* The pointer to the matching RLM entry is returned in R15.           *
+*                                                                     *
+***********************************************************************
+GETOFFST EQU   *                       Get offset to record field
+         ST    R14,SAVELNK2            Save link register
+         STM   R5,R7,SAVE5TO7          Save JXLE registers
+         L     R5,RLM_PTR              Address Resource Layout Mapping
+         USING DFHRLM_HEADER,R5        Estab RLM header addressability
+         L     R7,RLM_LENGTH           Get length of RLM
+         LA    R7,0(R7,R5)             Address the end of the RLM
+         BCTR  R7,0                    Address last byte of the RLM
+         LHI   R6,DFHRLM_HEADER__LEN   Set length of RLM header
+         DROP  R5                      Relinquish RLM header addressing
+         SR    R0,R0                   Set zero in R0
+         ST    R0,FLDOFFST             Initialize field offset to zero
+GNEXTRLM SR    R15,R15                 Clear returned RLM address
+         JXH   R5,R6,GETOEXIT          Bump to next RLM entry
+         USING DFHRLM_ENTRY,R5
+         LHI   R6,DFHRLM_DATA_ENTRY__LEN  Set DATA_ENTRY length
+         CLI   RLM_ENTRY_TYPE,X'01'    Is it a DATA_ENTRY?
+         JE    GDATENTR                Yes, process DATA_ENTRY
+         LHI   R6,DFHRLM_FIXED_REPEAT_ENTRY__LEN
+         CLI   RLM_ENTRY_TYPE,X'02'    Is it a FIXED_REPEAT entry?
+         JE    GNEXTRLM                Yes, skip
+         LHI   R6,DFHRLM_END_REPEAT_ENTRY__LEN
+         CLI   RLM_ENTRY_TYPE,X'04'    Is it an END_REPEAT entry?
+         JE    GNEXTRLM                Yes, skip
+         LHI   R6,DFHRLM_END_OF_FILE_ENTRY__LEN
+         CLI   RLM_ENTRY_TYPE,X'05'    Is it an END_OF_FILE entry?
+         JNE   INVRLMEN                No, entry type unknown
+         USING DFHRLM_DATA_ENTRY,DFHRLM_ENTRY
+GDATENTR LA    R15,255(,R11)           Get Execute length of fieldname
+         L     R1,RLM1_LOCAL_NAME_PTR  Address local name
+         EX    R15,COMPNAME            Compare fieldname
+         JE    FLDFOUND                Filename is matched
+*
+*  Get length of the NON-matching field for accumulation into offset
+*
+         SR    R15,R15                 Clear conversion-type index
+         IC    R15,RLM1_CONVERT_TYPE   Insert conversion type
+         ALR   R15,R15                 Double for halfword indexing
+         LH    R0,TYPELEN(R15)         Get length for convert type
+         LTR   R0,R0                   Is length found equal to zero?
+         JNZ   CALCOFFS                No, accumulate into offset
+         IC    R0,RLM1_DATA_FRACT      Get fraction size (if any)
+         AH    R0,RLM1_DATA_COUNT      Add data count
+         CLI   RLM1_CONVERT_TYPE,CTYP_PACKED_DECIMAL  Signed & packed?
+         JE    GPACKLEN                Yes, adjust data value
+         CLI   RLM1_CONVERT_TYPE,CTYP_UNSIGNED_DECIMAL Unsigned packed?
+         JNE   CALCOFFS                No, data length is correct
+GPACKLEN SRL   R0,1                    Halve the packed digit count
+         AHI   R0,1                    Add one to allow for sign nibble
+CALCOFFS A     R0,FLDOFFST             Add current offset
+         ST    R0,FLDOFFST             Save as new offset
+         J     GNEXTRLM                Process next field in the RLM
+FLDFOUND LR    R15,R5                  Return located RLM entry
+GETOEXIT LM    R5,R7,SAVE5TO7          Restore JXLE registers
+         L     R14,SAVELNK2            Restore link register
+         BR    R14
+*:erefstep.w2samp_get_offset ******************************************
+*:refstep.w2samp_sendmsg_routine ************************** DFHW2SAM **
+*                                                                     *
+***********************************************************************
+***********************************************************************
+*  If the parser produces an unexpected return code issue a message
+*  containing the codes and then abend with code W2P2 or W2P4.
+***********************************************************************
+SENDMSG  DS    0Y
+         USING DFHEISTG,R13            Address EISTG
+         USING W2STATIC,R12            Address static storage
+         ICM   R15,15,PARSRESP         Load and test response code
+         BZR   R14                     Return silently if no problem
+         L     R0,PARSREAS             Get the reason code
+         N     R0,=A(X'FFFF')          Isolate low halfword
+         CHI   R0,XRSN_BUFFER_INBUF_END  End of current input buffer?
+         BER   R14                     Yes, this is usually intentional
+         MVC   WTOSPACE(WTOLEN),WTOSKEL  Copy WTO skeleton
+         UNPK  ZWORK,PARSRESP+2(3)     Unpack two bytes of return code
+         TR    ZWORK(4),HEXCONV
+         MVC   WTOSPACE+42(4),ZWORK
+         UNPK  ZWORK,PARSREAS+2(3)     Unpack two bytes of reason code
+         TR    ZWORK(4),HEXCONV
+         MVC   WTOSPACE+52(4),ZWORK
+         WTO   MF=(E,WTOSPACE)
+         L     R5,OUTBUFFP             Reset to start of output buffer
+         USING XEH_BUFINFO,R5          Establish buffer info addressing
+         L     R3,XEH_ERROFFSET31      Get offset to the error record
+         LA    R3,0(R3,R5)             Get address of the error record
+         CLC   0(2,R3),=AL2(XEC_TOK_ERROR) Valid error record?
+         BNER  R14                     No, do't try to examine it
+         USING XEH_ERRINFO,R3          Addressing for error information
+         L     R1,XEH_DOCOFFSET+4      Get 31-bit offset to error text
+         A     R1,INBUFFPT             Relocate into buffer
+         AHI   R1,-16                  Decrement by 16 bytes
+         MVC   WTOSPACE(WTOLEN2),WTOSKEL2  Set up second skeleton
+         MVC   WTOSPACE+14(32),0(R1)   Copy the error text
+         TR    WTOSPACE+14(32),RECTIFY Rectify the text
+         WTO   MF=(E,WTOSPACE)         Send the message
+         J     XPARSERR                Signal parse error
+         BR    R14
+         EJECT ,
+*:erefstep.w2samp_sendmsg_routine *************************************
+W2STATIC DC    0AD(0)
+SAVETAGN MVC   TAGNAME(0),0(R14)       Save the current tagname
+INVQITEM DC    C'<content type="text">'
+         DC    C'Specified TSqueue item not found.'
+         DC    C'</content>&CRLF'
+INVQITEL EQU   *-INVQITEM
+INVQNAME DC    C'<content type="text">'
+         DC    C'Specified TSqueue name not found.'
+         DC    C'</content>&CRLF'
+INVQNAML EQU   *-INVQNAME
+ERRCONTE DC    C'<content type="text">'
+         DC    C'Error reading TSqueue entry.'
+         DC    C'</content>&CRLF'
+ERRCONTL EQU   *-ERRCONTE
+HIGHBYTE DC    X'FF'                   Single highvalues byte
+*:refstep.w2samp_common_constants ************************* DFHW2SAM **
+*                                                                     *
+* The following constants and static definitions are common to all    *
+* the Web2.0 samples.                                                 *
+*                                                                     *
+***********************************************************************
+COPYTEXT MVC   0(0,R2),0(R14)          Copy element content
+COPYUPPR OC    0(0,R2),0(R14)          Copy with uppercasing
+PACKTEXT PACK  PWORK,0(0,R14)          Pack string into Pwork
+COPYHOST MVC   0(0,R6),HOSTNAME        Copy the hostname
+COPYPORT MVC   0(0,R6),0(R1)           Copy colon + portnumber
+COPYPATH MVC   0(0,R6),PATHNAME        Copy pathname into URL
+COPYQSTR MVC   1(0,R6),QSTRING         Copy the querystring
+*
+XEFSTCOM EQU   XEC_FEAT_STRIP_COMMENTS
+XEFTKWSP EQU   XEC_FEAT_TOKENIZE_WHITESPACE
+XEFTCASC EQU   XEC_FEAT_CDATA_AS_CHARDATA
+CRLF     EQU   X'0D25'                 Carriage-Return/Line-Feed
+RESPNFND EQU   4                       Requested resource not found
+RESPIOER EQU   8                       I/O error accessing resource
+*
+AGXL1INI DC    V(GXL1INI)
+AGXL1PRS DC    V(GXL1PRS)
+AGXL1TRM DC    V(GXL1TRM)
+CCSIDVAL DC    A(XEC_ENC_IBM_1047)
+OBUFSIZE DC    A(32768)
+PARSFEAT DC    A(XEFSTCOM+XEFTKWSP+XEFTCASC)
+NULLVECT DC    A(0)                    Null system vector
+*  Set up a handler_parameter_list container to contain the
+*  other content and set the default namespace.
+AWRAPP1  DC    A(WRAPPER1)
+AWRAPP2  DC    A(WRAPPER2)
+LWRAPP1  DC    A(WRAP1LEN)
+LWRAPP2  DC    A(WRAP2LEN)
+WRAPPER1 DC    C'<handler_parameter_list xmlns="'
+         DC    C'http://www.ibm.com/software/htp/cics/pipeline'
+         DC    C'">'
+WRAP1LEN EQU   *-WRAPPER1
+WRAPPER2 DC    C'</handler_parameter_list>'
+WRAP2LEN EQU   *-WRAPPER2
+SPACES   DC    CL32' '
+WTOSKEL  WTO   'DFHW29901 Responses from Parser: RESP=**** REAS=****',M*
+               F=L
+WTOLEN   EQU   *-WTOSKEL
+WTOSKEL2 WTO   'DFHW29902 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',MF=L
+WTOLEN2  EQU   *-WTOSKEL2
+         ORG   W2STATIC+C'0'           Ensure that HEXVALUE-C'0'
+         ORG   ,                       ...is not before W2STATIC
+HEXVALUE DC    C'0123456789ABCDEF'     Define hex values
+HEXCONV  EQU   HEXVALUE-C'0',256,C'C'  Define virtual origin
+* This translate table is used to convert data that may possibly
+* contain invalid characters into data that can be safely displayed
+* on the console.
+RECTIFY  DC    C'................................'
+         DC    C'................................'
+         DC    C' .........›.<(+|&&.........!$*);^'
+         DC    C'-/.........,%_>?..........:#@''="'
+         DC    C'.abcdefghi.......jklmnopqr......'
+         DC    C'È.stuvwxyz......................'
+         DC    C'{ABCDEFGHI......}JKLMNOPQR......'
+         DC    C'\.STUVWXYZ......0123456789......'
+*:erefstep.w2samp_common_constants ************************************
+*:refstep.w2service_routine_constants ********************* DFHW2SAM **
+*                                                                     *
+***********************************************************************
+ELSTKLEN EQU   16                      Element stack length
+ATOMPRPL EQU   2
+CICSRDFL EQU   1
+MAXCICSR EQU   0
+MAXDEPTH EQU   32
+ANSTATIC DS    0AD(0)
+AANALREQ DC    A(ANALREQ)              Address of Analyze request func
+COMPNAME CLC   0(0,R10),0(R1)          Compare names
+COPYNUMB MVC   0(0,R2),0(R1)           Copy a number or number fragment
+UNPKWORK UNPKA 0(0,R2),QWORK           Unpack packed number to ascii
+EBCDNUMB OC    0(0,R2),=32C'0'         Convert ascii number to ebcdic
+ZAPWORK  ZAP   0(0,R2),QWORK           Zap fixed-len packed to variable
+ZAPNUMB  ZAP   QWORK,0(0,R5)           Zap variable-len packed to fixed
+PACKNUMB PACK  QWORK,0(0,R5)           Pack variable-len zoned to fixed
+HTTPCREA DC    C'HTTP/1.1 201 Created' Resource was created by POST
+HTTPDELE DC    C'HTTP/1.1 204 Deleted' Resource was deleted by DELETE
+HTTPPREF DC    C'HTTP/1.1 412 Precondition Failed'
+*
+*  The following table maps the supported datatypes to their
+*  corresponding lengths, when this is a fixed quantity,
+*  or to zero for variable length field types.
+*
+TYPELEN  DC    0AD(0)
+         DC    Y(0)                    0  Unused
+         DC    Y(0)                    1  CHAR_STRING
+         DC    Y(0)                    2  HEX_STRING
+         DC    Y(1)                    3  BYTE
+         DC    Y(1)                    4  UNSIGNED_BYTE
+         DC    Y(2)                    5  SHORT
+         DC    Y(2)                    6  UNSIGNED_SHORT
+         DC    Y(4)                    7  INT
+         DC    Y(4)                    8  UNSIGNED_INT
+         DC    Y(8)                    9  LONG
+         DC    Y(8)                    10 UNSIGNED_LONG
+         DC    Y(0)                    11 Reserved
+         DC    Y(1)                    12 BOOLEAN
+         DC    Y(4)                    13 BFP_FLOAT
+         DC    Y(8)                    14 BFP_DOUBLE
+         DC    Y(0)                    15 PACKED_DECIMAL
+         DC    Y(0)                    16 UNSIGNED_DECIMAL
+         DC    Y(0)                    17 BASE64_STRING
+         DC    Y(0)                    18 ZONED_DECIMAL
+         DC    Y(0)                    19 UNSIGNED_ZONED
+         DC    Y(4)                    20 HFP_SHORT
+         DC    Y(8)                    21 HFP_LONG
+         DC    Y(8)                    22 CICS_ABSTIME
+         DC    Y(8)                    23 TOD_CLOCK
+         DC    Y(0)                    24 Reserved
+         LTORG ,
+*:erefstep.w2service_routine_constants ********************************
+*:refstep.w2samp_namespaces ******************************* DFHW2SAM **
+*                                                                     *
+***********************************************************************
+*
+*  Define numeric constants for all the expected namespaces
+*
+NSXML1ID EQU   X'101'             XML namespace namespace
+NSXML2ID EQU   X'102'             XML namespace namespace
+NSXSCHID EQU   X'103'             XML Schema namespace
+NSXSCIID EQU   X'104'             XML Schema instance namespace
+NSPIPEID EQU   X'105'             CICS PIPELINE namespace
+NSCICSID EQU   X'106'             ATOMPIPE namespace used by SupportPac
+NSATOMID EQU   X'107'             ATOM namespace from of RFC4287
+NSATMPID EQU   X'108'             ATOM publishing namespace of RFC5023
+NSDFDLID EQU   X'109'             DFDL Namespace
+SYMTABLN EQU   120                Symbol table length
+*
+         SPACE 3
+*
+*  Here is a table of namespace URIs that will be tokenized.
+*  They are the namespace identifiers that are expected in the
+*  CICS PIPELINE configuration file.
+*
+SYMSTRA  DS    0AD(0)                  Symbol table on dword boundary
+SYMXML1  DC    A(NSXML1ID,L'NSXML1),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSXML1   DC    C'http://www.w3.org/XML/1998/namespace'
+         ORG   ,
+SYMXML2  DC    A(NSXML2ID,L'NSXML2),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSXML2   DC    C'http://www.w3.org/2000/xmlns/'
+         ORG   ,
+SYMPIPE  DC    A(NSPIPEID,L'NSPIPE),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSPIPE   DC    C'http://www.ibm.com/software/htp/cics/pipeline'
+         ORG   ,                       Namespace for CICS PIPE
+SYMCICS  DC    A(NSCICSID,L'NSCICS),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSCICS   DC    C'http://www.ibm.com/software/htp/cics/atompipe'
+         ORG   ,                       Namespace for SupportPac
+SYMATOM  DC    A(NSATOMID,L'NSATOM),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSATOM   DC    C'http://www.w3.org/2005/Atom' Namespace id from RFC4287
+         ORG   ,
+SYMATMP  DC    A(NSATMPID,L'NSATMP),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSATMP   DC    C'http://www.w3.org/2007/app'  Namespace id from RFC5023
+         ORG   ,
+SYMXSCI  DC    A(NSXSCIID,L'NSXSCI),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSXSCI   DC    C'http://www.w3.org/2001/XMLSchema-instance'
+         ORG   ,
+SYMXSCH  DC    A(NSXSCHID,L'NSXSCH),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSXSCH   DC    C'http://www.w3.org/2001/XMLSchema' XML Schema Namespace
+         ORG   ,
+SYMDFDL  DC    A(NSDFDLID,L'NSDFDL),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSDFDL   DC    C'http://dataformat.org/dfdl-1.0'
+         ORG   ,
+SYMSTRZ  EQU   *-SYMSTRLN              Address of last entry
+*
+SYMTAB   DSECT                    Symbol table entry
+SYMTABID DS    F                  Symbol table token id
+SYMTABLL DS    F                  Symbol table length
+SYMTABVL DS    CL(SYMTABLN)       Symbol table value
+SYMSTRLN EQU   *-SYMTAB
+*:erefstep.w2samp_namespaces ******************************************
+         DFHEISTG ,                    Start of dynamic storage
+QCOUNTER DS    H                       Queue item number
+QFIRST   DS    H                       First active item on queue
+QLAST    DS    H                       Last active item on queue
+QNEXT    DS    H                       Next active item on queue
+QPREV    DS    H                       Previous active item on queue
+QMAXNUM  DS    H                       Last actual item on queue
+QSELITEM DS    H                       Currently selected item
+QRECLEN  DS    H                       Queue record length
+*:refstep.w2samp_common_dynamic_storage ******************* DFHW2SAM **
+*                                                                     *
+* Define dynamic storage that is common to the Web2.0 samples.        *
+* Although it would appear to be economical to overlay the XML parser *
+* parameter list with the URM parameter list, this can't be done      *
+* because, for PUT and POST, the URM calls the parser!!               *
+*                                                                     *
+***********************************************************************
+XMLPLIST DS    0D
+XMLPARM1 DS    A                  Address of XML parser parameter 1
+XMLPARM2 DS    A                  Address of XML parser parameter 2
+XMLPARM3 DS    A                  Address of XML parser parameter 3
+XMLPARM4 DS    A                  Address of XML parser parameter 4
+XMLPARM5 DS    A                  Address of XML parser parameter 5
+XMLPARM6 DS    A                  Address of XML parser parameter 6
+XMLPARM7 DS    A                  Address of XML parser parameter 7
+XMLPARM8 DS    A                  Address of XML parser parameter 8
+XMLPLLEN EQU   *-XMLPLIST
+URMPLIST DS    0D                 Params from ATOMPARAMETER container
+         DS    XL(ATMP_PARAMETER_LIST__LEN)
+URMPLLEN EQU   *-URMPLIST
+         DS    0D                 Doubleword alignment
+DATEWORK DS    CL64               Space for date conversion
+         ORG   DATEWORK
+QWORK    DS    PL16               Packed decimal quadword
+         ORG   QWORK+8            Overlay lower doublword
+PWORK    DS    PL8                Packed decimal doubleword
+TODCLOCK DS    FD                 Time of day clock                @P1A
+         ORG   PWORK              Overlay with 9-byte workarea
+PWORK9   DS    PL9                Some conversions use nine-byte fields
+EWORK    DS    XL6                Edit & mark workarea
+ZWORK    DS    XL5                Zoned decimal workarea
+         ORG   ,
+         DS    0D                 Doubleword alignment
+PIMA_PTR DS    A                  Address of Parse Instance Memory Area
+PIMASIZE DS    F                  Size of Parse Instance Memory Area
+PARSRESP DS    F                  Parse return code
+PARSREAS DS    F                  Parse reason code
+INBUFFPT DS    A                  Address of input buffer
+INREMAIN DS    F                  Input bytes remaining
+OUBUFFPT DS    A                  Address of output buffer
+OUREMAIN DS    F                  Output bytes remaining
+HCONTPTR DS    A                  Address of <handler_parameter_list>
+HCONTLEN DS    F                  Length of <handler_parameter_list>
+PARSPARM DS    A                  Null parse system parameter
+OPTSNULL DS    A                  Null options word
+OUTBUFFP DS    A                  Permanent address of output buffer
+OUTBUFFL DS    F                  Permanent length of output buffer
+OUTBUFFN DS    F                  Current length of output buffer
+RESPBUFP DS    A                  Pointer to Atom response
+RESPBUFL DS    F                  Length of Atom response
+RESPSIZE DS    F                  Size of Atom response buffer
+RLM_PTR  DS    A                  Address of Resource Layout Mapping
+RLM_LEN  DS    F                  Length of RLM
+SCHEMECV DS    F
+HOSTLEN  DS    F
+PATHLEN  DS    F
+METHLEN  DS    F
+URLLEN   DS    F                  Length of invoking URL
+URLTLEN  DS    H                  Length of truncated URL (scheme+host)
+URLQOFF  DS    H                  Offset to querystring
+QSTRLEN  DS    F                  Length of querystring
+MEDIATYL DS    F
+PORTNUM  DS    F
+ETAGLEN  DS    F                  Length of Etag value
+WORKSNDX DS    F                  Current app:workspace index
+NUMENTS  DS    H
+ENTRYCNT DS    H
+SAVEXMLP DS    A                  Savearea for XML output ptr
+SAVELNK1 DS    A                  Link register savearea
+SAVELNK2 DS    A                  Link register savearea
+SAVELNK3 DS    A                  Link register savearea
+SAVELNK4 DS    A                  Link register savearea
+SAVE5TO7 DS    3A                 JXLE register savearea
+CTYPELEN DS    F                  Content-Type length
+RSRCNAME DS    CL16               CICS resource name
+RSRCTYPE DS    CL12
+DATETIME DS    CL32               xsd:dateTime or RFC3339 format
+ETAGVAL  DS    CL16               Etag value
+HTTPMETH DS    CL8
+MEDIATYP DS    CL56
+HTTPSTAT DS    CL56
+*  Some of the following fields can probably be overlaid
+*  if the size if DFHEISTG becomes too large.
+FUNCCONT DS    CL15               Function container
+         DS    C
+HOSTNAME DS    CL128              Hostname from EXTRACT WEB command
+PATHNAME DS    CL256              Pathname from EXTRACT WEB command
+SELFURL  DS    CL384              URL used to invoke this program
+         DS    0AD
+WTOSPACE DS    XL(WTOLEN)         Space for WTO message
+         DS    0AD
+*:erefstep.w2samp_common_dynamic_storage ******************************
+*:refstep.w2samp_service_routine_dynamic_storage ********** DFHW2SAM **
+*                                                                     *
+***********************************************************************
+RESOURCE DS    CL16                    Name of resource to be processed
+ETAGVIN  DS    CL16                    Etag value input to service
+NWORK    DS    CL32                    Number conversion workarea
+RFC3339  DS    CL32                    RFC3339 timestamp
+TAGNAME  DS    CL32                    Current tagname
+IDFIELD  DS    CL32                    Name of atom:id field
+UPDFIELD DS    CL32                    Name of timestamp field
+KEYFIELD DS    CL32                    Name of record key field
+TTLFIELD DS    CL32                    Name of the title field
+STLFIELD DS    CL32                    Name of the subtitle field
+SUMFIELD DS    CL32                    Name of the summary field
+CICSTIME DS    PL8                     Timestamp in CICS ABSTIME format
+SELECTOR DS    XL8                     Ptr/Len of item selector
+SIGNFLAG DS    B
+SIGNED   EQU   X'80'
+SIGNCHAR DS    C
+FLAGS    DS    B
+INCONTEN EQU   X'80'
+OUTTYPE  DS    FL1                     Output type
+OUTPLAIN EQU   0                       Output is plain text
+OUTHTML  EQU   1                       Output is HTML (escaped)
+OUTXHTML EQU   2                       Output is XHTML (not escaped)
+OUTXML   EQU   3                       Output is XML
+RESPCODE DS    FL1                     Response code
+         DS    XL3
+RLM_END  DS    A                       Address of the end of the RLM
+CONT_PTR DS    A                       Content container pointere
+CONT_LEN DS    F                       Content container length
+TIME_PTR DS    A                       Ptr to 32-byte timestamp
+RESP_PTR DS    A                       Ptr to return code
+SELSTORP DS    A                       Ptr to selector storage
+PLISTLEN DS    F
+RECD_PTR DS    A
+FLDOFFST DS    F
+QSTRING  DS    0X
+         DS    D
+ANASTORE DS    XL(ANASTORL)
+*:erefstep.w2samp_service_routine_dynamic_storage *********************
+         DFHEIEND ,                    End of dynamic storage
+*:refstep.w2samp_service_routine_analyzer_storage ********* DFHW2SAM **
+*                                                                     *
+***********************************************************************
+ANASTORD DSECT
+ANASAVEA DS    18F                     Analyze savearea
+ENTRYPTR DS    A                       Base for atomentry chain
+CURRENTR DS    A                       Address of current entry
+CURRELPT DS    A                       Address of current element tokns
+APPWRKSP DS    A                       Address of APP workspaces
+RSRCINDX DS    F                       Current cics:resource index
+ATTRNAME DS    XL8                     Current attribute name tokens
+ELEMSTCK DS    (MAXDEPTH)XL(ELSTKLEN)  Stack of element tokens
+FEEDUPDT DS    CL32                    Space for last update timestamp
+ANASTORL EQU   *-ANASTORD
+*:erefstep.w2samp_service_routine_analyzer_storage ********************
+SELSTORE DSECT ,
+SELCURR  DS    CL8                     Selector for current queue item
+SELPREV  DS    CL8                     Selector for prev queue item
+SELNEXT  DS    CL8                     Selector for next queue item
+SELFIRST DS    CL8                     Selector for first queue item
+SELLAST  DS    CL8                     Selector for last queue item
+SELSTORL EQU   *-SELSTORE
+         END   ,

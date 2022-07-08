@@ -1,0 +1,297 @@
+      CBL CICS('COBOL3,SP')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0BAT6                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Batch Enabling Sample BAT3                 *
+      *                    Force Indoubt UOWs Program                 *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      *   To aid the customer in the preparation for running non-RLS  *
+      *   VSAM batch jobs against a group of data sets, CICS          *
+      *   provides a suite of sample COBOL2 programs called DFH0BATx. *
+      *                                                               *
+      *   For an overview of the DFH0BATx suite, refer to the prolog  *
+      *   of program DFH0BAT1.                                        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      *   This program is part of a suite of programs DFH0BATx which  *
+      *   is intended to aid the user in the identification and       *
+      *   resolution of VSAM RLS retained locks. It may be modified   *
+      *   as required by the customer.                                *
+      *                                                               *
+      *   This program identifies any retained locks for a named data *
+      *   set that are caused by indoubt units of work, then forcibly *
+      *   backs them out. It is called remotely by coordinating       *
+      *   program DFH0BAT3 using DPL. Any errors arising from this    *
+      *   are written to remote TS queue DFH0BQ3 which resides on     *
+      *   the coordinating region.                                    *
+      *                                                               *
+      *   The name of the dataset for which indoubt units of work     *
+      *   are to be forced is passed to DFH0BAT6 in a commarea.       *
+      *   If DFH0BAT6 detects that there is no commarea,              *
+      *   or that its length is unexpected,                           *
+      *   the application is abnormally terminated with an abend code *
+      *   of BT61.                                                    *
+      *                                                               *
+      *   NOTE: The decision this sample takes is to always           *
+      *   backout indoubts - the customer can change this to          *
+      *   always commit indoubts or to use the value specified on     *
+      *   the ACTION parameter of the TRANSACTION definition. One     *
+      *   advantage of specifying backout is that diagnostic          *
+      *   information is written about the log records which are      *
+      *   forced to backout.                                          *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *  $MOD(DFH0BAT6),COMP(SAMPLES),PROD(CICS TS ):                 *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $L0= 654    510 941010 HDMMFM  : Created                      *
+      * $L1= 654    510 950210 HDMMFM  : Code Review work             *
+      * $P1= M93569 510 950105 HD9ZSMH : Use EXEC CICS SET DSN BACKOUT*
+      * $P2= M95193 510 950821 HDAVCMM : Correct prolog               *
+      * $P3= M95451 510 950925 HDAVCMM : Correct some comments        *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0BAT6.
+
+       ENVIRONMENT DIVISION.
+           EJECT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *****************************************************************
+      * Copy book for record for TS queue DFH0BQ3. A record is written
+      * to this queue if an error is encountered.
+      *****************************************************************
+       COPY DFH0BC31.
+      *****************************************************************
+      * Various variables used throughout the program.
+      *****************************************************************
+       77  INQ-RESP                    PIC S9(8) COMP.
+       77  INQ-RESP2                   PIC S9(8) COMP.
+       77  SET-RESP                    PIC S9(8) COMP.
+       77  SET-RESP2                   PIC S9(8) COMP.
+       77  ASSIGN-RESP                 PIC S9(8) COMP.
+
+       77  OUR-APPLID                  PIC X(8).
+       77  OUR-SYSID                   PIC X(4).
+       77  COORD-SYSID                 PIC X(4).
+
+       77  RET-LOCKS                   PIC S9(8) COMP.
+       77  RLS-STATUS                  PIC S9(8) COMP.
+       77  ABEND-CODE                  PIC X(4).
+       77  BT61                        PIC X(4) VALUE 'BT61'.
+
+       LINKAGE SECTION.
+      *****************************************************************
+      * Copy book for commarea passed to DFH0BAT6.
+      *****************************************************************
+       COPY DFH0BC32 REPLACING ==COMMAREA-3.== BY
+                               ==COMMAREA-3 REDEFINES DFHCOMMAREA.==.
+           EJECT.
+
+      *****************************************************************
+      ***               Batch Enabling Sample BAT3                  ***
+      ***               Force Indoubt UOWs Program                  ***
+      *****************************************************************
+       PROCEDURE DIVISION USING DFHEIBLK DFHCOMMAREA.
+
+       MAIN-PROCESSING SECTION.
+
+      *****************************************************************
+      * Check that we have been passed the correct commarea.
+      * If not return immediately.
+      *****************************************************************
+           IF EIBCALEN NOT = LENGTH OF COMMAREA-3 THEN
+             MOVE BT61 TO ABEND-CODE
+             EXEC CICS ABEND
+                  ABCODE(ABEND-CODE)
+             END-EXEC
+           ELSE
+      *****************************************************************
+      * First find the sysid of the coordinating CICS region.
+      * Then forcibly resolve any indoubt units of work for the data
+      * set named in the commarea. The decision made is to backout
+      * the units of work - the customer can change this as desired
+      * (see prolog).
+      *****************************************************************
+             PERFORM FIND-COORD-SYSID
+             PERFORM FORCE-INDOUBTS
+           END-IF.
+      *****************************************************************
+      * End the program and return to CICS.
+      *****************************************************************
+           EXEC CICS RETURN
+           END-EXEC.
+
+       MAIN-PROCESSING-EXIT.
+           GOBACK.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedures start here.
+      *---------------------------------------------------------------*
+
+      *---------------------------------------------------------------*
+      * Procedure to work out if we are running locally on the
+      * coordinating region, or remotely via DPL, and to set up
+      * the SYSID for use on subsequent TS and TD commands.
+      *---------------------------------------------------------------*
+       FIND-COORD-SYSID SECTION.
+           EXEC CICS ASSIGN
+                APPLID(OUR-APPLID)
+                SYSID(OUR-SYSID)
+                PRINSYSID(COORD-SYSID)
+                RESP(ASSIGN-RESP)
+           END-EXEC.
+      *****************************************************************
+      * A response of INVREQ caused by the PRINSYSID option means
+      * that we are running locally.
+      *****************************************************************
+           EVALUATE ASSIGN-RESP
+             WHEN DFHRESP(NORMAL)
+               CONTINUE
+             WHEN OTHER
+               MOVE OUR-SYSID TO COORD-SYSID
+           END-EVALUATE.
+
+       FIND-COORD-SYSID-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to forcibly resolve indoubt units of work for
+      * a data set. We do this if the data set has retained locks,
+      * the SMSVSAM server is available, and there are indoubt
+      * units of work for the data set.
+      *---------------------------------------------------------------*
+       FORCE-INDOUBTS SECTION.
+           PERFORM ANY-RETLOCKS.
+           IF RET-LOCKS = DFHVALUE(RETAINED)
+             PERFORM INQUIRE-VSAM-SERVER
+             IF RLS-STATUS = DFHVALUE(RLSACTIVE)
+               PERFORM FORCE-UOWS
+             END-IF
+           END-IF.
+
+       FORCE-INDOUBTS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to see if any retained locks exists for a data set.
+      *---------------------------------------------------------------*
+       ANY-RETLOCKS SECTION.
+           MOVE DFHVALUE(NORETAINED) TO RET-LOCKS.
+           EXEC CICS INQUIRE DSNAME(CA-DSNAME)
+                RETLOCKS(RET-LOCKS)
+                RESP(INQ-RESP)
+                RESP2(INQ-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If the inquiry failed write an error message to the TS queue
+      * Otherwise RETAINED, NORETAINED or NOTAPPLIC is returned.
+      * NOTAPPLIC can be treated as NORETAINED - the data set is in
+      * a state where retained locks can not have been created by
+      * this CICS sytem.
+      *****************************************************************
+           IF INQ-RESP NOT = DFHRESP(NORMAL)
+             MOVE 'Inq retlocks failed' TO TSQ-ERR-MSG
+             MOVE OUR-APPLID TO TSQ-APPLID
+             MOVE CA-DSNAME TO TSQ-DSNAME
+             MOVE INQ-RESP TO TSQ-RESP
+             MOVE INQ-RESP2 TO TSQ-RESP2
+             PERFORM WRITE-TSQ-RECORD
+           END-IF.
+
+       ANY-RETLOCKS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to force all indoubt units of work for a data set.
+      * The decision taken is to BACKOUT. Alternatives are to
+      * COMMIT or to obey the TRANSACTION definition ACTION
+      * parameter (FORCE) (see prolog).
+      *---------------------------------------------------------------*
+       FORCE-UOWS SECTION.
+           EXEC CICS SET DSNAME(CA-DSNAME)
+                BACKOUT
+                RESP(SET-RESP)
+                RESP2(SET-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If the force was unsuccessful, write an error message to
+      * the TS queue.
+      *****************************************************************
+           IF SET-RESP NOT = DFHRESP(NORMAL)
+             MOVE 'Force indoubt failed' TO TSQ-ERR-MSG
+             MOVE OUR-APPLID TO TSQ-APPLID
+             MOVE CA-DSNAME TO TSQ-DSNAME
+             MOVE SET-RESP TO TSQ-RESP
+             MOVE SET-RESP2 TO TSQ-RESP2
+             PERFORM WRITE-TSQ-RECORD
+           END-IF.
+
+       FORCE-UOWS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to check if the SMSVSAM server is available.
+      *---------------------------------------------------------------*
+       INQUIRE-VSAM-SERVER SECTION.
+           EXEC CICS INQUIRE SYSTEM
+                RLSSTATUS(RLS-STATUS)
+           END-EXEC.
+      *****************************************************************
+      * If the server is not present then there is no point
+      * continuing. Write an error message to the TS queue.
+      *****************************************************************
+           IF RLS-STATUS NOT = DFHVALUE(RLSACTIVE)
+             MOVE 'VSAM server failed' TO TSQ-ERR-MSG
+             MOVE OUR-APPLID TO TSQ-APPLID
+             MOVE CA-DSNAME TO TSQ-DSNAME
+             MOVE DFHRESP(NORMAL) TO TSQ-RESP
+             PERFORM WRITE-TSQ-RECORD
+           END-IF.
+
+       INQUIRE-VSAM-SERVER-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to write a TS record to DFH0BQ3. As this may be
+      * remote, the WRITEQ TS command may be function shipped.
+      *---------------------------------------------------------------*
+       WRITE-TSQ-RECORD SECTION.
+           EXEC CICS WRITEQ TS
+                QUEUE(TSQ-RELEASE-NAME)
+                FROM(TSQ-RELEASE-RECORD)
+                LENGTH(LENGTH OF TSQ-RELEASE-RECORD)
+                SYSID(COORD-SYSID)
+           END-EXEC.
+
+       WRITE-TSQ-RECORD-EXIT.
+           EXIT.

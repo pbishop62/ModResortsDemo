@@ -1,0 +1,547 @@
+*ASM XOPTS(FEPI)
+         TITLE 'DFH0AZQS - FEPI Sample: STSN Processing'
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1994, 2003"                             *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*   STATUS = 7.2.0                                                    *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*   $MOD(DFH0AZQS),COMP(FEPI),PROD(CICS TS ):                         *
+*                                                                     *
+*  PN= REASON REL YYMMDD HDXXIII : REMARKS                            *
+* $L0= Base   410 94     HD5VDLA : Base                               *
+* $P1= D05923 630 030305 HDHFFB  : Fix compile problem in FEPI samp   *
+*                                                                     *
+***********************************************************************
+*                                                                     *
+*  MODULE NAME = DFH0AZQS                                             *
+*                                                                     *
+*  DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample Program:               *
+*                     STSN handler.                                   *
+*                     Assembler version                               *
+*                                                                     *
+*                                                                     *
+*  FUNCTION = This program handles STSN processing for the            *
+*             FEPI sample application programs.                       *
+*                                                                     *
+*                                                                     *
+* OVERVIEW                                                            *
+*                                                                     *
+*      This transaction is started by FEPI when a request for         *
+*      message resynchronization ('set and test sequence number',     *
+*      STSN) or a 'start data traffic' indication is received from    *
+*      a back-end IMS system.                                         *
+*                                                                     *
+*      The conversation passed by FEPI MUST be accessed so that       *
+*      FEPI knows that the event is being handled.  The processing    *
+*      required depends on the STSN status, which is obtained using   *
+*      FEPI EXTRACT STSN.                                             *
+*                                                                     *
+*      For STSNSTATUS=NOSTSN, the transaction was started because     *
+*      'start data traffic' arrived.  A DR1 normal response must be   *
+*      sent.                                                          *
+*                                                                     *
+*      For STSNSTATUS=STSNSET, a positive STSN response must be       *
+*      sent.                                                          *
+*                                                                     *
+*      For STSNSTATUS=STSNTEST, processing would typically involve    *
+*      comparing saved sequence numbers with those received from      *
+*      the back-end IMS system to determine what response to send.    *
+*      The IMS Customization Guide gives advice on the appropriate    *
+*      action.                                                        *
+*                                                                     *
+*      After the processing, the response is sent using FEPI ISSUE.   *
+*      A report is written to a TS queue named 'SESSION', which can   *
+*      be browsed using CEBR.  The general format of the TS queue     *
+*      records is:                                                    *
+*                                                                     *
+*      date time CZQS STSN processing completed                       *
+*                Target......TGTNAME      Node........NODENAME        *
+*                Seqnumin....nnnn         Seqnumout...nnnn            *
+*                STSN status.XXXXXXXX     Response....XXXXXXXX        *
+*                                                                     *
+*                                                                     *
+*  PROGRAM LOGIC                                                      *
+*                                                                     *
+*       RETRIEVE start data                                           *
+*       Access conversation using FEPI ALLOCATE with PASSCONVID       *
+*       Get STSN status using FEPI EXTRACT STSN                       *
+*       Process according to STSN status:                             *
+*            STSNSTATUS=NOSTSN   - build DR1 normal response          *
+*            STSNSTATUS=STSNSET  - build STSN positive response       *
+*            STSNSTATUS=STSNTEST - handle as required and build       *
+*                                      required response              *
+*       Send response using FEPI ISSUE CONTROL                        *
+*       Write event details to TS queue                               *
+*       Free conversation, keeping session                            *
+*       RETURN                                                        *
+*                                                                     *
+*
+*
+*=====================================================================*
+*=       Working storage                                             =*
+*=====================================================================*
+*
+*
+DFHEISTG           DSECT ,
+*
+* Subroutine return address save areas.
+*
+RET_TSQ            DS    A
+*
+* Values used in CICS commands.
+*
+SZSTSN_ABSTIME     DS    PL8           Used for ASKTIME
+*
+SZSTSN_LENGTH      DS    H             Start data length
+*
+SZSTSN_STAT        DS    F             Used for FEPI commands
+SZSTSN_SEQNUMIN    DS    F
+SZSTSN_SEQNUMOUT   DS    F
+SZSTSN_STSNV       DS    F
+SZSTSN_IVALUE      DS    F
+SZSTSN_RESP        DS    F
+SZSTSN_RESP2       DS    F
+*
+* Used for building TS queue records.
+*
+SZSTSN_HOLD_DATA1  DS    CL12
+SZSTSN_HOLD_DATA2  DS    CL12
+*
+SZSTSN_HOLD_RESP   DS    F
+SZSTSN_HOLD_RESP2  DS    F
+*
+SZSTSN_HOLD_PACK   DS    D
+SZSTSN_HOLD_CHAR   DS    CL8
+*
+* Formats for the TS queue records.
+*
+SZSTSN_MESSAGE1    DS    0CL74         Message line
+SZSTSN_DATE        DS    CL8
+                   DS    CL1
+SZSTSN_TIME        DS    CL8
+                   DS    CL1
+SZSTSN_TRANSID     DS    CL4
+                   DS    CL1
+SZSTSN_DESC        DS    CL40
+                   DS    CL11
+*
+                   ORG   SZSTSN_MESSAGE1
+SZSTSN_MESSAGE2    DS    0CL74         Detail line
+                   DS    CL18
+SZSTSN_DESC1       DS    CL12
+SZSTSN_DATA1       DS    CL12
+                   DS    CL1
+SZSTSN_DESC2       DS    CL12
+SZSTSN_DATA2       DS    CL12
+*
+                   ORG   ,
+*
+* DFHSZAPA defines the FEPI RESP2 values and
+* the FEPI start data layout.
+*
+                   COPY  DFHSZAPA
+*
+*
+*=====================================================================*
+*=       Registers                                                   =*
+*=====================================================================*
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+*
+*=====================================================================*
+*=       Initialization                                              =*
+*=====================================================================*
+*
+DFH0AZQS DFHEIENT CODEREG=(R9),                                        +
+               DATAREG=(R10),                                          +
+               EIBREG=(R11)
+*
+DFH0AZQS AMODE 31
+DFH0AZQS RMODE ANY
+*
+         B     A_MAIN
+PROGID   DC    CL8'DFH0AZQS'
+*
+*
+*=====================================================================*
+*=       Main procedure                                              =*
+*=====================================================================*
+*
+* This section controls processing, getting the start data and
+* processing the STSN as required.
+*
+A_MAIN   DS    0H
+*
+* Clear the TS queue record area.
+*
+         MVI   SZSTSN_MESSAGE1,C' '
+         MVC   SZSTSN_MESSAGE1+1(L'SZSTSN_MESSAGE1-1),SZSTSN_MESSAGE1
+*
+* Format date and time.
+*
+         EXEC  CICS ASKTIME                                            +
+               ABSTIME(SZSTSN_ABSTIME)
+*
+         EXEC  CICS FORMATTIME                                         +
+               ABSTIME(SZSTSN_ABSTIME)                                 +
+               DATE(SZSTSN_DATE) DATESEP('/')                          +
+               TIME(SZSTSN_TIME) TIMESEP(':')
+*
+* Get transaction name.
+*
+         MVC   SZSTSN_TRANSID,DFH0BZCA_STSN_TRANSID
+*
+* Get the start data.
+*
+         MVC   SZSTSN_LENGTH,=AL2(DFHSZ_DATA_COMMON_LEN)
+         EXEC  CICS RETRIEVE                                           +
+               LENGTH(SZSTSN_LENGTH)                                   +
+               SET(R6)                                                 +
+               RESP(SZSTSN_RESP)
+*
+* Check the command completed successfully.
+*
+         CLC   SZSTSN_RESP,DFHRESP(NORMAL)
+         BE    A_100
+         MVC   SZSTSN_DESC,DFH0BZMA_MSG8
+         B     B_ERROR
+A_100    DS    0H
+         USING DFHSZ_DATA,R6
+*
+* Access the STSN conversation passed by FEPI
+* using FEPI ALLOCATE with PASSCONVID.
+* The conversation ID is obtained from the start data.
+*
+         EXEC  CICS FEPI ALLOCATE                                      +
+               PASSCONVID(DFHSZ_DATA_CONVID)                           +
+               RESP(SZSTSN_RESP)                                       +
+               RESP2(SZSTSN_RESP2)
+*
+* Check the command completed successfully.
+*
+         CLC   SZSTSN_RESP,DFHRESP(NORMAL)
+         BE    A_200
+         MVC   SZSTSN_DESC,DFH0BZMA_MSG4
+         B     B_ERROR
+A_200    DS    0H
+*
+* Check that the transaction was started for STSN processing.
+*
+         CLC   DFHSZ_DATA_EVENTTYPE,DFHVALUE(STSN)
+         BE    A_300
+         MVC   SZSTSN_DESC,DFH0BZMA_MSG9
+         B     B_ERROR
+A_300    DS    0H
+*
+* Extract STSN data.
+*
+         EXEC  CICS FEPI EXTRACT STSN                                  +
+               CONVID(DFHSZ_DATA_CONVID)                               +
+               STSNSTATUS(SZSTSN_STAT)                                 +
+               SEQNUMIN(SZSTSN_SEQNUMIN)                               +
+               SEQNUMOUT(SZSTSN_SEQNUMOUT)                             +
+               RESP(SZSTSN_RESP)                                       +
+               RESP2(SZSTSN_RESP2)
+*
+* Check the command completed successfully.
+*
+         CLC   SZSTSN_RESP,DFHRESP(NORMAL)
+         BE    A_400
+         MVC   SZSTSN_DESC,DFH0BZMA_MSGD
+         B     B_ERROR
+A_400    DS    0H
+*
+* Process according to the STSN status.
+*
+         CLC   SZSTSN_STAT,DFHVALUE(NOSTSN)
+         BE    B_NOSTSN
+         CLC   SZSTSN_STAT,DFHVALUE(STSNSET)
+         BE    B_STSNSET
+         CLC   SZSTSN_STAT,DFHVALUE(STSNTEST)
+         BE    B_STSNTEST
+*
+* Return point after processing.
+*
+A_500    DS    0H
+*
+* Send response to STSN using FEPI ISSUE CONTROL.
+*
+         EXEC  CICS FEPI ISSUE                                         +
+               CONTROL(SZSTSN_STSNV)                                   +
+               CONVID(DFHSZ_DATA_CONVID)                               +
+               VALUE(SZSTSN_IVALUE)                                    +
+               RESP(SZSTSN_RESP)                                       +
+               RESP2(SZSTSN_RESP2)
+*
+* Check the command completed successfully.
+*
+         CLC   SZSTSN_RESP,DFHRESP(NORMAL)
+         BE    A_600
+         MVC   SZSTSN_DESC,DFH0BZMA_MSGE
+         B     B_ERROR
+A_600    DS    0H
+*
+* Make the session available for further processing.
+* Use the HOLD option;  the RELEASE option would end the session.
+*
+         EXEC  CICS FEPI FREE                                          +
+               CONVID(DFHSZ_DATA_CONVID)                               +
+               RESP(SZSTSN_RESP)                                       +
+               RESP2(SZSTSN_RESP2)
+*
+* Check the command completed successfully.
+*
+         CLC   SZSTSN_RESP,DFHRESP(NORMAL)
+         BE    A_700
+         MVC   SZSTSN_DESC,DFH0BZMA_MSG5
+         B     B_ERROR
+A_700    DS    0H
+*
+* Record successful STSN processing by writing to a TS queue.
+*
+         MVC   SZSTSN_DESC,DFH0BZMA_MSGN
+         BAL   R14,C_TSQ
+*
+* Write target and node information.
+*
+         MVC   SZSTSN_DESC1,DFH0BZMA_OPFD_TARGET
+         MVC   SZSTSN_DATA1(8),DFHSZ_DATA_TARGET
+         MVC   SZSTSN_DESC2,DFH0BZMA_OPFD_NODE
+         MVC   SZSTSN_DATA2(8),DFHSZ_DATA_NODE
+         BAL   R14,C_TSQ
+*
+* Write sequence number information, if appropriate.
+*
+         CLC   SZSTSN_STAT,DFHVALUE(NOSTSN)
+         BE    A_800
+         MVC   SZSTSN_DESC1,DFH0BZMA_OPFD_SEQIN
+         L     R7,SZSTSN_SEQNUMIN
+         CVD   R7,SZSTSN_HOLD_PACK
+         UNPK  SZSTSN_HOLD_CHAR,SZSTSN_HOLD_PACK
+         OI    SZSTSN_HOLD_CHAR+7,X'F0'
+         MVC   SZSTSN_DATA1(8),SZSTSN_HOLD_CHAR
+         MVC   SZSTSN_DESC2,DFH0BZMA_OPFD_SEQOUT
+         L     R7,SZSTSN_SEQNUMOUT
+         CVD   R7,SZSTSN_HOLD_PACK
+         UNPK  SZSTSN_HOLD_CHAR,SZSTSN_HOLD_PACK
+         OI    SZSTSN_HOLD_CHAR+7,X'F0'
+         MVC   SZSTSN_DATA2(8),SZSTSN_HOLD_CHAR
+         BAL   R14,C_TSQ
+A_800    DS    0H
+*
+* Write response information.
+*
+         MVC   SZSTSN_DESC1,DFH0BZMA_OPFD_STSNSTAT
+         MVC   SZSTSN_DATA1,SZSTSN_HOLD_DATA1
+         MVC   SZSTSN_DESC2,DFH0BZMA_OPFD_RESPONSE
+         MVC   SZSTSN_DATA2,SZSTSN_HOLD_DATA2
+         BAL   R14,C_TSQ
+*
+* Return to CICS.
+*
+A_900    DS    0H
+         EXEC  CICS RETURN
+*
+*
+*=====================================================================*
+*=       No STSN routine                                             =*
+*=====================================================================*
+*
+* This section handles NOSTSN.
+*
+B_NOSTSN       DS    0H
+*
+* If the STSN status is NOSTSN, the transaction was started
+* because 'start data traffic' was received.
+* A DR1 response is required.
+*
+         MVC   SZSTSN_STSNV,DFHVALUE(NORMALRESP)
+         MVC   SZSTSN_IVALUE,DFHVALUE(DEFRESP1)
+         MVC   SZSTSN_HOLD_DATA1,DFH0BZMA_SDT_LITERAL
+         MVC   SZSTSN_HOLD_DATA2,DFH0BZMA_DEFRESP1_LITERAL
+*
+         B     A_500
+*
+*
+*=====================================================================*
+*=       STSN set routine                                            =*
+*=====================================================================*
+*
+* This section handles STSNSET.
+*
+B_STSNSET      DS    0H
+*
+* If the STSN status is STSNSET,
+* a positive STSN response is required.
+*
+         MVC   SZSTSN_STSNV,DFHVALUE(STSN)
+         MVC   SZSTSN_IVALUE,DFHVALUE(POSITIVE)
+         MVC   SZSTSN_HOLD_DATA1,DFH0BZMA_STSN_SET_LITERAL
+         MVC   SZSTSN_HOLD_DATA2,DFH0BZMA_POSITIVE_LITERAL
+*
+         B     A_500
+*
+*
+*=====================================================================*
+*=       STSN test routine                                           =*
+*=====================================================================*
+*
+* This section handles STSNTEST.
+*
+B_STSNTEST     DS    0H
+*
+* If the STSN status is STSNTEST,
+* the sequence numbers from the IMS back-end system must be
+* compared with the front-end sequence numbers to determine what
+* response to send.  This is dependent on local requirements
+* and so is not illustrated here.  Advice on the appropriate
+* action is given in the IMS Customization Guide.
+*
+* Applications participating in message resynchronization
+* would typically need to save sequence numbers on some
+* recoverable medium, so that this STSN transaction could read
+* the appropriate sequence numbers for comparison with the
+* sequence numbers sent from the back-end IMS system, and then
+* send the appropriate response:  POSITIVE, NEGATIVE, RESET, or
+* INVALID.
+*
+*
+* You can supply here whatever processing you want.
+*
+* ...
+*
+* Send required STSN response.
+* (For illustration purposes, POSITIVE is sent.)
+*
+         MVC   SZSTSN_STSNV,DFHVALUE(STSN)
+         MVC   SZSTSN_IVALUE,DFHVALUE(POSITIVE)
+         MVC   SZSTSN_HOLD_DATA1,DFH0BZMA_STSN_TEST_LITERAL
+         MVC   SZSTSN_HOLD_DATA2,DFH0BZMA_POSITIVE_LITERAL
+*
+         B     A_500
+*
+*
+*=====================================================================*
+*=       Report error routine                                        =*
+*=====================================================================*
+*
+* This section writes an error report to a TS queue.
+*
+B_ERROR        DS    0H
+*
+* The TS queue record already contains the error description.
+*
+* Save RESP values.
+*
+         MVC   SZSTSN_HOLD_RESP,SZSTSN_RESP
+         MVC   SZSTSN_HOLD_RESP2,SZSTSN_RESP2
+*
+* Write completed report.
+*
+         BAL   R14,C_TSQ
+*
+* Write RESP information.
+*
+         MVC   SZSTSN_DESC1,DFH0BZMA_OPFD_RESP
+         L     R7,SZSTSN_RESP
+         CVD   R7,SZSTSN_HOLD_PACK
+         UNPK  SZSTSN_HOLD_CHAR,SZSTSN_HOLD_PACK
+         OI    SZSTSN_HOLD_CHAR+7,X'F0'
+         MVC   SZSTSN_DATA1(8),SZSTSN_HOLD_CHAR
+         MVC   SZSTSN_DESC2,DFH0BZMA_OPFD_RESP2
+         L     R7,SZSTSN_RESP2
+         CVD   R7,SZSTSN_HOLD_PACK
+         UNPK  SZSTSN_HOLD_CHAR,SZSTSN_HOLD_PACK
+         OI    SZSTSN_HOLD_CHAR+7,X'F0'
+         MVC   SZSTSN_DATA2(8),SZSTSN_HOLD_CHAR
+         BAL   R14,C_TSQ
+*
+         B     A_900
+*
+*
+*=====================================================================*
+*=       Write TS queue routine                                      =*
+*=====================================================================*
+*
+* This section writes to a TS queue.
+*
+C_TSQ    DS    0H
+         ST    R14,RET_TSQ
+*
+* Write to TS queue.
+*
+         EXEC  CICS WRITEQ TS QUEUE(DFH0BZCA_STSN_TSQ)                 +
+               FROM(SZSTSN_MESSAGE1)                                   +
+               RESP(SZSTSN_RESP)
+*
+* If the write fails, tell the operator.
+*
+         CLC   SZSTSN_RESP,DFHRESP(NORMAL)
+         BE    C_100
+         EXEC  CICS WRITE OPERATOR                                     +
+               TEXT(DFH0BZMA_MSGH)
+C_100    DS    0H
+*
+* Clear the TS queue record area ready for the next record.
+*
+         MVI   SZSTSN_MESSAGE1,C' '
+         MVC   SZSTSN_MESSAGE1+1(L'SZSTSN_MESSAGE1-1),SZSTSN_MESSAGE1
+*
+         L     R14,RET_TSQ
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Constants                                                   =*
+*=====================================================================*
+*
+* DFH0BZCA defines the customizable constants used by the
+* FEPI sample programs.
+*
+         COPY  DFH0BZCA
+*
+* DFH0BZMA defines the messages and other text used by the
+* FEPI sample programs.
+*
+         COPY  DFH0BZMA
+*
+* Constants used in this program
+*
+         LTORG ,
+*
+*
+***********************************************************************
+*        End of program DFH0AZQS                                      *
+***********************************************************************
+*
+         END   DFH0AZQS

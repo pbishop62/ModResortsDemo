@@ -1,0 +1,224 @@
+      CBL CICS('COBOL3,SP')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0BAT8                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Batch Enabling Sample BAT3                 *
+      *                    Forcibly Release Locks Program             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      *   To aid the customer in the preparation for running non-RLS  *
+      *   VSAM batch jobs against a group of data sets, CICS          *
+      *   provides a suite of sample COBOL2 programs called DFH0BATx. *
+      *                                                               *
+      *   For an overview of the DFH0BATx suite, refer to the prolog  *
+      *   of program DFH0BAT1.                                        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      *   This program is part of a suite of programs DFH0BATx which  *
+      *   is intended to aid the user in the identification and       *
+      *   resolution of VSAM RLS retained locks. It may be modified   *
+      *   as required by the customer.                                *
+      *                                                               *
+      *   This program forcibly releases retained locks for a named   *
+      *   data set (and discards the associated log records).         *
+      *   It is called remotely by coordinating program DFH0BAT3      *
+      *   using DPL. Any errors encountered while doing this          *
+      *   are written to remote TS queue DFH0BQ3 which resides        *
+      *   on the coordinating region.                                 *
+      *                                                               *
+      *   The name of the dataset for which locks are to be forcibly  *
+      *   released is passed to DFH0BAT8 in a commarea.               *
+      *   If DFH0BAT8 detects that there is no commarea,              *
+      *   or that its length is unexpected,                           *
+      *   the application is abnormally terminated with an abend code *
+      *   of BT81.                                                    *
+      *                                                               *
+      *   **********************************************************  *
+      *   *** WARNING. RUNNING THIS PROGRAM CAN RESULT IN A LOSS ***  *
+      *   *** OF DATA INTEGRITY AS RETAINED LOCKS WILL BE        ***  *
+      *   *** FORCIBLY RELEASED !!                               ***  *
+      *   **********************************************************  *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *  $MOD(DFH0BAT8),COMP(SAMPLES),PROD(CICS TS ):                 *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $L0= 654    510 941010 HDMMFM  : Created                      *
+      * $L1= 654    510 950210 HDMMFM  : Code Review work             *
+      * $P1= M95193 510 950821 HDAVCMM : Correct prolog               *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0BAT8.
+
+       ENVIRONMENT DIVISION.
+           EJECT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *****************************************************************
+      * Copy book for record for TS queue DFH0BQ3. A record is written
+      * to this queue when an error is encountered releasing locks.
+      *****************************************************************
+       COPY DFH0BC31.
+      *****************************************************************
+      * Various variables used throughout the program.
+      *****************************************************************
+       77  SET-RESP                    PIC S9(8) COMP.
+       77  SET-RESP2                   PIC S9(8) COMP.
+       77  ASSIGN-RESP                 PIC S9(8) COMP.
+
+       77  OUR-APPLID                  PIC X(8).
+       77  OUR-SYSID                   PIC X(4).
+       77  COORD-SYSID                 PIC X(4).
+       77  ABEND-CODE                  PIC X(4).
+       77  BT81                        PIC X(4) VALUE 'BT81'.
+
+       LINKAGE SECTION.
+      *****************************************************************
+      * Copy book for commarea passed to DFH0BAT8.
+      *****************************************************************
+       COPY DFH0BC32 REPLACING ==COMMAREA-3.== BY
+                               ==COMMAREA-3 REDEFINES DFHCOMMAREA.==.
+           EJECT.
+
+      *****************************************************************
+      ***               Batch Enabling Sample BAT3                  ***
+      ***             Forcibly Release Locks Program                ***
+      *****************************************************************
+       PROCEDURE DIVISION USING DFHEIBLK DFHCOMMAREA.
+
+       MAIN-PROCESSING SECTION.
+
+      *****************************************************************
+      * Check that we have been passed the correct commarea.
+      * If not return immediately.
+      *****************************************************************
+           IF EIBCALEN NOT = LENGTH OF COMMAREA-3 THEN
+             MOVE BT81 TO ABEND-CODE
+             EXEC CICS ABEND
+                  ABCODE(ABEND-CODE)
+             END-EXEC
+           ELSE
+      *****************************************************************
+      * First find the sysid of the coordinating CICS region.
+      * Then forcibly release retained locks for the data set named
+      * in the commarea.
+      *****************************************************************
+             PERFORM FIND-COORD-SYSID
+             PERFORM RELEASE-LOCKS
+           END-IF.
+      *****************************************************************
+      * End the program and return to CICS.
+      *****************************************************************
+           EXEC CICS RETURN
+           END-EXEC.
+
+       MAIN-PROCESSING-EXIT.
+           GOBACK.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedures start here.
+      *---------------------------------------------------------------*
+
+      *---------------------------------------------------------------*
+      * Procedure to work out if we are running locally on the
+      * coordinating region, or remotely via DPL, and to set up
+      * the SYSID for use on subsequent TS commands.
+      *---------------------------------------------------------------*
+       FIND-COORD-SYSID SECTION.
+           EXEC CICS ASSIGN
+                APPLID(OUR-APPLID)
+                SYSID(OUR-SYSID)
+                PRINSYSID(COORD-SYSID)
+                RESP(ASSIGN-RESP)
+           END-EXEC.
+      *****************************************************************
+      * A response of INVREQ caused by the PRINSYSID option means
+      * that we are running locally.
+      *****************************************************************
+           EVALUATE ASSIGN-RESP
+             WHEN DFHRESP(NORMAL)
+               CONTINUE
+             WHEN OTHER
+               MOVE OUR-SYSID TO COORD-SYSID
+           END-EVALUATE.
+
+       FIND-COORD-SYSID-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to forcibly release locks for a data set.
+      *---------------------------------------------------------------*
+       RELEASE-LOCKS SECTION.
+           EXEC CICS SET DSNAME(CA-DSNAME)
+                RESETLOCKS
+                RESP(SET-RESP)
+                RESP2(SET-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If the release of locks was successful, continue.
+      * If the release returned an INVREQ with an EIBRESP2 value
+      * of 47 this means that no files have opened against the
+      * data set yet - which means there can be no retained locks -
+      * so treat this as successful and continue.
+      * Otherwise assume we failed to release locks, and write an
+      * error message to the TS queue.
+      *****************************************************************
+           IF SET-RESP NOT = DFHRESP(NORMAL)
+             IF SET-RESP = DFHRESP(INVREQ) AND
+                SET-RESP2 = 47 THEN
+               CONTINUE
+             ELSE
+               MOVE 'Release locks failed' TO TSQ-ERR-MSG
+               MOVE OUR-APPLID TO TSQ-APPLID
+               MOVE CA-DSNAME TO TSQ-DSNAME
+               MOVE SET-RESP TO TSQ-RESP
+               MOVE SET-RESP2 TO TSQ-RESP2
+               PERFORM WRITE-TSQ-RECORD
+             END-IF
+           END-IF.
+
+       RELEASE-LOCKS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to write a TS record to DFH0BQ3. As this may be
+      * remote, the WRITEQ TS command may be function shipped.
+      *---------------------------------------------------------------*
+       WRITE-TSQ-RECORD SECTION.
+           EXEC CICS WRITEQ TS
+                QUEUE(TSQ-RELEASE-NAME)
+                FROM(TSQ-RELEASE-RECORD)
+                LENGTH(LENGTH OF TSQ-RELEASE-RECORD)
+                SYSID(COORD-SYSID)
+           END-EXEC.
+
+       WRITE-TSQ-RECORD-EXIT.
+           EXIT.

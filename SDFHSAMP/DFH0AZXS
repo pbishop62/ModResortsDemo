@@ -1,0 +1,965 @@
+*ASM XOPTS(FEPI)
+         TITLE 'DFH0AZXS - FEPI Sample: Setup'
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1994"                                   *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*   STATUS = 7.2.0                                                    *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*   $MOD(DFH0AZXS),COMP(FEPI),PROD(CICS TS ):                         *
+*                                                                     *
+*  PN= REASON REL YYMMDD HDXXIII : REMARKS                            *
+* $L0= Base   410 94     HD5VDLA : Base                               *
+*                                                                     *
+***********************************************************************
+*                                                                     *
+*  MODULE NAME = DFH0AZXS                                             *
+*                                                                     *
+*  DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample Program:               *
+*                     Setup.                                          *
+*                     Assembler version                               *
+*                                                                     *
+*                                                                     *
+*  FUNCTION = This program installs the resources                     *
+*             (property sets, nodes, targets, pools)                  *
+*             used by the FEPI sample programs.                       *
+*                                                                     *
+*  TRANSACTION NAME = CZXS                                            *
+*                                                                     *
+*                                                                     *
+* OVERVIEW                                                            *
+*                                                                     *
+*      This program is used to install property sets, nodes, targets, *
+*      and pools prior to the use of the FEPI sample programs.        *
+*                                                                     *
+*      The definitions of each of these resources are organized so    *
+*      they can easily be changed.  They are kept separate from the   *
+*      processing that does the installation, and there is no         *
+*      hard-coding of values in the CICS commands.  There are four    *
+*      main tables, holding details of each resource type.  This      *
+*      enables the resources to be changed by repeating sets of       *
+*      definitions which are in an easy-to-understand form.  If       *
+*      desired, the program could be changed to obtain the resource   *
+*      definitions from a file.                                       *
+*                                                                     *
+*      The resources defined are:                                     *
+*        Pool     Property set   Node(s)                Target(s)     *
+*        POOL1    PROPSET1       NODE1  NODE2  NODE3    TARGET1       *
+*                                NODE4  NODE5                         *
+*        POOL2    PROPSET2       NODE6  NODE7  NODE8    TARGET1       *
+*                                NODE9  NODE10                        *
+*        POOL3    PROPSET3       NODE1  NODE2  NODE3    TARGET2       *
+*                                NODE4  NODE5                         *
+*                                                                     *
+*      You should customize these definitions to match the            *
+*      requirements of your system.  If you do, you may also need     *
+*      to change the definitions in the sample customization          *
+*      constants copy book, DFH0BZCx.  You do not need to change      *
+*      any other samples - you need simply reassemble them.           *
+*                                                                     *
+*      Each table is processed in turn.  Nodes and targets are        *
+*      organized into lists for reasons of efficiency.                *
+*      Details of resource installation are written to the CICS log   *
+*      automatically by FEPI.                                         *
+*                                                                     *
+*      On completion, a message is sent.  The setup program would     *
+*      typically be started by a PLT program, in which case the       *
+*      message will go to the CICS log.  It can, however, be invoked  *
+*      from a terminal, when the message will be sent to the          *
+*      terminal.                                                      *
+*                                                                     *
+*      For clarity, error checking is minimal.  In particular, the    *
+*      FEPI INSTALL commands do not check errors at all, because      *
+*      FEPI will report any errors that occur to the FEPI transient   *
+*      data queue, and they will then be recorded by the sample       *
+*      monitor program.                                               *
+*                                                                     *
+*                                                                     *
+*  PROGRAM LOGIC                                                      *
+*                                                                     *
+*      For each property set in table                                 *
+*          FEPI INSTALL PROPERTYSET                                   *
+*                                                                     *
+*      For each node in table                                         *
+*          Add node to list                                           *
+*      FEPI INSTALL NODELIST                                          *
+*                                                                     *
+*      For each target in table                                       *
+*          Add target to list                                         *
+*      FEPI INSTALL TARGETLIST                                        *
+*                                                                     *
+*      For each pool in table                                         *
+*          Start new lists of nodes and targets                       *
+*          For each entry within pool definition                      *
+*              If node, add details to node list                      *
+*              If target, add details to target list                  *
+*          FEPI INSTALL POOL with NODELIST and TARGETLIST             *
+*                                                                     *
+*      Send completion message                                        *
+*      RETURN                                                         *
+*                                                                     *
+*
+*
+*=====================================================================*
+*=       Working storage                                             =*
+*=====================================================================*
+*
+DFHEISTG DSECT ,
+*
+* Subroutine return address save areas.
+*
+RET_B_PROPERTYSETS     DS    A
+RET_B_NODES            DS    A
+RET_B_TARGETS          DS    A
+RET_B_POOLS            DS    A
+*
+* W07 holds values for CICS commands.
+*
+W07_PROPERTYSET        DS    CL8
+W07_POOL_NAME          DS    CL8
+*
+* W11 holds start code values.
+*
+W11_STARTCODE          DS    CL2
+*
+* W08 is used to pass the value of NODENUM or TARGETNUM.
+*
+W08_COUNT1             DS    F
+W08_COUNT2             DS    F
+*
+* W09/W10 are used to build lists for NODELIST and TARGETLIST.
+*
+W09_LISTITEM           EQU   8
+W09_LIST1              DS    256CL(W09_LISTITEM)
+W10_LISTITEM           EQU   8
+W10_LIST2              DS    256CL(W10_LISTITEM)
+*
+*
+*=====================================================================*
+*=       Data area descriptions                                      =*
+*=====================================================================*
+*
+* W02 defines the layout of the property set table.
+*
+W02_PROPERTYSETS       DSECT ,
+                       DS    0F
+W02_NAME               DS    CL8
+W02_DEVICE             DS    F
+W02_FORMAT             DS    F
+W02_CONTENTN           DS    F
+W02_INITIAL            DS    F
+W02_STSN               DS    CL4
+W02_BEGNSESS           DS    CL4
+W02_ENDSESS            DS    CL4
+W02_EXCEPQ             DS    CL4
+W02_UNSOLDATA          DS    CL4
+W02_UNSOLDACK          DS    F
+W02_MAXFLN             DS    F
+W02_LENGTH             EQU   *-W02_PROPERTYSETS
+                       USING W02_PROPERTYSETS,R2
+*
+* W03 defines the layout of the node table.
+*
+W03_NODES              DSECT ,
+                       DS    0F
+W03_NODENAME           DS    CL8
+W03_PASSWORD           DS    CL8
+W03_LENGTH             EQU   *-W03_NODES
+                       USING W03_NODES,R3
+*
+* W04 defines the layout of the target table.
+*
+W04_TARGETS            DSECT ,
+                       DS    0F
+W04_TARGET             DS    CL8
+W04_APPLID             DS    CL8
+W04_LENGTH             EQU   *-W04_TARGETS
+                       USING W04_TARGETS,R4
+*
+* W05 defines the layout of the pool table.
+*
+W05_POOLS              DSECT ,
+                       DS    0C
+W05_TYPE               DS    CL1
+W05_TYPE_POOL          EQU   C'P'
+W05_TYPE_PROP          EQU   C' '
+W05_TYPE_NODE          EQU   C'N'
+W05_TYPE_TARGET        EQU   C'T'
+W05_TYPE_END           EQU   C'Z'
+W05_NAME               DS    CL8
+W05_LENGTH             EQU   *-W05_POOLS
+                       USING W05_POOLS,R5
+*
+*
+*=====================================================================*
+*=       Registers                                                   =*
+*=====================================================================*
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+*
+*=====================================================================*
+*=       Initialization                                              =*
+*=====================================================================*
+*
+DFH0AZXS DFHEIENT CODEREG=(R9),                                        +
+               DATAREG=(R10),                                          +
+               EIBREG=(R11)
+*
+DFH0AZXS AMODE 31
+DFH0AZXS RMODE ANY
+*
+         B     A_MAIN
+W01_PROGID             DC    CL8'DFH0AZXS'
+*
+*
+*=====================================================================*
+*=       Main Procedure                                              =*
+*=====================================================================*
+*
+* This section controls the processing of property sets, nodes
+* targets and pools.
+*
+*
+A_MAIN   DS    0H
+*
+* Install property sets.
+*
+         L     R8,C02_PROPS_COUNT
+         LA    R2,C02_PROPS
+A_100    DS    0H
+         BAL   R14,B_PROCESS_PROPERTYSETS
+         LA    R2,W02_LENGTH(,R2)
+         BCT   R8,A_100
+*
+* Install nodes.
+*
+         BAL   R14,B_PROCESS_NODES
+*
+* Install targets.
+*
+         BAL   R14,B_PROCESS_TARGETS
+*
+* Install pools
+* with their associated property sets, targets, and nodes.
+*
+         LA    R5,C05_POOLS
+A_400    DS    0H
+         BAL   R14,B_PROCESS_POOLS
+         CLI   W05_TYPE,W05_TYPE_POOL
+         BE    A_400
+*
+* Determine how transaction was started
+* and send completion message appropriately.
+*
+         EXEC  CICS ASSIGN STARTCODE(W11_STARTCODE)
+         CLC   W11_STARTCODE,C06_START_BY_TERMINAL
+         BNE   A_820
+*
+         EXEC  CICS SEND                                               +
+               FROM(DFH0BZMA_MSGP)                                     +
+               ERASE
+         B     A_890
+*
+A_820    DS    0H
+         EXEC  CICS WRITE OPERATOR                                     +
+               TEXT(DFH0BZMA_MSGP)
+         B     A_890
+*
+A_890    DS    0H
+*
+* Return to CICS.
+*
+A_900    DS    0H
+         EXEC  CICS RETURN
+*
+A_EXIT   DS    0H
+*
+*
+*=====================================================================*
+*=       Process property sets routine                               =*
+*=====================================================================*
+*
+* This section installs the property sets.
+*
+B_PROCESS_PROPERTYSETS DS    0H
+         ST    R14,RET_B_PROPERTYSETS
+*
+* Install each property set.
+* Two formats of the FEPI command are necessary because
+* STSN cannot be specified for non-SLU P property sets and
+* FORMAT cannot be specified for SLU P.
+* The options used are explained below.
+*
+* PROPERTYSET is used to assign processing characteristics
+* to a pool or pools.
+*            PROPERTYSET(W02_NAME)
+*
+* DEVICE is a CVDA specifying the logical device that the
+* connection will appear as.
+*            DEVICE(W02_DEVICE)
+*
+* FORMAT is a CVDA specifying the data format: DATASTREAM or
+*     FORMATTED.
+*            FORMAT(W02_FORMAT)
+*
+* CONTENTION is a CVDA specifying whether the front-end application
+* will win or lose when there is inbound data with a 'begin bracket'
+* waiting and the it attempts a FEPI SEND.
+*            CONTENTION(W02_CONTENTN)
+*
+* INITIALDATA determines whether initial inbound data is
+* expected or not when a session begins.
+*            INITIALDATA(W02_INITIAL)
+*
+* STSN specifies a transaction to be invoked for STSN
+* processing.  This option is allowed only on SLU P property sets.
+*            STSN(W02_STSN)
+*
+* BEGINSESSION specifies a transaction to be invoked when a
+* FEPI session is set to ACQUIRED state.
+*            BEGINSESSION(W02_BEGNSESS)
+*
+* ENDSESSION specifies a transaction to be invoked when a
+* conversation of a session ends.
+*            ENDSESSION(W02_ENDSESS)
+*
+* EXCEPTIONQ specifies a transient data queue where details of
+* exceptional events will be sent.
+*            EXCEPTIONQ(W02_EXCEPQ)
+*
+* UNSOLDATA specifies a transaction to be invoked when
+* unsolicited data is received from the back-end system.
+*            UNSOLDATA(W02_UNSOLDATA)
+*
+* UNSOLDATACK specifies the response to be sent by FEPI when
+* unsolicited data is received from the back-end system,
+* rather than invoking a transaction.
+*            UNSOLDATACK(W02_UNSOLDACK)
+*
+* MAXFLENGTH is the maximum length of data that can be sent or
+* received in one command.
+*            MAXFLENGTH(W02_MAXFLN)
+*
+* NOHANDLE specifies that errors are to be ignored and that
+* the transaction is not to be abended.
+*            NOHANDLE
+*
+         CLC   W02_DEVICE,DFHVALUE(LUP)
+         BNE   B_Y_200
+*
+* For SLU P devices:
+*
+         EXEC  CICS FEPI INSTALL                                       +
+               PROPERTYSET(W02_NAME)                                   +
+               DEVICE(W02_DEVICE)                                      +
+               CONTENTION(W02_CONTENTN)                                +
+               INITIALDATA(W02_INITIAL)                                +
+               STSN(W02_STSN)                                          +
+               EXCEPTIONQ(W02_EXCEPQ)                                  +
+               UNSOLDATACK(W02_UNSOLDACK)                              +
+               MAXFLENGTH(W02_MAXFLN)                                  +
+               NOHANDLE
+         B     B_Y_900
+*
+* For non-SLU P devices:
+*
+B_Y_200  DS    0H
+         EXEC  CICS FEPI INSTALL                                       +
+               PROPERTYSET(W02_NAME)                                   +
+               DEVICE(W02_DEVICE)                                      +
+               FORMAT(W02_FORMAT)                                      +
+               CONTENTION(W02_CONTENTN)                                +
+               INITIALDATA(W02_INITIAL)                                +
+               BEGINSESSION(W02_BEGNSESS)                              +
+               ENDSESSION(W02_ENDSESS)                                 +
+               EXCEPTIONQ(W02_EXCEPQ)                                  +
+               UNSOLDATA(W02_UNSOLDATA)                                +
+               MAXFLENGTH(W02_MAXFLN)                                  +
+               NOHANDLE
+         B     B_Y_900
+*
+* End of routine.
+*
+B_Y_900  DS    0H
+         L     R14,RET_B_PROPERTYSETS
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Process nodes routine                                       =*
+*=====================================================================*
+*
+* This section installs the nodes.
+*
+B_PROCESS_NODES        DS    0H
+         ST    R14,RET_B_NODES
+*
+* Install the nodes.
+* The nodes and associated passwords are assembled into lists
+* which can be installed with a single command rather than
+* installing the nodes singly.
+* Installing a list improves the efficiency of the processing.
+*
+* The lists are built by making a pass of the W03 table, storing
+* the nodes in one list and the passwords in a second list.
+*
+         L     R8,C03_NODE_COUNT        Number of nodes
+         LA    R3,C03_NODES             Start of node table
+         LA    R6,W09_LIST1             Start of node list
+         LA    R7,W10_LIST2             Start of password list
+*
+* Add nodes to W09 list.
+* Add associated passwords to W10 list.
+*
+B_N_100  DS    0H
+         MVC   0(W09_LISTITEM,R6),W03_NODENAME
+         MVC   0(W10_LISTITEM,R7),W03_PASSWORD
+*
+         LA    R6,W09_LISTITEM(,R6)     Next entry in table and lists
+         LA    R7,W10_LISTITEM(,R7)
+         LA    R3,W03_LENGTH(,R3)
+         BCT   R8,B_N_100
+*
+* Now install the list of nodes.
+*
+* FEPI INSTALL NODELIST is used to define the nodes to FEPI.
+* The options used are explained below.
+*
+* NODELIST is a table of 8-character names of nodes.
+*            NODELIST(W09_LIST1)
+*
+* NODENUM is a count of the number of nodes in the list.
+*            NODENUM(W08_COUNT1)
+*
+* PASSWORDLIST is a table of optional passwords.
+* These correspond one-to-one with the list of nodes.
+* Nulls can be used to indicate that there is no password for the
+* corresponding node.
+* If no node has a password, it is unnecessary to specify the
+* password list at all.
+*            PASSWORDLIST(W10_LIST2)
+*
+* NOHANDLE specifies that errors are to be ignored and that
+* the transaction is not to be abended.
+*            NOHANDLE
+*
+         MVC   W08_COUNT1,C03_NODE_COUNT
+         EXEC  CICS FEPI INSTALL                                       +
+               NODELIST(W09_LIST1)                                     +
+               NODENUM(W08_COUNT1)                                     +
+               PASSWORDLIST(W10_LIST2)                                 +
+               NOHANDLE
+*
+* End of routine.
+*
+B_N_900  DS    0H
+         L     R14,RET_B_NODES
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Process targets routine                                     =*
+*=====================================================================*
+*
+* This section installs the targets.
+*
+B_PROCESS_TARGETS      DS    0H
+         ST    R14,RET_B_TARGETS
+*
+* Install the targets.
+* The targets and associated appl IDs are assembled into lists
+* which can be installed with a single command rather than
+* installing the targets singly.
+* Installing a list improves the efficiency of the processing.
+*
+* The lists are built by making a pass of the W04 table, storing
+* the targets in one list and the appl IDs in a second list.
+*
+         L     R8,C04_TARGET_COUNT      Number of targets
+         LA    R4,C04_TARGETS           Start of target table
+         LA    R6,W09_LIST1             Start of target list
+         LA    R7,W10_LIST2             Start of appl ID list
+*
+* Add targets to W09 list.
+* Add associated appl IDs to W10 list.
+*
+B_T_100  DS    0H
+         MVC   0(W09_LISTITEM,R6),W04_TARGET
+         MVC   0(W10_LISTITEM,R7),W04_APPLID
+*
+         LA    R6,W09_LISTITEM(,R6)     Next entry in table and lists
+         LA    R7,W10_LISTITEM(,R7)
+         LA    R4,W04_LENGTH(,R4)
+         BCT   R8,B_T_100
+*
+* Now install the list of targets.
+*
+* FEPI INSTALL TARGETLIST is used to define the targets to FEPI.
+*
+* TARGETLIST is a table of 8-character names of targets.
+*            TARGETLIST(W09_LIST1)
+*
+* TARGETNUM is a count of the number of nodes in the list.
+*            TARGETNUM(W08_COUNT1)
+*
+* APPLLIST is a table of required appl IDs.
+* These correspond one-to-one with the list of targets.
+*            APPLLIST(W10_LIST2)
+*
+* NOHANDLE specifies that errors are to be ignored and that
+* the transaction is not to be abended.
+*            NOHANDLE
+*
+         MVC   W08_COUNT1,C04_TARGET_COUNT
+         EXEC  CICS FEPI INSTALL                                       +
+               TARGETLIST(W09_LIST1)                                   +
+               TARGETNUM(W08_COUNT1)                                   +
+               APPLLIST(W10_LIST2)                                     +
+               NOHANDLE
+*
+* End of routine.
+*
+B_T_900  DS    0H
+         L     R14,RET_B_TARGETS
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Process pools routine                                       =*
+*=====================================================================*
+*
+* This section installs the pools.
+*
+B_PROCESS_POOLS        DS    0H
+         ST    R14,RET_B_POOLS
+*
+* Install pools with associated property sets, targets and nodes.
+* Once again, the targets and nodes are gathered into lists to
+* improve efficiency.  The data held in W05 is scanned,
+* extracting the pool name, the property set name, and then the
+* lists of nodes and targets to be associated with the named pool.
+*
+* Pool header: store the name and the property set name.
+*
+         MVC   W07_POOL_NAME,W05_NAME
+         LA    R5,W05_LENGTH(,R5)
+         MVC   W07_PROPERTYSET,W05_NAME
+         LA    R5,W05_LENGTH(,R5)
+*
+* Put the target and node entries associated with this
+* pool into two lists.
+*
+         LA    R6,W09_LIST1             Start of node list
+         LA    R14,0                    Number of nodes
+         LA    R7,W10_LIST2             Start of target list
+         LA    R15,0                    Number of targets
+B_P_200  DS    0H
+*
+* Check for node, if so add to list in W09.
+*
+         CLI   W05_TYPE,W05_TYPE_NODE
+         BNE   B_P_220
+         MVC   0(W09_LISTITEM,R6),W05_NAME
+         LA    R6,W09_LISTITEM(,R6)     Next entry in list
+         LA    R14,1(,R14)              Count node
+         B     B_P_290
+*
+* Check for target, if so add to list in W10.
+*
+B_P_220  DS    0H
+         CLI   W05_TYPE,W05_TYPE_TARGET
+         BNE   B_P_230
+         MVC   0(W10_LISTITEM,R7),W05_NAME
+         LA    R7,W10_LISTITEM(,R7)     Next entry in list
+         LA    R15,1(,R15)              Count target
+         B     B_P_290
+*
+* Neither node nor target means end of pool entry.
+* Set node and target counts.
+*
+B_P_230  DS    0H
+*
+         ST    R14,W08_COUNT1
+         ST    R15,W08_COUNT2
+         B     B_P_300
+*
+* Move to next entry in list, and loop.
+*
+B_P_290  DS    0H
+         LA    R5,W05_LENGTH(,R5)
+         B     B_P_200
+*
+* Install the pool with associated targets and nodes, using
+* lists for efficiency.
+*
+B_P_300  DS    0H
+*
+* FEPI INSTALL POOL defines the pools to FEPI,
+* and optionally associates nodes and targets with the pool.
+*
+* PROPERTYSET defines the characteristics of the pool.
+* This affects how the back-end system is perceived by the
+* front-end applications.
+*        PROPERTYSET(W07_PROPERTYSET)
+*
+* NODELIST is the list of nodes to be used by the pool. Each
+* node in this list can make a connection with each target in
+* the pool.
+*        NODELIST(W09_LIST1)
+*
+* NODENUM is the count of nodes to be associated with a pool.
+*        NODENUM(W08_COUNT1)
+*
+* TARGETLIST is the targets to be associated with the pool.
+*        TARGETLIST(W10_LIST2)
+*
+* TARGETNUM is the count of targets to be associated with the pool.
+*        TARGETNUM(W08_COUNT2)
+*
+* NOHANDLE specifies that errors are to be ignored and that
+* the transaction is not to be abended.
+*        NOHANDLE
+*
+         EXEC  CICS FEPI INSTALL POOL(W07_POOL_NAME)                   +
+               PROPERTYSET(W07_PROPERTYSET)                            +
+               NODELIST(W09_LIST1)                                     +
+               NODENUM(W08_COUNT1)                                     +
+               TARGETLIST(W10_LIST2)                                   +
+               TARGETNUM(W08_COUNT2)                                   +
+               NOHANDLE
+*
+* End of routine.
+*
+B_P_900  DS    0H
+         L     R14,RET_B_POOLS
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Constants                                                   =*
+*=====================================================================*
+*
+*
+* DFH0BZMA defines the messages and other text used by the
+* FEPI sample programs.
+*
+         COPY  DFH0BZMA
+*
+* Constants used in this program.
+*
+C06_START_BY_TERMINAL  DC    CL2'TD'
+         LTORG ,
+*
+*
+* Macro for generating constants involving CVDAs.
+* This artifice is necessary because DFHVALUE always generates a
+* literal, which cannot be used as the operand of a DC.  Further,
+* DFHVALUE will not be translated unless it follows a comma (or is
+* in brackets).
+*
+* Macro syntax is:   <name> CVDADC ,DFHVALUE(cvda)
+*
+*
+         MACRO ,
+&CVN    CVDADC &CVZ,&CVL
+&CVK     SETA  K'&CVL-1                 Get size of literal
+&CVX     SETC  '&CVL'(2,&CVK)           Remove '='
+.*                                      Generate DC
+&CVN     DC    &CVX
+         MEND  ,
+*
+*
+*=====================================================================*
+*=       Property set table                                          =*
+*=====================================================================*
+*
+* This table defines the property sets that are used by the
+* FEPI sample programs. You can add new property sets by copying
+* an entry and changing the definitions as required.
+*
+* There is one property set for each data type and mode:
+* SLU2 data stream, SLU2 formatted, and SLU P.
+*
+* For the SLU2 cases, begin-session, end-session, and unsolicited data
+* transactions are specified, and the exceptional event queue
+* is the common FEPI queue.  CONTENTION is set to 'WIN', to
+* match the action of a real terminal.
+*
+* For SLU P, most properties are set so that the FEPI default is used.
+* UNSOLDATACK must be POSITIVE for IMS.
+*
+C02_PROPS  DS   0F
+*
+C02_PS1           DS   0F
+                  DC   CL8'PROPSET1'
+              CVDADC   ,DFHVALUE(T3278M2)
+              CVDADC   ,DFHVALUE(DATASTREAM)
+              CVDADC   ,DFHVALUE(WIN)
+              CVDADC   ,DFHVALUE(INBOUND)
+                  DC   CL4'    '             STSN
+                  DC   CL4'CZUC'             Begin-session
+                  DC   CL4'CZUU'             End-session
+                  DC   CL4'CSZX'             Exception queue
+                  DC   CL4'CZUX'             Unsolicited data
+              CVDADC   ,DFHVALUE(NOTAPPLIC)
+                  DC   F'2048'               Max length
+*
+C02_PS2           DS   0F
+                  DC   CL8'PROPSET2'
+              CVDADC   ,DFHVALUE(T3278M2)
+              CVDADC   ,DFHVALUE(FORMATTED)
+              CVDADC   ,DFHVALUE(WIN)
+              CVDADC   ,DFHVALUE(INBOUND)
+                  DC   CL4'    '             STSN
+                  DC   CL4'CZUC'             Begin-session
+                  DC   CL4'CZUU'             End-session
+                  DC   CL4'CSZX'             Exception queue
+                  DC   CL4'CZUX'             Unsolicited data
+              CVDADC   ,DFHVALUE(NOTAPPLIC)
+                  DC   F'2048'               Max length
+*
+C02_PS3           DS   0F
+                  DC   CL8'PROPSET3'
+              CVDADC   ,DFHVALUE(LUP)
+              CVDADC   ,DFHVALUE(NOTAPPLIC)
+              CVDADC   ,DFHVALUE(WIN)
+              CVDADC   ,DFHVALUE(NOTINBOUND)
+                  DC   CL4'CZQS'             STSN
+                  DC   CL4'    '             Begin-session
+                  DC   CL4'    '             End-session
+                  DC   CL4'CSZX'             Exception queue
+                  DC   CL4'    '             Unsolicited data
+              CVDADC   ,DFHVALUE(POSITIVE)
+                  DC   F'2048'               Max length
+*
+* Number of property sets.
+*
+C02_PROPS_COUNT   DC   A((*-C02_PROPS)/W02_LENGTH)
+*
+*
+*=====================================================================*
+*=       Node table                                                  =*
+*=====================================================================*
+*
+* This table defines the nodes that are used by the
+* FEPI sample programs.  You can add new nodes by copying
+* an entry and changing the definitions as required.
+*
+* Each node name has associated with it a password, which may be
+* set to nulls to indicate no password is needed.
+*
+C03_NODES         DS   0F
+*
+C03_NO1           DS   0F
+                  DC   CL8'NODE1   '
+                  DC   XL8'00'
+*
+C03_NO2           DS   0F
+                  DC   CL8'NODE2   '
+                  DC   CL8'PASSWORD'
+*
+C03_NO3           DS   0F
+                  DC   CL8'NODE3   '
+                  DC   XL8'00'
+*
+C03_NO4           DS   0F
+                  DC   CL8'NODE4   '
+                  DC   CL8'PASSWORD'
+*
+C03_NO5           DS   0F
+                  DC   CL8'NODE5   '
+                  DC   XL8'00'
+*
+C03_NO6           DS   0F
+                  DC   CL8'NODE6   '
+                  DC   CL8'PASSWORD'
+*
+C03_NO7           DS   0F
+                  DC   CL8'NODE7   '
+                  DC   XL8'00'
+*
+C03_NO8           DS   0F
+                  DC   CL8'NODE8   '
+                  DC   CL8'PASSWORD'
+*
+C03_NO9           DS   0F
+                  DC   CL8'NODE9   '
+                  DC   XL8'00'
+*
+C03_NO10          DS   0F
+                  DC   CL8'NODE10  '
+                  DC   CL8'PASSWORD'
+*
+* Number of nodes.
+*
+C03_NODE_COUNT    DC   A((*-C03_NODES)/W03_LENGTH)
+*
+*
+*=====================================================================*
+*=       Target table                                                =*
+*=====================================================================*
+*
+* This table defines the targets that are used by the
+* FEPI sample programs.  You can add new targets by copying
+* an entry and changing the definitions as required.
+*
+* Each target name has associated with it an application ID.
+* Target names can be specified with the same value as the
+* application ID to which they refer, but it is recommended that
+* logical target names are used.  This allows back-end name changes
+* to be accommodated by changing only the setup program,
+* and not all the front-end applications.
+*
+C04_TARGETS       DS   0F
+*
+C04_TA1           DS   0F
+                  DC   CL8'TARGET1 '
+                  DC   CL8'CICS1   '
+*
+C04_TA2           DS   0F
+                  DC   CL8'TARGET2 '
+                  DC   CL8'IMS1    '
+*
+* Number of targets.
+*
+C04_TARGET_COUNT  DC   A((*-C04_TARGETS)/W04_LENGTH)
+*
+*
+*=====================================================================*
+*=       Pool table                                                  =*
+*=====================================================================*
+*
+* This table defines the pools that are used by the
+* FEPI sample programs.  You can add new pools or change the
+* pool structure.  Note that a given node-target pair must not exist
+* in more than one pool.
+*
+* The table defines the relationships of the pools to property sets,
+* targets and nodes in the following way.
+* Each pool definition is an entry (C05_POOLn) which comprises:
+*
+*   header information:
+*       flag W05_TYPE_POOL
+*       8-character pool name.
+*       flag W05_TYPE_PROP
+*       8-character property set name.
+*
+*   followed by:
+*       list of nodes and targets associated with this pool.
+*       Each node or target in the list is defined by:
+*           flag W05_TYPE_NODE or W05_TYPE_TARGET
+*           8-character name
+*
+C05_POOLS         DS   0F
+*
+C05_POOL1         DS   0C
+                  DC   AL1(W05_TYPE_POOL)
+                  DC   CL8'POOL1   '
+                  DC   AL1(W05_TYPE_PROP)
+                  DC   CL8'PROPSET1'
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE1   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE2   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE3   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE4   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE5   '
+*
+                  DC   AL1(W05_TYPE_TARGET)
+                  DC   CL8'TARGET1 '
+*
+C05_POOL2         DS   0C
+                  DC   AL1(W05_TYPE_POOL)
+                  DC   CL8'POOL2   '
+                  DC   AL1(W05_TYPE_PROP)
+                  DC   CL8'PROPSET2'
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE6   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE7   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE8   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE9   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE10  '
+*
+                  DC   AL1(W05_TYPE_TARGET)
+                  DC   CL8'TARGET1 '
+*
+C05_POOL3         DS   0C
+                  DC   AL1(W05_TYPE_POOL)
+                  DC   CL8'POOL3   '
+                  DC   AL1(W05_TYPE_PROP)
+                  DC   CL8'PROPSET3'
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE1   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE2   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE3   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE4   '
+*
+                  DC   AL1(W05_TYPE_NODE)
+                  DC   CL8'NODE5   '
+*
+                  DC   AL1(W05_TYPE_TARGET)
+                  DC   CL8'TARGET2 '
+*
+* End of table marker.
+*
+C05_POOL_END      DS   AL1(W05_TYPE_END)
+*
+*
+***********************************************************************
+*        End of program DFH0AZXS                                      *
+***********************************************************************
+*
+         END   DFH0AZXS

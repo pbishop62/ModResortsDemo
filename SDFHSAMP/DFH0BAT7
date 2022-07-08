@@ -1,0 +1,223 @@
+      CBL CICS('COBOL3,SP')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0BAT7                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Batch Enabling Sample BAT2                 *
+      *                    Retry Backout Failures Program             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      *   To aid the customer in the preparation for running non-RLS  *
+      *   VSAM batch jobs against a group of data sets, CICS          *
+      *   provides a suite of sample COBOL2 programs called DFH0BATx. *
+      *                                                               *
+      *   For an overview of the DFH0BATx suite, refer to the prolog  *
+      *   of program DFH0BAT1.                                        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      *   This program is part of a suite of programs DFH0BATx which  *
+      *   is intended to aid the user in the identification and       *
+      *   resolution of VSAM RLS retained locks. It may be modified   *
+      *   as required by the customer.                                *
+      *                                                               *
+      *   This program retries any backout failures for a named data  *
+      *   set. It is called remotely by coordinating program DFH0BAT2 *
+      *   using DPL. Any errors encountered retrying the backout      *
+      *   failures are written to remote TS queue DFH0BQ2 which       *
+      *   resides on the coordinating region.                         *
+      *                                                               *
+      *   Retrying backout failures is performed before inquiring on  *
+      *   retained locks for the dataset, in the hope that some of    *
+      *   the retained locks will be resolved if the original cause   *
+      *   of such locks has gone away.                                *
+      *                                                               *
+      *   The name of the dataset for which backout failures are to   *
+      *   be retried is passed to DFH0BAT7 in a commarea.             *
+      *   If DFH0BAT7 detects that there is no commarea,              *
+      *   or that it has an unexpected length,                        *
+      *   the application is abnormally terminated with an abend code *
+      *   of BT71.                                                    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *  $MOD(DFH0BAT7),COMP(SAMPLES),PROD(CICS TS ):                 *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $L0= 654    510 941010 HDMMFM  : Created                      *
+      * $L1= 654 510 950210 HDMMFM  : Code Review work forBatch Enabl-
+      * $P1= M95972 510 960221 HDMMFM  : PTM 95972                    *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0BAT7.
+
+       ENVIRONMENT DIVISION.
+           EJECT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *****************************************************************
+      * Copy book for record for TS queue DFH0BQ2. A record is written
+      * to this queue when an error is encountered retrying any
+      * backout failures.
+      *****************************************************************
+       COPY DFH0BC21.
+      *****************************************************************
+      * Various variables used throughout the program.
+      *****************************************************************
+       77  SET-RESP                    PIC S9(8) COMP.
+       77  SET-RESP2                   PIC S9(8) COMP.
+       77  ASSIGN-RESP                 PIC S9(8) COMP.
+
+       77  OUR-APPLID                  PIC X(8).
+       77  OUR-SYSID                   PIC X(4).
+       77  COORD-SYSID                 PIC X(4).
+       77  ABEND-CODE                  PIC X(4).
+       77  BT71                        PIC X(4) VALUE 'BT71'.
+
+       LINKAGE SECTION.
+      *****************************************************************
+      * Copy book for commarea passed to DFH0BAT7.
+      *****************************************************************
+       COPY DFH0BC22 REPLACING ==COMMAREA-2.== BY
+                               ==COMMAREA-2 REDEFINES DFHCOMMAREA.==.
+           EJECT.
+
+      *****************************************************************
+      ***               Batch Enabling Sample BAT2                  ***
+      ***             Retry Backout Failures Program                ***
+      *****************************************************************
+       PROCEDURE DIVISION USING DFHEIBLK DFHCOMMAREA.
+
+       MAIN-PROCESSING SECTION.
+
+      *****************************************************************
+      * Check that we have been passed the correct commarea.
+      * If not return immediately.
+      *****************************************************************
+           IF EIBCALEN NOT = LENGTH OF COMMAREA-2 THEN
+             MOVE BT71 TO ABEND-CODE
+             EXEC CICS ABEND
+                  ABCODE(ABEND-CODE)
+             END-EXEC
+           ELSE
+      *****************************************************************
+      * First find the sysid of the coordinating CICS region.
+      * Then retry any backout failures for the dataset named
+      * in the commarea.
+      *****************************************************************
+             PERFORM FIND-COORD-SYSID
+             PERFORM RETRY-BACKOUT-FAILURES
+           END-IF.
+      *****************************************************************
+      * End the program and return to CICS.
+      *****************************************************************
+           EXEC CICS RETURN
+           END-EXEC.
+
+       MAIN-PROCESSING-EXIT.
+           GOBACK.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedures start here.
+      *---------------------------------------------------------------*
+
+      *---------------------------------------------------------------*
+      * Procedure to work out if we are running locally on the
+      * coordinating region, or remotely via DPL, and to set up
+      * the SYSID for use on subsequent TS and TD commands.
+      *---------------------------------------------------------------*
+       FIND-COORD-SYSID SECTION.
+           EXEC CICS ASSIGN
+                APPLID(OUR-APPLID)
+                SYSID(OUR-SYSID)
+                PRINSYSID(COORD-SYSID)
+                RESP(ASSIGN-RESP)
+           END-EXEC.
+      *****************************************************************
+      * A response of INVREQ caused by the PRINSYSID option means
+      * that we are running locally.
+      *****************************************************************
+           EVALUATE ASSIGN-RESP
+             WHEN DFHRESP(NORMAL)
+               CONTINUE
+             WHEN OTHER
+               MOVE OUR-SYSID TO COORD-SYSID
+           END-EVALUATE.
+
+       FIND-COORD-SYSID-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to retry backout failures for a data set.
+      *---------------------------------------------------------------*
+       RETRY-BACKOUT-FAILURES SECTION.
+           EXEC CICS SET DSNAME(CA-DSNAME)
+                RETRY
+                RESP(SET-RESP)
+                RESP2(SET-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If the retry was successful, continue.
+      * If the retry returned an INVREQ with an EIBRESP2 value
+      * of 47 this means that no files have opened against the
+      * data set yet - which means there can be no retained locks -
+      * so treat this as successful and continue.
+      * Otherwise assume we failed to retry, and write an error
+      * message to the TS queue.
+      *****************************************************************
+           IF SET-RESP NOT = DFHRESP(NORMAL)
+             IF SET-RESP = DFHRESP(INVREQ) AND
+                SET-RESP2 = 47 THEN
+               CONTINUE
+             ELSE
+               MOVE RETRY-FAILED TO TSQ-ERR-MSG
+               MOVE OUR-APPLID TO TSQ-APPLID
+               MOVE CA-DSNAME TO TSQ-DSNAME
+               MOVE SET-RESP TO TSQ-RESP
+               MOVE SET-RESP2 TO TSQ-RESP2
+               PERFORM WRITE-TSQ-RECORD
+             END-IF
+           END-IF.
+
+       RETRY-BACKOUT-FAILURES-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to write a TS record to DFH0BQ2. As this may be
+      * remote, the WRITEQ TS command may be function shipped.
+      *---------------------------------------------------------------*
+       WRITE-TSQ-RECORD SECTION.
+           EXEC CICS WRITEQ TS
+                QUEUE(TSQ-RETLOCKS-NAME)
+                FROM(TSQ-RETLOCKS-RECORD)
+                LENGTH(LENGTH OF TSQ-RETLOCKS-RECORD)
+                SYSID(COORD-SYSID)
+           END-EXEC.
+
+       WRITE-TSQ-RECORD-EXIT.
+           EXIT.

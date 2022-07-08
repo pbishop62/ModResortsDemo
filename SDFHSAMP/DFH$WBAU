@@ -1,0 +1,472 @@
+*ASM XOPTS(SP NOPROLOG NOEPILOG)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$WBAU                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (WB) Sample Basic Authenication         *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1997, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION =                                                          *
+*        This program runs as a CICS Web Interface Converter program  *
+*        and provides an example of how to do HTTP basic              *
+*        authentication.                                              *
+*                                                                     *
+* NOTES :                                                             *
+*                                                                     *
+*    THIS IS A PRODUCT-SENSITIVE SAMPLE.                              *
+*    REFER TO PRODUCT DOCUMENTATION.                                  *
+*                                                                     *
+*    DEPENDENCIES = S/390                                             *
+*    RESTRICTIONS =                                                   *
+*    REGISTER CONVENTIONS =                                           *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read-only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$WBAU                                              *
+*                                                                     *
+*     PURPOSE =                                                       *
+*         Sample HTTP Basic Authentication Converter Program          *
+*                                                                     *
+*     LINKAGE =                                                       *
+*     INPUT =                                                         *
+*     OUTPUT =                                                        *
+*     EXIT-NORMAL =                                                   *
+*     EXIT-ERROR =                                                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+*                                                                     *
+*     ROUTINES =                                                      *
+*     DATA AREAS =                                                    *
+*     CONTROL BLOCKS =                                                *
+*     GLOBAL VARIABLES =                                              *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*       o Search the HTTP headers for an AUTHORIZATION header.        *
+*       o Decode the base-64 authentication token to obtain a         *
+*         userid and password.                                        *
+*       o Verify the userid/password using EXEC CICS VERIFY PASSWORD. *
+*       o If unsuccessful, return an HTTP 401 response.               *
+*         Otherwise, continue with the target application.            *
+*                                                                     *
+*   For a description of HTTP Basic Authentication, see               *
+*       http://www.ietf.org/rfc/rfc1945.txt                           *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFH$WBAU),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $01= A28711 610 990730 HDBGNRB : Migrate PQ28711 from SPA R530   *
+*    $L0= 728    520 970618 HD2JPEH : HTTP Basic Authentication       *
+*    $L2= 830    660 080923 HDISGPL : Add IPV6 to Parameters          *
+*    $P1= M27415 530 980209 HD2WPGK : Move DFHWBUCD amongst constants *
+*    $P2= M27322 530 990128 HD2JPEH : Converter commarea changes      *
+*    $P3= D12919 640 050114 HD2JPEH : Remove password uppercasing     *
+*                                                                     *
+***********************************************************************
+         EJECT ,
+*---------------------------------------------------------------------*
+*    Standard WBI definitions required                                *
+*---------------------------------------------------------------------*
+         COPY DFHWBCDD                 Converter parameter list
+         DFHREGS ,
+CRLF     EQU   X'0D25'                 Carriage-return/linefeed
+*
+*---------------------------------------------------------------------*
+*    Working storage definitions                                      *
+*---------------------------------------------------------------------*
+         DFHEISTG ,
+WORKAREA DS    D                       Workarea
+HDRNAME  DS    CL16                    HTTP header name
+USERID   DS    CL8                     Userid
+PASSWORD DS    CL8                     Password
+AUTHID   DS    CL256                   Authentication identifier
+         DFHEIEND ,
+*---------------------------------------------------------------------*
+*    Start of program code                                            *
+*---------------------------------------------------------------------*
+DFH$WBAU CSECT
+DFH$WBAU AMODE 31
+DFH$WBAU RMODE ANY
+         DFHEIENT DATAREG=R13,CODEREG=R12,EIBREG=R11
+*
+*  If there is no commarea, just return.
+*  (There is nowhere to set return codes).
+*
+         SR    R15,R15                 Zero insert register
+         ICM   R15,3,EIBCALEN          Insert commarea length
+         BZ    RETURN                  Return if zero
+*
+*  Address the parameter list
+*
+         L     R10,DFHEICAP            Address the commarea
+         USING COMM_PARMLIST,R10       Establish commarea addressing
+         LH    R0,CONVERTER_FUNCTION   Load the function           @P2C
+         CH    R0,=Y(URP_ENCODE)       Is it ENCODE?               @P2C
+         BE    ENCODE                  Yes
+         CH    R0,=Y(URP_DECODE)       Is it DECODE?               @P2C
+         BE    DECODE                  Yes
+*---------------------------------------------------------------------*
+*    Return Invalid                                                   *
+*---------------------------------------------------------------------*
+RET_INV  DS    0H
+         MVC   CONVERTER_RESPONSE,=A(URP_INVALID)
+         B     RETURN
+*---------------------------------------------------------------------*
+*    Return Disaster                                                  *
+*---------------------------------------------------------------------*
+RET_DIS  DS    0H
+         MVC   CONVERTER_RESPONSE,=A(URP_DISASTER)
+         B     RETURN
+*---------------------------------------------------------------------*
+*    Return OK                                                        *
+*---------------------------------------------------------------------*
+RET_OK   DS    0H
+         MVC   CONVERTER_RESPONSE,=A(URP_OK)
+RETURN   DS    0H
+         DFHEIRET ,
+         EJECT ,
+***********************************************************************
+*
+*  ENCODE routine
+*
+***********************************************************************
+ENCODE   DS    0H
+         CLC   ENCODE_EYECATCHER,=CL8'>encode'
+         BNE   RET_INV                 Return response=invalid
+         L     R9,ENCODE_DATA_PTR      Address input data
+         B     RET_OK
+         EJECT ,
+***********************************************************************
+*
+*  DECODE routine
+*
+***********************************************************************
+DECODE   DS    0H
+         CLC   DECODE_EYECATCHER,=CL8'>decode'
+         BNE   RET_INV                 Return response=invalid
+*---------------------------------------------------------------------*
+*    Processing different versions of input:                          *
+*    decode_version_CTS410 level introduce support for IPV6 addresses *
+*---------------------------------------------------------------------*
+*
+         CLI   decode_version,decode_version_CTS410 IPV6 supported?@L2A
+         BNL   GOT_IPV6                Y: process ipv6 fields      @L2A
+*
+*  This is where users would execute older IP address manipulation
+*  using fields decode_client_address and decode_client_address_string
+*
+         LA    R6,DECODE_CLIENT_ADDRESS     Example                @L2A
+         LA    R7,DECODE_CLIENT_ADDRESS_STRING Example             @L2A
+         B     END_IP                  B: finished with IP address @L2A
+*                                      processing
+GOT_IPV6 DS    0H                      Process IPV6 fields         @L2A
+*
+*  This is where users would execute newer IP address manipulation
+*  using fields decode_client_ipv6_address and
+*  decode_client_ipv6_address_string.
+*
+         LA    R6,DECODE_CLIENT_IPV6_ADDRESS Example               @L2A
+         LA    R7,DECODE_CLIENT_IPV6_ADDRESS_STRING  Example       @L2A
+*
+END_IP   DS    0H                      End IP address processing   @L2A
+
+         L     R14,DECODE_DATA_PTR Address encode data
+*---------------------------------------------------------------------*
+*    Search the HTTP headers for an AUTHORIZATION: header             *
+*---------------------------------------------------------------------*
+CHKHDRS  DS    0H                      Search for an authorization hdr
+         L     R14,DECODE_REQUEST_HEADER_PTR Point to first header
+CHKNEXT  DS    0H
+         MVC   HDRNAME,0(R14)          Copy header-name to workarea
+         TR    HDRNAME,UCTAB           Uppercase header name
+         CLC   HDRNAME(15),=CL15'AUTHORIZATION:' Is it authorization?
+         BE    AUTHHDR                 Yes, process it
+CHKCRLF  DS    0H                      No, scan remaining hdrs
+         CLC   0(2,R14),=AL2(CRLF)     Reached end of current header?
+         BE    CHKEOF                  Yes, check for EOF
+         LA    R14,1(,R14)             No, step over character
+         B     CHKCRLF                 Scan through current header
+CHKEOF   DS    0H
+         LA    R14,2(,R14)             Step over CRLF at end of hdr
+         CLC   0(2,R14),=AL2(CRLF)     Reached end of file?
+         BNE   CHKNEXT                 No, examine next header
+         B     NOT_AUTHORIZED          Yes, signal not authorized
+AUTHHDR  DS    0H
+         LA    R14,15(,R14)            Step over header name
+         MVC   WORKAREA(6),0(R14)      Copy first 6 chars of hdr value
+         TR    WORKAREA(6),UCTAB       Translate to uppercase
+         CLC   WORKAREA(6),=CL6'BASIC' Is this a basic header?
+         BNE   NOT_AUTHORIZED          No, can't process
+         EJECT ,
+*
+*  At this point, an HTTP Basic Authentication Header has been found.
+*  This looks like this:
+*
+*    Authorization: Basic xxxxxxxxxxxxxxxxxxxxxx
+*
+*     where xxxxxxxxxxxxxxxxxxxxxx is a base-64 encoded representation
+*           of the ASCII string "userid:password".
+*
+*  That is, the user's userid and password, in ASCII, have been
+*  concatenated together with a delimiting colon, and the result has
+*  been encoded using the base-64 algorithm.  In this encoding, the
+*  string is interpreted as a sequence of six-bit binary numbers
+*  (without regard to byte boundaries), and each six-bit number is
+*  encoded as an eight-bit character from the set {A..Z,a..z,0..9,+,/},
+*  with the final result being padded with equals signs to bring it to
+*  a multiple of four characters.
+*
+*  Our task now is to reconstruct to original "userid:password" string
+*  from the base-64 encoding, and translate the ASCII result to EBCDIC.
+*
+         MVI   AUTHID,C'='             Initialize AUTHID ...
+         MVC   AUTHID+1(L'AUTHID-1),AUTHID  to all pad characters
+         LA    R1,AUTHID               Point to authentication result
+         LA    R14,6(,R14)             Step over 'BASIC' string
+AUTHCOPY DS    0H                      Copy base-64 one byte at a time
+         CLC   0(2,R14),=AL2(CRLF)     Reached end of header?
+         BE    AUTHDCOD                Yes, start decode
+         MVC   0(1,R1),0(R14)          No, copy one byte
+         LA    R1,1(,R1)               Step output pointer
+         LA    R14,1(,R14)             Step input pointer
+         B     AUTHCOPY                Try next character
+*
+*  Translate each character to its corresponding 6-bit binary value.
+*  Every four bytes then contain four binary numbers less than 64 that
+*  represent a 24-bit binary string (in this case, 3 ASCII characters).
+*
+AUTHDCOD DS    0H
+         TR    AUTHID,BASE64           Translate from base-64 to binary
+         LA    R14,AUTHID              Point to translated string
+         LA    R15,AUTHID              Point to translated string
+*
+*  The following depends on the translated value of the padding byte
+*  being equal to B'01000001'. Executing BXLE R1,R1 causes R1 to be
+*  added to itself and the result compared with its initial value.
+*  When B'01000001' is in the high order byte, the addition causes
+*  BIT1 to be moved to BIT0, and the result is negative and therefore
+*  less than the initial value, and the branch is taken.
+*  Non-padding values always have zeroes in both BIT0 and BIT1,
+*  so the result is always a positive number equal to twice the
+*  original value, and the branch is not taken.
+*
+AUTHTRAN DS    0H
+         SR    R0,R0                   Zero result accumulator
+         ICM   R1,15,0(R14)            Insert four translated chars
+         BXLE  R1,R1,AUTHDONE          Shift left & branch if negative
+         ALR   R1,R1                   Shift left another bit
+         SLDL  R0,6                    Shift 6-bit translated value
+         BXLE  R1,R1,AUTHSHF3          Shift left & branch if negative
+         ALR   R1,R1                   Shift left another bit
+         SLDL  R0,6                    Shift 6-bit translated value
+         BXLE  R1,R1,AUTHSHF2          Shift left & branch if negative
+         ALR   R1,R1                   Shift left another bit
+         SLDL  R0,6                    Shift 6-bit translated value
+         BXLE  R1,R1,AUTHSHF1          Shift left & branch if negative
+         ALR   R1,R1                   Shift left another bit
+         SLDL  R0,6                    Shift 6-bit translated value
+         B     AUTHSHF0                Go save 24-bit translated result
+AUTHSHF3 SLL   R0,6                    Shift 6-bit result
+AUTHSHF2 SLL   R0,6                    Shift 12-bit result
+AUTHSHF1 SLL   R0,6                    Shift 18-bit result
+AUTHSHF0 STCM  R0,7,0(R15)             Save 24-bit result
+         LA    R15,3(,R15)             Step over chars just stored
+         LA    R14,4(,R14)             Step over input chars
+         B     AUTHTRAN                Continue translation
+AUTHDONE DS    0H                      Base-64 to ASCII decode complete
+         MVI   0(R15),0                Add a trailing null for luck
+AUTHTRUN BCTR  R15,0                   Decrement address
+         CLI   0(R15),0                Trailing null?
+         BE    AUTHTRUN                Yes, truncate trailing null
+         LA    R15,1(,R15)             Point past last character
+         LA    R14,AUTHID              Get starting address
+         SR    R15,R14                 Calculate userid:password length
+         TR    AUTHID,EBCDIC           Translate ASCII result to EBCDIC
+         LA    R1,0(R15,R14)           Address last char in AUTHID
+         BCTR  R14,0                   Address char before AUTHID
+         LA    R0,1                    Set scan increment
+AUTHUSCN BXH   R14,R0,AUTHUSER         Bump scan pointer
+         CLI   0(R14),C':'             Look for colon at end of userid
+         BNE   AUTHUSCN                Not found, continue loop
+AUTHUSER MVC   USERID,=CL8' '          Blank the userid
+         LR    R15,R14                 Save address of delimiting colon
+         LA    R2,AUTHID               Set start address of AUTHID
+         SR    R15,R2                  Calculate userid length
+         BNP   AUTHPSCN                Skip if not positive
+         LA    R2,L'USERID             Get maximum userid length
+         CR    R15,R2                  Is supplied length too long?
+         BNH   AUTHMUSR                No, copy calculated length
+         LR    R15,R2                  Yes, truncate to maximum
+AUTHMUSR BCTR  R15,0                   Decrement to machine length
+         EX    R15,COPYUSER            Copy userid into parameter list
+         LA    R3,1(,R14)              Save address following the colon
+AUTHPSCN BXH   R14,R0,AUTHPSWD         Bump over next character
+         CLI   0(R14),X'00'            Reached delimiting null?
+         BNE   AUTHPSCN                No, loop back
+AUTHPSWD MVC   PASSWORD,=CL8' '        Blank the password
+         LR    R15,R14                 Save address of final delimiter
+         SR    R15,R3                  Calculate password length
+         BNP   AUTHVERI                Skip if not positive
+         LA    R2,L'PASSWORD           Get maximum password length
+         CR    R15,R2                  Is supplied length too long?
+         BNH   AUTHMPSW                No, copy calculated length
+         LR    R15,R2                  Yes, truncate to maximum
+AUTHMPSW BCTR  R15,0                   Decrement to machine length
+         EX    R15,COPYPSWD            Copy userid into parameter list
+*
+*  We CAN now validate the password.
+*
+AUTHVERI DS    0H
+         EXEC  CICS VERIFY PASSWORD(PASSWORD) USERID(USERID) NOHANDLE
+         ICM   R15,15,EIBRESP          Check verification response
+         BNZ   NOT_AUTHORIZED          If failed, give NOTAUTH response
+         SPACE 1
+*
+*  The correct userid for this transaction has already been set
+*  by the Analyzer, and in any case there is no CICS API for changing
+*  the userid.  So now that we have confirmed that the userid:password
+*  pair is valid, we just return normally from the Converter and
+*  allow the application program to proceed.
+*
+         XC    PASSWORD,PASSWORD       Clear password-containing field
+         XC    AUTHID,AUTHID           Clear password-containing field
+         B     RET_OK                  Continue application
+         SPACE 1
+COPYUSER OC    USERID(0),AUTHID        Copy and uppercase userid
+COPYPSWD MVC   PASSWORD(0),0(R3)       Copy password ASIS          @P3C
+         EJECT ,
+*
+*  Either no Authorization: header was present, or it contained
+*  an invalid userid:password combination.
+*
+*  The HTTP Basic Authentication protocol requires us to reply with
+*  a 401 response and a WWW_Authenticate header.
+*
+NOT_AUTHORIZED DS 0H
+         L     R9,DECODE_DATA_PTR      Address decode data response
+         LR    R0,R9                   Copy address for MVCL
+         L     R1,RESP401              Get length of 401 response data
+         LA    R14,RESP401             Get address of 401 response data
+         LR    R15,R1                  Copy length
+         MVCL  R0,R14                  Copy HTTP 401 response
+         EXEC  CICS ASSIGN APPLID(APPL401-RESP401(R9)) NOHANDLE
+*                                           Put applid in response
+         MVC   USER401-RESP401(8,R9),USERID Put userid in response
+         XC    DECODE_SERVER_PROGRAM,DECODE_SERVER_PROGRAM Nullify pgm
+         B     RET_OK                  Return
+         EJECT ,
+         LTORG ,
+*---------------------------------------------------------------------*
+*    Translate table for upper case conversion                        *
+*---------------------------------------------------------------------*
+UCTAB    DC    256AL1(*-UCTAB)         ASIS by default
+         ORG   UCTAB+C'a'
+         DC    C'ABCDEFGHI'
+         ORG   UCTAB+C'j'
+         DC    C'JKLMNOPQR'
+         ORG   UCTAB+C's'
+         DC    C'STUVWXYZ'
+         ORG   ,
+*---------------------------------------------------------------------*
+*    Translate table for interpretation of base-64 encoded data.
+*
+*    For a description of base-64 encoding see RFC2045 at
+*    http://www.ietf.org/rfc/rfc2045.txt
+*---------------------------------------------------------------------*
+BASE64   DC    256X'FF'
+         ORG   BASE64+C'A'                         A-I
+         DC    AL1(0,1,2,3,4,5,6,7,8)
+         ORG   BASE64+C'J'                         J-R
+         DC    AL1(9,10,11,12,13,14,15,16,17)
+         ORG   BASE64+C'S'                         S-Z
+         DC    AL1(18,19,20,21,22,23,24,25)
+         ORG   BASE64+C'a'                         a-i
+         DC    AL1(26,27,28,29,30,31,32,33,34)
+         ORG   BASE64+C'j'                         j-r
+         DC    AL1(35,36,37,38,39,40,41,42,43)
+         ORG   BASE64+C's'                         s-z
+         DC    AL1(44,45,46,47,48,49,50,51)
+         ORG   BASE64+C'0'                         0-9
+         DC    AL1(52,53,54,55,56,57,58,59,60,61)
+         ORG   BASE64+C'+'                         +
+         DC    AL1(62)
+         ORG   BASE64+C'/'                         /
+         DC    AL1(63)
+         ORG   BASE64+C'='                         padding character
+         DC    B'01000001'
+         ORG   ,
+*---------------------------------------------------------------------*
+*    Translate table for conversion of ASCII to EBCDIC.
+*---------------------------------------------------------------------*
+EBCDIC   DC    X'00010203372D2E2F1605250B0C0D0E0F'
+         DC    X'101112133C3D322618193F27221D351F'
+         DC    X'405A7F7B5B6C507D4D5D5C4E6B604B61'
+         DC    X'F0F1F2F3F4F5F6F7F8F97A5E4C7E6E6F'
+         DC    X'7CC1C2C3C4C5C6C7C8C9D1D2D3D4D5D6'
+         DC    X'D7D8D9E2E3E4E5E6E7E8E9ADE0BD5F6D'
+         DC    X'79818283848586878889919293949596'
+         DC    X'979899A2A3A4A5A6A7A8A9C04FD0A107'
+         DC    X'4320211C23EB249B7128384990BAECDF'
+         DC    X'45292A9D722B8A9A6756644A53685946'
+         DC    X'EADA2CDE8B5541FE5851524869DB8E8D'
+         DC    X'737475FA15B0B1B3B4B56AB7B8B9CCBC'
+         DC    X'AB3E3B0ABF8F3A14A017CBCA1A1B9C04'
+         DC    X'34EF1E0608097770BEBBAC5463656662'
+         DC    X'30424757EE33B6E1CDED3644CECF31AA'
+         DC    X'FC9EAE8CDDDC39FB80AFFD7876B29FFF'
+         EJECT
+RESP401  DC    A(LEN401)
+         DC    C'HTTP/1.0 401 Unauthorized',AL2(CRLF)
+*
+*  The following header instructs the browser to prompt for a
+*  userid:password associated with the current "realm", which is here
+*  specified as "CICS application [applid]" (where [applid] is that
+*  returned by EXEC CICS ASSIGN APPLID).  Some browsers may display
+*  the realm name when prompting for the userid and password, so it
+*  should be something that is meaningful to an end-user.
+*
+         DC    C'WWW-Authenticate: Basic realm="CICS application '
+APPL401  DC    C'********'
+         DC    C'"',AL2(CRLF,CRLF)
+*
+*  The following HTML will not be displayed by browsers that
+*  support the Basic Authentication protocol, but is sent in case
+*  the browser is down-level and does not recognize the
+*  WWW_Authenticate header.
+*
+         DC    C'<html><title>401 Not authorized</title>',AL2(CRLF)
+         DC    C'<body><p>User '
+USER401  DC    C'********'
+         DC    C' is not authenticated.',AL2(CRLF)
+         DC    C'</body></html>'
+         DC    AL2(CRLF)
+LEN401   EQU   *-RESP401
+*---------------------------------------------------------------------*
+*    CWI URP constants                                            @P1A*
+*---------------------------------------------------------------------*
+         COPY DFHWBUCD                CWI URP constants            @P1M
+         END   DFH$WBAU

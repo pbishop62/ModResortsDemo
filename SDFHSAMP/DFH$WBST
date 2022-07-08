@@ -1,0 +1,574 @@
+         TITLE 'DFH$WBST - CICS SAMPLE STATE HANDLER - ASSEMBLER'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$WBST                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Module to handle CICS transactions that          *
+*                    wish to have state maintained on their           *
+*                    behalf.                                          *
+*                    This program offers non terminal-oriented        *
+*                    tasks, such as programs designed to interface    *
+*                    with the WWW, a facility to allow one CICS       *
+*                    task to save information to be retrieved by      *
+*                    another task using a unique identifier which     *
+*                    is stored elsewhere, for example in a hidden     *
+*                    field in a form.                                 *
+*                                                                     *
+*                    The program can be run periodically to purge     *
+*                    state data which has "timed out" if required.    *
+*                                                                     *
+*                    The program can also be run to delete ALL        *
+*                    state data resources                             *
+*                                                                     *
+*                    Allows callers to CREATE, RETRIEVE, UPDATE       *
+*                    and DESTROY state information                    *
+*                    When called as transaction CWBT, purges       @01C
+*                    all state data which has not been             @01C
+*                    updated for one hour.                         @01C
+*                                                                     *
+*                                                                     *
+*       Licensed Materials - Property of IBM                          *
+*                                                                     *
+*       "Restricted Materials of IBM"                                 *
+*                                                                     *
+*       5655-Y04                                                      *
+*                                                                     *
+*       (C) Copyright IBM Corp. 1996, 2003"                           *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*   CHANGE ACTIVITY :                                                 *
+*        $MOD(DFH$WBST),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $01= A24695 610 990610 HDBGNRB : Migrate PQ24695 from SPA R530   *
+*    $02= A28711 610 990730 HDBGNRB : Migrate PQ28711 from SPA R530   *
+*    $L0= 723    510 960611 HD6NPRW : Sample code                     *
+*    $P2= M14305 610 990916 HD4PALS : Fix DFH$WBST TIMEOUT_RTN        *
+*    $P4= M15766 610 000927 HD7OPJW : Binder warning messages         *
+*    $P5= D01526 620 010718 HD2WPGK : Perform timeout loop better     *
+*    $P6= D06350 630 030207 HD2JPEH : Suppresss ASMA015W message      *
+*                                                                     *
+*    Dummy change for APAR PQ28711                                 @02A
+***********************************************************************
+*
+*        Commarea Structure
+*
+COMMAREA DSECT
+COMM_START DS 0F
+EYECATCH DS  CL4
+FUNCTION DS  XL1
+CREATE   EQU   X'C3'              * Create a new handle and state stg
+RETRIEVE EQU   X'D9'               * Retrieve state info for a handle
+STORE    EQU   X'E2'               * Store state info for a handle
+DESTROY  EQU   X'C4'               * Destroy handle and state stg
+RETCODE  DS    XL1
+GOODRC   EQU   X'0'
+BADCOMRC EQU   X'1'
+INVFUNRC EQU   X'2'
+NOSTGRC  EQU   X'3'
+NOMATRC  EQU   X'4'
+TSWERRC  EQU   X'5'
+LENGERR  EQU   X'6'
+NOSTMPRC EQU   X'7'
+BADQNMRC EQU   X'8'
+TIMEFRC  EQU   X'9'
+TSWER2RC EQU   X'A'
+SHTSCERR EQU   X'B'
+SHTSRERR EQU   X'C'
+SHTSSERR EQU   X'D'
+SHTSDERR EQU   X'E'
+RESERVED DS    XL2
+HANDLE   DS    F                   * Unique conversation id
+USERDATA DS    XL256               * User state information
+COMLEN   EQU   *-COMM_START        * Length of COMMAREA
+*
+*
+R7       EQU   7
+WK1      EQU   6
+WK2      EQU   8
+COMPTR   EQU   5                   Pointer to Commarea
+ANCHOR_PTR  EQU   10               Pointer to Anchor block
+STATE_PTR  EQU   12                  Pointer to State Control Block
+*
+STATE_BLOCK        DSECT   State Control Block
+STATE_EYECATCHER   DS   CL4
+STATE_FORWARD_PTR  DS   F
+STATE_BACKWARD_PTR DS   F
+STATE_HANDLE       DS   F
+STATE_TIMESTAMP    DS   PL8
+STATE_USER_DATA    DS   XL256
+STATE_LEN EQU *-STATE_BLOCK
+*
+ANCHOR_BLOCK        DSECT
+ANCHOR_EYECATCHER   DS CL4
+ANCHOR_COUNTER      DS F    Counter to generate unique handles
+ANCHOR_FORWARD_PTR  DS F     Storage block chain forward ptr
+ANCHOR_BACKWARD_PTR DS F     Storage block chain backward ptr
+ANCHOR_TIMESTAMP    DS PL8      Time at which this anchor was created
+ANCHOR_LEN EQU *-ANCHOR_BLOCK  Length of anchor
+         EJECT ,
+DFHEISTG DSECT
+*
+*        Working Storage
+*
+TEMP_TIME DS   PL8
+CURRENT_TIME DS   PL8
+TIME     DS   PL8
+TEMP_STATE_PTR DS F
+MESSAGES DS    CL80                TEMP STORE FOR MESSAGES
+RESP     DS    1F                  RESPONSES TO CICS COMMANDS
+TRANID   DS    CL4                 TRANSACTION IDENTIFIER
+TSLEN    DS    H
+ITEMNUM  DS    H
+FREE_SAVE_R7 DS F
+GETMAIN_LENGTH DS F
+ANCHOR_STG DS CL(ANCHOR_LEN)
+         EJECT ,
+DFH$WBST CSECT
+DFH$WBST AMODE 31                                                  @P4A
+DFH$WBST RMODE ANY                                                 @P4A
+         XC   MESSAGES,MESSAGES                Clear message field
+***********************************************************************
+*        Issue an ENQ so that we have the State Management lock       *
+***********************************************************************
+         EXEC CICS ENQ RESOURCE(STATE_MANAGER)                         *
+                       LENGTH(L'STATE_MANAGER)                         *
+                       RESP(RESP)
+***********************************************************************
+*   Call GETANCH to retrieve the TS record containing our anchor      *
+*   information. If no address is returned, this must be the first    *
+*   time we have been invoked, so call INIT_ANCHOR to get the         *
+*   anchor block storage and initialise the TS record.                *
+***********************************************************************
+         LA    ANCHOR_PTR,ANCHOR_STG
+         USING ANCHOR_BLOCK,ANCHOR_PTR
+         USING STATE_BLOCK,STATE_PTR
+         BAL   R7,GETANCH       Get the state control block anchor
+         LTR   ANCHOR_PTR,ANCHOR_PTR  If the get for the anchor is OK
+         BNZ   CHKFUNC          ..continue
+         BAL   R7,INIT_ANCHOR   Else initialise the anchor
+         LTR   ANCHOR_PTR,ANCHOR_PTR  If this fails as well........
+         BZ    ENDFUNC          Give up !
+CHKFUNC  DS    0H
+         CLC   EIBTRNID,CWBT         Is it the timeout transaction ?
+         BE    TIMEOUT_RTN           ..Yes, go do it.
+         CLC   EIBTRNID,CWBP         Is it the purge transaction ?
+         BE    PURGE_RTN             ..Yes, go do it.
+***********************************************************************
+*        If we get here, we have been linked to from another program. *
+*        See whether there is a commarea for us to use.               *
+*        If not, there is an error, as we should always be called     *
+*        a commarea.                                                  *
+***********************************************************************
+         EXEC CICS ADDRESS COMMAREA(COMPTR)
+         USING COMMAREA,COMPTR
+         LTR   COMPTR,COMPTR
+         BZ    BADCOM
+         LH    R7,EIBCALEN                                        @P1A
+         LTR   R7,R7                                              @P1A
+         BZ    BADCOM                                             @P1A
+***********************************************************************
+*        Check the function code in the commarea to see why we have
+*        been invoked, and call the appropriate routine.
+***********************************************************************
+         MVI   RETCODE,GOODRC
+         L     R7,=AL4(CREATE_RTN)  If function is create
+         CLI   FUNCTION,CREATE      invoke the CREATE routine
+         BE    CALLFUNC
+*
+         L     R7,=AL4(RETRIEVE_RTN) If function is retrieve
+         CLI   FUNCTION,RETRIEVE     invoke the RETRIEVE routine
+         BE    CALLFUNC
+*
+         L     R7,=AL4(STORE_RTN)    If function is store
+         CLI   FUNCTION,STORE        invoke the STORE routine
+         BE    CALLFUNC
+*
+         L     R7,=AL4(DESTROY_RTN)  If function is destroy
+         CLI   FUNCTION,DESTROY      invoke the destroy routine
+         BE    CALLFUNC
+***********************************************************************
+*        We should not get here. If we do, issue an error message     *
+***********************************************************************
+         B     INVFUNC
+CALLFUNC DS    0H
+         BR    R7            Invoke the requested routine
+ENDFUNC  DS    0H
+***********************************************************************
+*       If an error was raised, issue message to operator             *
+***********************************************************************
+         CLI   RETCODE,GOODRC
+         BE    ENDNOERR
+*       If the error was no commarea, don't update commarea      @P1A
+ENDFUNC_NO_COMMAREA DS 0H                                        @P1A
+         EXEC  CICS WRITE OPERATOR                                     *
+               TEXT(MESSAGES) TEXTLENGTH(L'MESSAGES)                   *
+               ROUTECODES(MSGROUTE) NUMROUTES(L'MSGROUTE)
+ENDNOERR DS    0H
+***********************************************************************
+*        Issue an DEQ to release the State Management lock            *
+***********************************************************************
+         EXEC CICS DEQ RESOURCE(STATE_MANAGER)                         *
+                       LENGTH(L'STATE_MANAGER)                         *
+                       RESP(RESP)
+         EXEC CICS RETURN
+         EJECT ,
+CREATE_RTN DS 0H
+***********************************************************************
+*        This routine does the following:                             *
+*        1. Creates a new handle for a conversation                   *
+*        2. Acquires storage for a new state block                    *
+***********************************************************************
+         L     WK1,ANCHOR_COUNTER   Get the current count
+         LA    WK1,1(,WK1)         Increment it by one
+         ST    WK1,ANCHOR_COUNTER   Put it back
+*
+*        Get storage for the new state block
+*
+         MVC   GETMAIN_LENGTH,=AL4(STATE_LEN)
+         EXEC CICS GETMAIN SHARED SET(STATE_PTR) RESP(RESP)            *
+               FLENGTH(GETMAIN_LENGTH) INITIMG(X'00')
+         CLC   RESP,DFHRESP(NORMAL)    Storage acquired OK ?
+         BNE   NOSTG                   No, check for no queue
+**********************************************************************
+*        Add new state block to the chain                            *
+**********************************************************************
+         L    WK1,ANCHOR_BACKWARD_PTR
+         LTR  WK1,WK1
+         BNZ  ADDELEM
+**********************************************************************
+*        No elements currently in chain                              *
+**********************************************************************
+         ST    STATE_PTR,ANCHOR_BACKWARD_PTR
+         ST    STATE_PTR,ANCHOR_FORWARD_PTR
+         B     CONTINUE
+**********************************************************************
+*        Add element to existing chain                               *
+**********************************************************************
+ADDELEM  DS   0H
+         L    WK1,ANCHOR_BACKWARD_PTR
+         ST   STATE_PTR,STATE_FORWARD_PTR-STATE_BLOCK(,WK1)
+         XC   STATE_FORWARD_PTR,STATE_FORWARD_PTR
+         ST   WK1,STATE_BACKWARD_PTR
+         ST   STATE_PTR,ANCHOR_BACKWARD_PTR
+CONTINUE DS    0H
+**********************************************************************
+*        Write the anchor block back to TS                           *
+**********************************************************************
+         BAL   R7,REWRITE
+**********************************************************************
+*        Initialise element                                          *
+*        The method of state token generation should be revised if   *
+*        a more sophisticated method is required by the user.        *
+**********************************************************************
+         MVC  STATE_EYECATCHER,STATE_EYE_INIT
+         BAL  R7,TIMESTAMP
+         MVC  STATE_USER_DATA,USERDATA
+CLOCKOUT STCK TIME                          Read the TOD clock
+         MVC  HANDLE,TIME+4                 Save clock value as handle
+         BAL  R7,LOCATE_STATE_BLOCK         See if handle is in use
+         LTR  STATE_PTR,STATE_PTR           Found block with my handle?
+         BNZ  CLOCKOUT                      Yes, get another value
+         L    STATE_PTR,ANCHOR_BACKWARD_PTR No, restore my pointer
+         MVC  STATE_HANDLE,HANDLE           Save unique handle
+         MVI  RETCODE,GOODRC
+         B     ENDFUNC
+*
+*
+RETRIEVE_RTN DS 0H
+***********************************************************************
+*        This routine does the following:                             *
+*        1. Retrieve the state data for a handle passed in the        *
+*           Commarea.                                                 *
+*        2. Update the timestamp in the state block.                  *
+*        3. Return the state data to the application                  *
+***********************************************************************
+         BAL  R7,LOCATE_STATE_BLOCK
+         LTR  STATE_PTR,STATE_PTR
+         BZ   RETRIEVE_NO_MATCH
+         BAL  R7,TIMESTAMP
+         MVC  USERDATA,STATE_USER_DATA
+         B   ENDFUNC
+*********************************************************************
+*      No match was found for the handle passed by the caller.      *
+*      Either it has timed out, or there is a logic error.          *
+*********************************************************************
+RETRIEVE_NO_MATCH DS 0H
+         B   NOMATCH
+*
+*
+*
+STORE_RTN DS 0H
+***********************************************************************
+*        This routine does the following:                             *
+*        1. Finds the requested handle                                *
+*        2. Updates the timestamp                                     *
+*        3. Stores the new state data in the block                    *
+***********************************************************************
+         BAL  R7,LOCATE_STATE_BLOCK
+         LTR  STATE_PTR,STATE_PTR
+         BZ   STORE_NO_MATCH
+         BAL  R7,TIMESTAMP
+         MVC  STATE_USER_DATA,USERDATA
+         MVI  RETCODE,GOODRC
+         B ENDFUNC
+STORE_NO_MATCH DS 0H
+         B NOMATCH
+*
+DESTROY_RTN DS 0H
+***********************************************************************
+*        This routine does the following:                             *
+*        1. Finds the requested block                                 *
+*        2. Calls FREE_STATE_BLOCK to destroy the element.            *
+*        3. Freemains the state block                                 *
+***********************************************************************
+         BAL  R7,LOCATE_STATE_BLOCK
+         LTR  STATE_PTR,STATE_PTR
+         BZ   DESTROY_NO_MATCH
+         BAL  R7,FREE_STATE_BLOCK
+         MVI  RETCODE,GOODRC
+         B ENDFUNC
+DESTROY_NO_MATCH DS 0H
+         B NOMATCH
+TIMEOUT_RTN  DS    0H
+***********************************************************************
+*        Routine which loops through all the state control blocks     *
+*        and deletes those which have been around for more than       *
+*        1 hour (change EXPIRY_INTERVAL if you wish to                *
+*        customize this timeout value).                               *
+***********************************************************************
+         EXEC CICS ASKTIME ABSTIME(CURRENT_TIME) RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)    Timestamp made OK ?
+         BNE   TIMEFAIL
+         L     STATE_PTR,ANCHOR_FORWARD_PTR     Initialise state ptr
+TIMELOOP DS    0H
+         LTR   STATE_PTR,STATE_PTR              If nulls, we are done
+         BZ    ALLDONE
+         MVC   TEMP_TIME,STATE_TIMESTAMP      If (last update time +
+         AP    TEMP_TIME,EXPIRY_INTERVAL            expiry interval)
+         CP    TEMP_TIME,CURRENT_TIME              is less than current
+         BNL   TIMEOK                         then remove it
+         MVC   TEMP_STATE_PTR,STATE_FORWARD_PTR else remove this block
+         BAL   R7,FREE_STATE_BLOCK
+         L     STATE_PTR,TEMP_STATE_PTR
+         B     TIMELOOP
+TIMEOK   DS    0H
+         L     STATE_PTR,STATE_FORWARD_PTR
+         B     TIMELOOP                                            @P4A
+ALLDONE  DS     0H
+         B     ENDNOERR
+PURGE_RTN  DS    0H
+***********************************************************************
+*        Routine which loops through all the state control blocks     *
+*        and deletes them, then deletes the anchor block.             *
+***********************************************************************
+PURGE_LOOP DS    0H
+         L     STATE_PTR,ANCHOR_FORWARD_PTR     Initialise state ptr
+         LTR   STATE_PTR,STATE_PTR
+         BZ    PURGE_DONE
+         BAL   R7,FREE_STATE_BLOCK
+         B     PURGE_LOOP
+PURGE_DONE DS     0H
+         EXEC CICS DELETEQ TS QUEUE(WEBQUEUE) RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)    Timestamp made OK ?
+         BNE   DELEFAIL
+         EXEC CICS WRITE OPERATOR TEXT(TERMMSG) TEXTLENGTH(L'TERMMSG)
+         B     ENDNOERR
+GETANCH  DS    0H
+***********************************************************************
+*        Retrieve the TS Q record containing our anchor block         *
+*        if it's not there, create a new one                          *
+***********************************************************************
+         SR    WK1,WK1
+         LA    WK1,1(,WK1)
+         STCM  WK1,B'0011',ITEMNUM
+         MVC   TSLEN,=AL2(ANCHOR_LEN)
+         EXEC CICS READQ TS QUEUE(WEBQUEUE) INTO(ANCHOR_BLOCK)         *
+         LENGTH(TSLEN) ITEM(ITEMNUM) RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)    Record read OK ?
+         BNE   NOQUEUE                 No, check for no queue
+         LA    ANCHOR_PTR,ANCHOR_BLOCK
+         BR    R7
+NOQUEUE  DS    0H
+         SR    ANCHOR_PTR,ANCHOR_PTR
+         CLC   RESP,DFHRESP(QIDERR)    No queue found ?
+         BNE   BADQNM                  No, unexpected error
+         BR    R7                      Return to the caller
+INIT_ANCHOR DS  0H
+         LA    ANCHOR_PTR,ANCHOR_STG
+***********************************************************************
+*        This routine is responsible for acquiring and initialising   *
+*        the state control block anchor. It is a TS record,           *
+*        written the first time we are invoked.                       *
+***********************************************************************
+         XC    ANCHOR_BLOCK,ANCHOR_BLOCK
+         MVC   ANCHOR_EYECATCHER,ANCHOR_EYE_INIT
+         MVC   TSLEN,=AL2(ANCHOR_LEN)
+         EXEC CICS ASKTIME ABSTIME(ANCHOR_TIMESTAMP) RESP(RESP)
+         EXEC CICS WRITEQ TS MAIN QUEUE(WEBQUEUE) RESP(RESP) ,         *
+               FROM(ANCHOR_BLOCK) ,                                    *
+               LENGTH(TSLEN) .                                     @01C
+         CLC   RESP,DFHRESP(NORMAL)    Record written OK ?
+         BNE   WRITERR                 No, check for no queue
+         EXEC CICS WRITE OPERATOR TEXT(INITMSG) TEXTLENGTH(L'INITMSG)
+         BR    R7
+WRITERR  DS    0H
+         SR    ANCHOR_PTR,ANCHOR_PTR
+         B     TSWERR
+         BR    R7                      Return to the caller
+LOCATE_STATE_BLOCK DS 0H
+*********************************************************************
+* Subroutine to locate state block using handle from commarea       *
+* If we find it, load the address into STATE_PTR. Otherwise set     *
+* STATE_PTR to nulls before returning.                              *
+*********************************************************************
+         L   STATE_PTR,ANCHOR_FORWARD_PTR
+         LTR STATE_PTR,STATE_PTR         See if list is empty
+         BZ  LOCATE_NO_MATCH
+LOCATE_SEARCH_LOOP DS 0H
+         L   WK1,HANDLE
+         C   WK1,STATE_HANDLE
+         BE  LOCATE_FOUND
+         L   STATE_PTR,STATE_FORWARD_PTR
+         LTR STATE_PTR,STATE_PTR
+         BZ  LOCATE_NO_MATCH
+         B   LOCATE_SEARCH_LOOP
+LOCATE_FOUND DS 0H
+         BR  R7
+LOCATE_NO_MATCH DS 0H
+         SR  STATE_PTR,STATE_PTR
+         BR  R7
+FREE_STATE_BLOCK DS 0H
+*********************************************************************
+* Subroutine to free a state block, unchaining it from the list,    *
+* and then FREEMAIN the storage.                                    *
+*********************************************************************
+         L     WK1,STATE_FORWARD_PTR
+         LTR   WK1,WK1
+         BZ    FREE1
+         MVC   STATE_BACKWARD_PTR-STATE_BLOCK(4,WK1),STATE_BACKWARD_PTR
+         B     FREE2
+FREE1    DS    0H
+         L     WK1,STATE_BACKWARD_PTR
+         ST    WK1,ANCHOR_BACKWARD_PTR
+FREE2    DS    0H
+*********************************************************************
+*        Sort out forward pointers                                  *
+*********************************************************************
+         L     WK1,STATE_BACKWARD_PTR
+         LTR   WK1,WK1
+         BZ    FREE3
+         MVC   STATE_FORWARD_PTR-STATE_BLOCK(,WK1),STATE_FORWARD_PTR
+         B     FREE4
+FREE3    DS    0H
+         L     WK1,STATE_FORWARD_PTR
+         ST    WK1,ANCHOR_FORWARD_PTR
+FREE4    DS    0H
+*********************************************************************
+*        Freemain the state block storage                           *
+*********************************************************************
+         EXEC CICS FREEMAIN DATAPOINTER(STATE_PTR) RESP(RESP)
+         ST    R7,FREE_SAVE_R7               Save R7 across call
+         BAL   R7,REWRITE                    to update anchor
+         L     R7,FREE_SAVE_R7               Restore R7
+         BR    R7                            Return
+*********************************************************************
+*        Subroutine to timestamp a state block                      *
+*********************************************************************
+TIMESTAMP DS 0H
+         EXEC CICS ASKTIME ABSTIME(STATE_TIMESTAMP) RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)    Timestamp made OK ?
+         BNE   NOSTMP                  No, raise error.
+         BR R7
+REWRITE  DS    0H
+*********************************************************************
+*        Subroutine to write updated anchor block back to TS        *
+*********************************************************************
+         MVC   ITEMNUM,=AL2(1)
+         MVC   TSLEN,=AL2(ANCHOR_LEN)
+         EXEC CICS WRITEQ TS QUEUE(WEBQUEUE) RESP(RESP)                *
+               FROM(ANCHOR_BLOCK)                                      *
+               LENGTH(TSLEN)                                           *
+               ITEM(ITEMNUM)                                           *
+               REWRITE
+         CLC   RESP,DFHRESP(NORMAL)    Record written OK ?
+         BNE   TSWERR                  No, raise error
+         BR    R7
+         EJECT ,
+*********************************************************************
+*        Error Routines                                             *
+*********************************************************************
+BADCOM   DS    0H                  DUPLICATE RECORD
+         MVC   MESSAGES,=CL(L'MESSAGES)'Invalid Commarea passed.'
+         B     ENDFUNC_NO_COMMAREA    COMPLETE, GO FINISH
+INVFUNC  DS    0H                  DUPLICATE RECORD
+         MVC   MESSAGES,=CL(L'MESSAGES)'Invalid function passed.'
+         MVI   RETCODE,INVFUNRC
+         B     ENDFUNC                COMPLETE, GO FINISH
+BADQNM   DS    0H
+         MVC   MESSAGES,=CL(L'MESSAGES)'Unable to retrieve state block *
+               anchor.'
+         MVI   RETCODE,BADQNMRC
+         B     ENDFUNC
+TSWERR   DS    0H
+         MVC   MESSAGES,=CL(L'MESSAGES)'Initial TS write for state bloc*
+               k anchor failed.'
+         MVI   RETCODE,TSWERRC
+         B     ENDFUNC
+TSWERR2  DS    0H
+         MVC   MESSAGES,=CL(L'MESSAGES)'Update of anchor failed.      '
+         MVI   RETCODE,TSWER2RC
+         B     ENDFUNC
+NOSTG    DS    0H
+         MVC   MESSAGES,=CL(L'MESSAGES)'Getmain for state block failed.*
+                      '
+         B     ENDFUNC
+NOSTMP   DS    0H
+         MVC   MESSAGES,=CL(L'MESSAGES)'Timestamp for state block faile*
+               d'
+         MVI   RETCODE,NOSTMPRC
+         B     ENDFUNC
+NOMATCH  DS    0H
+         ACONTROL FLAG(8)                                          @P6A
+         MVC   MESSAGES,=CL(L'MESSAGES)'State data could not be found f*
+               or the handle supplied (xxxxxxxx)'
+         UNPK  MESSAGES+55(9),HANDLE(5)
+         TR    MESSAGES+55(8),=C'0123456789ABCDEF'-C'0'
+         MVI   MESSAGES+63,C')'
+         MVI   RETCODE,NOMATRC
+         B     ENDFUNC
+         ACONTROL FLAG(0)                                          @P6A
+LENGERR2 DS    0H
+         MVC   MESSAGES,=CL(L'MESSAGES)'Read from TSQ returned bad leng*
+               th'
+         SR    ANCHOR_PTR,ANCHOR_PTR
+         MVI   RETCODE,LENGERR
+         B     ENDFUNC
+TIMEFAIL DS    0H
+         MVC   MESSAGES,=CL(L'MESSAGES)'Unable to get current time.    *
+                 '
+         B     ENDFUNC
+DELEFAIL DS    0H
+         MVC   MESSAGES,=CL(L'MESSAGES)'Unable to delete State Block An*
+               chor.   '
+         B     ENDFUNC
+*
+*
+*        CONSTANTS
+*
+EXPIRY_INTERVAL DC XL8'00000003600000C'  * 1 hour in absolute time
+MSGROUTE DC    X'0B'                     * Message routecode (11)
+ANCHOR_EYE_INIT   DC CL4'SCBA'
+STATE_EYE_INIT DC CL4'SCBE'
+CWBP     DC    CL4'CWBP'
+CWBT     DC    CL4'CWBT'
+ANCHORID DC    CL8'CICSSTAT'
+WEBQUEUE DC    CL8'CICSWEB '
+STATE_MANAGER DC  CL13'STATE_MANAGER'
+INITMSG DC     CL80'State data manager DFH$WBST initialized'
+TERMMSG DC     CL80'State data manager DFH$WBST terminated'
+*
+         LTORG
+         END

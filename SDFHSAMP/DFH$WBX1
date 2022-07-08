@@ -1,0 +1,447 @@
+*ASM XOPTS(CICS,SP,NOEDF,NOPROLOG,NOEPILOG)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$WBX1                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (WB) Sample XWBAUTH exit using LDAP     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2006, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION =                                                          *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = z/ARCH                                            *
+*    RESTRICTIONS =                                                   *
+*    REGISTER CONVENTIONS =                                           *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only                                           *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$WBX1                                              *
+*                                                                     *
+*     PURPOSE = Sample version of XWBAUTH global user exit            *
+*               to demonstrate the use of LDAP XPI to obtain          *
+*               Basic Authentication credentials                      *
+*                                                                     *
+*     LINKAGE = BASR from DFHUEH or DFHSUEX                           *
+*                                                                     *
+*     INPUT =   XWBAUTH parameter list                                *
+*                                                                     *
+*     OUTPUT =  XWBAUTH parameter list                                *
+*                                                                     *
+*     EXIT-NORMAL = Return with RC=UERCNORM                           *
+*                                                                     *
+*     EXIT-ERROR =  Return with RC=UERCBYP or UERCERR                 *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+*  This is a sample version of the XWBAUTH global user exit that      *
+*  demonstrates how to use the DFHDDAPX exit program interface (XPI)  *
+*  to obtain Basic Authentication credentials from an LDAP server.    *
+*  The exit builds an LDAP "distinguished name" (DN) that is used     *
+*  as input to an LDAP search.                                        *
+*                                                                     *
+*  In this sample, the initial distinguished name is of the format:   *
+*                                                                     *
+*    racfid=uuuuuu, httprealm=rrrrrr, labeledURI=xxxxxx, cn=BasicAuth *
+*                                                                     *
+*  where uuuuuu is the RACF userid of the current CICS user           *
+*        rrrrrr is the realm specified by the target server           *
+*               in an HTTP 401 message                                *
+*        xxxxxx is the URL of the destination server                  *
+*                                                                     *
+*  It is assumed that LDAP has been configured to return a search     *
+*  result with at least the following attributes:                     *
+*    Uid          containing the required username for the target URL *
+*    UserPassword containing the required password for the target URL *
+*                                                                     *
+*  See the CICS Internet Guide for information about how to configure *
+*  the LDAP sever for use in conjustion with this exit program.       *
+*                                                                     *
+*  If the search fails, it is repeated, first with the httprealm      *
+*  parameter removed from the search DN, and then with both the       *
+*  httprealm and racfid parameters removed. If all searches fail      *
+*  XWBAUTH returns with a UERCERR response, which causes the          *
+*  EXEC CICS WEB SEND to fail with a NOTAUTH condition.               *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFH$WBX1),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*   PN= REASON REL YYMMDD HDXXIII: REMARKS                            *
+*  $L0= 873    650 060930 HD2JPEH: Sample XWBAUTH exit using LDAP     *
+*  $L1= 830    660 081006 HDISGPL: User Exits IPv6 awareness          *
+*                                                                     *
+***********************************************************************
+DFH$WBX1 CSECT
+DFH$WBX1 AMODE 31
+DFH$WBX1 RMODE ANY
+***********************************************************************
+*   Generate the prolog code with the DFHEIENT macro.                 *
+*      Specify CODEREG, EIBREG and DATAREG.                           *
+*      Specifying a register for DATAREG other than the default       *
+*      of 13 causes the DFHECALL macro to save and restore R13        *
+*      across EXEC calls, allowing R13 to address the kernel          *
+*      stack as required by the XPI.                                  *
+***********************************************************************
+         DFHEIENT CODEREG=12,EIBREG=11,DATAREG=10
+***********************************************************************
+*   Include DSECTS needed for:                                       *
+*      User Exit Parameter List - DFHUEPAR                            *
+*      Directory LDAP XPI plist - DFHDDAPY                            *
+*      Shared WB GLUE workarea  - DFH$WBGA                            *
+***********************************************************************
+         DFHUEXIT TYPE=EP,ID=XWBAUTH Generate XWBAUTH parameter list
+         DFHUEXIT TYPE=XPIENV       Enable use of XPI
+         COPY  DFHDDAPY             DDAP XPI parameter list
+         COPY  DFH$WBGA             Web GLUEs global workarea
+         DFHREGS ,                  Define register equates
+***********************************************************************
+* DFHEISTG working storage.                                           *
+***********************************************************************
+         DFHEISTG ,                 Start of working storage
+LDAPTOKN DS    F                    LDAP connection token
+SRCHTOKN DS    F                    LDAP search token
+RETRIES  DS    F                    Number of search retries
+DISTNAME EQU   *                    Space to build distinguished name
+DNKRACID DC    C'racfid='           Space for RACFID keyword
+DNVRACID DC    CL8' '               Space for RACFID value
+DNZRACID DC    C', '                End of RACFID delimiter
+DNKREALM DC    C'httprealm='        Space for HTTPREALM keyword
+DNVREALM DC    CL56' '              Space for HTTPREALM value
+DNZREALM DC    C', '                End of HTTPREALM delimiter
+DNKLBURI DC    C'labeleduri='       Space for LABELEDURI keyword
+DNVLBURI DC    CL256' '             Space for LABELEDURI value
+DNSUFFIX DC    C', cn=BasicAuth'    Delimiter plus DN suffix
+DISTNAML EQU   *-DISTNAME           Length of distinguished name
+         DFHEIEND ,                 End of working storage
+         EJECT ,
+*
+* Initialization
+*
+DFH$WBX1 CSECT ,                    Resume program CSECT
+         LR    R11,R1               Get UEP parameter list
+         USING DFHUEPAR,R11         Addressability
+         SR    R15,R15              Clear R15
+         ST    R15,LDAPTOKN         Clear LDAP session token
+         ST    R15,SRCHTOKN         Clear LDAP search token
+         MVC   RETRIES,=F'1'        Set one retry
+*
+* Set R13 to point to the kernel stack, as required by the XPI.
+* Because a DATAREG value was specified on DFHEIENT, the EXEC
+* interface will automatically save and restore R13 as needed.
+*
+         L     R13,UEPSTACK         Address the kernel stack for XPI
+*
+* If there is a global workarea, obtain the LDAP connection token
+* established earlier.
+*
+         ICM   R8,15,UEPGAA         Is there a global workarea?
+         BZ    BYPGAA               No, cannot be used
+         USING DFH$WBGA,R8          Yes, establish addressability
+         MVC   LDAPTOKN,LDAPBTOK    Copy global token to local storage
+BYPGAA   EQU   *
+         L     R9,UEPXSTOR          Address XPI parmlist storage
+         USING DFHDDAP_ARG,R9       Establish addressability for it
+*
+* Check the exit point at which we have been invoked.
+* It should be XWBAUTH or XSTERM, otherwise abend WBX1
+*
+         L     R2,UEPEXN            Address the user exit number
+         CLI   0(R2),XWBAUTH        Check this is XWBAUTH
+         BE    SETUPDN              Yes, set up the distinguished name
+         CLI   0(R2),XSTERM         It is XSTERM (system terminate)?
+         BE    UNBINDLD             Yes, Unbind the LDAP session
+         EXEC  CICS ABEND ABCODE('WBX1')
+         EJECT ,
+*
+* Set up the distinguished name that will be sent in the LDAP search.
+*
+* It is of the form:
+*   racfid=uuuuu, httprealm=rrrrr, labeledURI=xxxxx, cn=BasicAuth
+*
+SETUPDN  LA    R0,DISTNAME          Address the distinguished name
+         LA    R1,DISTNAML          Set length of distinguished name
+         SR    R14,R14              Clear source address
+         L     R15,=AL1(C' ',0,0,0) Set padding char to space
+         MVCL  R0,R14               Set distinguished name to spaces
+*
+* Set the current userid into the search DN so it can be used to
+* extract different BasicAuth credentials for different users.
+* You can remove this step if the credentials for the server do not
+* depend on the credentials of the client.
+*
+         MVC   DNKRACID,=C'racfid=' Set RACFID keyword
+         L     R14,UEPUSER          Address current userid
+         MVC   DNVRACID,0(R14)      Put userid into DN
+         MVI   DNZRACID,C','        Set RACFID delimiter
+*
+* Set the target realm into the search DN so it can be used to
+* extract different BasicAuth credentials for different realms.
+* If the realm is not known (because XWBAUTH is being called before
+* the Basic Authentication challenge has been issued) omit the realm.
+* You can remove this step if you do not need to use realms to
+* distinguish server credentials.
+*
+         L     R14,UEPREALML        Address realm length
+         SR    R5,R5                Clear realm length
+         ICM   R5,3,0(R14)          Pick up realm length
+         BNP   BYPREALM             If omitted, don't use realm
+         BCTR  R5,0                 Decrement length for EXECUTE
+         L     R4,UEPREALM          Address the realm name
+         MVC   DNKREALM,=C'httprealm='  Set httprealm keyword
+         LA    R1,DNVREALM          Address realm in workspace
+         EX    R5,COPYDATA          Copy realm value
+         MVI   DNZREALM,C','        Set realm delimiter
+         MVC   RETRIES,=F'2'        Set two retries
+BYPREALM EQU   *
+*
+* Build up the LABELEDURI value in the distinguished name.
+* It is assumed to be an HTTP URL. For LDAP lookup purposes this
+* can be used even if the session is in fact using HTTPS
+* (unless you want to present different credentials for HTTPS).
+*
+         MVC   DNKLBURI,=C'labeledURI='  Set labeleduri keyword
+         MVC   DNVLBURI(7),=C'http://' Set HTTP scheme
+         LA    R0,L'DNVLBURI-7      Space left in workarea
+         LA    R1,DNVLBURI+7        Position in URL for hostname
+*
+         L     R5,UEPHOSTT          Address host type              @L1A
+         CLI   0(R5),UEPIPV6A       ?Have an IPV6 address          @L1A
+         BNE   LOADLEN              N: bypass special handling     @L1A
+*    User can supply special handling of ipv6 addresses if desired @L1A
+LOADLEN  EQU   *                                                   @L1A
+         L     R5,UEPHOSTL          Address length of host
+         LH    R5,0(,R5)            Get length of host
+         CR    R5,R0                Does it exceed space available?
+         BNH   *+6                  No, skip next instruction
+         LR    R5,R0                Yes, truncate to length available
+         SR    R0,R5                Reduce length available
+         AHI   R5,-1                Decrement length for execute
+         BM    BYPASS               Hostname error, bypass
+         L     R4,UEPHOST           Get address of hostname
+         EX    R5,COPYDATA          Copy host into URL
+         LA    R1,1(R5,R1)          Step to end of hostname
+*
+         L     R5,UEPPATHL          Address length of path
+         LH    R5,0(,R5)            Get length of path
+         CR    R5,R0                Does it exceed space available?
+         BNH   *+6                  No, skip next instruction
+         LR    R5,R0                Yes, truncate to length available
+         SR    R0,R5                Reduce length available
+         AHI   R5,-1                Decrement length for execute
+         BM    BYPPATH              Null pathname, don't copy
+         L     R4,UEPPATH           Get address of pathname
+         EX    R5,COPYDATA          Copy path into URL
+BYPPATH  EQU   *
+*
+* Finally set a suffix into the search DN. The suffix is used
+* as the root of the tree of all the Basic Authentication
+* credentials in the LDAP server, and has to be specified in the
+* LDAP configuration file. It can be customized to a different value.
+*
+         MVC   DNSUFFIX,=C', cn=BasicAuth'  Set the suffix
+*
+* Now issue the sequence of LDAP XPI calls that will extract the
+* credentials associated with the search distinguished name.
+*
+         ICM   R0,15,LDAPTOKN       Connection already established?
+         BNZ   BYPSETGA             Yes, skip the bind
+         LTR   R8,R8                Is there a GAA?
+         BNZ   GETGABND             Yes, use GAA bind profile
+         LA    R4,HCODPROF          No, use hardcoded profile name
+         LHI   R5,L'HCODPROF        And use its length
+         B     BINDLDAP             Go to Bind
+GETGABND LA    R4,LDAPBPRO          Use profile name from GAA
+         LH    R5,LDAPBLEN          And use its length
+BINDLDAP DFHDDAPX CALL,CLEAR,                                          *
+               IN,                                                     *
+               FUNCTION(BIND_LDAP),                                    *
+               LDAP_BIND_PROFILE((R4),(R5)),                           *
+               OUT,                                                    *
+               LDAP_SESSION_TOKEN(LDAPTOKN),                           *
+               LDAP_RESPONSE(*),                                       *
+               RESPONSE(*),                                            *
+               REASON(*)
+         DFHTEST (DDAP_RESPONSE,DDAP_OK)
+         BNE   BINDFAIL
+         LTR   R8,R8                Is there a global workarea?
+         BZ    BYPSETGA             No, cannot be set
+         MVC   LDAPBTOK,LDAPTOKN    Save the connection token
+BYPSETGA EQU   *                    .
+         EJECT ,
+*
+*  Issue the LDAP search using the established distinguished name
+*
+SRCHLDAP LA    R4,DISTNAME          Address distinguished name
+         LA    R5,DISTNAML          Set its length
+         DFHDDAPX CALL,CLEAR,                                          *
+               IN,                                                     *
+               FUNCTION(SEARCH_LDAP),                                  *
+               LDAP_SESSION_TOKEN(LDAPTOKN),                           *
+               DISTINGUISHED_NAME((R4),(R5)),                          *
+               OUT,                                                    *
+               SEARCH_TOKEN(SRCHTOKN),                                 *
+               RESPONSE(*),                                            *
+               REASON(*)
+         DFHTEST (DDAP_RESPONSE,DDAP_OK)  Result OK?
+         BE    STARTBRW             Yes, browse results
+*
+* If the search for the full distinguished name failed,
+* repeat the search, first with the realm eliminated,
+* and then with current user's userid eliminated as well.
+* (Depending on your intended usage, and how you configure the
+* LDAP entries, you may want to vary these criteria in other
+* ways, such as eliminating the UID before the realm, or not
+* retrying at all.)
+*
+         L     R0,RETRIES           Load retry count
+         AHI   R0,-1                Decrement
+         ST    R0,RETRIES           Update retry count
+         BNP   SRCHFAIL             Exit if all retries failed
+         CLI   DNKREALM,C' '        Is realm absent?
+         BE    CLEARUID             Yes, clear UID
+         SPACE 1
+         MVI   DNKREALM,C' '        No, clear the realm
+         MVC   DNKREALM+1(L'DNKREALM+L'DNVREALM+L'DNZREALM-1),DNKREALM
+         B     SRCHLDAP             Retry the search
+         SPACE 1
+CLEARUID MVI   DNKRACID,C' '          Clear the UID
+         MVC   DNKRACID+1(L'DNKRACID+L'DNVRACID+L'DNZRACID-1),DNKRACID
+         B     SRCHLDAP             Retry the search
+         EJECT ,
+*
+* If the LDAP search was successful, prepare to browse the results.
+* This step is needed even you are going to extract the attributes
+* by name rather than actually browsing them.
+*
+STARTBRW DFHDDAPX CALL,CLEAR,                                          *
+               IN,                                                     *
+               FUNCTION(START_BROWSE_RESULTS),                         *
+               SEARCH_TOKEN(SRCHTOKN),                                 *
+               OUT,                                                    *
+               RESPONSE(*),                                            *
+               REASON(*)
+*
+* Extract the value of the UID attribute out of the LDAP search result
+* and place it directly into the space allocated in the XWBAUTH
+* parameter list for the Basic Authentication username.
+*
+         LA    R4,=C'UID'           Address name of UID attribute
+         LA    R5,3                 Get length of UID attribute
+         L     R6,UEPUSNM           Address username pointer
+         L     R6,0(,R6)            Address username buffer
+         L     R7,UEPUSNML          Address username length
+         LH    R7,0(,R7)            Get length of username buffer
+         DFHDDAPX CALL,CLEAR,                                          *
+               IN,                                                     *
+               FUNCTION(GET_ATTRIBUTE_VALUE),                          *
+               SEARCH_TOKEN(SRCHTOKN),                                 *
+               LDAP_ATTRIBUTE_NAME((R4),(R5)),                         *
+               LDAP_ATTRIBUTE_VALUE((R6),(R7),*),                      *
+               OUT,                                                    *
+               RESPONSE(*),                                            *
+               REASON(*)            Username is UID attribute value
+         L     R2,UEPUSNML          Address username length
+         MVC   0(2,R2),DDAP_LDAP_ATTRIBUTE_VALUE_N+2
+*
+* Extract the value of the USERPASSWORD attribute out of the LDAP
+* search result and place it directly into the space allocated in the
+* XWBAUTH parameter list for the Basic Authentication password.
+*
+         LA    R4,=C'UserPassword'  Address UserPassword attribute
+         LA    R5,12                Set its length
+         L     R6,UEPPSWD           Address password pointer
+         L     R6,0(,R6)            Address password buffer
+         L     R7,UEPPSWDL          Address password length
+         LH    R7,0(,R7)            Get length of password buffer
+         DFHDDAPX CALL,CLEAR,                                          *
+               IN,                                                     *
+               FUNCTION(GET_ATTRIBUTE_VALUE),                          *
+               SEARCH_TOKEN(SRCHTOKN),                                 *
+               LDAP_ATTRIBUTE_NAME((R4),(R5)),                         *
+               LDAP_ATTRIBUTE_VALUE((R6),(R7),*),                      *
+               OUT,                                                    *
+               RESPONSE(*),                                            *
+               REASON(*)            Password is UserPassword attr value
+         L     R2,UEPPSWDL          Address password length
+         MVC   0(2,R2),DDAP_LDAP_ATTRIBUTE_VALUE_N+2
+*
+* Terminate the browse of the LDAP search results.
+* This is necessary to release the internal storage allocated
+* by CICS and by LDAP.
+*
+         DFHDDAPX CALL,CLEAR,                                          *
+               IN,                                                     *
+               FUNCTION(END_BROWSE_RESULTS),                           *
+               SEARCH_TOKEN(SRCHTOKN),                                 *
+               OUT,                                                    *
+               RESPONSE(*),                                            *
+               REASON(*)
+*
+* If there is no global workarea, unbind from LDAP.
+* Otherwise, skip the unbind so that the LDAP connection stored
+* in the GAA can be used next time.
+*
+         LTR   R8,R8                Is there a global workarea?
+         BNZ   BYPUNBND             Yes, keep token and skip unbind
+UNBINDLD ICM   R0,15,LDAPTOKN       Was a bind established?
+         BZ    BYPUNBND             No, skip the unbind
+         DFHDDAPX CALL,CLEAR,                                          *
+               IN,                                                     *
+               FUNCTION(UNBIND_LDAP),                                  *
+               LDAP_SESSION_TOKEN(LDAPTOKN),                           *
+               OUT,                                                    *
+               RESPONSE(*),                                            *
+               REASON(*)            Unbind from LDAP
+BYPUNBND EQU   *                    .
+*
+* Return from the user exit with an appropriate return code
+*
+NORMAL   LHI   R15,UERCNORM         Set normal return code
+         DFHEIRET RCREG=15          Return with RC in R15
+BYPASS   LHI   R15,UERCBYP          Set bypass return code
+         DFHEIRET RCREG=15          Return with RC in R15
+SRCHFAIL EQU   *
+BINDFAIL LHI   R15,UERCERR          Set error return code
+         DFHEIRET RCREG=15          Return with RC in R15
+*
+*  Constants and literals
+*
+COPYDATA MVC   0(0,R1),0(R4)        Executed copy instruction
+         LTORG ,                    Define literals
+*
+* The following should be the name of a RACF profile in the LDAPBIND
+* class that contains the LDAP URL and credentials needed to bind
+* to an LDAP server containing Basic Authentication credentials.
+* This could potentially be the same LDAP server that is used to
+* contain Certificate Revocation Lists used by SSL and specfied
+* in the CRLPROFILE system initialization parameter.
+* The following is an example of such a name. You will almost
+* certainly need to customize this to your actual RACF profile name.
+* Note that this name is only used if there is no Global Work Area
+* for this exit. If there is a GWA, it is assumed that the name
+* of the LDAP profile has been placed there by the PLT program
+* DFH$WBPI which obtained it from an INITPARM system parameter.
+*
+HCODPROF DC    C'CICS.CRLSERVER.ADMIN'
+         END   DFH$WBX1             Finish

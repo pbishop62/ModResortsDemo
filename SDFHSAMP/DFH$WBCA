@@ -1,0 +1,277 @@
+*ASM     XOPTS(CICS,SP)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$WBCA                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (WB) Web Client Chunking Sample         *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2006, 2007"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION = CICS Assembler Program that performs Chunking to a web   *
+*            server.                                                  *
+*                                                                     *
+*   Versions of this program in other languages are also provided:    *
+*     C     - DFH$WBCC                                                *
+*     COBOL - DFH0WBCO                                                *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+* This program is a sample version in assembler of a client web       *
+* application that is invoked by a CICS Transaction.  It              *
+* demonstrates how to construct a chunking application that           *
+* uses a Client URIMAP.  The server application that is used by       *
+* this sample is DFH$WBHA (mapped by URIMAP DFH$URI4).                *
+*                                                                     *
+* The Client URIMAP DFH$URI3 needs the server attribute configured    *
+* and installed before this sample will function correctly.           *
+*                                                                     *
+* For more information on Chunking see RFC2616                        *
+*                                                                     *
+* Chunking allows a client to send a large body in segments (chunks)  *
+* rather than trying to send the body of the message in one send.     *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$WBCA),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 873    650 060613 HDJBAC  : Web Samples of Chunking         *
+*    $P1= D18453 650 070403 HD4EPEA : Show status code & status text  *
+***********************************************************************
+           EJECT
+           DFHREGS
+*---------------------------------------------------------------------*
+*    Working Storage                                                  *
+*---------------------------------------------------------------------*
+DFHEISTG   DSECT
+APPLID     DS  CL8              APPLID of this CICS
+RESP       DS  F                RESP Value
+RESP2      DS  F                RESP2 Value
+CURSOR     DS  H                Current cursor location
+SESSTOKEN  DS  8C               WEB OPEN Sesstoken
+STATUSLEN  DS  F                Status Text length
+RECLEN     DS  F                Received Data length
+MAXLEN     DS  F                Max receive data length
+RECDATA    DS  CL200            Received Data
+STATUS     DS  H                Status returned from Server
+STATUSTXT  DS  CL50             Holds Status Text
+RECMEDIA   DS  CL56             MediaType for received data
+RESPZONE   DS  D                Floating Point Resp value
+STATZONE   DS  D                Floating Point Stat value
+ERRTXT     DS  0CL27            Structure to hold Error message
+MSG1       DS  CL12             Text part of Error message
+TXTRESP    DS  CL4              Holds Text Resp value
+MSG2       DS  CL7              Text part of Error message
+TXTRESP2   DS  CL4              Holds Text Resp2 Value
+NORMTXT    DS  0CL41            Structure to hold Error message
+NORMMSG1   DS  CL38             Text part of Error message
+TXTSTATUS  DS  CL3              Holds Text Status Code
+STATUSTX   DS  0CL73            Structure to hold Error message
+STATMSG1   DS  CL23             Text part of Error message
+STATUST    DS  CL50             Holds Status Text
+*
+*---------------------------------------------------------------------*
+* Start of program code                                               *
+*---------------------------------------------------------------------*
+DFH$WBCA CSECT
+DFH$WBCA AMODE 31
+DFH$WBCA RMODE ANY
+*
+*---------------------------------------------------------------------*
+* Open a Session to the Remote Server using WEB OPEN and a client     *
+* URIMAP                                                              *
+*---------------------------------------------------------------------*
+OPEN     DS    0H
+         MVC   CURSOR,=H'0'
+         EXEC CICS WEB OPEN URIMAP(URIMAP) SESSTOKEN(SESSTOKEN)        x
+                   RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Using EXEC CICS ASSIGN extract the CICS applid to Send to the server*
+*---------------------------------------------------------------------*
+EXTRACT  DS    0H
+         EXEC CICS ASSIGN APPLID(APPLID) RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Create the Trailer Header                                           *
+*---------------------------------------------------------------------*
+TRAILER  DS    0H
+         EXEC CICS WEB WRITE HTTPHEADER('Trailer')                     x
+                       VALUE('Applid') SESSTOKEN(SESSTOKEN)            x
+                       RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Send the First Chunk using WEB SEND CHUNK                           *
+*---------------------------------------------------------------------*
+SENDONE  DS    0H
+         BAL   R10,SEND_CON
+         EXEC CICS SEND FROM(#SEND_ONE) LENGTH(=AL2(L'#SEND_ONE))
+         EXEC CICS WEB SEND POST FROM('Applid=') CHUNKYES RESP(RESP)   x
+                   RESP2(RESP2) MEDIATYPE(MEDIATYPE)                   x
+                   SESSTOKEN(SESSTOKEN)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Send the Second Chunk of the Applid using WEB SEND CHUNKYES         *
+*---------------------------------------------------------------------*
+SENDTWO  DS    0H
+         BAL   R10,SEND_CON
+         EXEC CICS SEND FROM(#SEND_TWO) LENGTH(=AL2(L'#SEND_TWO))
+         EXEC CICS WEB SEND FROM(APPLID) CHUNKYES                      x
+                   FROMLENGTH(=AL4(L'APPLID)) SESSTOKEN(SESSTOKEN)     x
+                   RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Send Trailer Header                                                 *
+*---------------------------------------------------------------------*
+TRAILHD  DS    0H
+         EXEC CICS WEB WRITE HTTPHEADER('Applid') VALUE(APPLID)        x
+                   VALUELENGTH(=AL4(L'APPLID)) SESSTOKEN(SESSTOKEN)    x
+                   RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Send the Third Chunk containing the rest of the Data                *
+*---------------------------------------------------------------------*
+SENDTHR  DS    0H
+         BAL   R10,SEND_CON
+         EXEC CICS SEND FROM(#SEND_THR) LENGTH(=AL2(L'#SEND_THR))
+         EXEC CICS WEB SEND FROM(FINALCHK) CHUNKYES                    x
+                   FROMLENGTH(=AL4(L'FINALCHK)) SESSTOKEN(SESSTOKEN)   x
+                   RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Send Final CHUNK (Also known as Zero Chunk)                         *
+*---------------------------------------------------------------------*
+ENDCHK   DS    0H
+         EXEC CICS WEB SEND CHUNKEND SESSTOKEN(SESSTOKEN)
+*
+*---------------------------------------------------------------------*
+* Receive the response to the chunked request                         *
+*---------------------------------------------------------------------*
+RECEONE  DS    0H
+         MVC   STATUSLEN,=F'50'  STATUSLEN needs loading with 50
+         MVC   RECLEN,=F'200'    RECLEN needs loading with 200
+         MVC   MAXLEN,=F'200'    MAXLEN needs loading with 200
+         BAL   R10,SEND_CON
+         EXEC CICS SEND FROM(#RECE) LENGTH(=AL2(L'#RECE))
+         EXEC CICS WEB RECEIVE STATUSCODE(STATUS) STATUSTEXT(STATUSTXT)x
+                   STATUSLEN(STATUSLEN) MEDIATYPE(RECMEDIA)            x
+                   INTO(RECDATA) LENGTH(RECLEN) SESSTOKEN(SESSTOKEN)   x
+                   MAXLENGTH(MAXLEN) RESP(RESP) RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+*
+*---------------------------------------------------------------------*
+* Close the Session to Remote Server                                  *
+*---------------------------------------------------------------------*
+CLOSE    DS    0H
+         BAL   R10,SEND_CON
+         BAL   R6,SEND_STA
+*
+         EXEC CICS WEB CLOSE SESSTOKEN(SESSTOKEN) RESP(RESP)           x
+                   RESP2(RESP2)
+         L     R5,RESP
+         C     R5,DFHRESP(NORMAL)
+         BNE   OUTERR
+         EXEC CICS RETURN
+*
+*---------------------------------------------------------------------*
+*    Send control information to move cursor on screen                *
+*---------------------------------------------------------------------*
+SEND_CON DS    0H
+         LH    R1,CURSOR
+         AHI   R1,80
+         STH   R1,CURSOR
+         EXEC CICS SEND CONTROL CURSOR(CURSOR)
+         BR    10
+*
+*---------------------------------------------------------------------*
+SEND_STA DS    0H
+         MVC   NORMTXT,#COMPLETE          Load template in NORMTXT
+         SR    R5,R5
+         LH    R5,STATUS                  Load status code to R5
+         CVD   R5,STATZONE                Convert to float
+         OI    STATZONE+7,X'0F'           Sort out the Sign
+         UNPK  TXTSTATUS,STATZONE         Unpack it for display
+         EXEC CICS SEND FROM(NORMTXT) LENGTH(=AL2(L'NORMTXT))
+         BAL   R10,SEND_CON
+         MVC   STATUSTX,#STATUSTX         Load template in STATUSTX
+         MVC   STATUST,STATUSTXT          Load Status Text
+         EXEC CICS SEND FROM(STATUSTX) LENGTH(=AL2(L'STATUSTX))
+         BR    6
+*
+*---------------------------------------------------------------------*
+*    Output Error message                                             *
+*---------------------------------------------------------------------*
+OUTERR   DS    0H
+         BAL   R10,SEND_CON                  Move Cursor
+         MVC   ERRTXT,#TEMPLATE              Load template in ERRTXT
+         CVD   R5,RESPZONE                   Convert resp in to float
+         OI    RESPZONE+7,X'0F'              Sort out the Sign
+         UNPK  TXTRESP,RESPZONE              Unpack it for display
+         L     R5,RESP2                      Load Resp2 into R5
+         CVD   R5,RESPZONE                   Convert resp in to Packed
+         OI    RESPZONE+7,X'0F'              Sort out the Sign
+         UNPK  TXTRESP2,RESPZONE             Unpack it for display
+         EXEC CICS SEND FROM(ERRTXT) LENGTH(=AL2(L'ERRTXT))
+         EXEC CICS RETURN
+*
+*---------------------------------------------------------------------*
+*    Character constant definitions                                   *
+*---------------------------------------------------------------------*
+MEDIATYPE DC    CL56'application/x-www-form-urlencoded'
+CHARSET   DC    CL40'ISO-8859-1'
+URIMAP    DC    CL8'DFH$URI3'
+FINALCHK  DC    C'&&CHECK=1234'
+#SEND_ONE DC    C'DFH$WBCA - Send first Chunk'
+#SEND_TWO DC    C'DFH$WBCA - Send Second Chunk'
+#SEND_THR DC    C'DFH$WBCA - Send third Chunk'
+#RECE     DC    C'DFH$WBCA - Receiving response'
+#COMPLETE DC    C'DFH$WBCA - Completed with status code:   '
+#STATUSTX DC    C'DFH$WBCA - Status text:                              x
+                    '
+#TEMPLATE DC    CL27'ERROR: RESP      RESP2    '
+          END

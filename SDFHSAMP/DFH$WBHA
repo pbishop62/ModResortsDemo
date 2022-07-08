@@ -1,0 +1,187 @@
+*ASM     XOPTS(CICS,SP)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$WBHA                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (WB) Web Server Chunking Sample         *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2006, 2007"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION = CICS Assembler Program that performs HTTP chunking to a  *
+*            web client.                                              *
+*                                                                     *
+*   Versions of this program in other languages are also provided:    *
+*     C     - DFH$WBHC                                                *
+*     COBOL - DFH0WBHO                                                *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/390                                             *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+* This is an assembler sample program that may be invoked by a web    *
+* client and performs HTTP chunking back to the client.  It ignores   *
+* the incoming data and returns a message containing the APPLID       *
+* of the region and adds trailer headers. The sample, if run from     *
+* a browser, may return the above or an error message saying that the *
+* browser does not support trailer headers.                           *
+*                                                                     *
+* To use this application in conjunction with the client samples      *
+* DFH$URI4 will have to be installed.                                 *
+*                                                                     *
+* For more information on Chunking see RFC2616                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$WBHA),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 873    650 060605 HDJBAC  : Web Samples of Chunking         *
+*    $P1= D18453 650 070403 HD4EPEA : Correct description             *
+***********************************************************************
+           EJECT
+           DFHREGS
+*
+*---------------------------------------------------------------------*
+*    Working storage definitions                                      *
+*---------------------------------------------------------------------*
+DFHEISTG DSECT
+APPLID     DS  CL8              APPLID of this CICS
+RCODE      DS  F                RESP Value
+RCODE2     DS  F                RESP2 Value
+RECDATA    DS  CL200            Receive Data Area
+RECLEN     DS  F                Receive Data Length
+MAXLEN     DS  F                Max Data to receive
+VALUELEN   DS  F                Length of Data to recieve
+*
+*---------------------------------------------------------------------*
+*    Start of program code                                            *
+*---------------------------------------------------------------------*
+DFH$WBHA CSECT
+DFH$WBHA AMODE 31
+DFH$WBHA RMODE ANY
+
+*
+*---------------------------------------------------------------------*
+* Receive any data that has been sent                                 *
+*---------------------------------------------------------------------*
+WEBREC   DS    0H
+         MVC   RECLEN,=F'200'    Load RECLEN with 200
+         MVC   MAXLEN,=F'200'    Load MAXLEN with 200
+         EXEC CICS WEB RECEIVE INTO(RECDATA) LENGTH(RECLEN)            x
+                       MAXLENGTH(MAXLEN) CHARACTERSET(CHARSET)         x
+                       RESP(RCODE) RESP2(RCODE)
+*
+*---------------------------------------------------------------------*
+* Read the Passed APPLID on the Headers                               *
+*---------------------------------------------------------------------*
+READTRL  DS    0H
+         MVC   VALUELEN,=F'8'    Load VALUELEN with 8
+         EXEC CICS WEB READ HTTPHEADER('Applid')                       x
+                       VALUE(APPLID) VALUELENGTH(VALUELEN)             x
+                       RESP(RCODE) RESP2(RCODE)
+*
+*---------------------------------------------------------------------*
+* Setup the Trailer Header                                            *
+*---------------------------------------------------------------------*
+TRAILER  DS    0H
+         EXEC CICS WEB WRITE HTTPHEADER('Trailer')                     x
+                             VALUE('Check,Applid')                     x
+                             RESP(RCODE) RESP2(RCODE)
+         L     R5,RCODE
+         C     R5,DFHRESP(NORMAL)
+         BNE   TRLERR
+*
+*---------------------------------------------------------------------*
+* Using EXEC CICS ASSIGN extract the the CICS APPLID.                 *
+*---------------------------------------------------------------------*
+EXTRACT  DS    0H
+         EXEC CICS ASSIGN APPLID(APPLID)
+
+*---------------------------------------------------------------------*
+* Use the WEB SEND CHUNK commands to chunk the separate chunks back   *
+* to the client.                                                      *
+*---------------------------------------------------------------------*
+CHUNKST  DS    0H
+         EXEC CICS WEB SEND FROM(TEXT1) FROMLENGTH(=AL4(L'TEXT1))      x
+                 MEDIATYPE(MTYPE) STATUSCODE(CODE) CHUNKYES            x
+                 STATUSTEXT(TEXT) CHARACTERSET(CHARSET)                x
+                 RESP2(RCODE2) RESP(RCODE)
+
+         EXEC CICS WEB SEND FROM(APPLID) FROMLENGTH(=AL4(L'APPLID))    x
+                 CHUNKYES RESP2(RCODE2) RESP(RCODE)
+*
+*---------------------------------------------------------------------*
+* Specify first trailer header                                        *
+*---------------------------------------------------------------------*
+APPLIDT  DS    0H
+         EXEC CICS WEB WRITE HTTPHEADER('Applid') VALUE(APPLID)
+*
+*---------------------------------------------------------------------*
+* Send the Applid Chunk                                               *
+*---------------------------------------------------------------------*
+CHUNK2   DS    0H
+         EXEC CICS WEB SEND FROM(TEXT2) FROMLENGTH(=AL4(L'TEXT2))      x
+                 CHUNKYES RESP2(RCODE2) RESP(RCODE)
+*
+*---------------------------------------------------------------------*
+* Specify second trailer header                                       *
+*---------------------------------------------------------------------*
+CHUNKT   DS    0H
+         EXEC CICS WEB WRITE HTTPHEADER('Check') VALUE('12345')
+*
+*---------------------------------------------------------------------*
+* Send second chunk                                                   *
+*---------------------------------------------------------------------*
+CHUNKED  DS    0H
+         EXEC CICS WEB SEND CHUNKEND RESP2(RCODE2) RESP(RCODE)
+*
+*---------------------------------------------------------------------*
+* Return to CICS                                                      *
+*---------------------------------------------------------------------*
+RETURN   DS    0H
+         EXEC CICS RETURN
+*
+*---------------------------------------------------------------------*
+* Send Error message to Client if Trailers are not supported          *
+*---------------------------------------------------------------------*
+TRLERR   DS    0H
+         EXEC CICS WEB SEND FROM(TRAILERR) FROMLENGTH(=AL4(L'TRAILERR))x
+                 MEDIATYPE(MTYPE) STATUSCODE(CODE)                     x
+                 STATUSTEXT(TEXT) CHARACTERSET(CHARSET)                x
+                 RESP2(RCODE2) RESP(RCODE)
+         EXEC CICS RETURN
+
+*---------------------------------------------------------------------*
+*    Character constant definitions                                   *
+*---------------------------------------------------------------------*
+CODE     DC    H'200'
+TEXT     DC    C'OK'
+MTYPE    DC    CL56'text/html'
+CHARSET  DC    CL40'ISO-8859-1'
+TEXT1    DC    C'<TITLE>DFH$WBHA</TITLE><H1>DFH$WBHA on system '
+TEXT2    DC    C' successfully invoked through CICS Web Support using  x
+               Chunking.</H1>'
+TRAILERR DC    C'<TITLE>Error</TITLE><H1>Error</H1> Trailer Headers arex
+                not supported by this client'
+         END   DFH$WBHA

@@ -1,0 +1,560 @@
+*ASM XOPTS(SP NOPROLOG NOEPILOG)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$WBX2                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (WB) Secure Token Service sample exit   *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2007, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION =                                                          *
+*        Sample program to demonstrate how to use a Secure            *
+*        Token Service to obtain credentials for an HTTP Basic        *
+*        Authentication server.                                       *
+*                                                                     *
+*        This Global User exit is called at the XWBAUTH exit point    *
+*        to obtain credentials (username and password) when an        *
+*        EXEC CICS WEB OPEN command is executed that specifies        *
+*        AUTHENTICATE(BASICAUTH) but does not provide credentials     *
+*        on the command.                                              *
+*                                                                     *
+*        The exit invokes a web service in a Secure Token Server      *
+*        (such as the Tivoli Federated Identity Manager) to request   *
+*        the credentials. It assumes that the URI of the STS server   *
+*        has been specified in the Web sample exits' Global Workarea  *
+*        (DFH$WBGA). This will be done by the Web sample PLT program  *
+*        if the following system initialization parameter is          *
+*        specified:                                                   *
+*          INITPARM=(DFH$WBPI,'STS=https://secure-token-service')     *
+*        where                                                        *
+*          https://secure-token-service is the URL of a               *
+*              suitable Secure Token Service. Note that this          *
+*              will usually be accessed using SSL to avoid exposing   *
+*              the requested password in transmission                 *
+*                                                                     *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = z/Arch                                            *
+*    RESTRICTIONS =                                                   *
+*    REGISTER CONVENTIONS =                                           *
+*    MODULE TYPE = Executable Sample                                  *
+*    PROCESSOR = HLASM V1R5 (required for ASCII constants)            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$WBX2                                              *
+*                                                                     *
+*     PURPOSE = Sample version of the XWBAUTH global user exit        *
+*               to demonstrate the use of a Secure Token Service      *
+*               to obtain Basic Authentication credentials.           *
+*                                                                     *
+*     LINKAGE = BASR from DFHUEH or DFHSUEX                           *
+*                                                                     *
+*     INPUT =   XWBAUTH parameter list                                *
+*                                                                     *
+*     OUTPUT =  XWBAUTH parameter list                                *
+*                                                                     *
+*     EXIT-NORMAL = Return with RC=UERCNORM                           *
+*                                                                     *
+*     EXIT-ERROR =  Return with RC=UERCBYP or UERCERR                 *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+*   The exit populates the following Containers, and then links       *
+*   to DFHPIRT to invoke the web service in the STS:                  *
+*                                                                     *
+*  DFHWS-STSURI     The full URL of the STS server.                   *
+*  DFHWS-STSACTION  The URN of the requested action (i.e. issue).     *
+*  DFHWS-TOKENTYPE  The URN that identifies the requested token type. *
+*  DFHWS-IDTOKEN    A WSSE security token (in XML) that identifies    *
+*                   the user for whom the request is being made       *
+*  DFHWS-SERVICEURI The URI to be used as the AppliesTo scope.        *
+*                   That is, the URL of the target server for which   *
+*                   credentials are required. In fact, the target URL *
+*                   is suffixed with a "fragment identifier" composed *
+*                   from the realm for which the credentials are      *
+*                   required.                                         *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFH$WBX2),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 873    650 070130 HD2JPEH : Secure Token Service sample     *
+*    $L1= 884    650 070219 HDJCIDH : Linkable Trust                  *
+*    $L2= 830    660 081006 HDISGPL : User Exits IPv6 awareness       *
+*    $P1= D18116 650 070306 HDJCIDH : Update Channel name             *
+*                                                                     *
+***********************************************************************
+DFH$WBX2 CSECT
+DFH$WBX2 AMODE 31
+DFH$WBX2 RMODE ANY
+***********************************************************************
+*   Generate the prolog code with the DFHEIENT macro.                 *
+***********************************************************************
+         DFHEIENT CODEREG=R12,EIBREG=R11,DATAREG=R10
+***********************************************************************
+*   Include DSECTS needed for:                                       *
+*      User Exit Parameter List - DFHUEPAR                            *
+*      Shared WB GLUE workarea  - DFH$WBGA                            *
+***********************************************************************
+         DFHUEXIT TYPE=EP,ID=XWBAUTH   Generate XWBAUTH parameter list
+         COPY  DFH$WBGA                Web GLUEs global workarea
+         DFHREGS ,                     Define register equates
+***********************************************************************
+* DFHEISTG working storage.                                           *
+***********************************************************************
+         DFHEISTG ,                    Start of working storage
+RESPFLAG DS B                          Flag byte
+GOTUSNM  EQU X'02'                     Username found in response
+GOTPSWD  EQU X'01'                     Password found in response
+         DS 0AD                        Align to a doubleword
+LNSTSURL DS F                          Length of STS URI container
+LNSTSACT DS F                          Length of STS action container
+LNTOKTYP DS F                          Length of token type container
+LNSERVIC DS F                          Length of Service container
+LNIDTOKN DS F                          Length of ID token container
+LNRETOKN DS F                          Length of response token
+USNMTOKL EQU L'USNMTKN1+L'USNMTKN2+8   Length of Username token
+USNMTOKN DS  CL(USNMTOKL)              Client WSSE XML Username token
+         DS  0AD                       Doubleword alignment
+RESPTOKN DS  0CL768                    Response WSSE XML Username token
+SRVERURL DS  CL768                     Space for target server's URL
+         DFHEIEND ,                    End of working storage
+         EJECT ,
+*
+* Initialization
+*
+DFH$WBX2 CSECT ,                       Resume program CSECT
+         LR    R9,R1                   Get UEP parameter list
+         USING DFHUEPAR,R9             UEP addressability
+         L     R8,UEPGAA               Get GWA address from parmlist
+         USING DFH$WBGA,R8             GWA addressability
+         MVI   RESPFLAG,0              Clear flag byte
+*
+* Put the URL of the target server in the DFHWS-SERVICEURI container
+* The URL is composed from
+*   "http://" + hostname + pathname + "#" + realmname
+*
+         MVC   SRVERURL(7),=C'http://' Set HTTP scheme
+         LA    R0,L'SRVERURL-7         Space left in workarea
+         LA    R1,SRVERURL+7           Position in URL for hostname
+         L     R5,UEPHOSTT          Address host type              @L1A
+         CLI   0(R5),UEPIPV6A       ?Have an IPV6 address          @L1A
+         BNE   LOADLEN              N: bypass special handling     @L1A
+*    User can supply special handling of ipv6 addresses if desired @L1A
+LOADLEN  EQU   *                                                   @L1A
+         L     R5,UEPHOSTL             Address length of host
+         LH    R5,0(,R5)               Get length of host
+         CR    R5,R0                   Does it exceed space available?
+         BNH   *+6                     No, skip next instruction
+         LR    R5,R0                   Yes, truncate to length avail
+         SR    R0,R5                   Reduce length available
+         AHI   R5,-1                   Decrement length for execute
+         BM    BYPASS                  Hostname error, bypass
+         L     R4,UEPHOST              Get address of hostname
+         EX    R5,COPYDATA             Copy host into URL
+         LA    R1,1(R5,R1)             Step to end of hostname
+         L     R5,UEPPATHL             Address length of path
+         LH    R5,0(,R5)               Get length of path
+         CR    R5,R0                   Does it exceed space available?
+         BNH   *+6                     No, skip next instruction
+         LR    R5,R0                   Yes, truncate to length avail
+         SR    R0,R5                   Reduce length available
+         AHI   R5,-1                   Decrement length for execute
+         BM    BYPPATH                 Null pathname, don't copy
+         L     R4,UEPPATH              Get address of pathname
+         EX    R5,COPYDATA             Copy path into URL
+         LA    R1,1(R5,R1)             Step to end of pathname
+BYPPATH  EQU   *
+         L     R14,UEPREALML           Address realm length
+         SR    R5,R5                   Clear realm length
+         ICM   R5,3,0(R14)             Pick up realm length
+         BNP   BYPREALM                If omitted, don't use realm
+         LA    R15,1(,R5)              Add one to unescaped realm size
+         CR    R15,R0                  Does it exceed space available?
+         BH    BYPREALM                Yes, omit the realm
+         EJECT ,
+*
+* Append the realm name to the target URL as a "fragment" identifier.
+* This is because there is no formal way to pass the realm as a
+* separate entity in the STS "issue" request, and only the target
+* URL can be passed as the "AppliesTo" element.
+*
+* Because the realm therefore becomes part of the URL, it must only
+* contain URL-valid characters, and any others have to be URL-encoded
+* or "escaped" into the standard %xx escape sequence, where xx is the
+* hexadecimal code for the ASCII value of the character.
+*
+         MVI   0(R1),C'#'              Append "fragment" delimiter
+         BCTR  R0,0                    Decrease space left
+         L     R4,UEPREALM             Address the realm name
+         LHI   R6,1                    Set increment value for BXLE
+         LA    R7,0(R5,R4)             Set end of realmname for BXLE
+         SR    R7,R6                   Point to final character
+         LA    R5,1(,R1)               Address next output position
+         SR    R2,R2                   Clear TRT result register
+ESCREALM TRT   0(1,R4),VALIDURL        Is realm character URL-valid?
+         BZ    OUTREALM                Yes, output unescaped
+         CHI   R0,3                    Space left for "%xx"?
+         BL    ENDREALM                No, truncate
+         SRDL  R2,4                    Split ASCII character...
+         SRL   R3,28                   ...into R2/R3 pair
+         MVI   0(R5),C'%'              Output a percent for escape
+         IC    R14,HEXLOWER(R2)        Get hex for first nibble
+         STC   R14,1(,R5)              Set first escape digit
+         IC    R14,HEXLOWER(R3)        Get hex for second nibble
+         STC   R14,2(,R5)              Set second escape digit
+         LA    R5,3(,R5)               Address next output position
+         AHI   R0,-2                   Allow for the two escape digits
+         B     CNTREALM                Go count remaining character
+OUTREALM MVC   0(1,R5),0(R4)           Output unescaped realm char
+         LA    R5,1(,R5)               Address next output position
+CNTREALM AHI   R0,-1                   Decrease space left
+         BNP   ENDREALM                If no space left, exit
+         BXLE  R4,R6,ESCREALM          Repeat escape loop
+ENDREALM LR    R1,R5                   Reset current output position
+         SPACE 3
+BYPREALM EQU   *                       Come here to bypass realm
+         LA    R15,SRVERURL            Address start of server URL
+         LR    R0,R1                   Address end of server URL
+         SR    R0,R15                  Calculate length of server URL
+         ST    R0,LNSERVIC             Save in fullword
+         EXEC  CICS PUT CONTAINER(CNSERVIC) CHANNEL(CHNTRUST) CHAR     -
+               FLENGTH(LNSERVIC) FROM(SRVERURL) NOHANDLE
+         ICM   R15,15,EIBRESP          Check response
+         BNZ   FAILURE                 Fail exit if non-zero
+         EJECT ,
+*
+* Put the Username XML for the user in the DFHWS-IDTOKEN container
+*
+         L     R2,UEPUSER              Address current userid
+         MVI   USNMTOKN,C' '           Set spaces into...
+         MVC   USNMTOKN+1(L'USNMTOKN-1),USNMTOKN ...the ID token
+         MVC   USNMTOKN(L'USNMTKN1),USNMTKN1 Set first part of token
+         MVC   USNMTOKN+L'USNMTKN1(8),0(R2) Copy current userid
+         LA    R15,USNMTOKN+L'USNMTKN1 Address start of userid
+         LA    R14,8(,R15)             Address end of userid
+         LHI   R0,C' '                 Set search character to space
+         SRST  R14,R15                 Locate trailing space
+         MVC   0(L'USNMTKN2,R14),USNMTKN2 Set second part of token
+         LA    R15,USNMTOKN            Address start of token
+         LA    R0,L'USNMTKN2(,R14)     Address end of token
+         SR    R0,R15                  Calculate length of token
+         ST    R0,LNIDTOKN             Save in fullword
+         EXEC  CICS PUT CONTAINER(CNIDTOKN) CHANNEL(CHNTRUST) CHAR     -
+               FLENGTH(LNIDTOKN) FROM(USNMTOKN) NOHANDLE
+         ICM   R15,15,EIBRESP          Check response
+         BNZ   FAILURE                 Fail exit if non-zero
+*
+* Put the URN of a "Username" token in the DFHWS-TOKENTYPE container
+*
+         LHI   R0,USNMURNL             Get length of token type URN
+         ST    R0,LNTOKTYP             Save in fullword
+         EXEC  CICS PUT CONTAINER(CNTOKTYP) CHANNEL(CHNTRUST) CHAR     -
+               FLENGTH(LNTOKTYP) FROM(USNMURN)                         -
+               FROMCCSID(1208) NOHANDLE
+         ICM   R15,15,EIBRESP          Check response
+         BNZ   FAILURE                 Fail exit if non-zero
+*
+* Put the URL of the STS server in the DFHWS-STSURI container
+*
+         LH    R0,STSURLEN             Get length of STS URL
+         ST    R0,LNSTSURL             Save in fullword
+         EXEC  CICS PUT CONTAINER(CNSTSURI) CHANNEL(CHNTRUST) CHAR     -
+               FLENGTH(LNSTSURL) FROM(STSURI) NOHANDLE
+         ICM   R15,15,EIBRESP          Check response
+         BNZ   FAILURE                 Fail exit if non-zero
+*
+* Put the URN of an "issue" request in the DFHWS-STSACTION container
+*
+         LHI   R0,L'ISSUEURN           Get length of action=issue URN
+         ST    R0,LNSTSACT             Save in fullword
+         EXEC  CICS PUT CONTAINER(CNSTSACT) CHANNEL(CHNTRUST) CHAR     -
+               FLENGTH(LNSTSACT) FROM(ISSUEURN)                        -
+               FROMCCSID(1208) NOHANDLE
+         ICM   R15,15,EIBRESP          Check response
+         BNZ   FAILURE                 Fail exit if non-zero
+*
+* Link to DFHPIRT with channel DFHWSTC-V1 to indicate a trust request
+*
+         EXEC  CICS LINK PROGRAM('DFHPIRT') CHANNEL(CHNTRUST) NOHANDLE
+         ICM   R15,15,EIBRESP          Check response
+         BNZ   FAILURE                 Fail exit if non-zero
+*
+* Retrieve the result from the DFHWS-RESTOKEN container
+*
+         LHI   R0,L'RESPTOKN           Get length of response token
+         ST    R0,LNRETOKN             Save in fullword
+         EXEC  CICS GET CONTAINER(CNRETOKN) CHANNEL(CHNTRUST)          -
+               FLENGTH(LNRETOKN) INTO(RESPTOKN) NOHANDLE
+         ICM   R15,15,EIBRESP          Check response
+         BNZ   FAILURE                 Fail exit if non-zero
+         EJECT ,
+*
+* "Parse" the XML response token in a very simple-minded way:
+*  - Extract Username from text following ":Username"
+*  - Extract Password from text following ":Password"
+*  - Only use the first reference as the second one may be the end tag.
+* This assumes that a namespace prefix is always present,
+* but we don't check that it is valid or appropriate.
+* The tags may contain attributes and be followed by white space,
+* so we have to allow for that too.
+* We have to skip over the UsernameToken tag so it doesn't give
+* a false hit as a Username tag.
+*
+         L     R4,LNRETOKN             Get length of response
+         LA    R5,RESPTOKN             Address start of response
+         LA    R4,0(R4,R5)             Address end of response
+         LR    R15,R5                  Copy start address
+SRCHRESP LR    R14,R4                  Copy end address
+         LHI   R0,C':'                 Set search argument to colon
+         SRST  R14,R15                 Search for a colon
+         BO    SRCHRESP                Repeat if search incomplete
+         BH    SRCHDONE                Exit if search exhausted
+         LA    R15,1(,R14)             Bump past located colon
+         LR    R1,R15                  Save located tag address
+         LR    R14,R4                  Reset search end pointer
+         LHI   R0,C'>'                 Set search to tag delimiter
+         SRST  R14,R15                 Search for tag delimiter
+         BO    *-4                     Repeat search if necessary
+         BH    SRCHDONE                Exit if search exhausted
+         LA    R15,1(,R14)             Bump past located delimiter
+         CLC   =C'UsernameToken',0(R1) Username Token tag found?
+         BE    SRCHRESP                Yes, ignore
+         CLC   =C'Username',0(R1)      Username tag found?
+         BE    GETUSNM                 Yes, copy it out
+         CLC   =C'Password',0(R1)      Password tag found?
+         BE    GETPSWD                 Yes, copy it out
+         B     SRCHRESP                Search for next tag
+*
+* Process the Username tag.
+*
+GETUSNM  EQU   *
+         TM    RESPFLAG,GOTUSNM        Already got Username?
+         BO    SRCHRESP                Yes, ignore end tag
+         TRT   0(256,R15),SKIPLWSP     Skip over any white space
+         LR    R6,R1                   Address start of username
+         TRT   0(256,R6),FINDLWSP      Find end of username
+         SR    R1,R6                   Get length of username
+         BNP   SRCHRESP                Continue search if null
+         L     R2,UEPUSNML             Address username length
+         CH    R1,0(,R2)               Is length found higher?
+         BNH   *+8                     No, use length found
+         LH    R1,0(,R2)               Yes, just use length provided
+         STH   R1,0(,R2)               Save length to be returned
+         AHI   R1,-1                   Decrement for EXECUTE
+         BM    SRCHRESP                Continue search if null
+         OI    RESPFLAG,GOTUSNM        Flag username existence
+         L     R2,UEPUSNM              Address Username buffer pointer
+         L     R2,0(,R2)               Address Username buffer itself
+         EX    R1,COPYCRED             Copy credential value
+         B     SRCHRESP                Continue search
+*
+* Process the Password tag.
+*
+GETPSWD  EQU   *
+         TM    RESPFLAG,GOTPSWD        Already got Username?
+         BO    SRCHRESP                Yes, ignore end tag
+         TRT   0(256,R15),SKIPLWSP     Skip over any white space
+         LR    R6,R1                   Address start of password
+         TRT   0(256,R6),FINDLWSP      Find end of password
+         SR    R1,R6                   Get length of password
+         L     R2,UEPPSWDL             Address password length
+         CH    R1,0(,R2)               Is length found higher?
+         BNH   *+8                     No, use length found
+         LH    R1,0(,R2)               Yes, just use length provided
+         STH   R1,0(,R2)               Save length to be returned
+         AHI   R1,-1                   Decrement for EXECUTE
+         BM    SRCHRESP                Continue search if null
+         OI    RESPFLAG,GOTPSWD        Flag password existence
+         L     R2,UEPPSWD              Address Password buffer pointer
+         L     R2,0(,R2)               Address Password buffer itself
+         EX    R1,COPYCRED             Copy credential value
+         B     SRCHRESP                Continue search
+*
+* When the search is complete, return with a normal response
+* only if both a Username and a Password were found.
+*
+SRCHDONE EQU   *
+         TM    RESPFLAG,GOTUSNM+GOTPSWD Got both username and pswd?
+         BO    NORMAL                  Yes, exit normally
+         B     FAILURE                 No, exit must fail
+         EJECT ,
+*
+* Return from the user exit with an appropriate return code
+*
+FAILURE  LHI   R15,UERCERR             Set error return code
+         B     RETURNRC                Return with error code
+BYPASS   LHI   R15,UERCBYP             Set bypass return code
+         B     RETURNRC                Return with error code
+NORMAL   LHI   R15,UERCNORM            Set normal return code
+RETURNRC DFHEIRET RCREG=15             Return with RC in R15
+*
+*  Constants and literals
+*
+COPYDATA MVC   0(0,R1),0(R4)           Executed copy of string data
+COPYCRED MVC   0(0,R2),0(R6)           Executed copy of credential
+         LTORG ,                       Define literals
+         DC    0AD(0)                  Double-word alignment
+CHNTRUST DC    CL16'DFHWSTC-V1'        Trust Channel               @P1C
+CNIDTOKN DC    CL16'DFHWS-IDTOKEN'     WSSE security token for user
+CNRETOKN DC    CL16'DFHWS-RESTOKEN'    WSSE security token of response
+CNSERVIC DC    CL16'DFHWS-SERVICEURI'  URL needing Basic Auth creds
+CNSTSURI DC    CL16'DFHWS-STSURI'      URL of STS server
+CNSTSACT DC    CL16'DFHWS-STSACTION'   URN for action=issue
+CNTOKTYP DC    CL16'DFHWS-TOKENTYPE'   URN for tokentype=Username
+*
+* Following is the URN for a username token (for token type).
+* It is coded in ASCII to avoid conversion overhead in the pipeline.
+*
+USNMURN  DC    CA'http://docs.oasis-open.org'
+         DC    CA'/wss/2004/01'
+         DC    CA'/oasis-200401-wss-wssecurity-secex-1.0.xsd'
+         DC    CA'/UsernameToken'
+USNMURNL EQU   *-USNMURN
+*
+* Following is the URN for an STS "issue" request (for STS action)
+* It is coded in ASCII to avoid conversion overhead in the pipeline.
+*
+ISSUEURN DC    CA'http://schemas.xmlsoap.org/ws/2005/02/trust/Issue'
+*
+* Following are the start and end of an XML WSSE username token
+*
+USNMTKN1 DC    C'<wsse:UsernameToken><wsse:Username>'
+USNMTKN2 DC    C'</wsse:Username></wsse:UsernameToken>'
+*
+* Following string is used to convert binary to its hex representation.
+* Lower-case hex is produced, as that is more usual on the Web.
+*
+HEXLOWER DC    0AD(0),C'0123456789abcdef'
+*
+* Following is a Translate and Test table for skipping whitespace
+*
+         DC    0AD(0)                  Align to double word
+SKIPLWSP DC    AL1(0),255AL1(4)        Skip Linear White Space
+         ORG   SKIPLWSP+X'09'          Position for Horizontal Tab
+         DC    AL1(0)                  Allow Horizontal tab
+         ORG   SKIPLWSP+X'0D'          Position for Carriage Return
+         DC    AL1(0)                  Allow Carriage Return
+         ORG   SKIPLWSP+X'15'          Position for New Line
+         DC    AL1(0)                  Allow New Line
+         ORG   SKIPLWSP+X'25'          Position for Line Feed
+         DC    AL1(0)                  Allow Line Feed
+         ORG   SKIPLWSP+C' '           Position for Blank
+         DC    AL1(0)                  Allow Blank
+         ORG   SKIPLWSP+256            Position to end of table
+*
+* Following is a Translate and Test table for locating
+* the end of a Username or Password. Assume it is delimited
+* by white space or by the start of the next tag.
+*
+         DC    0AD(0)                  Align to double word
+FINDLWSP DC    AL1(4),255AL1(0)        Detect Linear White Space
+         ORG   FINDLWSP+X'09'          Position for Horizontal Tab
+         DC    AL1(4)                  Detect Horizontal tab
+         ORG   FINDLWSP+X'0D'          Position for Carriage Return
+         DC    AL1(4)                  Detect Carriage Return
+         ORG   FINDLWSP+X'15'          Position for New Line
+         DC    AL1(4)                  Detect New Line
+         ORG   FINDLWSP+X'25'          Position for Line Feed
+         DC    AL1(4)                  Detect Line Feed
+         ORG   FINDLWSP+C' '           Position for Blank
+         DC    AL1(4)                  Detect Blank
+         ORG   FINDLWSP+C'<'           Position for start of next tag
+         DC    AL1(4)                  Detect next tag
+         ORG   FINDLWSP+256            Position to end of table
+         EJECT ,
+*
+* Following is a Translate and Test table that is used in the
+* URL-encoding algorithm. It translates EBCDIC characters that
+* are valid in a URL into binary zeroes, so that they can be copied
+* without being escaped. It translates other EBCDIC characters
+* into their ASCII equivalents, so that an ASCII escape sequence
+* (%xx) can be built into the output URL.
+*
+* The EBCDIC to ASCII conversions performed here are from the
+* 037 codepage into the iso-8859-1 codepage.
+* If you are using another EBCDIC codepage the table may need
+* to be modified.
+*
+         DC    0AD(0)                  Align to double word
+VALIDURL DC    0XL56                   Define label
+* First define a standard 037 to iso-8859-1 conversion table
+         DC    XL16'000102039C09867F978D8E0B0C0D0E0F'
+         DC    XL16'101112139D8508871819928F1C1D1E1F'
+         DC    XL16'80818283840A171B88898A8B8C050607'
+         DC    XL16'909116939495960498999A9B14159E1A'
+         DC    XL16'20A0E2E4E0E1E3E5E7F1A22E3C282B7C'
+         DC    XL16'26E9EAEBE8EDEEEFECDF21242A293BAC'
+         DC    XL16'2D2FC2C4C0C1C3C5C7D1A62C255F3E3F'
+         DC    XL16'F8C9CACBC8CDCECFCC603A2340273D22'
+         DC    XL16'D8616263646566676869ABBBF0FDFEB1'
+         DC    XL16'B06A6B6C6D6E6F707172AABAE6B8C6A4'
+         DC    XL16'B57E737475767778797AA1BFD0DDDEAE'
+         DC    XL16'5EA3A5B7A9A7B6BCBDBE5B5DAFA8B4D7'
+         DC    XL16'7B414243444546474849ADF4F6F2F3F5'
+         DC    XL16'7D4A4B4C4D4E4F505152B9FBFCF9FAFF'
+         DC    XL16'5CF7535455565758595AB2D4D6D2D3D5'
+         DC    XL16'30313233343536373839B3DBDCD9DA9F'
+         SPACE 1
+* Now overlay the EBCDIC to ASCII table with zeroes for the
+* URL-valid characters that do not need to be escaped.
+         ORG   VALIDURL+C'0'           EBCDIC 0-9
+         DC    10AL1(0)
+         ORG   VALIDURL+C'a'           EBCDIC a-i
+         DC    9AL1(0)
+         ORG   VALIDURL+C'j'           EBCDIC j-r
+         DC    9AL1(0)
+         ORG   VALIDURL+C's'           EBCDIC s-z
+         DC    8AL1(0)
+         ORG   VALIDURL+C'A'           EBCDIC A-I
+         DC    9AL1(0)
+         ORG   VALIDURL+C'J'           EBCDIC J-R
+         DC    9AL1(0)
+         ORG   VALIDURL+C'S'           EBCDIC S-Z
+         DC    8AL1(0)
+         ORG   VALIDURL+C'-'           EBCDIC hyphen
+         DC    AL1(0)
+         ORG   VALIDURL+C'_'           EBCDIC underscore
+         DC    AL1(0)
+         ORG   VALIDURL+C'.'           EBCDIC period
+         DC    AL1(0)
+         ORG   VALIDURL+C'!'           EBCDIC exclamation
+         DC    AL1(0)
+         ORG   VALIDURL+X'A1'          EBCDIC tilde
+         DC    AL1(0)
+         ORG   VALIDURL+C''''          EBCDIC apostrophe
+         DC    AL1(0)
+         ORG   VALIDURL+C'('           EBCDIC left parenthesis
+         DC    AL1(0)
+         ORG   VALIDURL+C')'           EBCDIC right parenthesis
+         DC    AL1(0)
+         ORG   VALIDURL+C':'           EBCDIC colon
+         DC    AL1(0)
+         ORG   VALIDURL+C'@'           EBCDIC at-sign
+         DC    AL1(0)
+         ORG   VALIDURL+C'$'           EBCDIC dollar sign
+         DC    AL1(0)
+         ORG   VALIDURL+C','           EBCDIC comma
+         DC    AL1(0)
+         ORG   VALIDURL+256            Restore location counter
+         END   DFH$WBX2                Finish

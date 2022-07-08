@@ -1,0 +1,669 @@
+         TITLE 'DFH0AZBI - FEPI Sample: IMS back-end application'
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1994"                                   *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*   STATUS = 7.2.0                                                    *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*   $MOD(DFH0AZBI),COMP(FEPI),PROD(CICS TS ):                         *
+*                                                                     *
+*  PN= REASON REL YYMMDD HDXXIII : REMARKS                            *
+* $L0= Base   410 94     HD5VDLA : Base                               *
+*                                                                     *
+***********************************************************************
+*                                                                     *
+*  MODULE NAME = DFH0AZBI                                             *
+*                                                                     *
+*  DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample Program:               *
+*                     IMS back-end application.                       *
+*                     Assembler version                               *
+*                                                                     *
+*                                                                     *
+*   FUNCTION = This program is the IMS back-end application           *
+*              used by the FEPI sample programs.                      *
+*                                                                     *
+*  TRANSACTION NAME = CZBI                                            *
+*                                                                     *
+*  PSB NAME    = DFH0AZBI                                             *
+*                                                                     *
+*  PCBs        = I/O                                                  *
+*                                                                     *
+*                                                                     *
+*  OVERVIEW                                                           *
+*                                                                     *
+*       This is a simple IMS back-end response mode program           *
+*       that is driven by input from a front-end FEPI application.    *
+*       It modifies the time stamp in the input message and returns   *
+*       the message to the front-end application.                     *
+*                                                                     *
+*       IMS will schedule this transaction when an input message      *
+*       is queued for it.  It addresses the I/O PCB, DLI call         *
+*       function, and I/O area to build the parameter list for the    *
+*       GU call to retrieve the queued input message.                 *
+*                                                                     *
+*       The time field of the input message is updated and the        *
+*       program then issues an ISRT call to place the message on the  *
+*       output queue.  IMS then sends the ouput message to the        *
+*       front-end FEPI application.                                   *
+*                                                                     *
+*       Output messages from this program are all prefixed with a     *
+*       5-byte function management header.                            *
+*                                                                     *
+*       If any errors occur, the program ends with a non-zero         *
+*       return code.                                                  *
+*                                                                     *
+*                                                                     *
+*  PROGRAM LOGIC                                                      *
+*                                                                     *
+*       GETMAIN storage areas for re-entrancy                         *
+*                                                                     *
+*       Address PCB                                                   *
+*       Issue GU call to get input message                            *
+*                                                                     *
+*       Use TIME to obtain system time                                *
+*       Update I/O area                                               *
+*                                                                     *
+*       Issue ISRT call to send output message                        *
+*                                                                     *
+*       RETURN                                                        *
+*                                                                     *
+*
+*
+*=====================================================================*
+*=       Registers                                                   =*
+*=====================================================================*
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3             Parameter list pointer
+R4       EQU   4             PCB list pointer
+R5       EQU   5             General work register
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8             Working storage pointer
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12            Base register
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+*
+*=====================================================================*
+*=       Initialization                                              =*
+*=====================================================================*
+*
+DFH0AZBI CSECT ,
+DFH0AZBI AMODE 31
+*
+         ENTRY DLITASM                 DLI entry point
+*
+         USING *,R12
+DLITASM  SAVE  (14,12),,DFH0AZBI-120
+         LR    R12,R15                 Load base register
+         LR    R7,R13                  Save register 13
+*
+*
+*=====================================================================*
+*=       Main procedure                                              =*
+*=====================================================================*
+*
+*
+* Issue the GETMAIN macro to obtain storage for work areas and DLI
+* call parameter list.
+*
+GETMAIN  DS    0H
+         GETMAIN    RC,LV=363          GETMAIN of 363 bytes
+         LTR   R15,R15                 Storage obtained?
+         BNZ   GET_ERR                 No, so set return code and
+*                                      RETURN to IMS
+         LR    R8,R1                   Yes, so load pointer
+         USING WORKSTOR,R8
+*
+         GETMAIN    RC,LV=12           GETMAIN of 12 bytes
+         LTR   R15,R15                 Storage obtained?
+         BNZ   GET_ERR                 No, so set return code and
+*                                      RETURN to IMS
+         LR    R3,R1                   Yes, so load pointer
+         USING DLI_PARMS,R3
+*                                      Now reload register 13
+         LR    R13,R7                  and save forward and backward
+         ST    R13,SAVEREGS+4          chain pointers
+         LA    R15,SAVEREGS
+         ST    R15,8(,R13)
+         LR    R13,R15
+*
+*
+* IMS provides a pointer to the program control block (PCB) list
+* in register 1 on entry to the program.  This was saved and must now
+* be retrieved in order to address the PCB list, and from there the
+* address of the I/O PCB needed in later DLI calls.
+*
+GETPCBS  DS    0H
+         L     R1,SAVEREGS+4           Locate caller's save area
+         L     R1,24(,R1)              Load register 1 with PCB list
+*                                      address
+         L     R4,0(,R1)               Load I/O PCB address
+         ST    R4,DLI_PCBADDR          Store in parameter list
+         MVI   DLI_PCBADDR,X'00'       Zero high-order byte
+         USING IO_PCB,R4
+*
+*
+* The program can now get the message off the input queue.  First the
+* parameter list is completed, then the call is issued.  On return,
+* IMS updates the IO_PCB_STATUS field with the DLI status code.
+* If the DLI status code is not SPACES then the program ends.
+*
+GET_MSG  DS    0H
+         MVC   FUNCTION,=C'GU  '       Load the DLI function code
+         LA    R5,FUNCTION             Address the function code
+         ST    R5,DLI_FUNCTION         Store the address in the
+*                                      parameter list
+         LA    R5,IOAREA               Address the I/O area
+         ST    R5,DLI_IOAREA           Store the address in the
+*                                      parameter list
+         MVI   DLI_IOAREA,X'80'        Tell IMS that this is the
+*                                      last parameter in the list
+*
+*                                      Now issue the DLI call
+         CALL  ASMTDLI,MF=(E,DLI_PARMS)
+         CLC   IO_PCB_STATUS,=C'  '    Call OK?
+         BE    PROCESS                 Yes, so continue
+         B     GU_ERR                  No, so set return code and
+*                                      RETURN to IMS
+*
+*
+* GU call was successful so update the I/O area status and time
+* fields.
+*
+PROCESS  DS    0H
+         MVC   TSTSTATE,CONV_COMP      Set conversation state to
+*                                      'COMPLETE'
+         TIME  DEC,ZONE=GMT            Issue TIME macro.  Time is
+*                                      returned in register 0
+         LTR   R15,R15                 Successful?
+         BNZ   TIME_ERR                No, so set return code and
+*                                      RETURN to IMS
+         ST    R0,PACKTIME             Yes, so continue and get time
+         UNPK  WORKTIME,PACKTIME
+         MVC   TIME(6),WORKTIME
+*
+*
+* With the I/O area updated, the message can now be returned to the
+* FEPI front-end application.  The parameter list has already been
+* built so the only thing to change is the DLI function code, to tell
+* IMS to place this message on the output queue.
+*
+ISRT     DS    0H
+         MVC   FUNCTION,=C'ISRT'       Load the DLI function code
+         CALL  ASMTDLI,MF=(E,DLI_PARMS)
+         CLC   IO_PCB_STATUS,=C'  '    Successful?
+         BNE   ISRT_ERR                No, so set return code and
+*                                      RETURN to IMS
+         B     RETURN                  Yes, so set return code 0 and
+*                                      RETURN to IMS
+*
+*
+*=====================================================================*
+*=       Error handling                                              =*
+*=====================================================================*
+*
+*
+* An error occurred in the GETMAIN macro processing.
+* Return to IMS with code 8.
+*
+GET_ERR  DS    0H
+         L     R7,SAVEREGS+4
+         FREEMAIN    RC,LV=363,A=(R8)
+         FREEMAIN    RC,LV=12,A=(R3)
+         LR    R13,R7
+         RETURN (14,12),,RC=8
+*
+*
+* An invalid DLI status code was returned from the GU call.
+* Return to IMS with code 7.
+*
+GU_ERR   DS    0H
+         L     R7,SAVEREGS+4
+         FREEMAIN    RC,LV=363,A=(R8)
+         FREEMAIN    RC,LV=12,A=(R3)
+         LR    R13,R7
+         RETURN (14,12),,RC=7
+*
+*
+* An invalid DLI status code was returned from the ISRT call.
+* Return to IMS with code 6.
+*
+ISRT_ERR DS    0H
+         L     R7,SAVEREGS+4
+         FREEMAIN    RC,LV=363,A=(R8)
+         FREEMAIN    RC,LV=12,A=(R3)
+         LR    R13,R7
+         RETURN (14,12),,RC=6
+*
+*
+* An error occurred in the TIME macro processing.
+* Return to IMS with code 5.
+*
+TIME_ERR DS    0H
+         L     R7,SAVEREGS+4
+         FREEMAIN    RC,LV=363,A=(R8)
+         FREEMAIN    RC,LV=12,A=(R3)
+         LR    R13,R7
+         RETURN (14,12),,RC=5
+*
+*
+*=====================================================================*
+*=       Termination                                                 =*
+*=====================================================================*
+*
+*
+* Processing has completed successfully so return to IMS with
+* code 0.
+*
+RETURN   DS    0H
+         L     R7,SAVEREGS+4
+         FREEMAIN    RC,LV=363,A=(R8)
+         FREEMAIN    RC,LV=12,A=(R3)
+         LR    R13,R7
+         RETURN (14,12),,RC=0
+*
+*
+*=====================================================================*
+*=       Constants and data areas                                    =*
+*=====================================================================*
+*
+*
+* Constants.
+*
+CONV_COMP      DC    C'COMPLETE'
+               LTORG ,
+*
+*
+* I/O PCB DSECT, addressed by R4.
+*
+IMSPCB         DSECT ,
+IO_PCB         DS    0CL40
+IO_PCB_LTERM   DS    CL8
+IO_PCB_ZZ      DS    CL2
+IO_PCB_STATUS  DS    CL2
+IO_PCB_CDATE   DS    PL4
+IO_PCB_CTIME   DS    PL4
+IO_PCB_IMSN    DS    F
+IO_PCB_MODN    DS    CL8
+IO_PCB_USERID  DS    CL8
+*
+*
+* DLI call parameter list DSECT, addressed by R3.
+*
+DLI_PARMS      DSECT ,
+DLI_FUNCTION   DS    F
+DLI_PCBADDR    DS    F
+DLI_IOAREA     DS    F
+*
+*
+* Working storage DSECT, addressed by R8.
+*
+WORKSTOR       DSECT ,
+PACKTIME       DS    F
+WORKTIME       DS    CL7
+FUNCTION       DS    CL4
+SAVEREGS       DS    18F'0'
+               DS    0H
+IOAREA         DS    0CL256
+LLBYTES        DC    H'256'
+ZZBYTES        DC    H'00'
+TRANCODE       DS    CL8
+GREGDATE       DS    CL6
+TIME           DS    CL6
+TSTSTATE       DS    CL8
+FILLER         DS    CL224
+IOLEN          EQU   *-IOAREA
+*
+*
+***********************************************************************
+*        End of program DFH0AZBI                                      *
+***********************************************************************
+*
+         END   DFH0AZBI
+         TITLE 'DFH0AZBI - FEPI Sample: IMS back-end application'
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*                                                                     *
+* $L0= Base   410 94     HD5VDLA : Base                               *
+*                                                                     *
+*                                                                     *
+*  MODULE NAME = DFH0AZBI                                             *
+*                                                                     *
+*  DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample Program:               *
+*                     IMS back-end application.                       *
+*                     Assembler version                               *
+*                                                                     *
+*                                                                     *
+*   FUNCTION = This program is the IMS back-end application           *
+*              used by the FEPI sample programs.                      *
+*                                                                     *
+*  TRANSACTION NAME = CZBI                                            *
+*                                                                     *
+*  PSB NAME    = DFH0AZBI                                             *
+*                                                                     *
+*  PCBs        = I/O                                                  *
+*                                                                     *
+*                                                                     *
+*  OVERVIEW                                                           *
+*                                                                     *
+*       This is a simple IMS back-end response mode program           *
+*       that is driven by input from a front-end FEPI application.    *
+*       It modifies the time stamp in the input message and returns   *
+*       the message to the front-end application.                     *
+*                                                                     *
+*       IMS will schedule this transaction when an input message      *
+*       is queued for it.  It addresses the I/O PCB, DLI call         *
+*       function, and I/O area to build the parameter list for the    *
+*       GU call to retrieve the queued input message.                 *
+*                                                                     *
+*       The time field of the input message is updated and the        *
+*       program then issues an ISRT call to place the message on the  *
+*       output queue.  IMS then sends the ouput message to the        *
+*       front-end FEPI application.                                   *
+*                                                                     *
+*       Output messages from this program are all prefixed with a     *
+*       5-byte function management header.                            *
+*                                                                     *
+*       If any errors occur, the program ends with a non-zero         *
+*       return code.                                                  *
+*                                                                     *
+*                                                                     *
+*  PROGRAM LOGIC                                                      *
+*                                                                     *
+*       GETMAIN storage areas for re-entrancy                         *
+*                                                                     *
+*       Address PCB                                                   *
+*       Issue GU call to get input message                            *
+*                                                                     *
+*       Use TIME to obtain system time                                *
+*       Update I/O area                                               *
+*                                                                     *
+*       Issue ISRT call to send output message                        *
+*                                                                     *
+*       RETURN                                                        *
+*                                                                     *
+*
+*
+*=====================================================================*
+*=       Registers                                                   =*
+*=====================================================================*
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3             Parameter list pointer
+R4       EQU   4             PCB list pointer
+R5       EQU   5             General work register
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8             Working storage pointer
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12            Base register
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+*
+*=====================================================================*
+*=       Initialization                                              =*
+*=====================================================================*
+*
+DFH0AZBI CSECT ,
+DFH0AZBI AMODE 31
+*
+         ENTRY DLITASM                 DLI entry point
+*
+         USING *,R12
+DLITASM  SAVE  (14,12),,DFH0AZBI-120
+         LR    R12,R15                 Load base register
+         LR    R7,R13                  Save register 13
+*
+*
+*=====================================================================*
+*=       Main procedure                                              =*
+*=====================================================================*
+*
+*
+* Issue the GETMAIN macro to obtain storage for work areas and DLI
+* call parameter list.
+*
+GETMAIN  DS    0H
+         GETMAIN    RC,LV=363          GETMAIN of 363 bytes
+         LTR   R15,R15                 Storage obtained?
+         BNZ   GET_ERR                 No, so set return code and
+*                                      RETURN to IMS
+         LR    R8,R1                   Yes, so load pointer
+         USING WORKSTOR,R8
+*
+         GETMAIN    RC,LV=12           GETMAIN of 12 bytes
+         LTR   R15,R15                 Storage obtained?
+         BNZ   GET_ERR                 No, so set return code and
+*                                      RETURN to IMS
+         LR    R3,R1                   Yes, so load pointer
+         USING DLI_PARMS,R3
+*                                      Now reload register 13
+         LR    R13,R7                  and save forward and backward
+         ST    R13,SAVEREGS+4          chain pointers
+         LA    R15,SAVEREGS
+         ST    R15,8(,R13)
+         LR    R13,R15
+*
+*
+* IMS provides a pointer to the program control block (PCB) list
+* in register 1 on entry to the program.  This was saved and must now
+* be retrieved in order to address the PCB list, and from there the
+* address of the I/O PCB needed in later DLI calls.
+*
+GETPCBS  DS    0H
+         L     R1,SAVEREGS+4           Locate caller's save area
+         L     R1,24(,R1)              Load register 1 with PCB list
+*                                      address
+         L     R4,0(,R1)               Load I/O PCB address
+         ST    R4,DLI_PCBADDR          Store in parameter list
+         MVI   DLI_PCBADDR,X'00'       Zero high-order byte
+         USING IO_PCB,R4
+*
+*
+* The program can now get the message off the input queue.  First the
+* parameter list is completed, then the call is issued.  On return,
+* IMS updates the IO_PCB_STATUS field with the DLI status code.
+* If the DLI status code is not SPACES then the program ends.
+*
+GET_MSG  DS    0H
+         MVC   FUNCTION,=C'GU  '       Load the DLI function code
+         LA    R5,FUNCTION             Address the function code
+         ST    R5,DLI_FUNCTION         Store the address in the
+*                                      parameter list
+         LA    R5,IOAREA               Address the I/O area
+         ST    R5,DLI_IOAREA           Store the address in the
+*                                      parameter list
+         MVI   DLI_IOAREA,X'80'        Tell IMS that this is the
+*                                      last parameter in the list
+*
+*                                      Now issue the DLI call
+         CALL  ASMTDLI,MF=(E,DLI_PARMS)
+         CLC   IO_PCB_STATUS,=C'  '    Call OK?
+         BE    PROCESS                 Yes, so continue
+         B     GU_ERR                  No, so set return code and
+*                                      RETURN to IMS
+*
+*
+* GU call was successful so update the I/O area status and time
+* fields.
+*
+PROCESS  DS    0H
+         MVC   TSTSTATE,CONV_COMP      Set conversation state to
+*                                      'COMPLETE'
+         TIME  DEC,ZONE=GMT            Issue TIME macro.  Time is
+*                                      returned in register 0
+         LTR   R15,R15                 Successful?
+         BNZ   TIME_ERR                No, so set return code and
+*                                      RETURN to IMS
+         ST    R0,PACKTIME             Yes, so continue and get time
+         UNPK  WORKTIME,PACKTIME
+         MVC   TIME(6),WORKTIME
+*
+*
+* With the I/O area updated, the message can now be returned to the
+* FEPI front-end application.  The parameter list has already been
+* built so the only thing to change is the DLI function code, to tell
+* IMS to place this message on the output queue.
+*
+ISRT     DS    0H
+         MVC   FUNCTION,=C'ISRT'       Load the DLI function code
+         CALL  ASMTDLI,MF=(E,DLI_PARMS)
+         CLC   IO_PCB_STATUS,=C'  '    Successful?
+         BNE   ISRT_ERR                No, so set return code and
+*                                      RETURN to IMS
+         B     RETURN                  Yes, so set return code 0 and
+*                                      RETURN to IMS
+*
+*
+*=====================================================================*
+*=       Error handling                                              =*
+*=====================================================================*
+*
+*
+* An error occurred in the GETMAIN macro processing.
+* Return to IMS with code 8.
+*
+GET_ERR  DS    0H
+         L     R7,SAVEREGS+4
+         FREEMAIN    RC,LV=363,A=(R8)
+         FREEMAIN    RC,LV=12,A=(R3)
+         LR    R13,R7
+         RETURN (14,12),,RC=8
+*
+*
+* An invalid DLI status code was returned from the GU call.
+* Return to IMS with code 7.
+*
+GU_ERR   DS    0H
+         L     R7,SAVEREGS+4
+         FREEMAIN    RC,LV=363,A=(R8)
+         FREEMAIN    RC,LV=12,A=(R3)
+         LR    R13,R7
+         RETURN (14,12),,RC=7
+*
+*
+* An invalid DLI status code was returned from the ISRT call.
+* Return to IMS with code 6.
+*
+ISRT_ERR DS    0H
+         L     R7,SAVEREGS+4
+         FREEMAIN    RC,LV=363,A=(R8)
+         FREEMAIN    RC,LV=12,A=(R3)
+         LR    R13,R7
+         RETURN (14,12),,RC=6
+*
+*
+* An error occurred in the TIME macro processing.
+* Return to IMS with code 5.
+*
+TIME_ERR DS    0H
+         L     R7,SAVEREGS+4
+         FREEMAIN    RC,LV=363,A=(R8)
+         FREEMAIN    RC,LV=12,A=(R3)
+         LR    R13,R7
+         RETURN (14,12),,RC=5
+*
+*
+*=====================================================================*
+*=       Termination                                                 =*
+*=====================================================================*
+*
+*
+* Processing has completed successfully so return to IMS with
+* code 0.
+*
+RETURN   DS    0H
+         L     R7,SAVEREGS+4
+         FREEMAIN    RC,LV=363,A=(R8)
+         FREEMAIN    RC,LV=12,A=(R3)
+         LR    R13,R7
+         RETURN (14,12),,RC=0
+*
+*
+*=====================================================================*
+*=       Constants and data areas                                    =*
+*=====================================================================*
+*
+*
+* Constants.
+*
+CONV_COMP      DC    C'COMPLETE'
+               LTORG ,
+*
+*
+* I/O PCB DSECT, addressed by R4.
+*
+IMSPCB         DSECT ,
+IO_PCB         DS    0CL40
+IO_PCB_LTERM   DS    CL8
+IO_PCB_ZZ      DS    CL2
+IO_PCB_STATUS  DS    CL2
+IO_PCB_CDATE   DS    PL4
+IO_PCB_CTIME   DS    PL4
+IO_PCB_IMSN    DS    F
+IO_PCB_MODN    DS    CL8
+IO_PCB_USERID  DS    CL8
+*
+*
+* DLI call parameter list DSECT, addressed by R3.
+*
+DLI_PARMS      DSECT ,
+DLI_FUNCTION   DS    F
+DLI_PCBADDR    DS    F
+DLI_IOAREA     DS    F
+*
+*
+* Working storage DSECT, addressed by R8.
+*
+WORKSTOR       DSECT ,
+PACKTIME       DS    F
+WORKTIME       DS    CL7
+FUNCTION       DS    CL4
+SAVEREGS       DS    18F'0'
+               DS    0H
+IOAREA         DS    0CL256
+LLBYTES        DC    H'256'
+ZZBYTES        DC    H'00'
+TRANCODE       DS    CL8
+GREGDATE       DS    CL6
+TIME           DS    CL6
+TSTSTATE       DS    CL8
+FILLER         DS    CL224
+IOLEN          EQU   *-IOAREA
+*
+*
+***********************************************************************
+*        End of program DFH0AZBI                                      *
+***********************************************************************
+*
+         END   DFH0AZBI

@@ -1,0 +1,217 @@
+         TITLE 'CUSTOMER INFORMATION CONTROL - SAMPLE XISQUE           *
+                GLOBAL USER EXIT PROGRAM'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$XISQ                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = C.I.C.S./VS Sample XISQUE  global exit.          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2006"                                *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION =                                                          *
+*        DFH$XISQ acts as an exit program for the exit point XISQUE.  *
+*        The exit deals with the problems encountered when 'sickness' *
+*        in a remote system causes allocates to queue in the sending  *
+*        system.This system develops 'sympathy sickness' as the       *
+*        allocate queue of tasks becomes too large.                   *
+*                                                                     *
+*        The exit allows the following return codes:                  *
+*                                                                     *
+*        UERCAQUE - queue the allocate                                *
+*        UERCAPUR - reject the allocate - return SYSIDERR             *
+*        UERCAKLL - reject allocate & purge the allocate queue        *
+*                                - return SYSIDERR                    *
+*        UERCNORM - allow the allocate following purge - may be queued*
+*                                                                     *
+*        This sample program takes the queue limit specified on the   *
+*        IPCONN definition (QUEUELIMIT) as the maximum queue          *
+*        length and issues RC 4 when this limit is reached.           *
+*                                                                     *
+*        Once this queue limit has been reached the process time      *
+*        of the queue is considered & when this becomes too large     *
+*        a request to purge the queue can be issued.                  *
+*        This return code 8 for the whole IPCONN.                     *
+*                                                                     *
+*        The process time of the queue is specified on the            *
+*        IPCONN definition (MAXQTIME).                                *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*        DFH$XISQ  must be defined on the CSD as a PROGRAM.           *
+*    RESTRICTIONS =                                                   *
+*        None                                                         *
+*    REGISTER CONVENTIONS =                                           *
+*        See the code                                                 *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Re-entrant                               *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* ENTRY POINT = DFH$XISQ                                              *
+*                                                                     *
+*     PURPOSE = see above                                             *
+*                                                                     *
+*     LINKAGE =                                                       *
+*        Called by the User Exit Handler.                             *
+*                                                                     *
+*     INPUT =                                                         *
+*        On entry register 1 addresses a parameter list described     *
+*        by the DFHUEPAR DSECT.                                       *
+*                                                                     *
+*     OUTPUT =                                                        *
+*        A return code is placed in register 15.                      *
+*                                                                     *
+*     EXIT-NORMAL =                                                   *
+*        DFH$XISQ returns to the address that was in register 14      *
+*        when it was called. Possible return codes in register 15     *
+*        are:-                                                        *
+*          0 - queue the allocate.                                    *
+*          4 - purge the allocate                                     *
+*          8 - Purge the queue & issue msg DFHIS5000                  *
+*          0 - after previous RC=8, allow the allocate, queueing      *
+*              if necessary. Issue DFHIS5001 after Rc=8.              *
+*     EXIT-ERROR = none                                               *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* EXTERNAL REFERENCES = none                                          *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* DESCRIPTION - see above                                             *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*     $MOD(DFH$XISQ),COMP(ISCIP),PROD(CICS TS ):                      *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= 710    650 061004 HD0EGMA : XISQUE support                  *
+*                                                                     *
+***********************************************************************
+*
+* Dsect for parameters passed to exit
+*
+         COPY DFHXIQDS
+*
+* Dsect for IPCONN statistics record
+*
+         COPY DFHISRDS
+*
+XSTOR    DSECT
+TIMENOW  DS    D
+ALLOCS_PROCESSED DS F
+QUEUE_LEN DS F
+*
+         DFHUEXIT TYPE=EP,ID=XISQUE
+R1              EQU  1        Parameter list address
+R2              EQU  2        Not used
+R3              EQU  3        Program base register
+R4              EQU  4        Address XISQUE  parameter list
+R5              EQU  5        Address IP connection stats
+R6              EQU  6        General
+R7              EQU  7        General
+R8              EQU  8        General
+R9              EQU  9        General
+R10             EQU  10       General
+R11             EQU  11       General
+R12             EQU  12       General
+R13             EQU  13       General
+R14             EQU  14       Return address
+R15             EQU  15       Entry point address,return code
+*
+         EJECT ,
+DFH$XISQ CSECT
+DFH$XISQ AMODE 31
+DFH$XISQ RMODE ANY
+         SAVE (14,12)                  Save current registers
+         LR    R3,R15                  Set-up base register
+         USING DFH$XISQ,R3
+         B     AROUND                  Branch around module ID
+         DC    CL8'DFH$XISQ'
+         DC    CL8'&SYSDATE'
+AROUND   DS    0H
+*
+         USING DFHUEPAR,R1             Set addressability to plist
+*
+         L     R4,UEPISDATA            Set up addressability to
+         USING DFHXIQDS,R4             XISQUE plist
+*
+         L     R2,UEPXSTOR             Address local variables
+         USING XSTOR,R2
+*
+         STCK  TIMENOW                 Current time
+         ICM   R11,B'1111',TIMENOW     Store meaningful part
+*--------------------------------------------------------------------*
+*        Examine IPCONN statistics                                   *
+*--------------------------------------------------------------------*
+         TM    UEPFLAG,UEPRC8          Return code 8 issued?
+         BZ    NOTRC8                  No
+         ICM   R15,B'1111',UEPSARC8    Number of allocates
+*                                      satisfied since RC8
+*                                      *Note: UEPSARC8 is 4 bytes*
+         BZ    NOQUEUE                 Link still bad if zero
+         B     NORMAL                  Link OK - allow allocate
+NOTRC8   DS    0H
+         ICM   R5,B'1111',UEPCONST     Set up addressability
+         BZ    NOSTATS                 Zero?
+*
+         USING DFHISRDS,R5             IPCONN stastitics
+         L     R6,ISR_CURRENT_QUEUED_ALLOCATES  Number in queue
+*
+         CLM   R6,B'0011',UEPQUELM     OK to queue?
+         BL    QUEUE                   Yes
+*--------------------------------------------------------------------*
+*        Consider process time                                       *
+*--------------------------------------------------------------------*
+         ST    R6,QUEUE_LEN            Store queue length
+         ICM   R12,15,UEPSAQTS         Time queue began
+         SR    R11,R12                 Time difference
+         ICM   R7,B'1111',UEPSACNT     Allocates processed on this Q
+*                                      *Note: UEPSACNT is 4 bytes*
+         BZ    TESTIME                 Kill queue if none processed
+         ST    R7,ALLOCS_PROCESSED     Store for further calculation
+*
+         SR    R10,R10                 Clear for divide
+         D     R10,ALLOCS_PROCESSED    Time for each allocate
+         M     R10,QUEUE_LEN           Time to process current queue
+TESTIME  DS    0H
+         CH    R11,UEPEMXQT            Link slow ?
+         BH    KILLQ                   Yes
+         B     NOQUEUE                 Queue limit reached so reject
+*--------------------------------------------------------------------*
+*        Return codes                                                *
+*--------------------------------------------------------------------*
+NORMAL   LA    R15,UERCNORM            Allow the request
+         B     EXIT                    return
+QUEUE    LA    R15,UERCAQUE            Queue the request
+         B     EXIT                    return
+NOQUEUE  LA    R15,UERCAPUR            No queue
+         B     EXIT                    return
+KILLQ    LA    R15,UERCAKLL            Purge queue
+         B     EXIT                    return
+*
+NOSTATS  WTO   ('DFH$XISQ - NO IPCONN STATS RECORD RECEIVED')
+         LA    R15,UERCAPUR            No connection stats record
+         B     EXIT                    Purge transaction
+*
+EXIT     L     R13,UEPEPSA
+         RETURN (14,12),RC=(15)        Return
+         LTORG
+*
+         END   DFH$XISQ

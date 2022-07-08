@@ -1,0 +1,137 @@
+#pragma XOPTS(CICS)
+ /*===================================================================*/
+ /*                                                                   */
+ /* MODULE NAME = DFH$WB1C                                            */
+ /*                                                                   */
+ /* DESCRIPTIVE NAME = CICS TS  Web Support Sample 1                  */
+ /*                                                                   */
+ /*                                                                   */
+ /*                                                                   */
+ /*     Licensed Materials - Property of IBM                          */
+ /*                                                                   */
+ /*     "Restricted Materials of IBM"                                 */
+ /*                                                                   */
+ /*     5655-Y04                                                      */
+ /*                                                                   */
+ /*     (C) Copyright IBM Corp. 1996, 2005"                           */
+ /*                                                                   */
+ /*                                                                   */
+ /*                                                                   */
+ /*                                                                   */
+ /* STATUS = 7.2.0                                                    */
+ /*                                                                   */
+ /* This program illustrates how a CICS program which is invoked      */
+ /* by the Web Support would return an HTTP response containing       */
+ /* HTML data to the Web Browser.                                     */
+ /*                                                                   */
+ /* Note that the incoming HTTP request is ignored. We simply         */
+ /* overwrite it with our output message.                             */
+ /*                                                                   */
+ /*-------------------------------------------------------------------*/
+ /*                                                                   */
+ /* CHANGE ACTIVITY :                                                 */
+ /*                                                                   */
+ /*      $MOD(DFH$WB1C),COMP(CICSWEB),PROD(CICS TS ):                 */
+ /*                                                                   */
+ /*   PN= REASON REL YYMMDD HDXXIII : REMARKS                         */
+ /*  $01= AD1747 640 050119 HDBGNRB : Migrate IND1747 from SPA R630   */
+ /*  $L0= 723    510 960626 HD0JADT : Sample applications             */
+ /*  $L4= 873    650 050803 HDNONEAC: Web Exec Samples                */
+ /*  $P1= M66347 520 970513 HDALSLW : Fix Pragma statement            */
+ /*  $P2= M66619 520 970613 HDWMR   : fix pragma                     */
+ /*  $P4= D14710 650 051116 HDNONEAC: 2 - Fix Text returned by Sample */
+ /*                                                                   */
+ /*   fix for defect 11747                                 @BAD11747A */
+ /*===================================================================*/
+
+/*--------------------------------------------------------------------*/
+/* Standard includes for a C/370 application                          */
+/*--------------------------------------------------------------------*/
+#include <ctype.h>
+#include <string.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+
+/*--------------------------------------------------------------------*/
+/* Local variables                                                    */
+/*--------------------------------------------------------------------*/
+int rcode ;                       /* RESP value for CICS calls        */
+int rcode2;                       /* RESP2 value for CICS calls       */
+char applid[8] ;                  /* APPLID of the CICS system        */
+char statustext[10] ;             /* Status Text for the Http Response*/
+int statuslength ;                /* Length of Status Text            */
+int statuscode ;                  /* Status Code of the Http Response */
+char mediatype[56] ;              /* Mediatype of the Http Response   */
+char doctoken[16] ;               /* Holds the DocToken               */
+char doctext[100] ;               /* Holds the Doctemplate text       */
+int doclength ;                   /* Length of the Document Text      */
+
+/*--------------------------------------------------------------------*/
+/* Main code for DFH$WB1C.                                            */
+/*                                                                    */
+/* Address the EIB.                                                   */
+/*                                                                    */
+/* Using the Document API setup a Document template with the response */
+/* within it.                                                         */
+/*                                                                    */
+/* Use the Web Send command to send the http response back to the     */
+/* client.                                                            */
+/*--------------------------------------------------------------------*/
+main()
+{
+   EXEC CICS ADDRESS EIB(dfheiptr) ;       /* Address the EIB         */
+
+/*--------------------------------------------------------------------*/
+/* Create a Doctemplate                                               */
+/*--------------------------------------------------------------------*/
+   EXEC CICS DOCUMENT CREATE DOCTOKEN(doctoken) ;
+
+/*--------------------------------------------------------------------*/
+/* Using EXEC CICS ASSIGN extract the CICS APPLID.                    */
+/*--------------------------------------------------------------------*/
+   EXEC CICS ASSIGN APPLID(applid) ;
+
+   EXEC CICS DOCUMENT SET DOCTOKEN(doctoken) SYMBOL("APPLID")
+                      VALUE(applid) LENGTH(strlen(applid)) ;
+
+/*--------------------------------------------------------------------*/
+/* Set the Status Text and Status code for this reply                 */
+/*--------------------------------------------------------------------*/
+   memset(statustext, 0x00, 10) ;
+   strcpy(statustext, "OK") ;
+   statuslength = strlen(statustext) ;
+   statuscode   = 200 ;
+
+/*--------------------------------------------------------------------*/
+/* Construct a Doctemplate to use on the WEB SEND command             */
+/*--------------------------------------------------------------------*/
+   memset(doctext, 0x00, 100) ;
+   strcpy(doctext, "<TITLE>DFH$WB1C</TITLE><H1>DFH$WB1C on system"
+                   " &APPLID; successfully invoked through CICS"
+                   " Web support.</H1>") ;
+   doclength = strlen(doctext) ;
+
+   EXEC CICS DOCUMENT INSERT DOCTOKEN(doctoken) FROM(doctext)
+             LENGTH(doclength) RESP(rcode) RESP2(rcode2) ;
+
+/*--------------------------------------------------------------------*/
+/* Use the WEB SEND command to send the HTTP response back to the web */
+/* browser                                                            */
+/*--------------------------------------------------------------------*/
+   memset(mediatype,0x00, 56) ;
+   strcat(mediatype,"text/html") ;
+
+   EXEC CICS WEB SEND DOCTOKEN(doctoken)
+                 STATUSTEXT(statustext)
+                 MEDIATYPE(mediatype)
+                 LENGTH(statuslength)
+                 STATUSCODE(statuscode)
+                 CHARACTERSET("ISO-8859-1")
+                 RESP(rcode) RESP2(rcode2) ;
+
+
+   EXEC CICS RETURN ;
+
+ }                                        /* End main                 */

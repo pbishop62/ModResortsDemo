@@ -1,0 +1,780 @@
+*ASM XOPTS(SP NOPROLOG NOEPILOG)
+         TITLE 'DFH$WBSN - CICS Web Interface - Sample signon program'
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1996, 2014"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* MODULE NAME = DFH$WBSN                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  Web Interface Sample Signon Program     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION = Sample program to validate a userid/password pair.       *
+*                                                                     *
+* NOTES :                                                             *
+*                                                                     *
+*    THIS IS A PRODUCT SENSITIVE SAMPLE.                              *
+*    REFER TO PRODUCT DOCUMENTATION.                                  *
+*                                                                     *
+*    DEPENDENCIES = S/390                                             *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$WBSN                                              *
+*                                                                     *
+*     PURPOSE = Sample Web Interface signon program                   *
+*                                                                     *
+*     LINKAGE =                                                       *
+*         This entry point is called by the CICS Web Business Logic   *
+*         Interface program DFHWBBLI via EXEC CICS LINK.              *
+*                                                                     *
+*     INPUT =                                                         *
+*         Input information is passed in the commarea.                *
+*         The first 256 bytes contain parameters for communication    *
+*         with the sample Converter program DFH$WBSC.                 *
+*         The remainder of the commarea contains HTTP information     *
+*         received from the Web client.                               *
+*                                                                     *
+*         The main input parameter is:                                *
+*           INTOKEN - the eight-character token representing the      *
+*                     current conversation in the state manager.      *
+*                                                                     *
+*     OUTPUT =                                                        *
+*         Output information is returned in the commarea received     *
+*         as input.  The first 256 bytes contain parameters for       *
+*         communication with DFH$WBSC. The remainder is HTTP          *
+*         information to be returned to the client.                   *
+*                                                                     *
+*         The main output parameter is:                               *
+*           OUTUSER - the userid supplied by the client and           *
+*                     authenticated by this program.                  *
+*                                                                     *
+*     EXIT-NORMAL = Exit is via a DFHEIRET macro.                     *
+*                                                                     *
+*     EXIT-ERROR =                                                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+*         None.                                                       *
+*                                                                     *
+*     ROUTINES =                                                      *
+*         EXEC CICS RETURN - return to the calling program.           *
+*                                                                     *
+*     CONTROL BLOCKS =                                                *
+*         The WBI Analyzer parameter list is defined in DFHWBTDD,     *
+*         along with a description of the parameters.                 *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+*-------------------------------------------------------------------- *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFH$WBSN),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 723    510 960624 HD2JPEH : Sample WEB signon program       *
+*    $P1= M97078 510 960808 HD2JPEH : Revoked id not handled          *
+*    $P2= M31088 530 990106 HDALSLW : ADD URP reason and response     *
+*    $P3= D01263 620 010803 HD2JPEH : Create DFHWBSN alias statement  *
+*    $P4= D01220 620 010803 HD2JPEH : Obsolete GIF reference          *
+*    $P5= D03059 620 011024 HD2JPEH : Remove alias and rename module  *
+*    $P6= D12919 640 050114 HD2JPEH : Remove password uppercasing     *
+*    $03= A11377 530 971223 HDBGNRB : Migrate PQ11377 from SPA R520   *
+*    $04= A14333 530 980918 HDBGNRB : Migrate PQ14333 from SPA R520   *
+*    $06= A28884 610 990730 HDBGNRB : Migrate PQ28884 from SPA R530   *
+*    $07= A40336 610 000922 HDBGNRB : Migrate PQ40336 from SPA R530   *
+*    $08= AD9822 640 050112 HDBGNRB : Migrate IND9822 from SPA R630   *
+*                                                                     *
+*    Fix for defect 9822                                           @08A
+***********************************************************************
+DFH$WBSN CSECT ,
+DFH$WBSN RMODE ANY
+DFH$WBSN AMODE 31
+CARRIAGE EQU   X'0D'
+LINEFEED EQU   X'25'
+CRLF     EQU   CARRIAGE*256+LINEFEED
+         DFHREGS ,
+         DFHEIENT DATAREG=13,CODEREG=12,EIBREG=11
+         L     R10,DFHEICAP       Load COMMAREA address
+         USING OUTCOMMA,R10       Address commarea output fields
+         LA    R0,HTTPHDRS        Address start of HTTP headers
+         ST    R0,RECDPTR         This is the first logical record
+         XC    RECDLEN,RECDLEN    Initialize its length to zero
+*
+*  Read through the logical records in the HTTP header until
+*  a "Content-length" record is found (case-insensitive), which
+*  indicates the presence of forms data with METHOD=POST.
+*
+READHDRS DS    0H                 Read through the headers
+         BAL   R14,GETRECD        Read a logical record
+         BZ    NOFORMS            If end-of-file, no forms data
+         CH    R0,=Y(16)          Is record at least 16 characters?
+         BL    READHDRS           No, read the next
+         MVC   KEYWORD,0(R1)      Copy first 16 characters
+         OC    KEYWORD,BLANKS     Uppercase the keyword
+         CLC   KEYWORD,=CL16'CONTENT-LENGTH:'  Is it content length?
+         BNE   READHDRS           No, read the next
+         EJECT ,
+*
+*  "Content-length" was found. Calculate its value.
+*
+         SH    R0,=Y(16)          Count characters left in record
+         LA    R1,16(,R1)         Address first of them
+         SR    R15,R15            Zero accumulator
+GETCLEN  DS    0H                 Get content length value
+         CLI   0(R1),C'0'         Is character numeric?
+         BL    GCL002             No, skip over it
+         IC    R14,0(,R1)         Yes, insert in register
+         N     R14,=X'0000000F'   Isolate numeric value
+         MH    R15,=H'10'         Multiply accumulator by 10
+         AR    R15,R14            Add into accumulator
+GCL002   LA    R1,1(,R1)          Point to next character
+         BCT   R0,GETCLEN         Count through remaining characters
+         STH   R15,CONTLEN        Save Content-length value
+*
+*  Continue reading until a null record is found, which delimits
+*  HTTP headers and is followed by the forms data itself
+*  (namely, the query string).
+*
+READEOD  DS    0H                 Read through to end-of-file
+         BAL   R14,GETRECD        Read a logical record
+         BNZ   READEOD            If not a null record, repeat
+         SR    R0,R0              Zero insert register
+         ICM   R0,3,CONTLEN       Is content length zero?
+         BZ    NOFORMS            Yes, no forms data
+         LA    R1,2(,R1)          Step over CRLF to query string
+         BAL   R14,INITSCAN       Initialize the scan pointers
+*
+*  Search the query string for the requested function.
+*
+         LA    R1,FUNCTION_KEY    Search for function keyword
+         BAL   R14,GETFIELD       Extract the function name
+         LA    R14,FUNCTION       Point to receiving field
+         MVCL  R14,R0             Copy the function name
+         L     R4,=A(RECTIFY)     Get address of translate table
+         CLC   FUNCTION,=CL8'signon'  Is it a SIGNON request?
+         BE    SIGNON                 Yes, go validate password
+         CLC   FUNCTION,=CL8'newpass' Is it a NEW PASSWORD request?
+         BE    NEWPASS                Yes, go change password
+         EJECT ,
+*
+*  An unrecognizable query string has been detected.
+*  Display it for diagnostic purposes.
+*
+         MVC   OUTHTTP,HTTPRESP   Initialize HTTP response
+         MVC   OUTRC,=C'500 IE'   Set "Implementation error" response
+         LA    R14,OUTHTML        Address commarea HTML area
+         LM    R15,R1,=A(FAIL_S,FAIL_P,FAIL_S) Address short message
+         MVCL  R14,R0             Copy the short error message
+         MVC   OUTHTML+FAIL_S(16),=C'<p>Query string='
+         LM    R0,R1,RECDPTR      Address & length of query string
+         LA    R14,OUTHTML+FAIL_S+16 Address of output
+         LR    R15,R1             Output length = input length
+         MVCL  R14,R0             Copy the query string
+         MVC   0(14,R14),=C'</body></html>'  Terminate the HTML
+         LA    R14,14(,R14)       Address end of text
+         LA    R0,OUTLEN          Address start of text
+         SR    R14,R0             Calculate length of text
+         ST    R14,OUTLEN         Save length at start of commarea
+         B     EXIT               Get out to issue message         @04A
+*
+*  If no forms data was present in the HTTP headers, the user
+*  has to be prompted for userid/password information by displaying
+*  the signon panel.
+*
+NOFORMS  DS    0H
+         MVC   OUTHTTP,HTTPRESP   Initialize HTTP response
+         LA    R14,OUTHTML        Address commarea HTML area
+         LM    R15,R1,=A(INIT_L,INIT_P,INIT_L) Address initial panel
+         MVCL  R14,R0             Copy the signon panel HTML
+         MVC   INIT_T-INIT_P+OUTHTML,INTOKEN Refresh connect token
+         LA    R0,OUTLEN          Address start of text
+         SR    R14,R0             Total length of data
+         ST    R14,OUTLEN         Save at start of commarea
+         B     EXIT               Exit
+         EJECT ,
+*
+*  The user had been prompted for a signon, and he has just responded
+*  with his userid and password.
+*
+SIGNON   DS    0H
+         LA    R1,USERID_KEY      Search for userid keyword
+         BAL   R14,GETFIELD       Extract the userid
+         LA    R14,USERID         Point to receiving field
+         MVCL  R14,R0             Copy the userid
+         TR    USERID,0(R4)       Uppercase the userid
+         LA    R1,PASSWORD_KEY    Search for password keyword
+         BAL   R14,GETFIELD       Extract the password
+         LA    R14,PASSWORD       Point to receiving field
+         MVCL  R14,R0             Copy the password
+         EXEC  CICS VERIFY PASSWORD(PASSWORD) USERID(USERID) NOHANDLE
+         MVC   PASSWORD,BLANKS    Blank password as soon as possible
+         ICM   R15,15,EIBRESP     Load and test response
+         BZ    SUCCESS            Successful
+CHKINVU  DS    0H                                                  @08A
+         MVC   OUTHTTP,HTTPRESP   Initialize HTTP response
+         LA    R14,OUTHTML        Address commarea HTML area
+         LM    R15,R1,=A(RETRY_L,RETRY_P,RETRY_L) Address retry panel
+         MVCL  R14,R0             Copy the signon panel HTML
+         LA    R0,OUTLEN          Address start of text
+         SR    R14,R0             Total length of data
+         ST    R14,OUTLEN         Save at start of commarea
+         CLC   EIBRESP,DFHRESP(NOTAUTH) Is is a NOTAUTH response?
+         BNE   CHKINVR            No, check for invalid request    @P1A
+         CLC   EIBRESP2,=A(2)     Invalid password supplied?
+         BE    RETRY              Yes, try again
+         CLC   EIBRESP2,=A(3)     Expired password supplied?
+         BE    EXPIRED            Yes, ask for a new one
+         CLC   EIBRESP2,=A(19)    Userid is revoked?               @P1A
+         BE    REVOKED            Yes, say userid is bad           @P1A
+         B     FAILURE            No, unexpected error             @P1A
+CHKINVR  DS    0H                 Invalid request diagnosed?       @P1A
+         CLC   EIBRESP,DFHRESP(INVREQ) Is is an INVREQ response?   @P1A
+         BNE   CHKUSER            No, check for USERIDERR          @P1A
+         CLC   EIBRESP2,=A(32)    Userid has imbedded blanks, etc  @P1A
+         BE    INVUSER            Yes, say userid is bad           @P1A
+         B     FAILURE            No, unexpected error
+CHKUSER  DS    0H                 Check for invalid userid
+         CLC   EIBRESP,DFHRESP(USERIDERR) Is it a USERIDERR response?
+         BNE   FAILURE            No, unexpected error
+REVOKED  DS    0H                 Userid exists, but is revoked    @P1A
+INVUSER  DS    0H                 The userid has syntax error      @P1A
+         MVC   RETRY_M-RETRY_P+OUTHTML(L'USNOGOOD),USNOGOOD            *
+                                  Output an explanatory message    @P1A
+         MVC   RETRY_M+25-RETRY_P+OUTHTML(8),USERID Add userid     @P1A
+         MVC   USERID,BLANKS      Blank out the invalid userid
+         EJECT ,
+*
+*  Invalid signon data was entered.  Ask the user to re-enter it.
+*
+RETRY    DS    0H
+         MVC   RETRY_U-RETRY_P+OUTHTML,USERID  Refresh userid
+         MVC   RETRY_T-RETRY_P+OUTHTML,INTOKEN Refresh connect token
+         B     EXIT               Exit
+*
+*  The password entered has expired.  Ask the user for a new one.
+*
+EXPIRED  DS    0H                 Password is expired
+         BAL   R2,REQNEWPW        Set up new password panel
+         MVC   0(L'PWEXPIRE,R1),PWEXPIRE Add expired password message
+         B     EXIT               Exit
+*
+*  In a previous signon request, the user's password was found
+*  to be expired, and he has just replied with a pair of new ones.
+*
+NEWPASS  DS    0H
+         LA    R1,USERID_KEY      Search for userid keyword
+         BAL   R14,GETFIELD       Extract the userid
+         LA    R14,USERID         Point to receiving field
+         MVCL  R14,R0             Copy the userid
+         TR    USERID,0(R4)       Uppercase the userid
+         LA    R1,PASSWORD_KEY    Search for password keyword
+         BAL   R14,GETFIELD       Extract the password
+         LA    R14,PASSWORD       Point to receiving field
+         MVCL  R14,R0             Copy the password
+         LA    R1,NEWPASS1_KEY    Search for new-password-1 keyword
+         BAL   R14,GETFIELD       Extract the new-password-1
+         LA    R14,NEWPASS1       Point to receiving field
+         MVCL  R14,R0             Copy the new-password-1
+         LA    R1,NEWPASS2_KEY    Search for new-password-2 keyword
+         BAL   R14,GETFIELD       Extract the new-password-2
+         LA    R14,NEWPASS2       Point to receiving field
+         MVCL  R14,R0             Copy the new-password-2
+         CLC   NEWPASS2,NEWPASS1  Are both new passwords the same
+         BE    CHANGEPW           Yes, go change password
+         MVC   PASSWORD,BLANKS    Blank current password
+         MVC   NEWPASS1(16),BLANKS Blank both new passwords
+         BAL   R2,REQNEWPW        Set up new password panel
+         MVC   0(L'PWNMATCH,R1),PWNMATCH Add match failed message
+         B     EXIT               Exit
+         EJECT ,
+*
+*  Change the user's password
+*
+CHANGEPW DS    0H                 Change the password
+         EXEC  CICS CHANGE PASSWORD(PASSWORD) NEWPASSWORD(NEWPASS1)    *
+               USERID(USERID) NOHANDLE
+         MVC   PASSWORD,BLANKS    Blank current password
+         MVC   NEWPASS1(16),BLANKS Blank both new passwords
+         ICM   R15,15,EIBRESP     Load and test response
+         BZ    SUCCESS            Yes, acknowledge success
+         CLC   EIBRESP,DFHRESP(NOTAUTH)  Is it a NOTAUTH response
+         BNE   CHKINVU            No, check for invalid userid     @08C
+         CLC   EIBRESP2,=A(2)     Old password is invalid?
+         BE    REQPRVPW           Yes, how did this happen         @07C
+         CLC   EIBRESP2,=A(4)     New password is invalid?
+         BNE   FAILURE            No, something worse
+         BAL   R2,REQNEWPW        Set up new password panel again
+         MVC   0(L'PWNOGOOD,R1),PWNOGOOD Add password quality message
+         B     EXIT               Exit
+         SPACE 2
+REQPRVPW DS    0H                 Request previous password        @07A
+         BAL   R2,REQNEWPW        Set up new password panel aga    @07A
+         MVC   0(L'PWPRVBAD,R1),PWPRVBAD Add password quality m    @07A
+         B     EXIT               Exit                             @07A
+         SPACE 2                                                   @07A
+REQNEWPW DS    0H                 Request new password
+         MVC   OUTHTTP,HTTPRESP   Initialize HTTP response
+         LA    R14,OUTHTML        Address commarea HTML area
+         LM    R15,R1,=A(NEWPS_L,NEWPS_P,NEWPS_L) Address newpswd panel
+         MVCL  R14,R0             Copy the signon panel HTML
+         MVC   NEWPS_U-NEWPS_P+OUTHTML,USERID  Refresh userid
+         MVC   NEWPS_T-NEWPS_P+OUTHTML,INTOKEN Refresh connect token
+         LA    R0,OUTLEN          Address start of text
+         SR    R14,R0             Total length of data
+         ST    R14,OUTLEN         Save at start of commarea
+         LA    R1,NEWPS_M-NEWPS_P+OUTHTML Address variable message area
+         BR    R2                 Return
+         EJECT ,
+*
+*  A failure has occurred in a CICS API function.
+*  Output a failure panel showing CICS API diagnostics.
+*
+FAILURE  DS    0H
+         MVC   OUTHTTP,HTTPRESP   Initialize HTTP response
+         MVC   OUTRC,=C'500 IE'   Set "Implementation error" response
+         LA    R14,OUTHTML        Address commarea HTML area
+         LM    R15,R1,=A(FAIL_L,FAIL_P,FAIL_L) Address failure panel
+         MVCL  R14,R0             Copy the failure panel HTML
+         LA    R0,OUTLEN          Address start of text
+         SR    R14,R0             Total length of data
+         ST    R14,OUTLEN         Save at start of commarea
+         UNPK  WORKAREA(5),EIBFN(3) Spread hex digits
+         TR    WORKAREA(4),HEXCONV  Translate to printable form
+         MVC   FAILFN-FAIL_P+OUTHTML,WORKAREA  Copy translated EIBFN
+         L     R15,EIBRESP        Get command response
+         CVD   R15,WORKAREA       Convert to decimal
+         OI    WORKAREA+7,X'0F'   Correct decimal sign
+         UNPK  FAILRESP-FAIL_P+OUTHTML,WORKAREA Unpack decimal value
+         L     R0,EIBRESP2        Get command subresponse
+         CVD   R0,WORKAREA        Convert to decimal
+         OI    WORKAREA+7,X'0F'   Correct decimal sign
+         UNPK  FAILRSP2-FAIL_P+OUTHTML,WORKAREA Unpack decimal value
+         B     EXIT               Exit
+*
+*  The signon process has been successful.
+*  Display a panel indicating this.
+*
+SUCCESS  DS    0H                 Userid successfully validated
+         MVC   OUTUSER,USERID     Send validated userid back
+         MVC   OUTHTTP,HTTPRESP   Initialize HTTP response
+         LA    R14,OUTHTML        Address commarea HTML area
+         LM    R15,R1,=A(FINAL_L,FINAL_P,FINAL_L) Address final panel
+         MVCL  R14,R0             Copy the final panel HTML
+         LA    R0,OUTLEN          Address start of text
+         SR    R14,R0             Total length of data
+         ST    R14,OUTLEN         Save at start of commarea
+         EJECT ,
+EXIT     DS    0H                 Exit
+         DFHEIRET ,               Return
+         DROP  R10
+         EJECT ,
+*
+*  Set up scan pointers for efficient scanning of the query string.
+*
+*  Input: R1 = address of query string
+*         R0 = length of query string
+*
+INITSCAN DS    0H                 Initialize scan pointers
+         MVI   KEYWORD,C' '       Put blank into keyword
+         MVC   KEYWORD+1(BLANKLEN-1),KEYWORD  Blank out all receivers
+         ST    R1,RECDPTR         Save address as record pointer
+         ST    R0,RECDLEN         Save length as record length
+         LR    R5,R1              Scan pointer to start of string
+         LA    R6,1               Set increment for BXH scans
+         LR    R7,R0              Copy length of string
+         AR    R7,R5              Add starting address
+         BCTR  R7,0               Point to last character in string
+         STM   R5,R7,KEYWPTRS     Save scan register values
+         BR    R14                Return
+         EJECT ,
+*
+*  Search the query string for a specific keyword.
+*
+*  The keyword list is in the form
+*  keyword1=value1&keyword2=value2& ... &keywordn=valuen
+*
+*  See http://www.w3.org/hypertext/WWW/Protocols/HTTP/Request.html
+*
+*  The search is case sensitive. The keywords should be just as
+*  generated from the forms data, so they should not have been
+*  uppercased.
+*
+*  Input:  R1 points to the following structure:
+*             AL1 - maximum length of operand
+*             AL1 - actual length of keyword
+*             CLn - keyword sought, including delimiting equals sign
+*
+*  Output: R0  - points to the operand found, or zero if not found
+*          R1  - contains length of operand found in the low-order
+*                three bytes, and a blank pad character in the
+*                high-order byte
+*          R15 - Contains the maximum field length
+*
+* (These values are intended for use in a subsequent MVCL instruction)
+*
+GETFIELD DS    0H
+         MVC   FIELDLEN,MAXFLEN(R1)  Save maximum field length
+         SR    R15,R15            Zero the insert register
+         IC    R15,KEYLEN(,R1)    Insert required length of keyword
+         MVC   KEYWORD,BLANKS     Blank out keyword name
+         EX    R15,COPYKEYW       Copy keyword and length
+         BCTR  R15,0              Decrement for later EXECUTEd compare
+         SR    R0,R0              Zero address of operand found
+         SR    R1,R1              Zero its length
+         LM    R5,R7,KEYWPTRS     Load BXH scan registers
+         B     GF002              Go check first keyword
+GF001    BXH   R5,R6,NOTFOUND     Bump scan pointer
+         CLI   0(R5),C'&&'        Found delimiting ampersand?
+         BNE   GF001              No, loop further
+         BXH   R5,R6,NOTFOUND     Bump over ampersand
+GF002    EX    R15,CHKYWORD       Is this requested keyword?
+         BNE   GF001              No, scan to next ampersand
+         LA    R5,0(R15,R5)       Yes, set scan to end of keyword
+         LA    R0,1(,R5)          Point to keyword operand
+*
+* Scan forward to find length of keyword operand.
+* Scan until next ampersand or the end of the query string.
+*
+GF003    BXH   R5,R6,GF004        Step scan register
+         CLI   0(R5),C'&&'        Is it the terminating ampersand?
+         BNE   GF003              No, scan further
+GF004    LR    R1,R5              Save address reached in scan
+         SR    R1,R0              Calculate operand length
+NOTFOUND ICM   R1,8,BLANKS        Insert a padding character
+         IC    R15,FIELDLEN       Load maximum receiver length
+         BR    R14                Return
+         EJECT ,
+*
+*  Read the next logical record in the HTTP header.
+*  Each logical record is delimited by a CRLF pair of characters.
+*  Its address is returned in R1 and its length in R0.
+*  The condition code is set to zero if the record length is
+*  zero, implying a null record that delimits the header string.
+*
+GETRECD  DS    0H
+         L     R5,RECDPTR         Address previous logical record
+         A     R5,RECDLEN         Add previous record length
+         ST    R5,RECDPTR         Save as current logical record
+GR001    LH    R6,EIBCALEN        Get total commarea length
+         LA    R6,0(R6,R10)       Point to end of commarea
+         SR    R6,R5              Calculate length left
+         LA    R0,256             Set maximum TRT length
+         CR    R6,R0              Is length left greater than max?
+         BNH   GR002              No, use actual length left
+         LR    R6,R0              Yes, substitute maximum length
+GR002    LA    R1,0(R6,R5)        Point to end of translate range
+         BCTR  R6,0               Decrement for EXECUTE
+         L     R4,=A(DELIMITR)    Address delimiter translate table
+         EX    R6,SRCHEOR         Search for end-of-record (CRLF)
+         BZ    GR003              If not found, search next section
+         CLC   0(2,R1),=AL2(CRLF) Confirm it is a CRLF pair
+         BE    GR004              Yes, end of logical record
+         LA    R5,1(,R1)          No, step over solo CR character
+         B     GR001              Continue scan
+GR003    LR    R5,R1              Step over record segment
+         B     GR001              Continue scan
+GR004    LA    R6,2(,R1)          Address end of record
+         S     R6,RECDPTR         Subtract start of record
+         ST    R6,RECDLEN         Save logical record length
+         LR    R1,R5              Copy actual record address
+         LR    R0,R6              Copy actual record length
+         SH    R0,=H'2'           Subtract len of CRLF and set CC
+         BR    R14                Return
+         EJECT ,
+*
+*  Instructions executed remotely with an EXECUTE instruction
+*
+COPYKEYW MVC   KEYWORDL(0),KEYLEN(R1) Copy keyword length and name
+CHKYWORD CLC   0(0,R5),KEYWORD    Compare to keyword sought
+TRANASCI TR    0(0,R5),0(R4)      Translate to EBCDIC
+SRCHEOR  TRT   0(0,R5),0(R4)      Search for CRLF delimiter
+         SPACE 2
+*
+*  Possible keywords in forms data
+*
+FUNCTION_KEY DC AL1(L'FUNCTION),AL1(9),C'function='
+USERID_KEY   DC AL1(L'USERID),AL1(7),C'userid='
+PASSWORD_KEY DC AL1(L'PASSWORD),AL1(9),C'password='
+NEWPASS1_KEY DC AL1(L'NEWPASS1),AL1(9),C'newpass1='
+NEWPASS2_KEY DC AL1(L'NEWPASS2),AL1(9),C'newpass2='
+*
+MAXFLEN  EQU   0                  Offset to maximum field length
+KEYLEN   EQU   1                  Offset to actual keyword length
+KEYNAME  EQU   2                  Offset to keyword name
+         SPACE 2
+*
+*  Literals and miscellaneous constants
+*
+         LTORG ,                  Literals
+         DC    0D'0'              Align following to double-word
+BLANKS   DC    CL16' '            Used for blanking fields
+HEXCONV  EQU   *-C'0'             Partial translate table for bin/hex
+         DC    C'0123456789ABCDEF' Hexadecimal digits
+PWEXPIRE DC    C'Your password has expired.'
+PWNOGOOD DC    C'The new password you provided is not permitted.'
+PWPRVBAD DC    C'The previous password is incorrect.'              @07A
+PWNMATCH DC    C'The two new passwords you provided do not match.'
+USNOGOOD DC    C'The userid you provided (********) is not usable.'    *
+                                                                   @P1A
+         EJECT ,
+*
+*  HTTP response header
+*
+HTTPRESP DC    CL9'HTTP/1.0'      Protocol level 1.0
+         DC    C'200 OK'          Response code
+         DC    AL2(CRLF)
+         DC    C'Content-Type: text/html'
+         DC    AL2(CRLF,CRLF)     End of header section
+         DC    C'<!doctype html public "-//IETF//DTD HTML 2.0//EN">'
+         DC    AL2(CRLF)
+HTTP_LEN EQU   *-HTTPRESP
+*
+*  Initial signon panel
+*
+INIT_P   DC    C'<html><head><title>'
+         DC    C'CICS Web Interface signon screen'
+         DC    C'</title></head>'
+         DC    AL2(CRLF),C'<body><h1>'
+         DC    C'CICS Web Interface signon screen'
+         DC    C'</h1>',AL2(CRLF)
+         DC    C'<form action="DFHWBSN?'                           @P5A
+INIT_T   DC    CL8' ',C'" method="POST">',AL2(CRLF)
+         DC    C'<input type="hidden" name="function" value="signon">'
+         DC    AL2(CRLF),C'<p>'
+         DC    C'Please enter your userid and password, then'
+         DC    C' select the Signon button.'
+         DC    AL2(CRLF),C'<p>'
+         DC    C'Userid '
+         DC    C'<input type="text" name="userid" size="8" value="">'
+         DC    AL2(CRLF),C'Password '
+         DC    C'<input type="password"'
+         DC    C' name="password" size="8" value="">'
+         DC    AL2(CRLF),C'<p>'
+         DC    C'<input type="submit" name="submit" value="Signon">'
+         DC    AL2(CRLF)
+         DC    C'<input type="reset">'
+         DC    AL2(CRLF)
+         DC    C'</form>',AL2(CRLF)
+         DC    C'<br><hr><br>',AL2(CRLF)
+         DC    C'<a href="http://www.ibm.com/software/ts/cics/'    @P4C
+         DC    C'about/modern/cicsweb.html'                        @P4A
+         DC    C'">',AL2(CRLF),C'<img alt="" '                     @P4C
+         DC    C'src="/dfhwbimg/cics.gif"',AL2(CRLF)               @P4C
+         DC    C'     border=0 height=64 width=64>'                @P4A
+         DC    C'CICS Web Support</a>',AL2(CRLF)                   @P4C
+         DC    C'</body></html>'
+INIT_L   EQU   *-INIT_P
+         EJECT ,
+*
+*  Successful signon panel
+*  (Note that this panel may be overlaid by DFH$WBSC.)
+*
+FINAL_P  DC    C'<html><head><title>'
+         DC    C'CICS Web Interface signon successful'
+         DC    C'</title></head>'
+         DC    AL2(CRLF),C'<body><h1>'
+         DC    C'CICS Web Interface signon successful'
+         DC    C'</h1>',AL2(CRLF)
+         DC    C'<p>Signon to the CICS Web Interface was successful'
+         DC    AL2(CRLF),C'</body></html>'
+FINAL_L  EQU   *-FINAL_P
+         SPACE 2
+*
+*  Retry panel
+*
+RETRY_P  DC    C'<html><head><title>'
+         DC    C'CICS Web Interface signon unsuccessful'
+         DC    C'</title></head>'
+         DC    AL2(CRLF),C'<body><h1>'
+         DC    C'CICS Web Interface signon unsuccessful'
+         DC    C'</h1>',AL2(CRLF)
+         DC    C'<form action="DFHWBSN?'                           @P5A
+RETRY_T  DC    CL8' ',C'" method="POST">',AL2(CRLF)
+         DC    C'<input type="hidden" name="function" value="signon">'
+         DC    AL2(CRLF),C'<p>'
+         DC    C'Your previous signon did not succeed.'
+         DC    AL2(CRLF),C'<p>'                                    @P1A
+RETRY_M  DC    CL(L'USNOGOOD)' '      Space for a variable message @P1A
+         DC    AL2(CRLF),C'<p>'
+         DC    C'Please enter your userid and password again,'
+         DC    C' then select the Retry button.'
+         DC    AL2(CRLF),C'<p>Userid '
+         DC    C'<input type="text" name="userid" value="'
+RETRY_U  DC    CL8' '
+         DC    C'" size="8">'
+         DC    AL2(CRLF)
+         DC    C'Password <input type="password"'
+         DC    C' name="password" value="" size="8">'
+         DC    AL2(CRLF),C'<p>'
+         DC    C'<input type="submit" name="submit" value="Retry">'
+         DC    C'<input type="reset">'
+         DC    C'</form>',AL2(CRLF)
+         DC    C'<br><hr><br>',AL2(CRLF)
+         DC    C'<a href="http://www.ibm.com/software/ts/cics/'    @P4C
+         DC    C'about/modern/cicsweb.html'                        @P4C
+         DC    C'">',AL2(CRLF),C'<img alt="" '                     @P4C
+         DC    C'src="/dfhwbimg/cics.gif"',AL2(CRLF)               @P4C
+         DC    C'     border=0 height=64 width=64>'                @P4A
+         DC    C'CICS Web Support</a>',AL2(CRLF)                   @P4C
+         DC    C'</body></html>'
+RETRY_L  EQU   *-RETRY_P
+         EJECT ,
+*
+*  New password panel
+*
+NEWPS_P  DC    C'<html><head><title>'
+         DC    C'CICS Web Interface new password required'
+         DC    C'</title></head>'
+         DC    AL2(CRLF),C'<body><h1>'
+         DC    C'CICS Web Interface new password required'
+         DC    C'</h1>',AL2(CRLF)
+         DC    C'<form action="DFHWBSN?'                           @P5A
+NEWPS_T  DC    CL8' ',C'" method="POST">',AL2(CRLF)
+         DC    C'<input type="hidden" name="function" value="newpass">'
+         DC    AL2(CRLF),C'<p>'
+NEWPS_M  DC    CL(L'PWNMATCH)' '  Space for a variable message
+         DC    AL2(CRLF),C'<p>'
+         DC    C'Please enter your userid, your previous password,'
+         DC    C' and two identical versions of your new password.'
+         DC    AL2(CRLF)
+         DC    C'Then select the Retry button.'
+         DC    AL2(CRLF),C'<p>Userid '
+         DC    C'<input type="text" name="userid" value="'
+NEWPS_U  DC    CL8' '
+         DC    C'" size="8">'
+         DC    AL2(CRLF)
+         DC    C'Previous password <input type="password"'
+         DC    C' name="password" value="" size="8">'
+         DC    AL2(CRLF)
+         DC    C'<p>New passwords '
+         DC    C'<input type="password"'
+         DC    C' name="newpass1" value="" size="8">',AL2(CRLF)
+         DC    C'<input type="password"'
+         DC    C' name="newpass2" value="" size="8">',AL2(CRLF)
+         DC    C'<p>'
+         DC    C'<input type="submit" name="submit" value="Retry">'
+         DC    C'<input type="reset">'
+         DC    C'</form>',AL2(CRLF)
+         DC    C'<br><hr><br>',AL2(CRLF)
+         DC    C'<a href="http://www.ibm.com/software/ts/cics/'    @P4C
+         DC    C'about/modern/cicsweb.html'                        @P4A
+         DC    C'">',AL2(CRLF),C'<img alt="" '                     @P4C
+         DC    C'src="/dfhwbimg/cics.gif"',AL2(CRLF)               @P4C
+         DC    C'     border=0 height=64 width=64>'                @P4A
+         DC    C'CICS Web Support</a>',AL2(CRLF)                   @P4C
+         DC    C'</body></html>'
+NEWPS_L  EQU   *-NEWPS_P
+         EJECT ,
+*
+*  This panel is displayed if an unexpected CICS API error occurs.
+*
+FAIL_P   DC    C'<html><head><title>'
+         DC    C'CICS Web Interface implementation error'
+         DC    C'</title></head>'
+         DC    AL2(CRLF),C'<body><h1>'
+         DC    C'CICS Web Interface implementation error'
+         DC    C'</h1>',AL2(CRLF)
+         DC    C'An implementation error occurred.',AL2(CRLF)
+FAIL_S   EQU   *-FAIL_P           Length of short message
+         DC    C'<p>EIBFN='
+FAILFN   DC    C'xxxx'
+         DC    C' EIBRESP='
+FAILRESP DC    C'0000'
+         DC    C' EIBRESP2='
+FAILRSP2 DC    C'0000'
+         DC    AL2(CRLF)
+         DC    C'</body></html>'
+FAIL_L   EQU   *-FAIL_P
+         EJECT ,
+*
+* The following translate table is used to set any invalid characters
+* to period ("."), to uppercase any lowercase characters, and to
+* replace any plus signs ("+") inserted by the browser with the
+* original blank characters.
+*
+RECTIFY  DC    0D'0'              Translate table on dword boundary
+TT       DC    256C'.'            Initialize to periods
+         ORG   TT+C'+'            Plus sign
+         DC    C' '               ...translates to blank
+         ORG   TT+C' '            Blank
+         DC    C' '               ...translates to itself
+         ORG   TT+C'$'            Currency sign
+         DC    C'$'               ...translates to itself
+         ORG   TT+C'#'            Number sign
+         DC    C'#'               ...translates to itself
+         ORG   TT+C'@'            Commercial at sign
+         DC    C'@'               ...translates to itself
+         ORG   TT+C'a'            Lowercase a-i
+         DC    C'ABCDEFGHI'       ...translate to uppercase
+         ORG   TT+C'j'            Lowercase j-r
+         DC    C'JKLMNOPQR'       ...translate to uppercase
+         ORG   TT+C's'            Lowercase s-z
+         DC    C'STUVWXYZ'        ...translate to uppercase
+         ORG   TT+C'A'            Uppercase A-I
+         DC    C'ABCDEFGHI'       ...translate to themselves
+         ORG   TT+C'J'            Uppercase J-R
+         DC    C'JKLMNOPQR'       ...translate to themselves
+         ORG   TT+C'S'            Uppercase S-Z
+         DC    C'STUVWXYZ'        ...translate to themselves
+         ORG   TT+C'0'            Numerics 0-9
+         DC    C'0123456789'      ...translate to themselves
+         ORG   ,                  To end of table
+         SPACE 2
+DELIMITR DC    XL256'00'          Translate table for record delimiter
+         ORG   DELIMITR+CARRIAGE  Carriage return character
+         DC    AL1(CARRIAGE)      ...translates to itself
+         ORG   ,                  To end of table
+         EJECT ,
+*
+*  Mapping DSECT for the commarea used for output
+*
+OUTCOMMA DSECT ,                  Output commarea
+OUTUSER  DS    CL8                Userid to return to DFH$WBSC
+INTOKEN  DS    CL8                Token set by DFH$WBSC
+         ORG   OUTCOMMA+256       First 256 bytes reserved
+HTTPHDRS DS    0C                 Start of input HTTP headers
+OUTLEN   DS    F                  Length of usable commarea
+OUTHTTP  DS    CL(HTTP_LEN)       Standard HTTP header information
+         ORG   OUTHTTP+9          Position of HTTP response code
+OUTRC    DS    CL6                HTTP response code
+         ORG   OUTHTTP+HTTP_LEN   Reposition to end of header
+OUTHTML  DS    C                  Space for constructed HTML
+         SPACE 3
+*
+*  Working storage obtained by DFHEIENT macro.
+*
+         DFHEISTG ,               Start of CICS-supplied storage
+KEYWPTRS DS    3A                 BXH registers for keyword scan
+CONTLEN  DS    H                  Content-length value
+FIELDLEN DS    AL1                Length of receiving field
+KEYWORDL DS    AL1                Length of current keyword
+KEYWORD  DS    CL16               Space for current keyword sought
+FUNCTION DS    CL8                Requested function name
+USERID   DS    CL8                Userid
+PASSWORD DS    CL8                Current password
+NEWPASS1 DS    CL8                New password 1
+NEWPASS2 DS    CL8                New password 2
+BLANKLEN EQU   *-KEYWORD          Length to be set to blanks
+WORKAREA DS    D                  Doubleword workarea
+RECDPTR  DS    A                  Pointer to current logical record
+RECDLEN  DS    F                  Length of current logical record
+         DFHEIEND ,               End of CICS-supplied working storage
+         END

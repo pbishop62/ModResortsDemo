@@ -1,0 +1,169 @@
+         TITLE 'CUSTOMER INFORMATION CONTROL - SAMPLE XISQLCL          *
+                GLOBAL USER EXIT PROGRAM'
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$XISL                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = C.I.C.S./VS Sample XISQLCL global exit.          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 2008"                                *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION =                                                          *
+*        DFH$XISL acts as an exit program for the exit point XISQLCL. *
+*        The exit allows START NOCHECK requests that are being sent   *
+*        over an IPIC connection to be selected or rejected for being *
+*        queued locally. The exit is driven when the IPIC connection  *
+*        is not acquired, or when there are no free sessions available*
+*        for the current request and CICS has decided not to queue    *
+*        the request for on the session allocation queue.             *
+*                                                                     *
+*        The exit allows the following return codes:                  *
+*                                                                     *
+*        UERCSYS  - take the system action based on the value of the  *
+*                   localq(yesºno) attribute of the transaction's     *
+*                   resource definition.                              *
+*        UERCQUE  - queue the request                                 *
+*                                - return NORMAL                      *
+*        UERCIGN  - Ignore the request                                *
+*                                - return SYSIDERR                    *
+*        UERCPURG - Indicates the task has been purged during an XPI  *
+*                   call.                                             *
+*                                                                     *
+*        This sample program takes the queue length provided as an    *
+*        input parameter and rejects requests one the queue size      *
+*        is greater than 4 requests.                                  *
+*                                                                     *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = S/370                                             *
+*        DFH$XISL  must be defined on the CSD as a PROGRAM.           *
+*    RESTRICTIONS =                                                   *
+*        None                                                         *
+*    REGISTER CONVENTIONS =                                           *
+*        See the code                                                 *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Re-entrant                               *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* ENTRY POINT = DFH$XISL                                              *
+*                                                                     *
+*     PURPOSE = see above                                             *
+*                                                                     *
+*     LINKAGE =                                                       *
+*        Called by the User Exit Handler.                             *
+*                                                                     *
+*     INPUT =                                                         *
+*        On entry register 1 addresses a parameter list described     *
+*        by the DFHUEPAR DSECT.                                       *
+*                                                                     *
+*     OUTPUT =                                                        *
+*        A return code is placed in register 15.                      *
+*                                                                     *
+*     EXIT-NORMAL =                                                   *
+*        DFH$XISL returns to the address that was in register 14      *
+*        when it was called. Possible return codes in register 15     *
+*        are:-                                                        *
+*          0 - take the system action for queuing from the            *
+*              transaction's localq() attribute                       *
+*          4 - add the request on the local queue                     *
+*          8 - do not add the request to the local queue              *
+*         20 - this task is being purged.                             *
+*     EXIT-ERROR = none                                               *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES = none                                          *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* DESCRIPTION - see above                                             *
+*                                                                     *
+*------------------------------------------------------------------ *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*     $MOD(DFH$XISL),COMP(ISCIP),PROD(CICS TS ):                      *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXIII : REMARKS                          *
+*    $L0= 711    660 080318 HDCQMDB: XISLCLQ support                  *
+*                                                                     *
+***********************************************************************
+*
+* Dsect for parameters passed to exit
+*
+         COPY DFHXILDS
+*
+         DFHUEXIT TYPE=EP,ID=XISQLCL
+R1              EQU  1        Parameter list address
+R2              EQU  2        Not used
+R3              EQU  3        Program base register
+R4              EQU  4        Address XISQLCL parameter list
+R5              EQU  5        General
+R6              EQU  6        General
+R7              EQU  7        General
+R8              EQU  8        General
+R9              EQU  9        General
+R10             EQU  10       General
+R11             EQU  11       General
+R12             EQU  12       General
+R13             EQU  13       General
+R14             EQU  14       Return address
+R15             EQU  15       Entry point address,return code
+*
+         EJECT ,
+DFH$XISL CSECT
+DFH$XISL AMODE 31
+DFH$XISL RMODE ANY
+         SAVE (14,12)                  Save current registers
+         LR    R3,R15                  Set-up base register
+         USING DFH$XISL,R3
+         B     AROUND                  Branch around module ID
+         DC    CL8'DFH$XISL'
+AROUND   DS    0H
+*
+         USING DFHUEPAR,R1             Set addressability to plist
+*
+         L     R4,UEPISQPL             Set up addressability to
+         USING DFHXILDS,R4             XISLCLQ plist
+*--------------------------------------------------------------------*
+*        This section shows how the length of the queue can be       *
+*        used to contol selection of request                         *
+*--------------------------------------------------------------------*
+         LA    R6,4                    Load R6 with queue limit of 4
+         CH    R6,UEPQLEN              Test current size with limit
+         BH    QUEUE                   Lower, so queue request
+*--------------------------------------------------------------------*
+*        This section illustrates how the IPCONN name can be used    *
+*        to control the selection or rejection of requests           *
+*--------------------------------------------------------------------*
+*        CLC   UEPIPCNM,=CL8'IPC1    ' Compare IPCONN names
+*        BE    QUEUE                   If equal then queue request
+         B     NOQUEUE                 Else reject request
+*--------------------------------------------------------------------*
+*        Return codes                                                *
+*--------------------------------------------------------------------*
+QUEUE    LA    R15,UERCQUE             Queue the request
+         B     EXIT                    return
+NOQUEUE  LA    R15,UERCIGN             No queue
+         B     EXIT                    return
+*
+EXIT     L     R13,UEPEPSA
+         RETURN (14,12),RC=(15)        Return
+         LTORG
+*
+         END   DFH$XISL

@@ -1,0 +1,344 @@
+      CBL CICS('COBOL3,SP')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0BAT5                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Batch Enabling Sample BAT2                 *
+      *                    Inquire Retained Locks Program             *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      *   To aid the customer in the preparation for running non-RLS  *
+      *   VSAM batch jobs against a group of data sets, CICS          *
+      *   provides a suite of sample COBOL2 programs called DFH0BATx. *
+      *                                                               *
+      *   For an overview of the DFH0BATx suite, refer to the prolog  *
+      *   of program DFH0BAT1.                                        *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      *   This program is part of a suite of programs DFH0BATx which  *
+      *   is intended to aid the user in the identification and       *
+      *   resolution of VSAM RLS retained locks. It may be modified   *
+      *   as required by the customer.                                *
+      *                                                               *
+      *   This program identifies any retained locks for a named data *
+      *   set. It is called remotely by coordinating program DFH0BAT2 *
+      *   using DPL. Retained lock information, plus any errors       *
+      *   encountered while attempting to identify retained locks,    *
+      *   are written to remote TS queue DFH0BQ2 which resides on     *
+      *   the coordinating region.                                    *
+      *                                                               *
+      *   The name of the dataset for which retained lock information *
+      *   is to be obtained is passed to DFH0BAT5 in a commarea.      *
+      *   If DFH0BAT5 detects that there is no commarea,              *
+      *   or that its length is unexpected,                           *
+      *   the application is abnormally terminated with an abend code *
+      *   of BT51.                                                    *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *  $MOD(DFH0BAT5),COMP(SAMPLES),PROD(CICS TS ):                 *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $L0= 654    510 941010 HDMMFM  : Created                      *
+      * $L1= 654 510 950210 HDMMFM  : Code Review work                *
+      * $P1= M95193 510 950821 HDAVCMM : Correct prolog               *
+      * $P2= M95451 510 950925 HDAVCMM : Correct some comments        *
+      * $P3= M96141 510 960124 HDMMFM : PTM 96141                     *
+      * $P4= M95972 510 960221 HDMMFM  : PTM 95972                    *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $P5= M96627 510 960430 HDMMFM  : Distinguish repeatable read  *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0BAT5.
+
+       ENVIRONMENT DIVISION.
+           EJECT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *****************************************************************
+      * Copy book for record for TS queue DFH0BQ2. A record is written
+      * to this queue when a retained lock is found for the data set
+      * or if an error is encountered.
+      *****************************************************************
+       COPY DFH0BC21.
+      *****************************************************************
+      * Various variables used throughout the program.
+      *****************************************************************
+       77  INQ-RESP                    PIC S9(8) COMP.
+       77  INQ-RESP2                   PIC S9(8) COMP.
+       77  ASSIGN-RESP                 PIC S9(8) COMP.
+
+       77  OUR-APPLID                  PIC X(8).
+       77  OUR-SYSID                   PIC X(4).
+       77  COORD-SYSID                 PIC X(4).
+
+       77  OTHER-APPLID                PIC X(8).
+       77  OTHER-SYSID                 PIC X(4).
+       77  UOW-ID                      PIC X(16).
+       77  NEXT-DSNAME                 PIC X(44).
+       77  CAUSE-CODE                  PIC S9(8) COMP.
+       77  REASON-CODE                 PIC S9(8) COMP.
+       77  RLS-ACCESS                  PIC S9(8) COMP.
+       77  RET-LOCKS                   PIC S9(8) COMP.
+      *****************************************************************
+      * Console messages
+      *****************************************************************
+       77  INDOUBT-MESSAGE             PIC X(60)
+           VALUE 'PPPPPPPP CONNECTION FAILURE BETWEEN CICS XXXXXXXX & YY
+      -    'YYYYYY'.
+       77  ABEND-CODE                  PIC X(4).
+       77  BT51                        PIC X(4) VALUE 'BT51'.
+       77  THIS-PROGRAM                PIC X(8) VALUE 'DFH0BAT5'.
+
+       01  INDOUBT.
+         03  INDOUBT-MSG-ISSUER        PIC X(8).
+           03  FILLER                  PIC X VALUE SPACE.
+         03  INDOUBT-TEXT1             PIC X(32).
+         03  INDOUBT-APPLID1           PIC X(8).
+         03  INDOUBT-TEXT2             PIC X(3).
+         03  INDOUBT-APPLID2           PIC X(8).
+
+       LINKAGE SECTION.
+      *****************************************************************
+      * Copy book for commarea passed to DFH0BAT5.
+      *****************************************************************
+       COPY DFH0BC22 REPLACING ==COMMAREA-2.== BY
+                               ==COMMAREA-2 REDEFINES DFHCOMMAREA.==.
+           EJECT.
+
+      *****************************************************************
+      ***               Batch Enabling Sample BAT2                  ***
+      ***             Inquire Retained Locks Program                ***
+      *****************************************************************
+       PROCEDURE DIVISION USING DFHEIBLK DFHCOMMAREA.
+
+       MAIN-PROCESSING SECTION.
+
+      *****************************************************************
+      * Check that we have been passed the correct commarea.
+      * If not return immediately.
+      *****************************************************************
+           IF EIBCALEN NOT = LENGTH OF COMMAREA-2 THEN
+             MOVE BT51 TO ABEND-CODE
+             EXEC CICS ABEND
+                  ABCODE(ABEND-CODE)
+             END-EXEC
+           ELSE
+      *****************************************************************
+      * First find the sysid of the coordinating CICS region.
+      * Then identify any retained locks that exists for the data set
+      * named in the commarea.
+      *****************************************************************
+             PERFORM FIND-COORD-SYSID
+             PERFORM IDENTIFY-RETLOCKS
+           END-IF.
+      *****************************************************************
+      * End the program and return to CICS.
+      *****************************************************************
+           EXEC CICS RETURN
+           END-EXEC.
+
+       MAIN-PROCESSING-EXIT.
+           GOBACK.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedures start here.
+      *---------------------------------------------------------------*
+
+      *---------------------------------------------------------------*
+      * Procedure to work out if we are running locally on the
+      * coordinating region, or remotely via DPL, and to set up
+      * the SYSID for use on subsequent TS and TD commands.
+      *---------------------------------------------------------------*
+       FIND-COORD-SYSID SECTION.
+           EXEC CICS ASSIGN
+                APPLID(OUR-APPLID)
+                SYSID(OUR-SYSID)
+                PRINSYSID(COORD-SYSID)
+                RESP(ASSIGN-RESP)
+           END-EXEC.
+      *****************************************************************
+      * A response of INVREQ caused by the PRINSYSID option means
+      * that we are running locally.
+      *****************************************************************
+           EVALUATE ASSIGN-RESP
+             WHEN DFHRESP(NORMAL)
+               CONTINUE
+             WHEN OTHER
+               MOVE OUR-SYSID TO COORD-SYSID
+           END-EVALUATE.
+
+       FIND-COORD-SYSID-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to identify retained locks for a data set.
+      * We check to see if we have any before browsing.
+      *---------------------------------------------------------------*
+       IDENTIFY-RETLOCKS SECTION.
+           PERFORM ANY-RETLOCKS.
+           IF RET-LOCKS = DFHVALUE(RETAINED)
+             PERFORM BROWSE-ALL-RETLOCKS
+           END-IF.
+
+       IDENTIFY-RETLOCKS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to see if any retained locks exist for a data set.
+      *---------------------------------------------------------------*
+       ANY-RETLOCKS SECTION.
+           MOVE DFHVALUE(NORETAINED) TO RET-LOCKS.
+           EXEC CICS INQUIRE DSNAME(CA-DSNAME)
+                RETLOCKS(RET-LOCKS)
+                RESP(INQ-RESP)
+                RESP2(INQ-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If the inquiry failed write an error message to the TS queue.
+      * Otherwise RETAINED, NORETAINED or NOTAPPLIC is returned.
+      * NOTAPPLIC can be treated as NORETAINED - the data set is in
+      * a state where retained locks can not have been created by
+      * this CICS system.
+      *****************************************************************
+           IF INQ-RESP NOT = DFHRESP(NORMAL)
+             MOVE INQ-RETLOCKS TO TSQ-ERR-MSG
+             MOVE OUR-APPLID TO TSQ-APPLID
+             MOVE CA-DSNAME TO TSQ-DSNAME
+             MOVE INQ-RESP TO TSQ-RESP
+             MOVE INQ-RESP2 TO TSQ-RESP2
+             PERFORM WRITE-TSQ-RECORD
+           END-IF.
+
+       ANY-RETLOCKS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to browse all units of work that have been shunted
+      * because they failed backout or went indoubt. This is
+      * effectively a browse for retained locks, and is actually
+      * a browse for all data sets because of the way the INQ
+      * UOWDSNFAIL command works. So we must filter on data set name.
+      *---------------------------------------------------------------*
+       BROWSE-ALL-RETLOCKS SECTION.
+           EXEC CICS INQUIRE UOWDSNFAIL START
+           END-EXEC.
+           PERFORM GET-NEXT-RETLOCK WITH TEST AFTER
+             UNTIL INQ-RESP = DFHRESP(END).
+           EXEC CICS INQUIRE UOWDSNFAIL END
+           END-EXEC.
+
+       BROWSE-ALL-RETLOCKS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to get the next shunted unit of work for
+      * the data set we are dealing with, and write the retained
+      * lock information to the TS queue.
+      *---------------------------------------------------------------*
+       GET-NEXT-RETLOCK SECTION.
+           EXEC CICS INQUIRE UOWDSNFAIL NEXT
+              DSNAME(NEXT-DSNAME)
+              UOW(UOW-ID)
+              CAUSE(CAUSE-CODE)
+              REASON(REASON-CODE)
+              SYSID(OTHER-SYSID)
+              NETNAME(OTHER-APPLID)
+              RLSACCESS(RLS-ACCESS)
+              RESP(INQ-RESP)
+              RESP2(INQ-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If the shunted unit of work is for our data set then examine
+      * it. If RLS was not the access mode at the time of the shunt,
+      * then ignore it as we are only interested in RLS retained locks.
+      * If RLS was the access mode, write the retained lock details
+      * to the TS queue.
+      *****************************************************************
+           IF INQ-RESP = DFHRESP(NORMAL)
+             IF NEXT-DSNAME = CA-DSNAME
+               IF RLS-ACCESS = DFHVALUE(RLS) THEN
+                 PERFORM WRITE-RETLOCK-INFO
+               END-IF
+             END-IF
+           END-IF.
+
+       GET-NEXT-RETLOCK-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to write retained lock information to the TS queue.
+      * The INQ UOWDSNFAIL CAUSE and REASON values are the most
+      * important information.
+      *---------------------------------------------------------------*
+       WRITE-RETLOCK-INFO SECTION.
+           MOVE SPACES TO TSQ-ERR-MSG.
+           MOVE CA-DSNAME TO TSQ-DSNAME.
+           MOVE OUR-APPLID TO TSQ-APPLID.
+           MOVE SPACES TO TSQ-INDOUBT-APPL1.
+           MOVE SPACES TO TSQ-INDOUBT-APPL2.
+           MOVE CAUSE-CODE TO TSQ-CAUSE-CODE.
+           MOVE REASON-CODE TO TSQ-REASON-CODE.
+           MOVE UOW-ID TO TSQ-UOW-ID.
+      *****************************************************************
+      * Additionally for a CAUSE of CONNECTION (ie, an indoubt)
+      * we write the applids of the two CICS regions involved
+      * (ie, ours and the other) and issue a console message.
+      *****************************************************************
+           IF CAUSE-CODE = DFHVALUE(CONNECTION)
+             IF REASON-CODE = DFHVALUE(INDOUBT) THEN
+               MOVE OUR-APPLID TO TSQ-INDOUBT-APPL1
+               MOVE OTHER-APPLID TO TSQ-INDOUBT-APPL2
+               MOVE INDOUBT-MESSAGE TO INDOUBT
+               MOVE THIS-PROGRAM TO INDOUBT-MSG-ISSUER
+               MOVE OUR-APPLID TO INDOUBT-APPLID1
+               MOVE OTHER-APPLID TO INDOUBT-APPLID2
+               EXEC CICS WRITE OPERATOR
+                    TEXT(INDOUBT)
+               END-EXEC
+             END-IF
+           END-IF.
+           PERFORM WRITE-TSQ-RECORD.
+
+       WRITE-RETLOCK-INFO-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to write a TS record to DFH0BQ2. As this may be
+      * remote, the WRITEQ TS command may be function shipped.
+      *---------------------------------------------------------------*
+       WRITE-TSQ-RECORD SECTION.
+           EXEC CICS WRITEQ TS
+                QUEUE(TSQ-RETLOCKS-NAME)
+                FROM(TSQ-RETLOCKS-RECORD)
+                LENGTH(LENGTH OF TSQ-RETLOCKS-RECORD)
+                SYSID(COORD-SYSID)
+           END-EXEC.
+
+       WRITE-TSQ-RECORD-EXIT.
+           EXIT.

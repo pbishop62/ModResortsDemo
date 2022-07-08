@@ -1,0 +1,3575 @@
+*ASM XOPTS(NOPROLOG NOEPILOG)
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH$W2FD                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = Web 2.0 Sample - Atom Feed document generator    *
+*                                                                     *
+*    Licensed Materials - Property of IBM                             *
+*                                                                     *
+*    CICS SupportPac CA8K                                             *
+*                                                                     *
+*    (c) Copyright IBM Corporation 2008 All Rights Reserved           *
+*    US Government Users Restricted Rights - Use, duplication         *
+*    or disclosure restricted by GSA ADP Schedule Contract            *
+*    with IBM Corporation                                             *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION = Parsing of PIPELINE configuration data to extract        *
+*            ATOM metadata and CICS resource layout data.             *
+*                                                                     *
+* NOTES :                                                             *
+*    DEPENDENCIES = z/Arch                                            *
+*    RESTRICTIONS =                                                   *
+*    REGISTER CONVENTIONS = See "Register Usage" below                *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = HLASM V5                                             *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*    This program parses an XML fragment obtained from the pipeline   *
+*    configuration file to obtain ATOM metadata an CICS file          *
+*                                                                     *
+* Register Usage:                                                     *
+*  R0    Volatile work register                                       *
+*  R1    Parameter list pointer and volatile work register            *
+*  R2    Atom document output pointer. Parent node pointer.           *
+*  R3    Element content length. Grandparent node pointer.            *
+*  R4    Pointer to element descriptor                                *
+*  R5    Pointer to current XML parse event record                    *
+*  R6    Length of current XML parse event record                     *
+*  R7    Address of last byte of XML parse response buffer            *
+*  R8    Address of current atom:entry descriptor                     *
+*  R9    EIB address. Address of ATOMPROP structure                   *
+*  R10   Address of author, Address of RLM, Address of element name   *
+*  R11   Address of parameter list, Length of element name            *
+*  R12   Static storage address                                       *
+*  R13   Address of DFHEISTG and savearea                             *
+*  R14   Linkage register and volatile work register                  *
+*  R15   Return code and volatile work register                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  Abend codes:                                                       *
+*  W2C0 - A data conversion was attempted that is not supported       *
+*  W2C1 - The data to be converted is in an invalid format            *
+*  W2E0 - Content Type header omitted when expected (PUT or POST)     *
+*  W2E1 - The data type in a dfdl:type attribute in unrecognized      *
+*  W2E2 - CICS resource from an atom:content element was not found    *
+*  W2E4 - Unknown entry type in the Resource Layout Mapping structure *
+*  W2P1 - GXL1INI Parser initialization failed (parsing config file)  *
+*  W2P2 - GXL1PRS Parser failed (parsing configuration file)          *
+*  W2P3 - GXL1INI Parser initialization failed (parsing HTTP request) *
+*  W2P4 - GXL1PRS Parser failed (parsing HTTP request body)           *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFH$W2FD),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*   PN= REASON REL YYMMDD HDXXIII : REMARKS                           *
+*  $D0= I07937 640 071102 HD2JPEH : SupportPac CA8K sample programs   *
+*       D30794 680 111202 HDLHJJH : Remove check for unsupported OS   *
+*                                                                     *
+***********************************************************************
+         COPY  DFH$W2MC                Define common macros
+&MODNAME SETC  'DFH$W2FD'              Save module name in LCLC symbol
+&CRLF    SETC  X2C('0D25')             Set hex 0D25 in a LCLC symbol
+*:refstep.w2samp_common_prologue ************************** DFHW2SAM **
+*                                                                     *
+* Licensed Materials - Property of IBM                                *
+*                                                                     *
+* 5655-Y04                                                            *
+*                                                                     *
+* (C) Copyright IBM Corp. 2007, 2014 All Rights Reserved.             *
+*                                                                     *
+* Generated from file:                                                *
+* /com.ibm.cics.web.web2                                              *
+*    /DESIGN                                                          *
+*       /DFHW2SAM.DESIGN                                              *
+*                                                                     *
+* Change activity from DFHW2SAM.DESIGN:                               *
+*   $D0= I07937 660 071119 HD2JPEH : Web 2.0 SupportPac               *
+*   $P1= D21936 660 080902 HD2JPEH : CA8K beta customer defects       *
+*        D30794 680 111202 HDLHJJH : Remove check for unsupported OS  *
+*                                                                     *
+***********************************************************************
+&MODNAME CSECT ,                       Initialize main CSECT
+&MODNAME AMODE 31
+&MODNAME RMODE ANY
+         PRINT OFF
+         COPY  DFHKEBRC                Redefine branches as relative
+         DFHREGS ,                     Define CICS registers
+         CVT   DSECT=YES               Map z/OS CVT
+         GXLYXEC ,                     Parser equates
+         COPY  GXLYXR                  Parser return code values
+         PRINT ON,GEN
+         COPY  DFH$W2CD                Define constants
+         COPY  DFH$W2PD                ATOMPARAMETERS definition
+         COPY  DFH$W2LD                Define Resource Layout Mapping
+&MODNAME CSECT ,                       Resume main CSECT
+*
+*  This prologue code confirms that the XML System Service
+*  is available before allowing the program to start.
+*
+PROLOG   EQU   *                       Local label for entry point
+         DFHEIENT CODEREG=0,STATREG=R12,EIBREG=R9,STATIC=W2STATIC
+         L     R14,CVTPTR              Load CVT address
+         USING CVT,R14                 Establish CVT addressability
+         L     R14,CVTCSRT             Get callable services table
+         ICM   R14,15,72(R14)          Check for XML service address
+         JNZ   STARTUP                 Continue with startup if present
+         DROP  R14                     Kill CVT addressability
+IPARSERR EXEC  CICS ABEND ABCODE('W2P1') . Parser initialization failed
+XPARSERR EXEC  CICS ABEND ABCODE('W2P2') . Parser execution failed
+CTYPABST EXEC  CICS ABEND ABCODE('W2E0') . Required Content-type absent
+STACKERR EXEC  CICS ABEND ABCODE('W2E7') . XML element stack overflow
+         SPACE 3
+STARTUP  EQU   *                       Start after prologue validation
+         USING ATMP_PARAMETER_LIST,URMPLIST
+         XC    FUNCCONT,FUNCCONT       Clear DFHFUNCTION container
+         EXEC  CICS GET CONTAINER('DFHFUNCTION')                       *
+               INTO(FUNCCONT) NOHANDLE
+         CLC   FUNCCONT,=C'PROCESS-REQUEST'  Expected value?
+         JNE   RETURNOK                No, ignore
+         LHI   R0,-APPWORKL            Get negative workspace index
+         ST    R0,WORKSNDX             Initialize workspace index
+         XC    XMLPLIST(XMLPLLEN),XMLPLIST  Clear the plist
+         XC    PARSPARM,PARSPARM       Set up null parse parameter
+         XC    OPTSNULL,OPTSNULL       Set up null options word
+         MVI   MEDIATYP,C' '           Set the mediatype
+         MVC   MEDIATYP+1(L'MEDIATYP-1),MEDIATYP  ...to all spaces
+         JAS   R14,BUILDURL            Construct the invoking URL
+         CLI   HTTPMETH,C'P'           Is the method POST or PUT?
+         JNE   GETPIMA                 No, mediatype is meaningless
+         LHI   R0,L'MEDIATYP           Get length of mediatype
+         ST    R0,MEDIATYL             Save it
+         EXEC  CICS WEB READ HTTPHEADER('Content-Type')                *
+               VALUE(MEDIATYP) VALUELENGTH(MEDIATYL) NOHANDLE
+         ICM   R15,15,EIBRESP          Load and test the response
+         JZ    MEDTYPOK                Skip if OK
+         C     R15,DFHRESP(LENGERR)    Length error detected?
+         JNE   CTYPABST                No, abend on other errors
+MEDTYPOK EQU   *
+*
+*  Read in any supplied If-Match header.
+*  The If-Match value must match the current Etag value
+*  before allowing any PUT to be performed.
+*
+         CLC   HTTPMETH,=CL8'PUT'      Is this a PUT?
+         JNE   GETPIMA                 No, If-Match is not required
+         MVC   ETAGVAL,SPACES          Clear current Etag value
+         MVC   ETAGLEN,=A(L'ETAGVAL)
+         EXEC  CICS WEB READ HTTPHEADER('If-Match')                    *
+               VALUE(ETAGVAL) VALUELENGTH(ETAGLEN) NOHANDLE
+*
+*  Obtain a Parse Instance Memory Area
+*
+GETPIMA  MVC   PIMASIZE,=A(XEC_MIN_PIMA_SIZE)  Set PIMA size
+         EXEC  CICS GETMAIN FLENGTH(PIMASIZE) SET(R2)
+         XC    0(64,R2),0(R2)          Clear the start of the PIMA
+         ST    R2,PIMA_PTR             Save address of PIMA
+         ST    R2,XMLPARM1             Save address in plist
+*
+*  Initialize the XML System Services Parser
+*
+         LA    R0,PIMASIZE             Address PIMA size
+         ST    R0,XMLPARM2             Save in parmlist
+         LA    R0,CCSIDVAL             Address CCSID
+         ST    R0,XMLPARM3             Save in parmlist
+         LA    R0,PARSFEAT             Address (null) feature word
+         ST    R0,XMLPARM4             Save in parmlist
+         LA    R0,SYSVECT              Address system vector
+         ST    R0,XMLPARM5             Save in parmlist
+         LA    R0,PARSPARM             Address custom parameter list
+         ST    R0,XMLPARM6             Save in parmlist
+         LA    R0,PARSRESP             Address parser return code
+         ST    R0,XMLPARM7             Save in parmlist
+         LA    R0,PARSREAS             Address reason code
+         ST    R0,XMLPARM8             Save in parmlist
+         LA    R1,XMLPLIST             Address GXL1INI parameter list
+         L     R15,AGXL1INI            Address GXL1INI
+         BASR  R14,R15                 Call GXL1INI
+         LTR   R15,R15                 Test return code
+         JNZ   IPARSERR
+*
+*  Read in the <handler_parameter_list> container
+*
+         EXEC  CICS GET CONTAINER('DFH-HANDLERPLIST')                  *
+               SET(R2) FLENGTH(HCONTLEN) NOHANDLE
+         ICM   R15,15,EIBRESP          Check response
+         ST    R2,HCONTPTR             Save container address
+*
+*  Obtain storage for the output parsed structure
+*
+         MVC   OUTBUFFL,OBUFSIZE       Set length of output buffer
+         EXEC  CICS GETMAIN FLENGTH(OUTBUFFL) SET(R2)
+         ICM   R15,15,EIBRESP          Check response
+         ST    R2,OUTBUFFP             Save for freemain
+         ST    R2,OUBUFFPT             Save for parser
+         MVC   OUREMAIN,OUTBUFFL       Save output remainder count
+*
+*  Set up parameter list for GXL1PRS parse function
+*
+         XC    XMLPLIST+4(XMLPLLEN-4),XMLPLIST+4  Clear the plist
+         LA    R0,OPTSNULL             Address null options word
+         ST    R0,XMLPARM2             Save in parmlist
+         LA    R0,INBUFFPT             Address input buffer pointer
+         ST    R0,XMLPARM3             Save in parmlist
+         LA    R0,INREMAIN             Address input remainder count
+         ST    R0,XMLPARM4             Save in parmlist
+         LA    R0,OUBUFFPT             Address output buffer pointer
+         ST    R0,XMLPARM5             Save in parmlist
+         LA    R0,OUREMAIN             Address output remainder count
+         ST    R0,XMLPARM6             Save in parmlist
+         LA    R0,PARSRESP             Address return code
+         ST    R0,XMLPARM7             Save in parmlist
+         LA    R0,PARSREAS             Address reason code
+         ST    R0,XMLPARM8             Save in parmlist
+         MVC   INBUFFPT,AWRAPP1        Point to initial wrapper
+         MVC   INREMAIN,LWRAPP1        Save input remainder length
+         LA    R1,XMLPLIST             Address GXL1PRS parameter list
+         L     R15,AGXL1PRS            Address GXL1PRS
+         BASR  R14,R15                 Call GXL1PRS
+         JAS   R14,SENDMSG             Display response codes
+*
+*  Call the XML System Services GXL1PRS parse function
+*
+         XC    PARSREAS,PARSREAS       Clear the parse reason code
+         MVC   INBUFFPT,HCONTPTR       Point to container
+         MVC   INREMAIN,HCONTLEN       Save input remainder length
+         LA    R1,XMLPLIST             Address GXL1PRS parameter list
+         L     R15,AGXL1PRS            Address GXL1PRS
+         BASR  R14,R15                 Call GXL1PRS
+         JAS   R14,SENDMSG             Display response codes
+         XC    PARSREAS,PARSREAS
+         MVC   INBUFFPT,AWRAPP2        Point to final wrapper
+         MVC   INREMAIN,LWRAPP2        Save input remainder length
+         LA    R1,XMLPLIST             Address GXL1PRS parameter list
+         L     R15,AGXL1PRS            Address GXL1PRS
+         BASR  R14,R15                 Call GXL1PRS
+         JAS   R14,SENDMSG             Display response codes
+         ICM   R15,15,PARSRESP         Was the parse successful?
+         JNZ   XMLTERM                 No, terminate
+         LA    R14,OUTBUFFP            Address the response buffer ptr
+         L     R0,OUTBUFFL             Get total length of output buff
+         S     R0,OUREMAIN             Subtract length remaining
+         ST    R0,OUTBUFFN             Save as current length
+         LA    R15,OUTBUFFN            Address the response buffer len
+         STM   R14,R15,XMLPARM7        Save in PARM 7 and 8 slots
+         LA    R1,XMLPARM7             Address those parms
+         L     R15,AANALYZE            Address the Analyze routine
+         BASR  R14,R15                 Analyze the parsed response
+*
+*  Terminate the XML System Services Parser
+*
+XMLTERM  DS    0Y                      Clean up the parser state
+         XC    XMLPLIST+4(XMLPLLEN-4),XMLPLIST+4  Clear the plist
+         XC    PARSREAS,PARSREAS
+         LA    R0,PARSRESP
+         ST    R0,XMLPARM2
+         LA    R0,PARSREAS
+         ST    R0,XMLPARM3
+         LA    R1,XMLPLIST             Address GXL1TRM parameter list
+         L     R15,AGXL1TRM            Address GXL1TRM
+         BASR  R14,R15                 Call GXL1TRM
+         JAS   R14,SENDMSG             Display response codes
+         L     R2,PIMA_PTR             Load PIMA address
+         EXEC  CICS FREEMAIN DATAPOINTER(R2) NOHANDLE
+*:erefstep.w2samp_common_prologue *************************************
+*
+*  Obtain the current channel, for propagation to the service routines
+*
+         EXEC  CICS ASSIGN CHANNEL(CURRCHAN)
+*
+*  Set the default mediatype for the returned content to text/xml
+*
+         LA    R0,=C'text/xml'         Address of text/xml mediatype
+         LA    R1,8                    Length of text/xml mediatype
+         STM   R0,R1,OMEDTPTR          Save as outbound mediatype
+*
+*  Obtain some storage in which to build the Atom feed or entry.
+*
+         MVC   RESPSIZE,=A(65536)      Initialize size to 64K
+         EXEC  CICS GETMAIN FLENGTH(RESPSIZE) SET(R2)
+         ICM   R15,15,EIBRESP          Load and test the response
+         ST    R2,RESPBUFP             Save for response buffer
+*
+*  Match the incoming URL against those defined in <link rel="self">
+*  entries within the individual subentries. This is to determine
+*  what should be returned to service this request: either the entire
+*  feed, or just one of the entries within it.
+*
+*  We only match again the PATH part of the URL: It is assumed that
+*  all the URLs being serviced by this URIMAP/PIPELINE combination
+*  are at the same CICS virtual host, and that the querystring will
+*  be used to refine the resource being returned by the service
+*  routine.
+*
+         USING ANASTORD,ANASTORE
+         LA    R9,FEEDPROP             Point to properties for the feed
+         USING ATOMPROP,R9             Addressability for properties
+         LA    R14,=CL8'feed'          Address atom feed type
+         LHI   R15,4                   Set its length
+         STM   R14,R15,ATOMTYPE        Save atom type pointers
+         JAS   R14,MATCHURL            Match feed against inbound URL
+         LTR   R15,R15                 Does inbound URL match feed?
+         JNZ   BLDFEED                 Yes, so build the feed
+*
+*  Inbound URL does not designate the entire feed, so check
+*  whether one of the entry definitions in the feed matches.
+*
+         LA    R8,ENTRYPTR             Address first entry pointer
+         USING ATOMENTR,R8
+GETNENTR ICM   R8,15,NEXTENTR          Get the next entry definition
+         JZ    RESP404                 If none, give HTTP 404 resp
+         LA    R9,ENTRPROP             Address common atom properties
+         JAS   R14,MATCHURL            Match entry against inbound URL
+         LTR   R15,R15                 Does entry match?
+         JZ    GETNENTR                No, try next entry descriptor
+         LA    R14,=CL8'entry'         Address atom entry type
+         LHI   R15,5                   Set its length
+         STM   R14,R15,ATOMTYPE        Save atom type pointers
+         CLC   HTTPMETH,=CL8'PUT'      Is this a PUT request?
+         JNE   DELENTRY                No, check for PUT
+         CLC   ETAGVAL,SPACES          Was an Etag value returned?
+         JNE   OUTENTRY                Yes, send the entry document
+         J     RESP409                 No, signal a conflict
+DELENTRY CLC   HTTPMETH,=CL8'DELETE'   Is this a delete request?
+         JNE   OUTENTRY                No, output an entry
+         JAS   R14,DELENT              Yes, request a delete
+         J     FREERESP                Then free the response buffer
+OUTENTRY JAS   R14,ADDENT              Output the entry document
+         J     ATOMRESP                Go return the Atom response
+*
+*  Now start building a feed response.
+*
+BLDFEED  ADD_TEXT FDPROLOG,FDPROLEN    Output atom feed prolog
+         ADD_TEXT ATLNKSEL,ATLNKLEN    Add link-self tag
+         LA    R10,SELFURL             Load address of my own URL
+         L     R11,URLLEN              Load length of my own URL
+         JAS   R14,COPYURL             Copy URL escaping any ampersands
+         ADD_TEXT ATLNKEND,ATLNKENL
+*
+*  Add the common Atom properties for the feed body
+*
+         USING ANASTORD,ANASTORE
+         DROP  R9                      Relinquish EIB addressability
+         LA    R9,FEEDPROP             Point to properties for the feed
+         MVC   FEEDUPDT,SPACES         Clear feed updated timestamp
+         XC    OPTIONS,OPTIONS         Clear options string
+         JAS   R14,SETATOMP            Set the Atom properties for feed
+*
+*  Add a series of Atom entries to the feed
+*
+         L     R15,=A(ADDENTS)         Address add-entries routine
+         BASR  R14,R15                 Call add-entries routine
+         ADD_TEXT '<updated>'
+         ADD_TEXT FEEDUPDT             Add RFC3339 time stamp
+FUPDTRUN LR    R1,R2                   Address current output position
+         BCTR  R1,0                    Check byte before
+         CLI   0(R1),C' '              Is it a trailing space?
+         JNE   FUPDTERM                No, terminate the element
+         JCT   R2,FUPDTRUN             Yes, suppress trailing blanks
+FUPDTERM ADD_TEXT '</updated>&CRLF'
+         ADD_TEXT ATEPILOG,ATEPILEN    Append the Atom epilogue
+         S     R2,RESPBUFP             Calculate length
+         ST    R2,RESPBUFL             Save the response length
+*
+*  Return the Atom response to the pipeline by putting it
+*  into the DFHRESPONSE container.
+*
+ATOMRESP L     R9,DFHEIBP              Restore EIB pointer
+         USING DFHEIBLK,R9
+         L     R2,RESPBUFP             Readdress the buffer
+         EXEC  CICS PUT CONTAINER('DFHRESPONSE') FROMCCSID(1047)       *
+               FROM(0(,R2)) FLENGTH(RESPBUFL)
+         ICM   R15,15,EIBRESP          Load and test the response
+*
+*  Set the DFHMEDIATYPE container with a value of
+*  "application/atom+xml" to indicate that this is an
+*  Atom feed response.
+*
+         MVC   MEDIATYP(L'ATMEDTYP),ATMEDTYP
+         MVC   RESPBUFL,=A(L'ATMEDTYP)
+         EXEC  CICS PUT CONTAINER('DFHMEDIATYPE') FROMCCSID(1047)      *
+               FROM(MEDIATYP) FLENGTH(RESPBUFL)
+         ICM   R15,15,EIBRESP          Load and test the response
+*
+*  Output a Cache-Control: no-cache header to prevent the client
+*  from caching the response.
+*
+         EXEC  CICS WEB WRITE HTTPHEADER('Cache-Control')              *
+               VALUE(NOCACHE)
+         ICM   R15,15,EIBRESP          Load and test the response
+*
+*  Free the response buffer
+*
+FREERESP EXEC  CICS FREEMAIN DATA(0(,R2)) NOHANDLE
+         L     R2,OUTBUFFP             Address parser output buffer
+         EXEC  CICS FREEMAIN DATA(0(,R2)) NOHANDLE
+*
+*  Delete the DFHREQUEST container to show we have dealt with it.
+*
+         EXEC  CICS DELETE CONTAINER('DFHREQUEST') NOHANDLE
+***********************************************************************
+*  Epilogue code to return to CICS
+***********************************************************************
+RETURNOK SR    R15,R15                 Set successful return code
+         EXEC  CICS RETURN
+FINISHUP DFHEIRET LITERALS=NO,RCREG=15 Return to CICS
+         SPACE 3
+***********************************************************************
+*  Return with an HTTP 404 response.
+*  This code is entered when no feasible match for the inbound URL
+*  could be found in the PIPELINE configuration file.
+*  A response document is returned in HTML, as that is what is
+*  normally returned with a 404 error response.
+***********************************************************************
+RESP404  DS    0H                      Return with HTTP 404 response
+         L     R9,DFHEIBP              Restore EIB pointer
+         MVC   RESPBUFL,=A(L'HTTP404)
+         MVC   HTTPSTAT(L'HTTP404),HTTP404
+         EXEC  CICS PUT CONTAINER('DFHHTTPSTATUS') FROMCCSID(1047)     *
+               FROM(HTTPSTAT) FLENGTH(RESPBUFL) NOHANDLE
+         MVC   RESPBUFL,=A(L'HTMLMTYP)
+         MVC   MEDIATYP(L'HTMLMTYP),HTMLMTYP
+         EXEC  CICS PUT CONTAINER('DFHMEDIATYPE') FROMCCSID(1047)      *
+               FROM(MEDIATYP) FLENGTH(RESPBUFL) NOHANDLE
+         LM    R5,R6,HTML404P          Load HTML 404 pointer/length
+         ST    R6,RESPBUFL             Save HTML 404 length
+         EXEC  CICS PUT CONTAINER('DFHRESPONSE') FROMCCSID(1047)       *
+               FROM(0(,R5)) FLENGTH(RESPBUFL) NOHANDLE
+         J     FREERESP                Free response buffer and exit
+***********************************************************************
+*  Return with an HTTP 409 response.
+*  This code is returned to indicate a server-detected conflict
+*  within the input provided by the client.
+*  In this instance we return the response if the client wishes to
+*  perform a PUT operation, but has not provided an If-Match header.
+*  (If the client wishes update the resource without matching the
+*  current Etag, an If-match header with an Etag of * must be sent.)
+***********************************************************************
+RESP409  DS    0H                      Return with HTTP 409 response
+         L     R9,DFHEIBP              Restore EIB pointer
+         MVC   RESPBUFL,=A(L'HTTP409)
+         MVC   HTTPSTAT(L'HTTP409),HTTP409
+         EXEC  CICS PUT CONTAINER('DFHHTTPSTATUS') FROMCCSID(1047)     *
+               FROM(HTTPSTAT) FLENGTH(RESPBUFL) NOHANDLE
+         MVC   RESPBUFL,=A(L'HTMLMTYP)
+         MVC   MEDIATYP(L'HTMLMTYP),HTMLMTYP
+         EXEC  CICS PUT CONTAINER('DFHMEDIATYPE') FROMCCSID(1047)      *
+               FROM(MEDIATYP) FLENGTH(RESPBUFL) NOHANDLE
+         LM    R5,R6,HTML409P          Load HTML 409 pointer/length
+         ST    R6,RESPBUFL             Save HTML 409 length
+         EXEC  CICS PUT CONTAINER('DFHRESPONSE') FROMCCSID(1047)       *
+               FROM(0(,R5)) FLENGTH(RESPBUFL) NOHANDLE
+         J     FREERESP                Free response buffer and exit
+         EJECT ,
+***********************************************************************
+*
+*  Subroutine to match inbound URL against a <link rel="self">
+*  element in the configuration file.
+*  When a matching element is found, its location is used to determine
+*  the type of document (feed or entry) that is to be returned.
+*
+*  If a match is found, the address of the matching ATOMLINK
+*  descriptor is returned in R15. Otherwise zero is returned.
+*
+***********************************************************************
+         USING ATOMPROP,R9             Addressability for properties
+MATCHURL ST    R14,SAVELNK1            Save the link register
+         STM   R5,R7,SAVE5TO7          Save the JXLE registers
+         LA    R5,LINKELTS             Address first atom:link descr
+         LA    R6,ATOMLNKL             Get length of atom:link descr
+         L     R7,LINKINDX             Get current atom:link index
+         CHI   R7,(MAXLINKS-1)*ATOMLNKL  Exceeds maximum index?
+         JNH   *+8                       No, use current index
+         LHI   R7,(MAXLINKS-1)*ATOMLNKL  Yes, use maximum index
+         LA    R7,0(R7,R5)             Address last atom:link descr
+         USING ATOMLINK,R5             Addressing for atom:link desc
+MLNKHREF LM    R14,R15,LINKHREF        Get ptr/len of link href value
+         MVC   PWORK,SPACES            Put spaces into PWORK
+         OC    PWORK,0(R14)            Uppercase first 8 bytes of href
+         LHI   R0,7                    Get length of HTTP scheme, etc.
+         CLC   =C'HTTP://',PWORK       Is it an absolute HTTP URL?
+         JE    MREMHOST                Yes, remove scheme and host
+         LHI   R0,8                    Get length of HTTPS scheme, etc.
+         CLC   =C'HTTPS://',PWORK      Is it an absolute HTTPS URL?
+         JNE   RELTVURL                No, it's a relative URL
+MREMHOST LA    R1,0(R15,R14)           Address end of href value
+         AR    R14,R0                  Bump over the scheme, etc.
+         LHI   R0,C'/'                 Set search character
+         SRST  R1,R14                  Search for slash after hostname
+         BRC   4,MGOTPATH              If slash found, calculate length
+         LA    R14,=C'/'               No slash, so point to literal
+         LA    R1,1(,R14)              Point to byte after literal
+MGOTPATH LR    R15,R1                  Address byte after pathname
+         SLR   R15,R14                 Get actual pathname length
+RELTVURL C     R15,PATHLEN             Does link href match URL path?
+         JNE   MTCHPTHN                No, length doesn't match
+         AHI   R15,-1                  Decrement for Execute
+         EX    R15,COMPPATH            Compare pathname
+         JNE   MTCHPTHN                No, path doesn't match
+         LM    R14,R15,LINKREL         Pointer to link rel attribute
+         CLC   =C'self',0(R14)         Is this a rel=self link?
+         JNE   MTCHPTHN                No, matched URL is not useful
+         LR    R15,R5                  Yes, save address of ATOMLINK
+         J     MATCHURX                Exit from MATCHURL
+MTCHPTHN JXLE  R5,R6,MLNKHREF          Try next link href
+         SR    R15,R15                 No ATOMLINK found
+MATCHURX LM    R5,R7,SAVE5TO7          Restore the JXLE registers
+         L     R14,SAVELNK1            Restore the link register
+         BR    R14
+         EJECT ,
+***********************************************************************
+*
+*  Subroutine to output a single entry document.
+*
+***********************************************************************
+         USING ATOMENTR,R8
+ADDENT   DS    0Y
+         ST    R14,SAVELNK1
+         LA    R9,ENTRPROP             Address common atom properties
+         ADD_TEXT XMLPROLO             Output the XML prolog
+         ADD_TEXT ENTPROLO             Output the entry document prolog
+         ADD_TEXT GENELEMT,GENELEML    Output generator text
+         JAS   R14,QSELECT             Get selector from querystring
+         XC    OPTIONS,OPTIONS         Clear the options string
+         JAS   R14,ADDCONTE            Output content and updated elems
+         LA    R9,ENTRPROP             Address common atom properties
+         JAS   R14,SETATOMP            Set Atom properties for entry
+         JAS   R14,SETLINKS            Output link definitions
+         ADD_TEXT ATENTEND,ATENTENL    Output an entry end tag
+         S     R2,RESPBUFP             Calculate length
+         ST    R2,RESPBUFL             Save the response length
+*
+*  The Atom Publishing Protocol requires the Content-Type header
+*  for an entry document to have the additional parameter type=entry,
+*  which is not handled by the DFHMEDIATYPE container, so we output
+*  our own Content-Type header in the correct format.
+*
+         L     R9,DFHEIBP              Restore EIB pointer
+         USING DFHEIBLK,R9
+         MVC   CTYPELEN,=A(L'ATOMCTYP)
+         EXEC  CICS WEB WRITE HTTPHEADER('Content-Type')               *
+               VALUE(ATOMCTYP) VALUELENGTH(CTYPELEN)
+         ICM   R15,15,EIBRESP          Load and test the response
+*
+*  If the Etag value has been set, write an Etag response header
+*
+         CLC   ETAGVAL,SPACES          Is the Etag value set?
+         JE    ADDENTX                 No, just exit
+         EXEC  CICS WEB WRITE HTTPHEADER('Etag') VALUE(ETAGVAL)
+         ICM   R15,15,EIBRESP
+ADDENTX  L     R14,SAVELNK1
+         BR    R14
+*
+*  Perform special processing for the DELETE method, as we do not have
+*  to return an Atom document. We return a simple HTML document
+*  notifying the user that the requested resource was deleted.
+*  Alternatively, according to RFC2616, we could return an HTTP 204
+*  response with no response body.
+*
+DELENT   DS    0Y
+         ST    R14,SAVELNK1
+         LA    R9,ENTRPROP             Address common atom properties
+         JAS   R14,QSELECT             Get selector from querystring
+         JAS   R14,ADDCONTE            Handle link to service routine
+         L     R9,DFHEIBP              Restore EIB pointer
+         MVC   RESPBUFL,=A(L'HTTPDEL)  Set length of deleted status
+         MVC   HTTPSTAT(L'HTTPDEL),HTTPDEL
+         EXEC  CICS PUT CONTAINER('DFHHTTPSTATUS') FROMCCSID(1047)     *
+               FROM(HTTPSTAT) FLENGTH(RESPBUFL) NOHANDLE
+         MVC   RESPBUFL,=A(L'HTMLMTYP)
+         MVC   MEDIATYP(L'HTMLMTYP),HTMLMTYP
+         EXEC  CICS PUT CONTAINER('DFHMEDIATYPE') FROMCCSID(1047)      *
+               FROM(MEDIATYP) FLENGTH(RESPBUFL) NOHANDLE
+         LM    R5,R6,HTMLDELP          Get pointer to deleted message
+         ST    R6,RESPBUFL             Save length of deleted message
+         EXEC  CICS PUT CONTAINER('DFHRESPONSE') FROMCCSID(1047)       *
+               FROM(0(,R5)) FLENGTH(RESPBUFL) NOHANDLE
+         L     R14,SAVELNK1
+         BR    R14
+         DROP  R9
+         SPACE 3
+***********************************************************************
+*
+*  Subroutine to add multiple <entry> elements to a feed document
+*
+***********************************************************************
+ADDENTS  DS    0Y
+         ST    R14,SAVELNK1
+         MVC   WINSIZE,WINDOW          Initialize window size pointers
+         XC    SELECTOR,SELECTOR       Clear selector pointers
+         JAS   R14,QSELECT             Get initial selector and window
+         LM    R14,R15,WINSIZE         Get the window size pointers
+         LHI   R0,1                    Initialize window size to one
+         AHI   R15,-1                  Decrement winsize length
+         JM    ADDNENTS                Skip if no w= parameter
+         EX    R15,PACKTEXT            Pack the window size
+         CVB   R0,PWORK                Convert window size to binary
+ADDNENTS STH   R0,NUMENTS              Save number of entries per feed
+*
+* We have allowed multiple entry definitions per handler_parameter_list
+* but we are now going to iterate over WINSIZE instances per entry
+* definition. It is probably not sensible to try to do both!
+*
+         LA    R8,ENTRYPTR
+         USING ATOMENTR,R8
+ADDNEXTE ICM   R8,15,NEXTENTR          Link to next entry definition
+         JZ    ADDENTEX                Exit if none left
+         MVC   ENTRYCNT,NUMENTS        Initialize entry counter
+         XC    LINKNEXT(32),LINKNEXT   Initialize all link identifiers
+         LA    R9,ENTRPROP             Address common atom properties
+ADDENTRY ADD_TEXT ATENTRY,ATENTRYL     Output an entry tag
+         JAS   R14,ADDCONTE            Output content and updated elems
+         LA    R9,ENTRPROP             Address common atom properties
+         JAS   R14,SETATOMP            Set Atom properties for entry
+         LA    R9,ENTRPROP             Restore properties addressing
+         MVC   SAVECURR,SELECTOR       Save current selector ptrs  @P1A
+         JAS   R14,SETLINKS            Edit the link relationships
+         ADD_TEXT ATENTEND,ATENTENL    Output an entry end tag
+         LM    R14,R15,SAVECURR        Load link to curr selector  @P1A
+         LM    R0,R1,LASTSEL           Load link to last feed      @P1A
+         CLCL  R0,R14                  Is last same as current?    @P1A
+         JE    ADDNEXTE                Yes, finished current entry @P1A
+         LM    R14,R15,LINKNEXT        Get pointers for next entry
+         LTR   R14,R14                 Is there a next entry?
+         JZ    ADDNEXTE                No, try next set of entries
+         STM   R14,R15,SELECTOR        Update selector with next entry
+         LH    R0,ENTRYCNT             Load current entry count
+         AHI   R0,-1                   Decrement entry count
+         STH   R0,ENTRYCNT             Save updated entry count
+         JP    ADDENTRY                Iterate over WINSIZE entries
+         J     ADDNEXTE                Repeat for next entry definition
+ADDENTEX JAS   R14,PUTLINKS            Output the navigation links
+         L     R14,SAVELNK1
+         BR    R14
+         SPACE 3
+*
+*  Output all the link elements for the current entry, and then save
+*  the forward and backward link for navigation through the entries.
+*
+         USING ATOMPROP,R9
+SETLINKS EQU   *
+         ST    R14,SAVELNK2
+         STM   R5,R7,SAVE5TO7          Save the JXLE registers
+         LA    R5,LINKELTS             Address first atom:link descr
+         LA    R6,ATOMLNKL             Get length of atom:link descr
+         L     R7,LINKINDX             Get current atom:link index
+         CHI   R7,(MAXLINKS-1)*ATOMLNKL  Exceeds maximum index?
+         JNH   *+8                       No, use current index
+         LHI   R7,(MAXLINKS-1)*ATOMLNKL  Yes, use maximum index
+         LA    R7,0(R7,R5)             Address last atom:link descr
+         USING ATOMLINK,R5             Addressing for atom:link desc
+SETLSTRT ADD_TEXT '<link rel="'        Start the link element
+         LM    R14,R15,LINKREL         Load the link rel pointers
+         AHI   R15,-1                  Decrement length for Execute
+         ADD_TEXT *                    Output rel value
+         ADD_TEXT '" href="'           Close rel and start href attrib
+         LM    R10,R11,LINKHREF        Load the link href pointers
+         CLC   =C'self',0(R14)         Is this a rel=self link?
+         JNE   SETLABSH                No, output href as given
+         LA    R14,SELFURL             Isolate href path
+         LH    R15,URLTLEN             Get length of scheme+host only
+         AHI   R15,-1                  Decrement for Execute
+         ADD_TEXT *                    Output scheme+host
+         JAS   R14,GETHPATH            Isolate path part of href
+SETLABSH JAS   R14,COPYURL             Copy URL, escaping ampersands
+         L     R14,ATMP_SELECTOR       Address returned selector ptrs
+         LM    R14,R15,0(R14)          Load ptr/len of selector
+         AHI   R15,-1                  Decrement length for Execute
+         JM    SETLHREX                Skip Execute if negative
+         ADD_TEXT '?s='                Append selector keyword
+         ADD_TEXT *                    Append selector value
+SETLHREX ADD_TEXT '"'                  Close the href attribute
+         LM    R14,R15,LINKLANG        Load hreflang attribute ptrs
+         AHI   R15,-1                  Decrement length for execute
+         JM    SETLTYPE                If no hreflang, try type
+         ADD_TEXT ' hreflang="'        Output hreflang attribute
+         ADD_TEXT *                    Output hreflang value
+         ADD_TEXT '"'                  Close hreflang attribute
+SETLTYPE LM    R14,R15,LINKTYPE        Load link type attribute ptrs
+         AHI   R15,-1                  Decrement length for Execute
+         JM    SETLTITL                If no type, try title
+         ADD_TEXT ' type="'            Output type attribute
+         ADD_TEXT *                    Output type value
+         ADD_TEXT '"'                  Close type attribute
+SETLTITL LM    R14,R15,LINKTITL        Load link title attribute ptrs
+         AHI   R15,-1                  Decrement length for Execute
+         JM    SETLLENG                If no title, try length
+         ADD_TEXT ' title="'           Output title attribute
+         ADD_TEXT *                    Output title value
+         ADD_TEXT '"'                  Close title attribute
+SETLLENG LM    R14,R15,LINKLEN         Load link length attribute ptrs
+         AHI   R15,-1                  Decrement length for Execute
+         JM    SETLCLOS                If no length, close element
+         ADD_TEXT ' length="'          Output length attribute
+         ADD_TEXT *                    Output length value
+         ADD_TEXT '"'                  Close length attribute
+SETLCLOS ADD_TEXT '/>&CRLF'            Close the link element
+         JXLE  R5,R6,SETLSTRT          Try next link
+*
+*  The link elements created above are contained within the entry.
+*  The following processing applies to link elements contained
+*  within the feed element in which the entry is imbedded.
+*  Therefore their values will not be output until all the entry
+*  elements are complete. Instead we just capture the values returned
+*  by the service routine. We also use the NEXTSEL value to determine
+*  the next entry to be inserted into the feed document.
+*
+         LM    R14,R15,ATMP_FIRSTSEL   Load FIRSTSEL and LASTSEL parms
+         MVC   LINKFRST,0(R14)         Save link to first
+         MVC   LINKLAST,0(R15)         Save link to last
+         L     R15,ATMP_NEXTSEL        Address NEXTSEL parameter
+         LM    R14,R15,0(R15)          Load len/ptr of NEXT selector
+         STM   R14,R15,SELECTOR        Save for next loop iteration
+         STM   R14,R15,LINKNEXT        Save for link rel="next"
+         CLC   ENTRYCNT,NUMENTS        Is this the first iteration?
+         JNE   SETLEXIT                No, don't change PREVSEL again
+         L     R15,ATMP_PREVSEL        Address PREVSEL parameter
+         MVC   LINKPREV,0(R15)         Save PREVSEL first time through
+SETLEXIT LM    R5,R7,SAVE5TO7          Restore the JXLE registers
+         L     R14,SAVELNK2
+         BR    R14
+         SPACE 3
+PUTLINKS EQU   *
+         ST    R14,SAVELNK2            Save the link register
+         LM    R14,R15,LINKNEXT        Load link to next feed
+         AHI   R15,-1                  Decrement length
+         JM    PUTLPREV                No next, try previous
+         ADD_TEXT '<link rel="next" href="'
+         MVC   0(256,R2),SELFURL       Copy 256 bytes of my URL
+         MVC   256(L'SELFURL-256,R2),SELFURL+256 Copy rest of the URL
+         AH    R2,URLQOFF              Bump to querystring
+         ADD_TEXT '?s='                Append selector keyword
+         ADD_TEXT *                    Append selector value
+         LM    R14,R15,OMEDTPTR        Load type pointers
+         CHI   R15,8                   Is it default (text/xml)?
+         JE    PUTLNXCL                Yes, don't add to URL
+         BCTR  R15,0                   Decrement length
+         ADD_TEXT '&&amp;t=',7         Append t= keyword
+         ADD_TEXT *                    Append type value
+PUTLNXCL LM    R14,R15,WINSIZE         Get the window size pointers
+         BCTR  R15,0                   Decrement length
+         ADD_TEXT '&&amp;w=',7         Append w= keyword
+         ADD_TEXT *                    Append type value
+         ADD_TEXT '"/>&CRLF'           Close the rel=next link
+PUTLPREV LM    R14,R15,LINKPREV        Load link to previous feed
+         AHI   R15,-1                  Decrement length
+         JM    PUTLFRST                No previous, try first
+         ADD_TEXT '<link rel="previous" href="'
+         MVC   0(256,R2),SELFURL       Copy 256 bytes of my URL
+         MVC   256(L'SELFURL-256,R2),SELFURL+256 Copy rest of the URL
+         AH    R2,URLQOFF              Bump to querystring
+         ADD_TEXT '?s='                Append selector keyword
+         ADD_TEXT *                    Append selector value
+         LM    R14,R15,OMEDTPTR        Load type pointers
+         CHI   R15,8                   Is it default (text/xml)?
+         JE    PUTLPRCL                Yes, don't add to URL
+         BCTR  R15,0                   Decrement length
+         ADD_TEXT '&&amp;t=',7         Append t= keyword
+         ADD_TEXT *                    Append type value
+PUTLPRCL LM    R14,R15,WINSIZE         Get the window size pointers
+         BCTR  R15,0                   Decrement length
+         ADD_TEXT '&&amp;w=',7         Append w= keyword
+         ADD_TEXT *                    Append type value
+         ADD_TEXT '"/>&CRLF'           Close the rel=prev link
+PUTLFRST LM    R14,R15,LINKFRST        Load link to first feed
+         AHI   R15,-1                  Decrement length
+         JM    PUTLLAST                No first, try last
+         ADD_TEXT '<link rel="first" href="'
+         MVC   0(256,R2),SELFURL       Copy 256 bytes of my URL
+         MVC   256(L'SELFURL-256,R2),SELFURL+256 Copy rest of the URL
+         AH    R2,URLQOFF              Bump to querystring
+         ADD_TEXT '?s='                Append selector keyword
+         ADD_TEXT *                    Append selector value
+         LM    R14,R15,OMEDTPTR        Load type pointers
+         CHI   R15,8                   Is it default (text/xml)?
+         JE    PUTLFRCL                Yes, don't add to URL
+         BCTR  R15,0                   Decrement length
+         ADD_TEXT '&&amp;t=',7         Append t= keyword
+         ADD_TEXT *                    Append type value
+PUTLFRCL LM    R14,R15,WINSIZE         Get the window size pointers
+         BCTR  R15,0                   Decrement length
+         ADD_TEXT '&&amp;w=',7         Append w= keyword
+         ADD_TEXT *                    Append type value
+         ADD_TEXT '"/>&CRLF'           Close the rel=first link
+*
+*  The following returns the selector of the last entry to be
+*  applied to a feed URL. This means the last feed will only contain
+*  one element (the oldest). It might be more appropriate to return
+*  a feed containing the last w entries, where w is the window size,
+*  but that would take more sophisticated tracking.
+*
+PUTLLAST LM    R14,R15,LINKLAST        Load link to last feed
+         AHI   R15,-1                  Decrement length
+         JM    PUTLEXIT                No last, so exit
+         ADD_TEXT '<link rel="last" href="'
+         MVC   0(256,R2),SELFURL       Copy 256 bytes of my URL
+         MVC   256(L'SELFURL-256,R2),SELFURL+256 Copy rest of the URL
+         AH    R2,URLQOFF              Bump to querystring
+         ADD_TEXT '?s='                Append selector keyword
+         ADD_TEXT *                    Append selector value
+         LM    R14,R15,OMEDTPTR        Load type pointers
+         CHI   R15,8                   Is it default (text/xml)?
+         JE    PUTLLACL                Yes, don't add to URL
+         BCTR  R15,0                   Decrement length
+         ADD_TEXT '&&amp;t=',7         Append t= keyword
+         ADD_TEXT *                    Append type value
+PUTLLACL LM    R14,R15,WINSIZE         Get the window size pointers
+         BCTR  R15,0                   Decrement length
+         ADD_TEXT '&&amp;w=',7         Append w= keyword
+         ADD_TEXT *                    Append type value
+         ADD_TEXT '"/>&CRLF'           Close the rel=last link
+PUTLEXIT L     R14,SAVELNK2            Restore link register
+         BR    R14
+*
+*  Examine the URL specified in the href value and address only
+*  path part, ignoring any supplied host.
+*  The URL pointer and its length are in R10 and R11.
+*
+GETHPATH EQU   *                       Isolate path from an href value
+         ST    R14,SAVELNK3            Save link register
+         MVC   PWORK,SPACES            Put spaces into PWORK
+         OC    PWORK,0(R10)            Uppercase first 8 bytes of href
+         LHI   R0,7                    Get length of HTTP scheme, etc.
+         CLC   =C'HTTP://',PWORK       Is it an absolute HTTP URL?
+         JE    GHPREMSH                Yes, remove scheme and host
+         LHI   R0,8                    Get length of HTTPS scheme, etc.
+         CLC   =C'HTTPS://',PWORK      Is it an absolute HTTPS URL?
+         JNE   GHPEXIT                 No, it's already a relative URL
+GHPREMSH LA    R1,0(R11,R10)           Address end of href value
+         AR    R10,R0                  Bump over the scheme, etc.
+         LHI   R0,C'/'                 Set search character
+         SRST  R1,R10                  Search for slash after hostname
+         BRC   4,GHPGPATH              If slash found, calculate length
+         LA    R10,=C'/'               No slash, so point to literal
+         LA    R1,1(,R10)              Point to byte after literal
+GHPGPATH LR    R11,R1                  Address byte after pathname
+         SLR   R11,R10                 Get actual pathname length
+GHPEXIT  L     R14,SAVELNK3            Restore link register
+         BR    R14
+         DROP  R8,R9
+***********************************************************************
+*
+*  This subroutine outputs the common Atom properties for
+*  the feed and for each entry.
+*
+*  R9 must point to the appropriate ATOMPROP structure.
+*
+***********************************************************************
+SETATOMP DS    0Y
+         USING ATOMPROP,R9
+         ST    R14,SAVELNK2            Save the link register
+         STM   R5,R7,SAVE5TO7          Save JXLE registers
+         LA    R5,OPTIONS              Address the options string
+         USING ATMP_OPTIONS_BITS,R5    Addressing for options mapping
+         MVC   CNTNPTRS,TITLE          Preset pointers to config title
+         TM    ATMP_OUTOPT_BYTE1,OPTTITLE Title from service routine?
+         JZ    SETATITL                No, set from config file
+         LA    R10,=CL16'ATOMTITLE'    Yes, identify title container
+         JAS   R14,GETCONTN            Read the container
+SETATITL ADD_ELEM CNTNPTRS,ATTITLE,(ATTITLEN,ATTITENL),                *
+               MOVE=LONG,TYPE=TITLETYP
+         MVC   CNTNPTRS,SUBTITLE       Preset pointers to conf subtitle
+         TM    ATMP_OUTOPT_BYTE1,OPTSUBTI Subtitle from service rtn?
+         JZ    SETASUBT                No, set from config file
+         LA    R10,=CL16'ATOMSUBTITLE' Yes, identify subtitle container
+         JAS   R14,GETCONTN            Read the container
+SETASUBT ADD_ELEM CNTNPTRS,ATSUBTIT,(ATSUBTEN,ATSUBTEL),               *
+               MOVE=LONG,TYPE=SUBTTLTY
+         MVC   CNTNPTRS,SUMMARY        Preset pointers to conf summary
+         TM    ATMP_OUTOPT_BYTE1,OPTSUMMA Summary from service rtn?
+         JZ    SETASUMM                No, set from config file
+         LA    R10,=CL16'ATOMSUMMARY'  Yes, identify summary container
+         JAS   R14,GETCONTN            Read the container
+SETASUMM ADD_ELEM CNTNPTRS,(ATSUMMAR,ATSUMMAL),(ATSUMMEN,ATSUMMNL),    *
+               MOVE=LONG,TYPE=SUMMARTY
+         DROP  R5                      Relinquish OPTIONS addressing
+         ADD_ELEM PUBLISHD,ATPUBLIS,(ATPUBLEN,ATPUBLEL)
+         ADD_ELEM ID,ATID,(ATIDEND,ATIDENDL)
+         ADD_ELEM CATEGORY,ATCATEGO,(ATCATEGE,ATCATEGL)
+         ADD_ELEM ICON,ATICON,(ATICOEND,ATICOENL)
+         ADD_ELEM LOGO,ATLOGO,(ATLOGEND,ATLOGENL)
+         ADD_ELEM RIGHTS,ATRIGHTS,(ATRIGHEN,ATRIGENL),TYPE=RIGHTSTY
+         LA    R10,ATOMAUTH            Address the author descriptor
+         USING AUTHOR,R10              Addressing for contrib/author
+         ADD_TEXT ATAUTHOR             Output author tag
+         ADD_ELEM AUTNAME,ATNAME,(ATNAMEND,ATNAMENL)
+         ADD_ELEM AUTEMAIL,ATEMAIL,(ATEMAEND,ATEMAENL)
+         ADD_ELEM AUTURI,ATURI,(ATURIEND,ATURIENL)
+         ADD_TEXT ATAUTEND,ATAUTENL    Output author end tag
+         DROP  R10
+         ICM   R1,15,CONTRNDX          Pick up current contrib index
+         JZ    NOENCONT                No contributors were specified
+         CHI   R1,MAXCONTR*AUTHORL     Too many contributors?
+         JL    *+8                     No, use current contrib index
+         LHI   R1,MAXCONTR*AUTHORL     Yes, use maximum contrib index
+         LA    R5,CONTRIBR             Address first contributor
+         LA    R6,AUTHORL              Length of author information
+         LA    R7,0(R1,R5)             Address end of contributors
+         SR    R7,R6                   Address last contributor
+         USING AUTHOR,R5               Addressing for contrib/author
+NXENCONT ADD_TEXT ATCNTRIB             Output contributor tag
+         ADD_ELEM AUTNAME,ATNAME,(ATNAMEND,ATNAMENL)
+         ADD_ELEM AUTEMAIL,ATEMAIL,(ATEMAEND,ATEMAENL)
+         ADD_ELEM AUTURI,ATURI,(ATURIEND,ATURIENL)
+         ADD_TEXT ATCNREND,ATCNRENL    Output contributor end tag
+         JXLE  R5,R6,NXENCONT          Loop to next contributor
+         LM    R5,R7,SAVE5TO7          Restore JXLE registers
+NOENCONT L     R14,SAVELNK2            Restore link register
+         BR    R14                     Return
+         DROP  R5
+*
+*  Get the contents of the container whose name is addressed by R10.
+*  The address and length of the contents are returned in CNTNPTRS.
+*
+GETCONTN EQU   *                       Put string into container
+         ST    R14,SAVELNK4            Save link register
+         EXEC  CICS GET CONTAINER(0(,R10)) INTOCCSID(1047)             *
+               SET(R10) FLENGTH(CONT_LEN) NOHANDLE
+         L     R11,CONT_LEN            Load container length
+         STM   R10,R11,CNTNPTRS        Save container pointers
+         L     R15,DFHEIBP             Load temporary EIB pointer
+         ICM   R15,15,EIBRESP-DFHEIBLK(R15)  Load and test response
+         JZ    GETCONTX                Exit if GET was OK
+         XC    CNTNPTRS,CNTNPTRS       Else clear container pointers
+GETCONTX L     R14,SAVELNK4            Restore link register
+         BR    R14
+         EJECT ,
+***********************************************************************
+*  Get the item selector from the "s=" keyword in the querystring.
+*  We cannot use the READ FORMFIELD command to do this as it will
+*  not work for anything other than a GET request.
+*  The selector is used to identify the resource record to be returned,
+*  and is typically the queue item number or the file key value.
+*  (The same routine is also used to capture the entry "window size"
+*  as the "w=" keyword, which counts the number of entries per feed,
+*  and the "t=" keyword, which selects the type.)
+***********************************************************************
+QSELECT  EQU   *                       Get selector from querystring
+         ST    R14,SAVELNK2            Save link register
+         STM   R5,R7,SAVE5TO7          Save JXLE registers
+         XC    SELECTOR,SELECTOR       Clear selector pointers
+         L     R7,QSTRLEN              Get length of the querystring
+         MVI   QSTRPRFX,C'&&'          Set initial byte to ampersand
+         LA    R5,QSTRPRFX             Address byte before querystring
+         LA    R6,1                    Get JXLE increment
+         LA    R7,QSTRING(R7)          Address byte after querystring
+QSELSCAN CLC   =C'&&s=',0(R5)          Look for selector keyword
+         JE    QSELFND                 Exit search if found
+         CLC   =C'&&t=',0(R5)          Look for type override
+         JE    QTYPFND
+         CLC   =C'&&w=',0(R5)          Look for window/width keyword
+         JE    QWINFND                 Exit search if found
+         J     QSELNEXT
+QSELFND  EQU   *
+         LA    R10,3(,R5)              Address operand of '&s=' keyword
+         LHI   R0,C'&&'                Set search argument to ampersand
+         LR    R11,R7                  Save search end address
+         SRST  R11,R10                 Search for next ampersand or end
+         SR    R11,R10                 Calculate operand length
+         STM   R10,R11,SELECTOR        Save selector address & length
+         J     QSELNEXT
+QWINFND  EQU   *
+         LA    R10,3(,R5)              Address operand of '&w=' keyword
+         LHI   R0,C'&&'                Set search argument to ampersand
+         LR    R11,R7                  Save search end address
+         SRST  R11,R10                 Search for next ampersand or end
+         SR    R11,R10                 Calculate operand length
+         STM   R10,R11,WINSIZE         Save window size addr & length
+         J     QSELNEXT
+QTYPFND  EQU   *
+         LA    R10,3(,R5)              Address operand of '&t=' keyword
+         LHI   R0,C'&&'                Set search argument to ampersand
+         LR    R11,R7                  Save search end address
+         SRST  R11,R10                 Search for next ampersand or end
+         SR    R11,R10                 Calculate operand length
+         CHI   R11,4                   Is length equal to 4?
+         JNE   QTYPXHTM                No, try XHTML
+         CLC   =C'text',0(R10)         t=text => plain text
+         JE    QTYPSAVE                Yes, save pointers
+         CLC   =C'html',0(R10)         t=html => escaped html
+         JE    QTYPSAVE                Yes, save pointers
+         J     QSELNEXT                Ignore anything else
+QTYPXHTM CHI   R11,5                   Is length equal to 5?
+         JNE   QSELNEXT                No, ignore anything else
+         CLC   =C'xhtml',0(R10)        t=xhtml => unescaped xhtml
+         JNE   QSELNEXT                No, ignore anything else
+QTYPSAVE EQU   *
+         STM   R10,R11,OMEDTPTR        Save atom:content mediatype
+         J     QSELNEXT
+QSELNEXT JXLE  R5,R6,QSELSCAN          Continue search
+         LM    R5,R7,SAVE5TO7          Restore JXLE registers
+         L     R14,SAVELNK2            Restore link registers
+         BR    R14
+         EJECT ,
+***********************************************************************
+*  Output a content element within an atom entry element
+*  This is where the actual published data from the referenced
+*  CICS resource is made available on the feed.
+*  This routine does not construct any part of the content element,
+*  but links to an associated routine to build the content data in
+*  in the ATOMCONTENT container.
+*  The linked-to routine must also return the time and date at which
+*  the content data was last updated, expressed in xsd:dateTime
+*  (RFC3339/ISO8601) format.
+***********************************************************************
+ADDCONTE DS    0Y                      Output a content element
+         USING ATOMENTR,R8
+         ST    R14,SAVELNK2            Save the link register
+         STM   R5,R7,SAVE5TO7          Save JXLE registers
+         ST    R2,SAVEXMLP             Save current XML output pointer
+         MVC   ENTCICST,SPACES         Clear out CICS type for entry
+         MVC   ENTCICSR,SPACES         Clear out CICS name for entry
+         LM    R14,R15,CICSRTYP        Load ptrs for cics:type
+         AHI   R15,-1                  Decrement length
+         LA    R2,ENTCICST             Address CICS type
+         EX    R15,COPYUPPR            Copy & uppercase the type
+         LM    R14,R15,CICSRNAM        Load ptrs for cics:name
+         AHI   R15,-1                  Decrement length
+         LA    R2,ENTCICSR             Address CICS name
+         EX    R15,COPYTEXT            Copy the name, preserving case
+         L     R15,RSRCINDX            Get current cics:resource index
+         CHI   R15,(MAXCICSR-1)*CICSRDFL Exceeds maximum?
+         JNH   *+8                       No, use current index
+         LHI   R15,(MAXCICSR-1)*CICSRDFL Yes, set index to maximum
+         LA    R5,CICSRSRC             Address cics:resource descript
+         LA    R6,CICSRDFL             Set length of cics:resource desc
+         LA    R7,0(R15,R5)            Address last cics:resource desc
+         USING CICSRDEF,R5             Establish resource addressing
+FINDRSRC EQU   *
+         LM    R14,R15,CICSNAME        Load ptr/len of cics:name
+         MVC   RSRCNAME,SPACES         Clear name to spaces
+         LA    R2,RSRCNAME             Address CICS resrce name wkarea
+         AHI   R15,-1                  Decrement length
+         EX    R15,COPYTEXT            Copy the name of cics:resource
+         CLC   RSRCNAME,ENTCICSR       Does name match? (case-sensitve)
+         JNE   NEXTRSRC                No, try next
+         LM    R14,R15,CICSTYPE        Load ptr/len of cics:type
+         MVC   RSRCTYPE,SPACES         Clear type workarea to spaces
+         LA    R2,RSRCTYPE             Address CICS resrce type wkarea
+         AHI   R15,-1                  Decrement length
+         EX    R15,COPYUPPR            Copy and uppercase type
+         CLC   RSRCTYPE,ENTCICST       Does type match?
+         JE    GETRCONT                Yes, go get its content
+NEXTRSRC JXLE  R5,R6,FINDRSRC          Continue resource search
+         J     RSRCNFND                Resource not found
+         DROP  R5                      Release old CICSRDEF addressing
+*
+*  Requested resource and type have been found.
+*  Construct a parameter list for the resource service routine.
+*
+*  A parameter list like this would normally be passed in a commarea,
+*  but we also need to exchange information with the service routine
+*  in containers, and commareas and containers are incompatible.
+*  So the parameter list is constructed in a BIT container named
+*  ATOMPARAMETERS. Each parameter passed in this container is a pointer
+*  to an eight byte area. The first parameter is a pointer to a 64-bit
+*  options string, whose definition is mapped by the ATMP_OPTIONSt.
+*  dsect.
+*  The second parameter is a pointer to two fullwords in which the
+*  the response and reason code can be returned.
+*  The remaining parameters are pointers to pointer+length structures,
+*  in which the first word contains a pointer to the parameter's value,
+*  and the second word contains its length.
+*
+*  ATMP_OPTIONS  Address of a double word containing 64 option bits.
+*                The first word is used to send options to the service
+*                routine, and the second word is used to receive
+*                options from the service routine.
+*  ATMP_RESPONSE Address of a double word in which the response and
+*                reason code can be returned. These are both
+*                initialized to zero, indicating successful completion.
+*  ATMP_RESNAME  Address of a double word containing a pointer to the
+*                CICS resource name, followed by its length
+*  ATMP_RESTYPE  Address of a double word containing a pointer to the
+*                CICS resource type name in uppercase, followed by
+*                its length. The type can be PROGRAM, TSQUEUE, or FILE.
+*  ATMP_ATOMTYPE Address of a double word containing a pointer to the
+*                type of Atom document being processed, in lowercase,
+*                followed by its length. It is either entry or feed.
+*  ATMP_ATOMID   Address of a double word containing a pointer to the
+*                unique Atom request identifier (from the atom:id
+*                element), followed by its length.
+*  ATMP_SELECTOR Address of a double word containing a pointer to the
+*                selector value from the URL, followed by its length.
+*                This parameter is used to select the record within
+*                the CICS resource that is to be accessed. In this
+*                implementation, the selector is the operand of
+*                the "s=" keyword within the querystring section
+*                of the URL.
+*  ATMP_HTTPMETH Address of a double word containing a pointer to the
+*                the HTTP method padded, followed by its length
+*                It is GET, POST, PUT or DELETE.
+*  ATMP_RLM      Address of a double word containing a pointer to the
+*                Resource Layout Mapping area, followed by its length.
+*  ATMP_MTYPEIN  Address of a double word containing a pointer to the
+*                the mediatype of the incoming HTTP request body,
+*                if any, followed by its length. It is only meaningful
+*                if the HTTP method is POST or PUT, otherwise the
+*                pointer and length are both zero.
+*  ATMP_MTYPEOUT Address of a double word containing a pointer to an
+*                area in which the routine must return the mediatype of
+*                the data being returned in the ATOMCONTENT container,
+*                followed by the length of that area (56 bytes).
+*  ATMP_UPDATED  Address of a double word containing a pointer to an
+*                area in which the routine must return the date and
+*                time at which the returned document was last updated,
+*                followed by the length of that area (32 bytes).
+*                The value must be returned in xs:dateTime format,
+*                which is the same as RFC3339 format, namely
+*                yyyy-mm-ddThh:mm:ss.fffZ, or as spaces. (The .fff
+*                fractional seconds are optional, and may be omitted.)
+*                If spaces are returned, the currect time is assumed.
+*  ATMP_ETAGVAL  Address of a double word containing a pointer to the
+*                Etag value for the selected record, followed by its
+*                length. The Etag (or entity tag) is any string
+*                that can be used to identify the record instance
+*                uniquely. It could be based on an accurate timestamp
+*                or version number, but in this implementation it is
+*                the hexadecimal value of the binary checksum of the
+*                record derived by the CKSM machine instruction.
+*                The checksum may theoretically sometimes be the same
+*                for different record instances, but this is likely to
+*                be rare. It is "probably good enough" for its primary
+*                purposeof guarding against the updating of data in a
+*                PUT operation that was derived from data that was
+*                previously obtained in a GET operation but is now
+*                stale (i.e. it was updated by someone else since the
+*                GET request had completed).
+*  ATMP_WINSIZE  Address of a double word containing a pointer to the
+*                feed window size, followed by its length. The value
+*                is a numeric string that contains the default number
+*                of entries to be returned in each feed,
+*  ATMP_NEXTSEL  Address of a double word into which the service
+*                routine should set a pointer and length of a selector
+*                value for the next record in the resource, if any.
+*  ATMP_PREVSEL  Address of a double word into which the service
+*                routine should set a pointer and length of a selector
+*                value for the previous record in the resource, if any.
+*  ATMP_FIRSTSEL Address of a double word into which the service
+*                routine should set a pointer and length of a selector
+*                value for the first (newest) record in the resource,
+*                if any.
+*  ATMP_LASTSEL  Address of a double word into which the service
+*                routine should set a pointer and length of a selector
+*                value for the last (oldest) record in the resource,
+*                if any.
+*  ATMP_ID_FLD   Address of a double word containing a pointer to the
+*                NAME OF THE FIELD within the resource that contains
+*                the atom identifier (from the atom:id element), if
+*                present, followed by its length. If it is present,
+*                the service routine should use this named field to
+*                store the contents of the atom:id element.
+*  ATMP_UPDATED_FLD  Address of a double word containing a pointer to
+*                the NAME OF THE FIELD within the resource that
+*                contains the time when the resource was last updated,
+*                if present, followed by its length. If no such field
+*                exists, the pointer and length are both zero.
+*                If it is present, the service routine should use this
+*                named field to locate the value of the timestamp that
+*                can be used to construct the value returned in the
+*                UPDATED parameter. This may be all spaces if the
+*                resource does not contain such a field.
+*  ATMP_KEY_FLD  Address of a double word containing a pointer to the
+*                NAME OF THE FIELD within the resource that contains
+*                the key (RIDFLD) for File Control operations, if any,
+*                followed by its length. Only relevant when the
+*                resource type is FILE.
+*  ATMP_TITLE_FLD Address of a double word containing a pointer to
+*                the NAME OF THE FIELD within the resource that
+*                contains the Atom title of the represented entry,
+*                if present, followed by its length.
+*                If it is present, the service routine should use this
+*                named field to locate the entry title, and return it
+*                in the ATOMTITLE container.
+*  ATMP_SUBTITLE_FLD  Address of a double word containing a pointer to
+*                the NAME OF THE FIELD within the resource that
+*                contains the Atom subtitle of the represented entry,
+*                if present, followed by its length.
+*                If it is present, the service routine should use this
+*                named field to locate the entry subtitle, and return
+*                it in the ATOMSUBTITLE container.
+*  ATMP_SUMMARY_FLD  Address of a double word containing a pointer to
+*                the NAME OF THE FIELD within the resource that
+*                contains the Atom summary of the represented entry,
+*                if present, followed by its length.
+*                If it is present, the service routine should use this
+*                named field to locate the entry summary, and return
+*                it in the ATOMSUMMARY container.
+GETRCONT EQU   *                       Get resource content
+         LR    R11,R5                  Copy resource definition pointer
+         USING CICSRDEF,R11            Establish resource addressing
+         EXEC  CICS GETMAIN FLENGTH(8192) SET(R10)
+         ST    R10,RLM_PTR             Save as address of RLM
+         LA    R2,ATOMID               Address the atom:id storage
+         MVI   0(R2),C' '              Initialize atom:id storage
+         MVC   1(L'ATOMID-1,R2),0(R2)  ... to spaces
+         LM    R14,R15,ID              Load pointers to id
+         BCTR  R15,0                   Decrement length
+         EX    R15,COPYTEXT            Copy atom:id
+         ST    R2,ID                   Save pointer to copied area
+         XC    OPTIONS,OPTIONS         Clear the options string
+         LA    R0,OPTIONS              Address the options string
+         ST    R0,ATMP_OPTIONS         Save as URM parameter 1
+         LA    R0,SERVRETN             Address service routine retcode
+         ST    R0,ATMP_RESPONSE        Save as URM parameter 2
+         LA    R0,CICSRNAM             Address CICS resource name
+         ST    R0,ATMP_RESNAME         Save as URM parameter 3
+         LA    R0,CICSRTYP             Address CICS resource type
+         ST    R0,ATMP_RESTYPE         Save as URM parameter 4
+         LA    R0,ATOMTYPE             Address Atom document type ptrs
+         ST    R0,ATMP_ATOMTYPE        Save as URM parameter 5
+         LA    R0,ID                   Address the Atom id pointers
+         ST    R0,ATMP_ATOMID          Save as URM parameter 6
+         LA    R0,SELECTOR             Address selector
+         ST    R0,ATMP_SELECTOR        Save as URM parameter 7
+         LA    R14,HTTPMETH            Address the HTTP method
+         LHI   R15,L'HTTPMETH          Set its length
+         JAS   R1,TRIMSPAC             Trim trailing spaces
+         STM   R14,R15,METHPTRS        Save the pointers
+         LA    R0,METHPTRS             Address the HTTP method pointers
+         ST    R0,ATMP_HTTPMETH        Save as URM parameter 8
+         LA    R0,RLM_PTR              Address the RLM pointer & length
+         ST    R0,ATMP_RLM             Save as URM parameter 9
+         LA    R14,MEDIATYP            Address the inbound mediatype
+         LHI   R15,L'MEDIATYP          Set its length
+         JAS   R1,TRIMSPAC             Trim trailing spaces
+         STM   R14,R15,IMEDTPTR        Save the pointers
+         LA    R0,IMEDTPTR             Address inbound mediatype
+         ST    R0,ATMP_MTYPEIN         Save as URM parameter 10
+         LA    R0,OMEDTPTR             Address outbound mediatype
+         ST    R0,ATMP_MTYPEOUT        Save as URM parameter 11
+         LA    R14,DATETIME            Address RFC3339 date/timestamp
+         LHI   R15,L'DATETIME          Set its length
+         STM   R14,R15,DTIMEPTR        Save the pointers
+         LA    R0,DTIMEPTR             Address the DATETIME pointers
+         ST    R0,ATMP_UPDATED         Save as URM parameter 12
+         LA    R14,ETAGVAL             Address Etag value
+         LHI   R15,L'ETAGVAL           Set its length
+         STM   R14,R15,ETAGVALP        Save the ptr/len for Etag
+         LA    R0,ETAGVALP             Address Etag value
+         ST    R0,ATMP_ETAGVAL         Save as URM parameter 13
+         LA    R0,WINSIZE              Address window size pointers
+         ST    R0,ATMP_WINSIZE         Save as URM parameter 14
+         LA    R14,NEXTSEL             Address NEXT selector pointers
+         LA    R15,PREVSEL             Address PREV selector pointers
+         LA    R0,FIRSTSEL             Address FIRST selector pointers
+         LA    R1,LASTSEL              Address LAST selector pointers
+         STM   R14,R1,ATMP_NEXTSEL     Save as URM parameters 15-18
+*  The remaining parameters are the *names* of field within the
+*  resource that have Atom significance.
+         LA    R0,CICSATID             Address atom:id fieldname ptrs
+         ST    R0,ATMP_ID_FLD          Save as URM parameter 19
+         LA    R0,CICSUPDT             Address update fieldname ptrs
+         ST    R0,ATMP_UPDATED_FLD     Save as URM parameter 20
+         LA    R0,CICSKEYF             Address RIDFLD fieldname ptrs
+         ST    R0,ATMP_KEY_FLD         Save as URM parameter 21
+         LA    R0,CICSTITL             Address title fieldname
+         ST    R0,ATMP_TITLE_FLD       Save as URM parameter 22
+         LA    R0,CICSSUBT             Address subtitle fieldname
+         ST    R0,ATMP_SUBTITLE_FLD    Save as URM parameter 23
+         LA    R0,CICSSUMM             Address summary fieldname
+         ST    R0,ATMP_SUMMARY_FLD     Save as URM parameter 24
+*
+*  Now set up some of the fields to which the parameters point
+*
+         MVC   DATETIME,SPACES         Initialize datestamp
+         USING DFHRLM_HEADER,R10       Addressability for RLM header
+         XC    0(DFHRLM_HEADER__LEN,R10),0(R10) Clear RLM header
+         MVC   RLM_EYE_CATCHER,=C'>DFHRLM<'
+         MVC   RLM_VERSION_MAJOR,=F'2'
+         MVC   RLM_VERSION_MINOR,=F'0'
+         MVC   RLM_LENGTH,=F'0'
+         MVC   RLM_NAME,=CL32'Atom Content'
+         MVC   RLM_STRUCT_SIZE,=F'0'
+         AHI   R10,DFHRLM_HEADER__LEN
+         USING DFHRLM_ENTRY,R10
+         USING DFHRLM_DATA_ENTRY,DFHRLM_ENTRY
+         L     R15,XSELMNDX            Get current xs:element index
+         CHI   R15,(MAXXSELM-1)*DFDLDEFL Is index too high?
+         JNH   *+8                       No, use high water mark index
+         LHI   R15,(MAXXSELM-1)*DFDLDEFL Yes, load the maximum index
+         LA    R5,XSELMENT             Address first xs:element descr
+         LA    R6,DFDLDEFL             Set length of xs:element descr
+         LA    R7,0(R15,R5)            Address last xs:element descr
+         USING DFDLDEFN,R5             Establish addressability
+ADDRLMDA XC    0(DFHRLM_DATA_ENTRY__LEN,R10),0(R10)  Clear RLM data
+         MVI   RLM_ENTRY_TYPE,X'01'    Set type = DATA_ENTRY
+         MVI   RLM1_DATA_FLAGS,0       Clear the data flags
+         LM    R14,R15,DFDNAME         Ptr and length of name
+         ST    R14,RLM1_LOCAL_NAME_PTR Save name pointer
+         STH   R15,RLM1_LOCAL_NAME_LEN Save name length
+         LM    R14,R15,DFDLEN          Get field length
+         AHI   R15,-1                  Decrement count
+         JM    SKIPFLEN                Skip field length if omitted
+         EX    R15,PACKTEXT            Pack the digits
+         OI    PWORK+7,X'0F'           Force a valid sign nibble
+         CVB   R0,PWORK                Convert to binary
+         STH   R0,RLM1_DATA_COUNT      Save data count
+SKIPFLEN EQU   *
+*
+*  The following series of tests converts the xs:type attribute
+*  into a numeric value in RLM1_CONVERT_TYPE.
+*  For the present, ignore the containing elements (resource/record)
+*
+BUILDRLM EQU   *
+         LARL  R14,IGNORELM            Set exit for ignored elements
+         ICM   R15,15,DFDTYPE          Address xs:type
+         BNPR  R14                     Ignore if undefined
+         CLC   0(7,R15),=C'tsqueue'    Temporary Storage Queue?
+         BER   R14                     Yes, ignore element
+         CLC   0(4,R15),=C'file'       File?
+         BER   R14                     Yes, ignore element
+         CLC   0(6,R15),=C'record'     Record?
+         BER   R14                     Yes, ignore
+         LARL  R14,CONSVTYP            Set exit for binary conversions
+         LHI   R0,CTYP_CHAR_STRING
+         CLC   0(06,R15),=C'string'
+         BER   R14
+         LHI   R0,CTYP_HEX_STRING
+         CLC   0(09,R15),=C'hexBinary'
+         BER   R14
+         LHI   R0,CTYP_BASE64_STRING
+         CLC   0(12,R15),=C'base64Binary'
+         BER   R14
+         LHI   R0,CTYP_BYTE
+         CLC   0(04,R15),=C'byte'
+         BER   R14
+         LHI   R0,CTYP_UNSIGNED_BYTE
+         CLC   0(12,R15),=C'unsignedByte'
+         BER   R14
+         LHI   R0,CTYP_SHORT
+         CLC   0(05,R15),=C'short'
+         BER   R14
+         LHI   R0,CTYP_UNSIGNED_SHORT
+         CLC   0(13,R15),=C'unsignedShort'
+         BER   R14
+         LHI   R0,CTYP_INT
+         CLC   0(03,R15),=C'int'
+         BER   R14
+         LHI   R0,CTYP_UNSIGNED_INT
+         CLC   0(11,R15),=C'unsignedInt'
+         BER   R14
+         LHI   R0,CTYP_LONG
+         CLC   0(04,R15),=C'long'
+         BER   R14
+         LHI   R0,CTYP_UNSIGNED_LONG
+         CLC   0(12,R15),=C'unsignedLong'
+         BER   R14
+         LHI   R0,CTYP_BOOLEAN
+         CLC   0(07,R15),=C'boolean'
+         BER   R14
+*
+*  The following xs:types are recognized, but unsupported.
+*
+         CLC   0(05,R15),=C'float'
+         JE    CONUNSUP
+         CLC   0(06,R15),=C'double'
+         JE    CONUNSUP
+*
+*  Analyze an xs:dateTime datatype
+*
+         CLC   0(08,R15),=C'dateTime'
+         JNE   CONDECIM
+         LHI   R0,CTYP_CICS_ABSTIME    Presume CICS abstime
+         ICM   R15,15,DFDDEFOR         Is there a dfdl:decimalFormat?
+         JZ    CONTDCLK                No, try binary
+         CLC   0(06,R15),=C'packed'    Is it packed?
+         JNE   CONUNSUP                No, unrecognized type
+         CLC   RLM1_DATA_COUNT,=H'8'   Is length eight?
+         JNE   CONUNSUP                No, unrecognized type
+         BR    R14
+CONTDCLK LHI   R0,CTYP_TOD_CLOCK       Presume TOD clock
+         ICM   R15,15,DFDREPRE         Is there a dfdl:representation?
+         JZ    CONUNSUP                No, unrecognized type
+         CLC   0(06,R15),=C'binary'    representation="binary"?
+         JNE   CONDTSTR                No, try string
+         CLC   RLM1_DATA_COUNT,=H'8'   Is length eight?
+         JNE   CONUNSUP                No, unrecognized type
+         BR    R14                     Yes, save as TOD Clock
+CONDTSTR LHI   R0,CTYP_CHAR_STRING     Presume RCF3339 string format
+         CLC   0(04,R15),=C'text'      representation="text"?
+         JNE   CONUNSUP                No, unrecognized type
+         BR    R14                     Yes, return with string type
+*
+*  The decimal type needs further qualification from DFDL
+*
+CONDECIM CLC   0(07,R15),=C'decimal'   Is it a decimal type?
+         JNE   INVTYPE                 No, type unrecognized
+         LHI   R0,CTYP_UNSIGNED_ZONED  Default is unsigned zoned
+         ICM   R15,15,DFDDEFOR         Is there a dfdl:decimalFormat?
+         BZR   R14                     No, exit
+         CLC   0(05,R15),=C'zoned'     Is it zoned?
+         JNE   CONPACKD                No, try packed
+         ICM   R15,15,DFDDESIG         Address dfdl:decimalSigned
+         BZR   R14                     Not present, assume unsigned
+         CLC   0(5,R15),=C'false'      decimalSigned=false?
+         BER   R14                     Yes
+         CLI   0(R15),C'0'             decimalSigned=0?
+         BER   R14                     Yes
+         LHI   R0,CTYP_ZONED_DECIMAL   Change to zoned signed
+         CLC   0(4,R15),=C'true'       decimalSigned=true?
+         BER   R14                     Yes
+         CLI   0(R15),C'1'             decimalSigned=1?
+         BER   R14                     Yes
+         J     INVTYPE                 Unrecognized boolean value
+CONPACKD LHI   R0,CTYP_PACKED_DECIMAL  Presume signed packed decimal
+         CLC   0(06,R15),=C'packed'    Is it packed?
+         JNE   CONUNSUP                No, unrecognized type (e.g. BCD)
+         LH    R1,RLM1_DATA_COUNT      Get field length in bytes
+         ALR   R1,R1                   Double to get decimal digits
+         BCTR  R1,0                    Subtract one to allow for sign
+         STH   R1,RLM1_DATA_COUNT      Save decimal digit count
+         ICM   R15,15,DFDDESIG         Address dfdl:decimalSigned
+         BZR   R14                     Not present, assume signed
+         CLC   0(4,R15),=C'true'       decimalSigned=true?
+         BER   R14                     Yes
+         CLI   0(R15),C'1'             decimalSigned=1?
+         BER   R14                     Yes
+         LHI   R0,CTYP_UNSIGNED_DECIMAL  Change to unsigned packed
+         CLC   0(5,R15),=C'false'      decimalSigned=false?
+         BER   R14                     Yes
+         CLI   0(R15),C'0'             decimalSigned=0?
+         BER   R14                     Yes
+         J     INVTYPE                 Unrecognized boolean value
+CONSVTYP STC   R0,RLM1_CONVERT_TYPE
+         LM    R14,R15,DFDFRACT        Get fractional digits
+         AHI   R15,-1                  Decrement count
+         JM    SKIPFRAC                Skip fractions if omitted
+         EX    R15,PACKTEXT            Pack the digits
+         OI    PWORK+7,X'0F'           Force a valid sign nibble
+         CVB   R0,PWORK                Convert to binary
+         STC   R0,RLM1_DATA_FRACT      Save fraction digit count
+         LH    R1,RLM1_DATA_COUNT      Get decimal integer digit count
+         SR    R1,R0                   Adjust by fraction digit count
+         STH   R1,RLM1_DATA_COUNT      Reset integer digit count
+SKIPFRAC EQU   *                       Skip fractions if omitted
+         AHI   R10,DFHRLM_DATA_ENTRY__LEN  Bump to next entry
+IGNORELM EQU   *                       Ignored element
+         JXLE  R5,R6,ADDRLMDA          Loop through all xs:elements
+         LM    R5,R7,SAVE5TO7          Restore JXLE registers
+         LR    R0,R10                  Save address of end of RLM
+         L     R10,RLM_PTR             Restore start of RLM
+         SR    R0,R10                  Calculate RLM length
+         USING DFHRLM_HEADER,R10       Re-establish header addressing
+         ST    R0,RLM_LENGTH           Save length of RLM
+         ST    R0,RLM_LEN              Save in plist variable too
+         MVC   SERVPROG,=CL8'DFH$W2FI' Set File service program
+         CLC   ENTCICST,=CL12'FILE'    Is is a file request
+         JE    LINKSERV                Yes, link to service program
+         MVC   SERVPROG,=CL8'DFH$W2TS' Set TSqueue service program
+         CLC   ENTCICST,=CL12'TSQUEUE' Is it a TSqueue request?
+         JE    LINKSERV                Yes, link to service program
+         MVC   SERVPROG,ENTCICSR       Set custom service program
+         CLC   ENTCICST,=CL12'PROGRAM' Is it a program request?
+         JE    LINKSERV                Yes, link to service program
+         J     INVTYPE
+***********************************************************************
+*                                                                     *
+*  Link to the resource-dependent service routine with a container.   *
+*                                                                     *
+LINKSERV EQU   *
+         L     R9,DFHEIBP              Restore EIB pointer
+         USING DFHEIBLK,R9
+         EXEC  CICS PUT CONTAINER('ATOMPARAMETERS') BIT                *
+               FROM(URMPLIST) FLENGTH(=A(URMPLLEN))
+         XC    SERVRETN(8),SERVRETN    Clear service return/reason code
+         EXEC  CICS LINK PROGRAM(SERVPROG) CHANNEL(CURRCHAN)
+*                                                                     *
+***********************************************************************
+         ICM   R15,15,SERVRETN         Check response from service
+         JZ    CHKHMETH                If OK, do tidy-up actions
+         CHI   R15,RESPIOER            If I/O error
+         JE    RSRCIOER                Abend with W2E3 code
+         CHI   R15,RESPNFND            If not found
+         JNE   CHKHMETH                Check the HTTP method
+         L     R14,ATOMTYPE            Address Atom document type
+         CLC   =C'feed',0(R14)         Is it a feed?
+         JNE   RESP404                 No, return with 404         @P1C
+         L     R2,SAVEXMLP             Yes, Restore output locator @P1A
+         J     ADDCONTX                And ignore deleted entry    @P1C
+CHKHMETH CLC   HTTPMETH,=CL8'GET'      Was this a get?
+         BNE   CHKDELET
+         L     R14,ATOMTYPE            Address Atom document type
+         CLC   =C'feed',0(R14)         Is it a feed?
+         JNE   SETUPDTE                No, just set updated element
+         CLC   ENTRYCNT,NUMENTS        Is this the first iteration?
+         JNE   SETUPDTE                No
+         JAS   R14,GETPREVL            Get link to previous feed doc
+         J     SETUPDTE
+CHKDELET CLC   HTTPMETH,=CL8'DELETE'   Was this a delete?
+         JE    ADDCONTX                Yes, no content to return
+         CLC   HTTPMETH,=CL8'POST'     Was this a post?
+         JNE   SETUPDTE                No, skip Location header
+         LH    R15,URLQOFF             Get offset to querystring in URL
+         LA    R2,SELFURL(R15)         Address querystring location
+         ADD_TEXT '?s='                Add selector keyword
+         L     R14,ATMP_SELECTOR       Address returned selector
+         LM    R14,R15,0(R14)          Load ptr/length of new selector
+         AHI   R15,-1                  Decrement length for Execute
+         JM    SETUPDTE                Skip location header if none
+         ADD_TEXT *                    Append the Copy selector value
+         LA    R15,SELFURL             Address start of URL
+         SR    R2,R15                  Get new length of the URL
+         ST    R2,URLLEN               Save it
+         EXEC  CICS WEB WRITE HTTPHEADER('Location')                   *
+               VALUE(SELFURL) VALUELENGTH(URLLEN)
+SETUPDTE JAS   R14,SETCLOCK            Set timestamp if omitted    @P1A
+         CLC   FEEDUPDT,DATETIME       Is feed time earlier then entry?
+         JNL   *+10                    No, leave feed datestamp as is
+         MVC   FEEDUPDT,DATETIME       Yes, update the feed datestamp
+         L     R2,SAVEXMLP             Restore XML output pointer
+         ADD_TEXT '<updated>'          Output updated tag
+         ADD_TEXT DATETIME             Output 32 byte timestamp
+EUPDTRUN LR    R1,R2                   Current end of timestamp
+         BCTR  R1,0                    Decrement
+         CLI   0(R1),C' '              Is last character a space?
+         JNE   EUPDTERM                No, truncation done
+         JCT   R2,EUPDTRUN             Yes, decrement and loop back
+EUPDTERM ADD_TEXT '</updated>&CRLF'    Append ending tag
+         EXEC  CICS GET CONTAINER('ATOMCONTENT') SET(R6)               *
+               FLENGTH(CONT_LEN) NOHANDLE
+         ICM   R15,15,EIBRESP          Was get successful
+         JNZ   ADDCONTX                No, return with no content
+*
+*  Check whether there is enough space in the current output buffer
+*  to receive the contents of the ATOMCONTENT container, plus an
+*  estimated 3K of closing markup. If not, get a larger output buffer
+*  then copy the current buffer into it and free the current buffer.
+*
+         L     R7,CONT_LEN             Pick up the container length
+         L     R3,RESPBUFP             Load old storage address
+         LA    R0,3072(R7,R2)          Estimate end of buffer required
+         SR    R0,R3                   Subtract start to get size req'd
+         C     R0,RESPSIZE             Compare to actual size
+         JNH   APNDCONT                If reqd size not too big, append
+         LHI   R15,4095                Get 4K rounding value
+         AR    R0,R15                  Round up
+         OR    R0,R15                  Round over
+         XR    R0,R15                  Round off
+         ST    R0,RESPSIZE             Save new response size
+         EXEC  CICS GETMAIN FLENGTH(RESPSIZE) SET(R5)
+         ST    R5,RESPBUFP             Save new storage address
+         LR    R14,R3                  Address old storage in R14
+         LR    R15,R2                  Address current output position
+         SR    R15,R14                 Get length currently used
+         LR    R0,R5                   Address new storage in R0
+         LR    R1,R15                  Get length to be copied
+         MVCL  R0,R14                  Copy old storage to new
+         LR    R2,R0                   Reset current output position
+         EXEC  CICS FREEMAIN DATAPOINTER(R3) NOHANDLE
+APNDCONT LR    R3,R7                   Copy length of ATOMCONTENT
+         MVCL  R2,R6                   Copy the ATOMCONTENT container
+*
+*  Exit from ADDCONTE routine
+*
+ADDCONTX L     R10,RLM_PTR             Restore RLM pointer
+         EXEC  CICS FREEMAIN DATAPOINTER(R10) NOHANDLE
+         L     R14,SAVELNK2            Restore link register
+         BR    R14                     Return
+         DROP  R8
+         EJECT ,
+*
+*  This routine trims the length of a string up to the first space
+*  The string is addressed by R14 and it maximum length is in R15
+*
+TRIMSPAC EQU   *                       Trim spaces
+         LA    R15,0(R15,R14)          Address end of string
+         LHI   R0,C' '                 Set search character to space
+         SRST  R15,R14                 Search for first space
+         SR    R15,R14                 Recalculate length
+         BR    R1                      Unusual link register
+*
+*  This routine copies a URL, escaping any ampersands as it goes
+*  The address is in R10 and the length is in R11
+*
+COPYURL  EQU   *
+         ST    R14,SAVELNK3
+         LR    R14,R10                 Save start address
+COPYURPT LA    R15,0(R10,R11)          Calculate end address
+         LHI   R0,C'&&'                Set search char to ampersand
+         LR    R1,R14                  Save current search start
+         SRST  R15,R1                  Search for an ampersand
+         BRC   1,*-4                   Loop until complete
+         BRC   2,COPYUEND              If no ampersand found
+         SR    R15,R14                 Calculate length up to ampersand
+         LR    R3,R15                  Copy the length
+         MVCL  R2,R14                  Copy URL up to ampersand
+         ADD_TEXT '&&amp;',5           Output entity for ampersand
+         AHI   R14,1                   Bump over ampersand
+         J     COPYURPT                Repeat search
+COPYUEND SR    R15,R14                 Calculate remaining length
+         LR    R3,R15                  Copy the length
+         MVCL  R2,R14                  Copy the rest of the URL
+         L     R14,SAVELNK3
+         BR    R14
+*
+*  Get selector for the start of the previous feed document.
+*  The only reliable way to do this appears to be to browse
+*  backwards through the previous links for entry documents.
+*  This allows for entries that may have been deleted.
+*
+GETPREVL EQU   *
+         ST    R14,SAVELNK3
+         MVC   SAVECURR,SELECTOR       Save current selector pointers
+         MVC   SAVENEXT,NEXTSEL        Save link to next
+         MVC   SAVEPREV,PREVSEL        Save link to previous
+         MVC   SAVEFRST,FIRSTSEL       Save link to first
+         MVC   SAVELAST,LASTSEL        Save link to last
+         LH    R3,NUMENTS              Get the window size
+         AHI   R3,-1                   Decrement
+         JNP   GETPDONE                If none left, we are done
+GETPNEXT LM    R0,R1,FIRSTSEL          Load link to first feed
+         LM    R14,R15,PREVSEL         Load link to previous feed
+         CLCL  R0,R14                  Is previous same as first?
+         JE    GETPDONE                Yes, finish browse backwards
+         MVC   SELECTOR,PREVSEL        Set selector for previous entry
+         XC    NEXTSEL,NEXTSEL         Clear
+         XC    PREVSEL,PREVSEL           out
+         XC    FIRSTSEL,FIRSTSEL            current
+         XC    LASTSEL,LASTSEL               pointers
+         XC    SERVRETN(8),SERVRETN    Clear service return/reason code
+         EXEC  CICS LINK PROGRAM(SERVPROG) CHANNEL(CURRCHAN)
+         ICM   R15,15,SERVRETN         Check response from service
+         JNZ   RSRCIOER                Abend if error occurred
+         JCT   R3,GETPNEXT             Otherwise iterate backwards
+*
+*  After browsing backwards, repeat the get for the current entry
+*
+GETPDONE EQU   *
+         MVC   SAVEPREV,PREVSEL        Save link to previous
+         MVC   SELECTOR,SAVECURR       Restore current selector ptrs
+         XC    SERVRETN(8),SERVRETN    Clear service return/reason code
+         EXEC  CICS LINK PROGRAM(SERVPROG) CHANNEL(CURRCHAN)
+         MVC   PREVSEL,SAVEPREV        Restore link to previous
+         L     R14,SAVELNK3
+         BR    R14
+*
+*  If the timestamp is omitted from DATETIME, set it to current time.
+*
+SETCLOCK EQU   *                       Set RFC3339 clock value     @P1A
+         ST    R14,SAVELNK3            Save link register          @P1A
+         CLI   DATETIME,C' '           If date is already set      @P1A
+         BNER  R14                     Return immediately          @P1A
+         L     R1,16                   Load CVT address            @P1A
+         L     R1,CVTEXT2-CVTMAP(,R1)  Get CVT extension address   @P1A
+         STCK  TODCLOCK                Get current TOD clock       @P1A
+         LG    R0,TODCLOCK             Load clock into a register  @P1A
+         SG    R0,CVTLSO-CVTXTNT2(,R1) Subtract leap seconds       @P1A
+         STG   R0,TODCLOCK             Store adjusted clock        @P1A
+         STCKCONV STCKVAL=TODCLOCK,CONVVAL=QWORK,                      *
+               DATETYPE=YYYYMMDD,TIMETYPE=DEC,MF=(E,TODCONVL)      @P1A
+         MVC  PWORK+4(4),QWORK         Move time after date        @P1A
+         MVC  DATETIME(20),=X'20202020602020602020E320207A20207A2020E9'
+         ED   DATETIME(20),PWORK       Convert the timestamp       @P1A
+         L    R14,SAVELNK3             Restore link                @P1A
+         BR   R14                      Return                      @P1A
+*
+*  Unrecoverable parsing errors - abend
+*
+CONUNSUP EXEC  CICS ABEND ABCODE('W2C0') . Unsupported conversion
+INVTYPE  EXEC  CICS ABEND ABCODE('W2E1') . Unknown xs:type or dfdl:type
+RSRCNFND EXEC  CICS ABEND ABCODE('W2E2') . CICS resource not in config
+RSRCIOER EXEC  CICS ABEND ABCODE('W2E3') . I/O error accessing resource
+         EJECT ,
+*:refstep.w2samp_common_routines ************************** DFHW2SAM **
+*                                                                     *
+***********************************************************************
+&MODNAME CSECT ,                  Resume main csect
+***********************************************************************
+*  Send message with parse return codes
+***********************************************************************
+*:refstep.w2samp_sendmsg_routine ************************** DFHW2SAM **
+*                                                                     *
+***********************************************************************
+***********************************************************************
+*  If the parser produces an unexpected return code issue a message
+*  containing the codes and then abend with code W2P2 or W2P4.
+***********************************************************************
+SENDMSG  DS    0Y
+         USING DFHEISTG,R13            Address EISTG
+         USING W2STATIC,R12            Address static storage
+         ICM   R15,15,PARSRESP         Load and test response code
+         BZR   R14                     Return silently if no problem
+         L     R0,PARSREAS             Get the reason code
+         N     R0,=A(X'FFFF')          Isolate low halfword
+         CHI   R0,XRSN_BUFFER_INBUF_END  End of current input buffer?
+         BER   R14                     Yes, this is usually intentional
+         MVC   WTOSPACE(WTOLEN),WTOSKEL  Copy WTO skeleton
+         UNPK  ZWORK,PARSRESP+2(3)     Unpack two bytes of return code
+         TR    ZWORK(4),HEXCONV
+         MVC   WTOSPACE+42(4),ZWORK
+         UNPK  ZWORK,PARSREAS+2(3)     Unpack two bytes of reason code
+         TR    ZWORK(4),HEXCONV
+         MVC   WTOSPACE+52(4),ZWORK
+         WTO   MF=(E,WTOSPACE)
+         L     R5,OUTBUFFP             Reset to start of output buffer
+         USING XEH_BUFINFO,R5          Establish buffer info addressing
+         L     R3,XEH_ERROFFSET31      Get offset to the error record
+         LA    R3,0(R3,R5)             Get address of the error record
+         CLC   0(2,R3),=AL2(XEC_TOK_ERROR) Valid error record?
+         BNER  R14                     No, do't try to examine it
+         USING XEH_ERRINFO,R3          Addressing for error information
+         L     R1,XEH_DOCOFFSET+4      Get 31-bit offset to error text
+         A     R1,INBUFFPT             Relocate into buffer
+         AHI   R1,-16                  Decrement by 16 bytes
+         MVC   WTOSPACE(WTOLEN2),WTOSKEL2  Set up second skeleton
+         MVC   WTOSPACE+14(32),0(R1)   Copy the error text
+         TR    WTOSPACE+14(32),RECTIFY Rectify the text
+         WTO   MF=(E,WTOSPACE)         Send the message
+         J     XPARSERR                Signal parse error
+         BR    R14
+         EJECT ,
+*:erefstep.w2samp_sendmsg_routine *************************************
+         DROP  R12,R13
+         EJECT ,
+***********************************************************************
+*
+*  Construct the originating URL.
+*  Although this is nominally in the DFHWS-URI container, the code
+*  that puts it there is a bit buggy, so we generate it ourselves
+*  using the WEB EXTRACT command, which also obtains the HTTP method,
+*  which we need anyway.
+*
+***********************************************************************
+         USING W2STATIC,R12
+         USING DFHEISTG,R13
+BUILDURL DS    0Y
+         ST    R14,SAVELNK1
+         MVC   HOSTLEN,=A(L'HOSTNAME)  Initialize host length
+         MVC   PATHLEN,=A(L'PATHNAME)  Initialize path length
+         MVC   QSTRLEN,=A(L'QSTRING)   Initialize query length
+         MVC   METHLEN,=A(L'HTTPMETH)  Initialize method length
+         MVC   HTTPMETH,=CL8' '        Initialize method
+         EXEC  CICS WEB EXTRACT                                        *
+               HTTPMETHOD(HTTPMETH) METHODLENGTH(METHLEN)              *
+               SCHEME(SCHEMECV) PORTNUMBER(PORTNUM)                    *
+               HOST(HOSTNAME) HOSTLENGTH(HOSTLEN)                      *
+               PATH(PATHNAME) PATHLENGTH(PATHLEN)                      *
+               QUERYSTRING(QSTRING) QUERYSTRLEN(QSTRLEN)
+         OC    HTTPMETH,=CL8' '        Convert trailing spaces
+*
+*  Copy scheme into URL
+*
+         MVC   SELFURL(7),=C'http://'  Initialize scheme to HTTP
+         LA    R6,SELFURL+7            Address end of scheme
+         LHI   R14,80                  Set HTTP default port number
+         CLC   SCHEMECV,DFHVALUE(HTTPS)  Is it an HTTPS scheme?
+         JNE   SCHEMEOK                No, scheme is correct
+         MVC   SELFURL(8),=C'https://' Yes, change to HTTPS
+         LA    R6,SELFURL+8            Address new end of scheme
+         LHI   R14,443                 Set HTTPS default port number
+SCHEMEOK DS    0H                      Scheme done
+*
+*  Copy hostname into URL
+*
+         ICM   R15,15,HOSTLEN          Get length of HOST
+         AHI   R15,-1                  Decrement for EXECUTE
+         EX    R15,COPYHOST            Copy the hostname
+         LA    R6,1(R15,R6)            Bump over hostname
+*
+*  Copy portnumber into URL
+*
+         L     R0,PORTNUM              Get the port number
+         CR    R0,R14                  Is it default for the scheme?
+         JE    OMITPORT                Yes, don't add to URL
+         CVD   R0,PWORK                Convert port to decimal
+         MVC   EWORK,=X'7A2020202120'  Edit mask with colon
+         LA    R1,EWORK+5              Address significance
+         EDMK  EWORK,PWORK+5           Convert port & get start
+         BCTR  R1,0                    Point to preceding colon
+         LA    R15,EWORK+5             Address end
+         SLR   R15,R1                  Calculate machine length of port
+         EX    R15,COPYPORT            Copy colon and portnumber
+         LA    R6,1(R15,R6)            Bump over colon and portnumber
+OMITPORT EQU   *
+         LR    R0,R6                   Save current position
+         LA    R15,SELFURL             Reset starting address
+         SLR   R0,R15                  Calculate length so far
+         STH   R0,URLTLEN              Save truncated length
+*
+*  Copy pathname into URL
+*
+         MVI   0(R6),C'/'              Initialize path to slash
+         ICM   R15,15,PATHLEN          Does pathname exist?
+         JZ    STEPPATH                No, skip
+         AHI   R15,-1                  Yes, decrement for execute
+         EX    R15,COPYPATH            Copy pathname into URL
+STEPPATH LA    R6,1(R15,R6)            Bump over pathname
+*
+*  Save URL length without the querystring
+*
+         LR    R0,R6                   Save current position
+         LA    R15,SELFURL             Reset starting address
+         SLR   R0,R15                  Calculate length so far
+         STH   R0,URLQOFF              Save querystring offset
+*
+*  Copy querystring into URL
+*
+         ICM   R15,15,QSTRLEN          Is there a query string?
+         JZ    GETURLEN                No, all done
+         MVI   0(R6),C'?'              Yes, set querystring delimiter
+         AHI   R15,-1                  Decrement length for execute
+         EX    R15,COPYQSTR            Copy the querystring
+         LA    R6,2(R15,R6)            Bump over query string
+*
+*  Calculate length of whole URL
+*
+GETURLEN DS    0H
+         LA    R0,SELFURL              Address URL start
+         SLR   R6,R0                   Subtract final end address
+         ST    R6,URLLEN               Save the URL length
+         L     R14,SAVELNK1            Restore link address
+         BR    R14
+*:erefstep.w2samp_common_routines *************************************
+***********************************************************************
+*  Allocate constants
+*  To aid reusability of code between samples, these constants
+*  have different values in the different samples. They are mainly
+*  concerned with the allocation of space in automatic storage.
+***********************************************************************
+MAXWORKS EQU   0                  Maximum workspaces per service
+MAXCOLLN EQU   0                  Max collections per workspace
+MAXACCPT EQU   0                  Max accept elements per collection
+MAXCONTR EQU   8                  Max contributors per feed or entry
+MAXLINKS EQU   6                  Max links per feed or entry
+MAXCICSR EQU   3                  Max CICS resources per feed
+MAXXSELM EQU   64                 Maximum number of xs:element elements
+MAXDEPTH EQU   24                 Maximum XML element nesting depth
+ELSTKLEN EQU   8                  Element stack length
+*
+*  Static storage definitions for DFH$W2FD
+*
+W2STATIC DC    0AD(0)                  Start of static storage
+AANALYZE DC    A(ANALYZE)              Address of ANALYZE routine
+SYSVECT  DC    A(3)                    System vector contains 3 entries
+         DC    A(0)                    Null getmain routine
+         DC    A(0)                    Null freemain routine
+         DC    A(GXLSYM31)             Stringid generation routine
+         SPACE 1
+COMPPATH CLC   0(0,R14),PATHNAME       Match against pathname
+*
+*  Following is the XML markup required to produce an ATOM feed
+*  according to the RFC4287 Atom Syndication specification.
+*
+         PRINT NOGEN
+FDPROLOG EQU   *
+XMLPROLO DC    C'<?xml version="1.0" encoding="utf-8"?>&CRLF'
+         DC    C'<feed xmlns="http://www.w3.org/2005/Atom">&CRLF'
+GENELEMT DC    C'<generator uri="'
+         DC    C'http://www.ibm.com'
+         DC    C'/software/htp/cics/support/supportpacs/'
+         DC    C'" version="1.0">&CRLF'
+         DC    C'CICS SupportPac CA8K',AL2(CRLF)
+         DC    C'</generator>&CRLF'
+GENELEML EQU   *-GENELEMT
+FDPROLEN EQU   *-FDPROLOG
+ENTPROLO DC    C'<entry xmlns="http://www.w3.org/2005/Atom">&CRLF'
+ATLNKSEL DC    C'<link rel="self" type="'
+ATMEDTYP DC    C'application/atom+xml'
+         DC    C'"',AL2(CRLF),CL6' ',C'href="'
+ATLNKLEN EQU   *-ATLNKSEL
+ATLNKEND DC    C'"/>&CRLF'
+ATLNKENL EQU   *-ATLNKEND
+ATAUTHOR DC    C'<author>&CRLF'
+ATNAME   DC    C'<name>'
+ATNAMEND DC    C'</name>&CRLF'
+ATNAMENL EQU   *-ATNAMEND
+ATEMAIL  DC    C'<email>'
+ATEMAEND DC    C'</email>&CRLF'
+ATEMAENL EQU   *-ATEMAEND
+ATURI    DC    C'<uri>'
+ATURIEND DC    C'</uri>&CRLF'
+ATURIENL EQU   *-ATURIEND
+ATAUTEND DC    C'</author>&CRLF'
+ATAUTENL EQU   *-ATAUTEND
+ATCNTRIB DC    C'<contributor>&CRLF'
+ATCNREND DC    C'</contributor>&CRLF'
+ATCNRENL EQU   *-ATCNREND
+ATENTRY  DC    C'<entry>&CRLF'
+ATENTRYL EQU   *-ATENTRY
+ATENTEND DC    C'</entry>&CRLF'
+ATENTENL EQU   *-ATENTEND
+ATEPILOG DC    C'</feed>'
+ATEPILEN EQU   *-ATEPILOG
+ATCATEGO DC    C'<category>'
+ATCATEGE DC    C'</category>&CRLF'
+ATCATEGL EQU   *-ATCATEGE
+ATICON   DC    C'<icon>'
+ATICOEND DC    C'</icon>&CRLF'
+ATICOENL EQU   *-ATICOEND
+ATID     DC    C'<id>'
+ATIDEND  DC    C'</id>&CRLF'
+ATIDENDL EQU   *-ATIDEND
+ATLOGO   DC    C'<logo>'
+ATLOGEND DC    C'</logo>&CRLF'
+ATLOGENL EQU   *-ATLOGEND
+ATPUBLIS DC    C'<published>'
+ATPUBLEN DC    C'</published>&CRLF'
+ATPUBLEL EQU   *-ATPUBLEN
+ATRIGHTS DC    C'<rights>'
+ATRIGHEN DC    C'</rights>&CRLF'
+ATRIGENL EQU   *-ATRIGHEN
+ATSUBTIT DC    C'<subtitle>'
+ATSUBTEN DC    C'</subtitle>&CRLF'
+ATSUBTEL EQU   *-ATSUBTEN
+ATSUMMAR DC    C'<summary>&CRLF'
+ATSUMMAL EQU   *-ATSUMMAR
+ATSUMMEN DC    C'&CRLF.</summary>&CRLF'
+ATSUMMNL EQU   *-ATSUMMEN
+ATTITLE  DC    C'<title>'
+ATTITLEN DC    C'</title>&CRLF'
+ATTITENL EQU   *-ATTITLEN
+ATOMCTYP DC    C'application/atom+xml;type=entry;charset=utf-8'
+NOCACHE  DC    C'no-cache'
+HTTP404  DC    C'HTTP/1.1 404 Atom document not found'
+HTTP409  DC    C'HTTP/1.1 409 Conflict in update request'
+HTTPDEL  DC    C'HTTP/1.1 200 Atom document deleted'
+HTMLMTYP DC    C'text/html'
+HTML404P DC    A(HTML404,HTML404L)     Pointer/length for 404 message
+HTML409P DC    A(HTML409,HTML409L)     Pointer/length for 409 message
+HTMLDELP DC    A(HTMLDELE,HTMLDELL)    Pointer/length for deleted msg
+         PRINT GEN
+*:refstep.w2samp_common_constants ************************* DFHW2SAM **
+*                                                                     *
+* The following constants and static definitions are common to all    *
+* the Web2.0 samples.                                                 *
+*                                                                     *
+***********************************************************************
+COPYTEXT MVC   0(0,R2),0(R14)          Copy element content
+COPYUPPR OC    0(0,R2),0(R14)          Copy with uppercasing
+PACKTEXT PACK  PWORK,0(0,R14)          Pack string into Pwork
+COPYHOST MVC   0(0,R6),HOSTNAME        Copy the hostname
+COPYPORT MVC   0(0,R6),0(R1)           Copy colon + portnumber
+COPYPATH MVC   0(0,R6),PATHNAME        Copy pathname into URL
+COPYQSTR MVC   1(0,R6),QSTRING         Copy the querystring
+*
+XEFSTCOM EQU   XEC_FEAT_STRIP_COMMENTS
+XEFTKWSP EQU   XEC_FEAT_TOKENIZE_WHITESPACE
+XEFTCASC EQU   XEC_FEAT_CDATA_AS_CHARDATA
+CRLF     EQU   X'0D25'                 Carriage-Return/Line-Feed
+RESPNFND EQU   4                       Requested resource not found
+RESPIOER EQU   8                       I/O error accessing resource
+*
+AGXL1INI DC    V(GXL1INI)
+AGXL1PRS DC    V(GXL1PRS)
+AGXL1TRM DC    V(GXL1TRM)
+CCSIDVAL DC    A(XEC_ENC_IBM_1047)
+OBUFSIZE DC    A(32768)
+PARSFEAT DC    A(XEFSTCOM+XEFTKWSP+XEFTCASC)
+NULLVECT DC    A(0)                    Null system vector
+*  Set up a handler_parameter_list container to contain the
+*  other content and set the default namespace.
+AWRAPP1  DC    A(WRAPPER1)
+AWRAPP2  DC    A(WRAPPER2)
+LWRAPP1  DC    A(WRAP1LEN)
+LWRAPP2  DC    A(WRAP2LEN)
+WRAPPER1 DC    C'<handler_parameter_list xmlns="'
+         DC    C'http://www.ibm.com/software/htp/cics/pipeline'
+         DC    C'">'
+WRAP1LEN EQU   *-WRAPPER1
+WRAPPER2 DC    C'</handler_parameter_list>'
+WRAP2LEN EQU   *-WRAPPER2
+SPACES   DC    CL32' '
+WTOSKEL  WTO   'DFHW29901 Responses from Parser: RESP=**** REAS=****',M*
+               F=L
+WTOLEN   EQU   *-WTOSKEL
+WTOSKEL2 WTO   'DFHW29902 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',MF=L
+WTOLEN2  EQU   *-WTOSKEL2
+         ORG   W2STATIC+C'0'           Ensure that HEXVALUE-C'0'
+         ORG   ,                       ...is not before W2STATIC
+HEXVALUE DC    C'0123456789ABCDEF'     Define hex values
+HEXCONV  EQU   HEXVALUE-C'0',256,C'C'  Define virtual origin
+* This translate table is used to convert data that may possibly
+* contain invalid characters into data that can be safely displayed
+* on the console.
+RECTIFY  DC    C'................................'
+         DC    C'................................'
+         DC    C' .........›.<(+|&&.........!$*);^'
+         DC    C'-/.........,%_>?..........:#@''="'
+         DC    C'.abcdefghi.......jklmnopqr......'
+         DC    C'È.stuvwxyz......................'
+         DC    C'{ABCDEFGHI......}JKLMNOPQR......'
+         DC    C'\.STUVWXYZ......0123456789......'
+*:erefstep.w2samp_common_constants ************************************
+         LTORG ,                       Literal pool
+HTML404  DC    C'<!DOCTYPE html PUBLIC'
+         DC    C' "-//W3C//DTD XHTML 1.0 Strict//EN"'
+         DC    C' "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">'
+         DC    AL2(CRLF)
+         DC    C'<html xmlns="http://www.w3.org/1999/xhtml">',AL2(CRLF)
+         DC    C'<head>',AL2(CRLF)
+         DC    C'<title>404 Atom document not found</title>',AL2(CRLF)
+         DC    C'</head>',AL2(CRLF),C'<body>',AL2(CRLF),C'<p>'
+         DC    C'No suitable Atom document could be determined from'
+         DC    C' the selected CICS URIMAP and PIPELINE definitions.'
+         DC    C'</p>',AL2(CRLF),C'</body>',AL2(CRLF),C'</html>'
+HTML404L EQU   *-HTML404
+HTML409  DC    C'<!DOCTYPE html PUBLIC'
+         DC    C' "-//W3C//DTD XHTML 1.0 Strict//EN"'
+         DC    C' "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">'
+         DC    AL2(CRLF)
+         DC    C'<html xmlns="http://www.w3.org/1999/xhtml">',AL2(CRLF)
+         DC    C'<head>',AL2(CRLF)
+         DC    C'<title>409 Atom document conflict</title>',AL2(CRLF)
+         DC    C'</head>',AL2(CRLF),C'<body>',AL2(CRLF),C'<p>'
+         DC    C'A PUT request is not allowed'
+         DC    C' without an If-Match header.'
+         DC    C' To update without a matching Etag value,'
+         DC    C' specify "If-Match: *".'
+         DC    C'</p>',AL2(CRLF),C'</body>',AL2(CRLF),C'</html>'
+HTML409L EQU   *-HTML409
+*  If the following text is modified to include the URL that was
+*  deleted, be careful not to introduce a cross-site scripting attack.
+HTMLDELE DC    C'<!DOCTYPE html PUBLIC'
+         DC    C' "-//W3C//DTD XHTML 1.0 Strict//EN"'
+         DC    C' "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">'
+         DC    AL2(CRLF)
+         DC    C'<html xmlns="http://www.w3.org/1999/xhtml">',AL2(CRLF)
+         DC    C'<head>',AL2(CRLF)
+         DC    C'<title>Atom document deleted</title>',AL2(CRLF)
+         DC    C'</head>',AL2(CRLF),C'<body>',AL2(CRLF),C'<p>'
+         DC    C'The requested document was deleted.'
+         DC    C'</p>',AL2(CRLF),C'</body>',AL2(CRLF),C'</html>'
+HTMLDELL EQU   *-HTMLDELE
+*
+*  CICS dynamic storage used for working variables and parameter lists
+*
+         DFHEISTG ,                    Start of dynamic storage
+*:refstep.w2samp_common_dynamic_storage ******************* DFHW2SAM **
+*                                                                     *
+* Define dynamic storage that is common to the Web2.0 samples.        *
+* Although it would appear to be economical to overlay the XML parser *
+* parameter list with the URM parameter list, this can't be done      *
+* because, for PUT and POST, the URM calls the parser!!               *
+*                                                                     *
+***********************************************************************
+XMLPLIST DS    0D
+XMLPARM1 DS    A                  Address of XML parser parameter 1
+XMLPARM2 DS    A                  Address of XML parser parameter 2
+XMLPARM3 DS    A                  Address of XML parser parameter 3
+XMLPARM4 DS    A                  Address of XML parser parameter 4
+XMLPARM5 DS    A                  Address of XML parser parameter 5
+XMLPARM6 DS    A                  Address of XML parser parameter 6
+XMLPARM7 DS    A                  Address of XML parser parameter 7
+XMLPARM8 DS    A                  Address of XML parser parameter 8
+XMLPLLEN EQU   *-XMLPLIST
+URMPLIST DS    0D                 Params from ATOMPARAMETER container
+         DS    XL(ATMP_PARAMETER_LIST__LEN)
+URMPLLEN EQU   *-URMPLIST
+         DS    0D                 Doubleword alignment
+DATEWORK DS    CL64               Space for date conversion
+         ORG   DATEWORK
+QWORK    DS    PL16               Packed decimal quadword
+         ORG   QWORK+8            Overlay lower doublword
+PWORK    DS    PL8                Packed decimal doubleword
+TODCLOCK DS    FD                 Time of day clock                @P1A
+         ORG   PWORK              Overlay with 9-byte workarea
+PWORK9   DS    PL9                Some conversions use nine-byte fields
+EWORK    DS    XL6                Edit & mark workarea
+ZWORK    DS    XL5                Zoned decimal workarea
+         ORG   ,
+         DS    0D                 Doubleword alignment
+PIMA_PTR DS    A                  Address of Parse Instance Memory Area
+PIMASIZE DS    F                  Size of Parse Instance Memory Area
+PARSRESP DS    F                  Parse return code
+PARSREAS DS    F                  Parse reason code
+INBUFFPT DS    A                  Address of input buffer
+INREMAIN DS    F                  Input bytes remaining
+OUBUFFPT DS    A                  Address of output buffer
+OUREMAIN DS    F                  Output bytes remaining
+HCONTPTR DS    A                  Address of <handler_parameter_list>
+HCONTLEN DS    F                  Length of <handler_parameter_list>
+PARSPARM DS    A                  Null parse system parameter
+OPTSNULL DS    A                  Null options word
+OUTBUFFP DS    A                  Permanent address of output buffer
+OUTBUFFL DS    F                  Permanent length of output buffer
+OUTBUFFN DS    F                  Current length of output buffer
+RESPBUFP DS    A                  Pointer to Atom response
+RESPBUFL DS    F                  Length of Atom response
+RESPSIZE DS    F                  Size of Atom response buffer
+RLM_PTR  DS    A                  Address of Resource Layout Mapping
+RLM_LEN  DS    F                  Length of RLM
+SCHEMECV DS    F
+HOSTLEN  DS    F
+PATHLEN  DS    F
+METHLEN  DS    F
+URLLEN   DS    F                  Length of invoking URL
+URLTLEN  DS    H                  Length of truncated URL (scheme+host)
+URLQOFF  DS    H                  Offset to querystring
+QSTRLEN  DS    F                  Length of querystring
+MEDIATYL DS    F
+PORTNUM  DS    F
+ETAGLEN  DS    F                  Length of Etag value
+WORKSNDX DS    F                  Current app:workspace index
+NUMENTS  DS    H
+ENTRYCNT DS    H
+SAVEXMLP DS    A                  Savearea for XML output ptr
+SAVELNK1 DS    A                  Link register savearea
+SAVELNK2 DS    A                  Link register savearea
+SAVELNK3 DS    A                  Link register savearea
+SAVELNK4 DS    A                  Link register savearea
+SAVE5TO7 DS    3A                 JXLE register savearea
+CTYPELEN DS    F                  Content-Type length
+RSRCNAME DS    CL16               CICS resource name
+RSRCTYPE DS    CL12
+DATETIME DS    CL32               xsd:dateTime or RFC3339 format
+ETAGVAL  DS    CL16               Etag value
+HTTPMETH DS    CL8
+MEDIATYP DS    CL56
+HTTPSTAT DS    CL56
+*  Some of the following fields can probably be overlaid
+*  if the size if DFHEISTG becomes too large.
+FUNCCONT DS    CL15               Function container
+         DS    C
+HOSTNAME DS    CL128              Hostname from EXTRACT WEB command
+PATHNAME DS    CL256              Pathname from EXTRACT WEB command
+SELFURL  DS    CL384              URL used to invoke this program
+         DS    0AD
+WTOSPACE DS    XL(WTOLEN)         Space for WTO message
+         DS    0AD
+*:erefstep.w2samp_common_dynamic_storage ******************************
+CONT_LEN DS    F                       Content container length
+         DS    0AD                     Align ptr/len pairs on Dword
+SELECTOR DS    XL8                     Pointer/length of selector
+NEXTSEL  DS    XL8                     Ptr/len of next selector
+PREVSEL  DS    XL8                     Ptr/len of previous selector
+FIRSTSEL DS    XL8                     Ptr/len of first selector
+LASTSEL  DS    XL8                     Ptr/len of last selector
+WINSIZE  DS    XL8                     Ptr/len of window size
+ATOMTYPE DS    XL8                     Ptr/len of type (feed or entry)
+METHPTRS DS    XL8                     Ptr/len of HTTP method
+IMEDTPTR DS    XL8                     Ptr/len of inbound mediatype
+OMEDTPTR DS    XL8                     Ptr/len of outbound mediatype
+DTIMEPTR DS    XL8                     Ptr/len of Date/Time stamp
+KEYFPTRS DS    XL8                     Ptr/len of Key fieldname
+ETAGVALP DS    XL8                     Ptr/len of Etag value
+RLMPTRS  DS    XL8                     Ptr/len of Resource Layout Map
+CNTNPTRS DS    XL8                     Ptr/len from container
+SAVECURR DS    XL8                     Savearea for SELECTOR
+SAVENEXT DS    XL8                     Savearea for LINKNEXT
+SAVEPREV DS    XL8                     Savearea for LINKPREV
+SAVEFRST DS    XL8                     Savearea for LINKFRST
+SAVELAST DS    XL8                     Savearea for LINKLAST
+CURRCHAN DS    CL16                    Name of current channel
+SERVPROG DS    CL8                     Service program
+OPTIONS  DS    BL8                     64 bits of options
+SERVRETN DS    F                       Service program return code
+SERVREAS DS    F                       Service program reason code
+QSTRPRFX DS    C                       Prefix before querystring
+QSTRING  DS    CL255                   Copy of URL querystring
+         DS    0AD                                                 @P1A
+TODCONVL STCKCONV MF=L                 Space for STCKCONV plist    @P1A
+         DS    0AD
+APPWRKSD DS    (MAXWORKS)XL(APPWORKL)  Storage for workspaces
+ANASTORE DS    XL(ANASTORL)
+         ORG   ,
+         DFHEIEND ,                    End of dynamic storage
+         DROP  ,                       Kill all addressability
+         EJECT ,
+*
+*  GXLYXEH maps the event records returned in the parser output buffer
+*
+         GXLYXEH
+         EJECT ,
+*:refstep.w2samp_analyze_routine ************************** DFHW2SAM **
+*                                                                     *
+***********************************************************************
+***********************************************************************
+*
+*  Analyze routine.
+*  This routine analyzes the tokenized response from the XML Parser
+*  and saves the content (as pointer+length) of all the elements.
+*
+***********************************************************************
+&MODNAME CSECT ,                       Resume main CSECT
+ANALYZE  DC    0D'0'
+         STM   R14,R12,12(R13)         Save caller's registers
+         USING DFHEISTG,R13            Address EISTG
+         LARL  R12,ANSTATIC            Address static
+         USING ANSTATIC,R12            Basing for static
+         LR    R11,R1                  Save parmlist address
+         USING ANASTORD,ANASTORE       Address the Analyze workarea
+         LA    R0,ANASTORE             Address for MVCL
+         LHI   R1,ANASTORL             Length for MVCL
+         SR    R14,R14                 Clear source address
+         SR    R15,R15                 Clear source length
+         MVCL  R0,R14                  Clear the Analyze workarea
+         MVC   ANASAVEA(72),0(R13)     Copy savearea
+         LA    R9,FEEDPROP             Point to properties for the feed
+         USING ATOMPROP,R9
+         LHI   R0,-ATOMLNKL            Get negative atom:link index
+         ST    R0,LINKINDX             Save as current link index
+         ST    R0,LINKSELF             Save as rel=self index
+         ST    R0,LINKACT              Save as active link index
+         LHI   R0,-CICSRDFL            Negate cics:resource length
+         ST    R0,RSRCINDX             Set initial cics:resource index
+         LA    R14,=C'5'               Address default window size
+         LA    R15,1                   Set its length
+         STM   R14,R15,WINDOW          Save initial window value ptrs
+*
+*  Initialize pointers to the record structure returned by the parser.
+*
+         LM    R14,R15,0(R11)          Load buffer pointer and length
+         L     R5,0(,R14)              Get address of response buffer
+         SR    R6,R6                   Clear JXLE stride register
+         LR    R7,R5                   Copy start address
+         AL    R7,0(,R15)              Add length to get end addr
+         BCTR  R7,0                    Address last byte of response
+         LA    R0,ELEMSTCK-ELSTKLEN    Address element stack
+         ST    R0,CURRELPT             Save current pointer
+         USING XEH_RECORD,R5
+         USING XEH_VALUE,XEH_VALUES
+         USING XEH_STRINGIDS,XEH_VALUES
+*
+*  Examine each record returned by the parser.
+*  Note that the records are not necessarily on word boundaries.
+*
+EXAMRECD EQU   *                       Examine parse response record
+         SR    R1,R1                   Clear for insertion
+         ICM   R1,3,XEH_TOKTYPE        Insert record type
+         ICM   R6,15,XEH_RECLEN        Get the record length
+         TMLL  R1,X'F00F'              Is this a valid record id?
+         JNO   INVTOKEN                No, it's an error
+         NILL  R1,X'0FF0'              Isolate functional bits
+         SRL   R1,2                    Convert to jumptable offset
+         CHI   R1,NEXTITEM-JUMPTABL    Is offset too high?
+         JH    INVTOKEN                Yes, it's an error
+         LARL  R14,NEXTITEM            Set return address
+         LARL  R15,JUMPTABL            Address the jump table
+         ALR   R15,R1                  Index into the jump table
+         BR    R15                     Jump to it
+JUMPTABL J     NEXTITEM                F00F - Buffer information
+         J     NEXTITEM                F01F - XML declaration
+         J     ELEMSTRT                F02F - Start element
+         J     ELEMEND                 F03F - End element
+         J     ATTRIBNM                F04F - Attribute name
+         J     ATTRVALU                F05F - Attribute value
+         J     NEXTITEM                F06F - Namespace declaration
+         J     CHARDATA                F07F - Character data
+         J     NEXTITEM                F08F - Start CDATA
+         J     NEXTITEM                F09F - End CDATA
+         J     NEXTITEM                F0AF - Whitespace
+         J     NEXTITEM                F0BF - Processing instruction
+         J     NEXTITEM                F0CF - Comment
+         J     NEXTITEM                F0DF - DTD data
+         J     NEXTITEM                F0EF - Unresolved reference
+NEXTITEM JXLE  R5,R6,EXAMRECD          Examine next record
+INVTOKEN EQU   *
+ANRETURN LM    R14,R12,ANASAVEA+12     Restore registers
+         BR    R14                     Return
+         EJECT ,
+*
+*  Start of an element.
+*
+*  For all elements, push the element's tokens on to the element stack.
+*
+*  Where we are expecting multiple instances of an element,
+*  we construct a linked-list or array of those elements
+*  so that we can examine all the instances later.
+*  This is required for atom:entry, atom:contributor, xs:element, etc.
+*
+ELEMSTRT EQU   *
+         CHI   R6,20                   Record form 3 with 3 stringids?
+         BNER  R14                     Ignore unexpected record form
+         LA    R0,ELEMSTCK+MAXDEPTH*ELSTKLEN Address end of stack
+         L     R2,CURRELPT             Get current stack pointer
+         LR    R1,R2                   Copy stack pointer
+         AHI   R1,ELSTKLEN             Add stack length
+         CR    R1,R0                   Reached end of stack?
+         JNL   STACKERR                If too high, abend
+         ST    R1,CURRELPT             Refresh pointer
+         MVC   0(ELSTKLEN,R1),XEH_STRINGIDS  Save ids for element
+         LA    R9,FEEDPROP             Point to properties for the feed
+         USING ATOMPROP,R9
+*
+*  Process an atom:link element
+*
+CHKLINK  CLC   0(ELSTKLEN,R1),=A(NUM_LINK,NSATOMID)
+         JNE   CHKENTRY
+         CLC   0(ELSTKLEN,R2),=A(NUM_FEED,NSATOMID) Is link for a feed?
+         JE    BYPENTRY                Yes, bypass entry location
+         L     R8,CURRENTR             Locate current entry
+         USING ATOMENTR,R8
+         LA    R9,ENTRPROP             Address entry properties
+         USING ATOMPROP,R9
+BYPENTRY EQU   *
+         L     R15,LINKINDX            Get current link index
+         AHI   R15,ATOMLNKL            Increment atom:link index
+         ST    R15,LINKINDX            Save new atom:link index
+         BR    R14
+*
+*  Process an atom:entry element
+*  Each entry is assigned a new getmained piece of storage,
+*  which is added to a singly-linked list of entries.
+*
+CHKENTRY CLC   0(ELSTKLEN,R1),=A(NUM_ENTRY,NSATOMID)  atom:entry?
+         JNE   CHKCONTR                No, try contributor
+         ST    R14,SAVELNK1            Save current link register
+         LA    R8,ENTRYPTR             Address atom:entry chain
+         USING ATOMENTR,R8
+         USING ATOMPROP,ENTRPROP
+RUNENTRY ICM   R0,15,NEXTENTR          End of chain?
+         JZ    GETENTRY                Yes, append new entry
+         LR    R8,R0                   No, address next entry
+         J     RUNENTRY                Search for end of chain
+GETENTRY EQU   *                       Get a new atom:entry workarea
+         L     R9,DFHEIBP              Restore EIB pointer
+         USING DFHEIBLK,R9
+         EXEC  CICS GETMAIN FLENGTH(ENTRYLEN) INITIMG(X'00') SET(R2)
+         ST    R2,CURRENTR             Save as currently active entry
+         ST    R2,NEXTENTR             Save as next in chain
+         LR    R8,R2                   Point to new entry
+         LHI   R0,-ATOMLNKL            Get negative atom:link index
+         ST    R0,LINKINDX             Save as current link index
+         ST    R0,LINKSELF             Save as rel=self index
+         ST    R0,LINKACT              Save as active link index
+         L     R14,SAVELNK1            Restore link address
+         BR    R14                     Return
+         DROP  R8
+*
+*  Process an atom:contributor element
+*  Each contributor is added to an array of contributors that
+*  is maintained within the ATOMPROP structure.
+*  There is one such structure for the feed, and one for each entry.
+*  The maximum number of contributors in each structure is defined
+*  by the constant MAXCONTR.
+*
+CHKCONTR CLC   0(ELSTKLEN,R1),=A(NUM_CONTRIBUTOR,NSATOMID)  Contribr?
+         JNE   CHKCICSR                Not contributor, check next
+         CLC   0(ELSTKLEN,R2),=A(NUM_ENTRY,NSATOMID)  Within entry?
+         JNE   CONTFEED                No, assume feed contributor
+         L     R8,CURRENTR             Address current entry
+         USING ATOMENTR,R8
+         LA    R9,ENTRPROP             Address the entry properties
+         USING ATOMPROP,R9
+CONTFEED L     R0,CONTRNDX             Get contributor index
+         AHI   R0,AUTHORL              Increment atom:contributor index
+         ST    R0,CONTRNDX             Save new contributor index
+         BR    R14
+*
+*  Process a cics:resource element
+*
+CHKCICSR CLC   0(ELSTKLEN,R1),=A(NUM_RESOURCE,NSCICSID)  Resource?
+         JNE   CHKXSELM                Not cics:resource, check next
+         L     R15,RSRCINDX            Get CICS resource index
+         AHI   R15,CICSRDFL            Increment cics:resource index
+         ST    R15,RSRCINDX            Save new index
+         CHI   R15,(MAXCICSR-1)*CICSRDFL Exceeds maximum?
+         BHR   R14                       Yes, ignore
+         LA    R2,CICSRSRC(R15)        Address current resource
+         USING CICSRDEF,R2             Establish resource addressing
+         XC    0(XSELMENT-CICSRDEF,R2),0(R2)  Clear start of descriptor
+         LHI   R0,-DFDLDEFL            Negative xs:element length
+         ST    R0,XSELMNDX             Initialize xs:element index
+         BR    R14
+         DROP  R2
+*
+*  Process an xs:element element.
+*  There is an xs:element for each of:
+*    o Each CICS resource that will be externalized
+*    o Each record definition within the CICS resource
+*    o Each field definition within each record definition.
+*  We save each of these as we encounter each one.
+*  The maximum number of such elements is defined by MAXXSELM.
+*
+CHKXSELM CLC   0(ELSTKLEN,R1),=A(NUM_ELEMENT,NSXSCHID)
+         JNE   CHKWKSPC                Not an xs:element, try next
+         L     R15,RSRCINDX            Get current cics:resource index
+         CHI   R15,(MAXCICSR-1)*CICSRDFL Exceeds max resource number?
+         BHR   R14                       Yes, ignore excess resources
+         LA    R2,CICSRSRC(R15)        Address current resource
+         USING CICSRDEF,R2             Establish resource addressing
+         L     R15,XSELMNDX            Get xs:element index
+         AHI   R15,DFDLDEFL            Increment xs:element index
+         ST    R15,XSELMNDX            Save new xs:element index
+         CHI   R15,(MAXXSELM-1)*DFDLDEFL Is index too high?
+         BHR   R14                       Yes, don't clear the element
+         LA    R2,XSELMENT(R15)        Address xse:element array elem
+         XC    0(DFDLDEFL,R2),0(R2)    Clear it
+         BR    R14
+         DROP  R2
+*
+*  Process an app:workspace element
+*
+CHKWKSPC CLC   0(ELSTKLEN,R1),=A(NUM_WORKSPACE,NSATMPID)
+         JNE   CHKCOLLN                No, try collection
+         L     R15,WORKSNDX            Get app:workspace index
+         CHI   R15,MAXWORKS*APPWORKL   Too many app:workspaces?
+         BNLR  R14                     Yes, ignore
+         AHI   R15,APPWORKL            No, bump app:workspace index
+         ST    R15,WORKSNDX            Save new app:workspace index
+         STM   R5,R7,SAVE5TO7          Save JXLE regs for use by MVCL
+         LA    R5,APPWRKSD(R15)        Address the workspace descriptor
+         LR    R0,R5                   Copy workspace descriptor ptr
+         LHI   R1,APPWORKL             Set its length
+         SR    R6,R6                   Clear source for MVCL
+         SR    R7,R7                   Clear length for MVCL
+         MVCL  R0,R6                   Clear the workspace descriptor
+         LHI   R0,-APPCOLLL            Get negative collection index
+         ST    R0,APPWCNDX-APPWORKS(,R5)  Save as current index
+         LM    R5,R7,SAVE5TO7          Restore JXLE registers
+         BR    R14
+*
+*  Process an app:collection element
+*
+CHKCOLLN CLC   0(ELSTKLEN,R1),=A(NUM_COLLECTION,NSATMPID)
+         JNE   CHKACCPT                No, try accept
+         ICM   R15,15,WORKSNDX         Get current workspace index
+         BMR   R14                     Exit if negative
+         LA    R1,APPWRKSD(R15)        Address the workspace element
+         L     R15,APPWCNDX-APPWORKS(,R1)  Get app:collection index
+         CHI   R15,MAXCOLLN*APPCOLLL   Too many app:collections?
+         BNLR  R14                     Yes, ignore
+         AHI   R15,APPCOLLL            No, bump app:collection index
+         ST    R15,APPWCNDX-APPWORKS(,R1)  Save new collection index
+         LA    R1,APPWCOLL-APPWORKS(R15,R1)  Address new collection
+         XC    0(APPCOLLL,R1),0(R1)    Clear collection descriptor
+         LHI   R0,-APPACCPL            Get negative accept index
+         ST    R0,APCOANDX-APPCOLLN(R1)  Save as current accept index
+         BR    R14
+*
+*  Process an app:accept element
+*
+CHKACCPT CLC   0(ELSTKLEN,R1),=A(NUM_ACCEPT,NSATMPID)
+         BNER  R14
+         ICM   R15,15,WORKSNDX         Get current workspace index
+         BMR   R14                     Exit if not set
+         LA    R1,APPWRKSD(R15)        Address current workspace elemt
+         ICM   R15,15,APPWCNDX-APPWORKS(R1)  Get collection index
+         BMR   R14                     Exit if not set
+         LA    R1,APPWCOLL-APPWORKS(R15,R1)  Address current collection
+         L     R15,APCOANDX-APPCOLLN(R1)  Get app:accept index
+         CHI   R15,MAXACCPT*APPACCPL   Too many app:accepts?
+         BNLR  R14                     Yes, ignore
+         AHI   R15,APPACCPL            No, bump app:accept index
+         ST    R15,APCOANDX-APPCOLLN(R1)  Save new app:accept index
+         BR    R14
+         DROP  R8,R9
+***********************************************************************
+*
+*  End of an element.
+*  Pop the last element from the element stack.
+*
+***********************************************************************
+ELEMEND  EQU   *
+         L     R1,CURRELPT             Get current stack pointer
+         XC    0(ELSTKLEN,R1),0(R1)    Clear current element
+         AHI   R1,-ELSTKLEN            Subtract stack length
+         ST    R1,CURRELPT             Update current stack pointer
+         BR    R14
+         EJECT ,
+***********************************************************************
+*
+* Character data. This represents the content of an element.
+* The tokens for the most recent element are pointed to by CURRELPT.
+* The tokens for the parent element are eight bytes earlier.
+*
+***********************************************************************
+CHARDATA EQU   *
+         LA    R9,FEEDPROP             Point to feed properties
+         L     R1,CURRELPT             Get current stack pointer
+         LR    R2,R1                   Copy current stack pointer
+         AHI   R2,-ELSTKLEN            Address previous stack pointer
+         LR    R3,R2                   Copy parent stack pointer
+         AHI   R3,-ELSTKLEN            Address grandparent
+*
+*  Check the parent of the current element
+*
+         CLC   0(8,R2),=A(NUM_FEED,NSATOMID)   Is it atom:feed?
+         JE    TRYFEED
+         CLC   0(8,R2),=A(NUM_ENTRY,NSATOMID)  Is it atom:entry?
+         JE    TRYENTRY
+         CLC   0(8,R2),=A(NUM_AUTHOR,NSATOMID) Is it atom:author?
+         JE    TRYAUTH
+         CLC   0(8,R2),=A(NUM_CONTRIBUTOR,NSATOMID)  atom:contributor?
+         JE    TRYCONTR
+         CLC   0(8,R2),=A(NUM_WORKSPACE,NSATMPID)    app:workspace?
+         JE    TRYWORKS
+         CLC   0(8,R2),=A(NUM_COLLECTION,NSATMPID)   app:collection?
+         JE    TRYCOLLN
+BADNEST  EQU   *
+         BR    R14                     Unrecognized content. Ignore
+*
+*  The parent node is an entry.
+*  Address the current entry workarea and save the entry child
+*  elements in it.
+*
+TRYENTRY EQU   *
+         L     R8,CURRENTR             Address current entry
+         USING ATOMENTR,R8
+         LA    R9,ENTRPROP             Address the entry properties
+         USING ATOMPROP,R9
+*
+*  The parent node is a feed. Check for feed child nodes.
+*
+TRYFEED  EQU   *
+         LA    R4,CATEGORY             Point to Category
+         CLC   0(8,R1),=A(NUM_CATEGORY,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,ICON                 Point to Icon
+         CLC   0(8,R1),=A(NUM_ICON,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,ID                   Point to Id
+         CLC   0(8,R1),=A(NUM_ID,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,LOGO                 Point to Logo
+         CLC   0(8,R1),=A(NUM_LOGO,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,NAME                 Point to Name
+         CLC   0(8,R1),=A(NUM_NAME,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,PUBLISHD             Point to Published
+         CLC   0(8,R1),=A(NUM_PUBLISHED,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,RIGHTS               Point to Rights
+         CLC   0(8,R1),=A(NUM_RIGHTS,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,SUBTITLE             Point to Subtitle
+         CLC   0(8,R1),=A(NUM_SUBTITLE,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,SUMMARY              Point to Summary
+         CLC   0(8,R1),=A(NUM_SUMMARY,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,TITLE                Point to Title
+         CLC   0(8,R1),=A(NUM_TITLE,NSATOMID)
+         JE    SAVECHAR
+         BR    R14                     Ignore unknown element
+         SPACE 3
+*
+*  The parent node is an author. Check for author child nodes.
+*  We need to distinguish feed authors from entry authors.
+*
+TRYAUTH  EQU   *
+         CLC   0(8,R3),=A(NUM_FEED,NSATOMID)  Is it atom:feed?
+         JNE   TRAUTHEN                No, check entry author
+         LA    R10,ATOMAUTH            Address feed author
+         J     TRAUTHCM
+TRAUTHEN CLC   0(8,R3),=A(NUM_ENTRY,NSATOMID)  Is it atom:entry?
+         BNER  R14                     No, return
+         L     R8,CURRENTR             Address current entry
+         USING ATOMENTR,R8
+         LA    R9,ENTRPROP
+         LA    R10,ATOMAUTH
+         J     TRAUTHCM
+         DROP  R8
+*
+*  The parent node is a contributor. Check for contributor child nodes.
+*  We handle contributors just like an array of authors.
+*  We also need to distinguish feed contributors from entry
+*  contributors by checking the grandparent node.
+*
+TRYCONTR EQU   *
+         CLC   0(8,R3),=A(NUM_FEED,NSATOMID)  Is it atom:feed?
+         JE    TRCONTCM
+TRCONTEN CLC   0(8,R3),=A(NUM_ENTRY,NSATOMID)  Is it atom:entry?
+         BNER  R14                     No, return
+         L     R8,CURRENTR             Address current entry
+         USING ATOMENTR,R8
+         LA    R9,ENTRPROP
+         USING ATOMPROP,R9
+         DROP  R8
+TRCONTCM LA    R10,ATOMAUTH
+         L     R0,CONTRNDX             Get contributor index
+         CHI   R0,MAXCONTR*AUTHORL     Is index too high?
+         BHR   R14                     Yes, ignore excess contributor
+         ALR   R10,R0                  No, apply contributor index
+*
+*  Common code to output the child nodes of an author or contributor.
+*
+TRAUTHCM EQU   *
+         USING AUTHOR,R10
+         LA    R4,AUTNAME              Point to Author Name
+         CLC   0(8,R1),=A(NUM_NAME,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,AUTEMAIL             Point to Author Email
+         CLC   0(8,R1),=A(NUM_EMAIL,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,AUTURI               Point to Author URI
+         CLC   0(8,R1),=A(NUM_URI,NSATOMID)
+         JE    SAVECHAR
+         BR    R14
+         DROP  R10
+*
+*  Parent is an APP workspace
+*
+TRYWORKS EQU   *
+         L     R15,WORKSNDX            Get current workspace index
+         LA    R4,APPWRKSD(R15)        Address current workspace
+         LA    R4,APPWTITL-APPWORKS(,R4)  Address workspace title
+         CLC   0(8,R1),=A(NUM_TITLE,NSATOMID)
+         JE    SAVECHAR
+         BR    R14
+*
+*  Parent is an APP collection
+*
+TRYCOLLN EQU   *
+         L     R15,WORKSNDX            Get current workspace index
+         LA    R2,APPWRKSD(R15)        Address current workspace
+         L     R15,APPWCNDX-APPWORKS(,R2)  Get collection index
+         LA    R2,APPWCOLL-APPWORKS(R15,R2)  Address current collection
+         LA    R4,APCOLTIT-APPCOLLN(,R2)  Collection title
+         CLC   0(8,R1),=A(NUM_TITLE,NSATOMID)
+         JE    SAVECHAR
+         LA    R4,APCATTXT-APPCOLLN(,R2)  Collection categories
+         CLC   0(8,R1),=A(NUM_CATEGORIES,NSATMPID)
+         JE    SAVECHAR
+         L     R15,APCOANDX-APPCOLLN(,R2)  Get accept index
+         LA    R4,APCOLACC-APPCOLLN(R15,R2)  Address accept ptr/len
+         CLC   0(8,R1),=A(NUM_ACCEPT,NSATMPID)
+         JE    SAVECHAR
+         BR    R14
+*
+*  Here we save the address and length of the character data.
+*  The parser does not remove leading or trailing whitespace,
+*  so we adjust for those before setting the pointers.
+*  The NL (newline character) is not a valid XML whitespace,
+*  so it is converted to a LF (linefeed) instead.
+*
+*  R4 = Location at which to save the pointer and length.
+*
+SAVECHAR EQU   *
+         LA    R2,XEH_VALTEXT-1        Address byte before string
+         ICM   R3,15,XEH_VALLEN        Get character length
+         SR    R15,R15                 Clear for indexing
+SACHPICK IC    R15,0(R3,R2)            Pick up last byte of string
+         LA    R1,WHITESPC(R15)        Address its whitespace transform
+         CLI   0(R1),0                 Is it linear whitespace?
+         JNE   SACHXLWS                No, exit trailing scan
+         JCT   R3,SACHPICK             Yes, reduce length and try again
+         BR    R14                     Exit if no characters left
+SACHXLWS LA    R15,255(,R3)            Prepare length for Execute
+         LA    R1,0(R3,R2)             Preset R1 to end of string
+         EX    R15,SKIPLWS             Scan over LWS
+         LR    R2,R1                   Save addr of 1st non-white char
+         LA    R0,XEH_VALTEXT          Address start of text
+         SR    R1,R0                   Count leading white characters
+         SR    R3,R1                   Decrease length accordingly
+         STM   R2,R3,0(R4)             Save pointer and length
+         LA    R15,255(,R3)            Recalculate execute length
+         EX    R15,CONVRTNL            Convert newlines to linefeeds
+         BR    R14                     Continue
+*
+*  Attribute name found
+*
+*  The interpretation of an unprefixed attribute is somewhat ambiguous
+*  in the XML specification <http://www.w3.org/TR/REC-xml-names/>,
+*  which says:
+*
+*  >> Default namespace declarations do not apply directly to attribute
+*  >> names; the interpretation of unprefixed attributes is determined
+*  >> by the element on which they appear.
+*
+*  This does not actually say that the namespace for an unprefixed
+*  attribute name should be assumed to be the same as the namespace
+*  of the containing element, but this is one possible interpretation
+*  that is widely used. The z/OS XML parser does not make this
+*  assumption, however. In this module we DO make this interpretation:
+*  if the namespace URI stringid is zero, it is overridden with that
+*  of the containing element.
+*
+ATTRIBNM EQU   *
+         XC    ATTRNAME(8),ATTRNAME    Clear current name token
+         CHI   R6,20                   Record form 3 with 3 stringids?
+         BNER  R14                     No, ignore unexpected recd form
+         MVC   ATTRNAME(8),XEH_STRINGIDS  Save current name token
+         ICM   R0,15,ATTRNAME+4        Is the namespace prefix omitted?
+         BNZR  R14                     No, return with specified nspace
+         L     R1,CURRELPT             Get current stack pointer
+         MVC   ATTRNAME+4(4),4(R1)     Copy namespace of current elemt
+         BR    R14                     Return
+*
+*  Attribute value found
+*
+ATTRVALU EQU   *
+         L     R1,CURRELPT             Get current stack pointer
+         LR    R2,R1                   Copy current stack pointer
+         AHI   R2,-ELSTKLEN            Address previous stack pointer
+         LR    R3,R2                   Copy parent stack pointer
+         AHI   R3,-ELSTKLEN            Address grandparent
+*
+*  Check the name of the element to which the current attribute applies
+*  (This is the most recent element on the element stack.)
+*
+         CLC   0(8,R1),=A(NUM_LINK,NSATOMID)  link element?
+         JE    ATTLINK                 Handle link attributes
+         CLC   0(8,R1),=A(NUM_CONTENT,NSATOMID)  content element?
+         JE    ATTCONTE                Handle content attributes
+         CLC   0(8,R1),=A(NUM_ELEMENT,NSXSCHID)  schema element?
+         JE    ATTSCHEL                Handle schema attributes
+         CLC   0(8,R1),=A(NUM_RESOURCE,NSCICSID)  CICS resource?
+         JE    ATTCIRSR                Handle cics:resource attributes
+         CLC   0(8,R1),=A(NUM_FEED,NSCICSID)  CICS feed?
+         JE    ATTCICFD                Handle cics:feed attributes
+         CLC   0(8,R1),=A(NUM_FIELDNAMES,NSCICSID) Is it fieldnames?
+         JE    ATTCICFL                Handle cics:fieldnames
+         CLC   0(8,R1),=A(NUM_DATAFORMAT,NSDFDLID)  DFDL dataFormat?
+         JE    ATTDFDDF                Handle DFDL dataformat attribs
+         CLC   0(8,R1),=A(NUM_USE,NSDFDLID)  DFDL use?
+         JE    ATTDFDUS                Handle DFDL use attributes
+         CLC   0(8,R1),=A(NUM_COLLECTION,NSATMPID)  APP collection?
+         JE    APPCOLLE                Handle APP collection
+         CLC   0(8,R1),=A(NUM_CATEGORIES,NSATMPID)  APP categories?
+         JE    APPCATGS                Handle APP categories
+*
+*  The type attribute applies to several atom element types,
+*  so check for that specifically here.
+*
+         CLC   ATTRNAME(8),=A(NUM_TYPE,NSATOMID) atom:type attribute
+         JE    ATTTYPE                 Yes, handle type
+         BR    R14                     Unknown attribute
+ATTLINK  EQU   *                       Handle link attributes
+         LA    R9,FEEDPROP             Point to properties for the feed
+         USING ATOMPROP,R9
+         L     R8,CURRENTR             Get current entry
+         USING ATOMENTR,R8             Addressability for entry
+         CLC   0(ELSTKLEN,R2),=A(NUM_ENTRY,NSATOMID)  Within entry?
+         JNE   ATTLINKF                No, assume feed
+         LA    R9,ENTRPROP             Address the entry properties
+ATTLINKF L     R15,LINKINDX            Get current atom:link index
+         CHI   R15,(MAXLINKS-1)*ATOMLNKL Does it exceed maximum?
+         BHR   R14                       Yes, ignore excessive links
+         LA    R3,LINKELTS(R15)        Address current atom:link desc
+         USING ATOMLINK,R3             Establish addressabilty
+         LA    R4,LINKREL              Address rel attribute
+         CLC   ATTRNAME,=A(NUM_REL,NSATOMID)  Is it the rel attribute?
+         JE    SAVEATTR                Yes, rel attribute value
+         LA    R4,LINKHREF             Address href attribute
+         CLC   ATTRNAME,=A(NUM_HREF,NSATOMID)  Is is the href attrib?
+         JE    SAVEATTR                Yes
+         LA    R4,LINKTITL             Address title attribute
+         CLC   ATTRNAME,=A(NUM_TITLE,NSATOMID)  Is it the title attr?
+         JE    SAVEATTR
+         LA    R4,LINKTYPE
+         CLC   ATTRNAME,=A(NUM_TYPE,NSATOMID)  Is it the type attr?
+         JE    SAVEATTR
+         LA    R4,LINKLANG
+         CLC   ATTRNAME,=A(NUM_HREFLANG,NSATOMID)  Is it hreflang attr?
+         JE    SAVEATTR
+         LA    R4,LINKLEN
+         CLC   ATTRNAME,=A(NUM_LENGTH,NSATOMID)  Is it the length attr?
+         JE    SAVEATTR
+         BR    R14
+         DROP  R3
+*
+*  Handle the attributes for an xs:element element.
+*  For this application, xs:schema is part of the DFDL language.
+*
+ATTSCHEL EQU   *                       Handle schema attributes
+         L     R15,RSRCINDX            Get current cics:resource index
+         CHI   R15,(MAXCICSR-1)*CICSRDFL Exceeds maximum?
+         BHR   R14                       Yes, ignore excess resources
+         LA    R10,CICSRSRC(R15)       Address current resource
+         USING CICSRDEF,R10            Establish resource addressing
+         L     R15,XSELMNDX            Get current xs:element index
+         CHI   R15,(MAXXSELM-1)*DFDLDEFL Is index too high?
+         BHR   R14                       Yes, ignore excess elements
+         LA    R10,XSELMENT(R15)       Address current xs:element
+         USING DFDLDEFN,R10            Establish addressability
+         LA    R4,DFDNAME              Address xs:element name
+         CLC   ATTRNAME,=A(NUM_NAME,0)  schema name?
+         JE    SAVEATTR                Yes, save name value
+         CLC   ATTRNAME,=A(NUM_NAME,NSXSCHID)  schema name?
+         JE    SAVEATTR                Yes, save name value
+         LA    R4,DFDTYPE              Address xs:type
+         CLC   ATTRNAME,=A(NUM_TYPE,0)  xs:type?
+         JE    SAVEATTR                Yes, save xs type
+         CLC   ATTRNAME,=A(NUM_TYPE,NSXSCHID)  xs:type?
+         JE    SAVEATTR                Yes, save xs type
+         LA    R4,DFDREPRE             Address dfdl:representation
+         CLC   ATTRNAME,=A(NUM_REPRESENTATION,NSDFDLID)
+         JE    SAVEATTR                Yes, save as dfdl:representation
+         LA    R4,DFDLEN               Address dfdl:length
+         CLC   ATTRNAME(4),=A(NUM_LENGTH)  xs:length or dfdl:length?
+         JE    SAVEATTR                Yes, save dfdl length
+         LA    R4,DFDDEFOR             Decimal Format
+         CLC   ATTRNAME,=A(NUM_DECIMALFORMAT,NSDFDLID)
+         JE    SAVEATTR                Yes, Save decimal type
+         LA    R4,DFDDESIG             Decimal Signed
+         CLC   ATTRNAME,=A(NUM_DECIMALSIGNED,NSDFDLID)
+         JE    SAVEATTR                Yes, Save decimal type
+         LA    R4,DFDFRACT
+         CLC   ATTRNAME,=A(NUM_FRACTIONDIGITS,NSXSCHID)
+         JE    SAVEATTR                Yes, Save fractionDigits
+         BR    R14                     Unknown schema attribute, return
+         DROP  R10
+ATTDFDDF DS    0H
+ATTDFDUS DS    0H
+         BR    R14
+ATTCONTE DS    0H                      Handle content attributes
+         L     R8,CURRENTR             Get current entry
+         USING ATOMENTR,R8             Addressability for entry
+         LA    R4,CICSRNAM
+         CLC   ATTRNAME,=A(NUM_RESOURCE,NSCICSID)  cics:resource?
+         JE    SAVEATTR                Yes, save CICS resource name
+         CLC   ATTRNAME,=A(NUM_NAME,NSCICSID)  cics:name?
+         JE    SAVEATTR                Yes, save CICS resource name
+         LA    R4,CICSRTYP
+         CLC   ATTRNAME,=A(NUM_TYPE,NSCICSID)  cics:type?
+         JE    SAVEATTR                Yes, save CICS resource type
+         BR    R14
+APPCOLLE DS    0H                      APP collection
+         L     R15,WORKSNDX            Get current workspace index
+         LA    R2,APPWRKSD(R15)        Address current workspace
+         L     R15,APPWCNDX-APPWORKS(,R2)  Get collection index
+         LA    R2,APPWCOLL-APPWORKS(R15,R2)  Address current collection
+         LA    R4,APCOLURL-APPCOLLN(,R2)  Collection href
+         CLC   ATTRNAME(4),=A(NUM_HREF)  href attribute?
+         JE    SAVEATTR                Yes, save collection href
+         BR    R14
+APPCATGS DS    0H                      APP categories
+         L     R15,WORKSNDX            Get current workspace index
+         LA    R2,APPWRKSD(R15)        Address current workspace
+         L     R15,APPWCNDX-APPWORKS(,R2)  Get collection index
+         LA    R2,APPWCOLL-APPWORKS(R15,R2)  Address current collection
+         LA    R4,APCATHRF-APPCOLLN(,R2)  Address categories href
+         CLC   ATTRNAME(4),=A(NUM_HREF)  href atttribute?
+         JE    SAVEATTR                Yes, save categories href
+         BR    R14
+*
+*  Save the attributes from the cics:resource tag
+*
+ATTCIRSR DS    0H
+         L     R15,RSRCINDX            Get current CICS resource index
+         CHI   R15,(MAXCICSR-1)*CICSRDFL Exceeds maximum?
+         BHR   R14                       Yes, ignore excess resources
+         LA    R2,CICSRSRC(R15)        Address current resource
+         USING CICSRDEF,R2
+         LA    R4,CICSNAME             Address resource name
+         CLC   ATTRNAME,=A(NUM_NAME,NSCICSID)  cics:name?
+         JE    SAVEATTR                Save CICS resource name
+         LA    R4,CICSTYPE             Address resource type
+         CLC   ATTRNAME,=A(NUM_TYPE,NSCICSID)  cics:type?
+         JE    SAVEATTR                Save CICS resource type
+         LA    R4,CICSKEYF             Address resource key field
+         BR    R14
+*
+*  Save the attributes from the cics:feed element
+*
+ATTCICFD DS    0H
+         LA    R4,WINDOW               Address window size
+         CLC   ATTRNAME,=A(NUM_WINDOW,NSCICSID)  cics:window?
+         JE    SAVEATTR                Save window size
+         BR    R14
+*
+*  Save the attributes from the cics:fieldnames element
+*
+ATTCICFL DS    0F
+         L     R15,RSRCINDX            Get current CICS resource index
+         CHI   R15,(MAXCICSR-1)*CICSRDFL Exceeds maximum?
+         BHR   R14                       Yes, ignore excess resources
+         LA    R2,CICSRSRC(R15)        Address current resource
+         USING CICSRDEF,R2             Address CICS resource definition
+         LA    R4,CICSKEYF             Address key field pointers
+         CLC   ATTRNAME,=A(NUM_KEY,NSCICSID)  cics:key?
+         JE    SAVEATTR                Save key field name
+         LA    R4,CICSATID             Address id field pointers
+         CLC   ATTRNAME,=A(NUM_ID,NSCICSID)  cics:id?
+         JE    SAVEATTR                Save id field name
+         LA    R4,CICSUPDT             Address updated field pointers
+         CLC   ATTRNAME,=A(NUM_UPDATED,NSCICSID)  cics:updated?
+         JE    SAVEATTR                Save updated field name
+         LA    R4,CICSTITL             Address title field pointers
+         CLC   ATTRNAME,=A(NUM_TITLE,NSCICSID)  cics:title?
+         JE    SAVEATTR                Save title field name
+         LA    R4,CICSSUBT             Address subtitle field pointers
+         CLC   ATTRNAME,=A(NUM_SUBTITLE,NSCICSID)  cics:subtitle?
+         JE    SAVEATTR                Save subtitle field name
+         LA    R4,CICSSUMM             Address summary field pointers
+         CLC   ATTRNAME,=A(NUM_SUMMARY,NSCICSID)  cics:summary?
+         JE    SAVEATTR                Save summary field name
+         BR    R14                     Ignore unrecognized attribute
+*
+*  Handle the type attribute for a number of different atom elements
+*
+ATTTYPE  DS    0H
+         LA    R9,FEEDPROP             Point to properties for the feed
+         USING ATOMPROP,R9
+         L     R8,CURRENTR             Get current entry
+         USING ATOMENTR,R8             Addressability for entry
+         CLC   0(ELSTKLEN,R2),=A(NUM_ENTRY,NSATOMID)  Within entry?
+         JNE   ATTTYPEF                No, assume feed
+         LA    R9,ENTRPROP             Address the entry properties
+ATTTYPEF EQU   *
+         LA    R4,TITLETYP             Address title type
+         CLC   0(8,R1),=A(NUM_TITLE,NSATOMID)  title element?
+         JE    SAVEATTR                Yes, save title type attribute
+         LA    R4,SUBTTLTY             Address subtitle type
+         CLC   0(8,R1),=A(NUM_SUBTITLE,NSATOMID)  subtitle element?
+         JE    SAVEATTR                Yes, save subtitle type attrib
+         LA    R4,SUMMARTY             Address summary type
+         CLC   0(8,R1),=A(NUM_SUMMARY,NSATOMID)  summary element?
+         JE    SAVEATTR                Yes, save summary type attrib
+         LA    R4,RIGHTSTY             Address rights type
+         CLC   0(8,R1),=A(NUM_RIGHTS,NSATOMID)  rights element?
+         JE    SAVEATTR                Yes, save rights type attribute
+         BR    R14                     Ignore unrecognized attribute
+*
+*  Note that the parser does not tokenize attribute values,
+*  nor even remove any namespace prefix, so we do that here.
+*  Note that if the attribute value is a URL, the scheme looks
+*  just like a namespace prefix, but it is not suppressed.
+*
+SAVEATTR LA    R2,XEH_VALTEXT-1        Address byte before string
+         ICM   R3,15,XEH_VALLEN        Get character length
+         SR    R15,R15                 Clear for indexing
+SATTPICK IC    R15,0(R3,R2)            Pick up last byte of string
+         LA    R1,WHITESPC(R15)        Address its whitespace transform
+         CLI   0(R1),0                 Is it linear whitespace?
+         JNE   SATTXLWS                No, exit trailing scan
+         JCT   R3,SATTPICK             Yes, reduce length and try again
+         BR    R14                     Exit if no characters left
+SATTXLWS LA    R15,255(,R3)            Prepare length for Execute
+         LA    R1,0(R3,R2)             Preset R1 to end of string
+         EX    R15,SKIPLWS             Scan over LWS
+         LR    R2,R1                   Save addr of 1st non-white char
+         LA    R0,XEH_VALTEXT          Address start of text
+         SR    R1,R0                   Count leading white characters
+         SR    R3,R1                   Decrease length accordingly
+         STM   R2,R3,0(R4)             Save pointer and length
+         LA    R3,0(R3,R2)             Address byte after value
+         LR    R15,R3                  Set as search terminator
+         LHI   R0,C':'                 Set search character to colon
+         SRST  R15,R2                  Search for a colon
+         BRC   1,*-4                   Loop until search complete
+         BCR   2,R14                   No colon found, so exit
+         LA    R2,1(,R15)              Address character after colon
+         SR    R3,R2                   Calculate remaining length
+         CLC   0(2,R2),=C'//'          Is the attribute a URL?
+         BER   R14                     Yes, scheme, not namespace
+         STM   R2,R3,0(R4)             No, reset pointer and length
+         BR    R14                     Return if drop through
+         SPACE 3
+ANSTATIC DS    0AD(0)
+ENTRYLEN DC    A(ATOMENTL)
+COPYCHAR MVC   4(*-*,R4),0(R3)
+CONVRTNL TR    0(*-*,R2),NLCONVRT
+SKIPLWS  TRT   1(0,R2),WHITESPC
+         LTORG ,
+*
+*  This table is used to detect whitespace characters in a string.
+*  The whitespace characters are NULL, HT, CR, NL, LF, and SP.
+*
+         DS    0D
+WHITESPC DC    256AL1(*-WHITESPC)      Create ASIS translate table
+         ORG   WHITESPC+X'09'          HT - Horizontal tab
+         DC    AL1(0)
+         ORG   WHITESPC+X'0D'          CR - Carriage return
+         DC    AL1(0)
+         ORG   WHITESPC+X'15'          NL - Newline (or NEL, formally)
+         DC    AL1(0)
+         ORG   WHITESPC+X'25'          LF - Linefeed
+         DC    AL1(0)
+         ORG   WHITESPC+X'40'          SP - Space
+         DC    AL1(0)
+         ORG   ,
+*
+*  This table converts NL characters (newline) to LF (linefeed).
+*  This is needed because XML does not recognize NL as whitespace.
+*  See http://www.w3.org/TR/newline by Sue Malaika.
+*
+NLCONVRT DC    256AL1(*-NLCONVRT)      Create ASIS translate table
+         ORG   NLCONVRT+X'15'          Convert NL (newline)
+         DC    X'25'                   ... to LF (linefeed)
+         ORG   ,
+         EJECT ,
+*
+*  The following storage area contains all the cics and atom
+*  properties for a single entry within the feed.
+*
+ATOMENTR DSECT ,                       Layout for an atom entry
+NEXTENTR DS    A                       Link to next entry
+ENTCICST DS    CL12                    CICS resource type
+ENTCICSR DS    CL16                    CICS resource name
+CICSRTYP DS    XL8
+CICSRNAM DS    XL8
+ENTRPROP DS    XL(ATOMPRPL)            Storage for entry properties
+ATOMENTL EQU   *-ATOMENTR
+*
+*  The following dsect describes a structure for the child elements
+*  that are common to a feed and an atom feed entry.
+*
+ATOMPROP DSECT ,
+LINKINDX DS    F                  Index to atom:link element
+CONTRNDX DS    F                  Contributor number
+LINKSELF DS    A                  Pointer to atom:link (rel=self)
+LINKACT  DS    A                  Pointer to  active (actual) atom:link
+TITLE    DS    XL8                Ptr/Len for atom:title
+TITLETYP DS    XL8                Ptr/len for atom:title type attrib
+SUBTITLE DS    XL8                Ptr/Len for atom:subtitle
+SUBTTLTY DS    XL8                Ptr/len for atom:subtitle type attrib
+SUMMARY  DS    XL8                Ptr/Len for atom:summary
+SUMMARTY DS    XL8                Ptr/len for atom:summary type attrib
+CATEGORY DS    XL8                Ptr/Len for atom:category
+ID       DS    XL8                Ptr/Len for atom:id URI
+ICON     DS    XL8                Ptr/Len for atom:icon URL
+LOGO     DS    XL8                Ptr/Len for atom:logo URL
+NAME     DS    XL8                Ptr/Len for atom:name
+PUBLISHD DS    XL8                Ptr/Len for atom:published
+RIGHTS   DS    XL8                Ptr/Len for atom:rights
+RIGHTSTY DS    XL8                Ptr/len for atom:rights type attrib
+ATOMID   DS    CL128              Space for atom:id
+*
+*  Allocate space for a fixed number of link elements.
+*
+LINKELTS DS    (MAXLINKS)XL(ATOMLNKL)
+*
+*  Allocate space for one author and a fixed number of contributors.
+*
+ATOMAUTH DS    XL(AUTHORL)
+CONTRIBR DS    (MAXCONTR)XL(AUTHORL)
+ATOMPRPL EQU   *-ATOMPROP
+         SPACE 3
+*
+*  The following describes the child elements associated with
+*  an author or a contributor.
+*
+AUTHOR   DSECT
+AUTNAME  DS    XL8                     Ptr/Len for author atom:name
+AUTEMAIL DS    XL8                     Ptr/Len for author atom:email
+AUTURI   DS    XL8                     Ptr/Len for author atom:uri
+AUTHORL  EQU   *-AUTHOR
+*  The following describes the attributes of a link element.
+*  There should be one link element with rel="self" to identify
+*  the link or entry for the CICS URL matching process,
+*  but the atom spec allows other link elements as well.
+ATOMLINK DSECT ,
+LINKHREF DS    XL8                     Ptr/Len for href attribute
+LINKREL  DS    XL8                     Ptr/Len for rel attribute
+LINKTYPE DS    XL8                     Ptr/Len for type attribute
+LINKLANG DS    XL8                     Ptr/len for hreflang attribute
+LINKTITL DS    XL8                     Ptr/Len for title attribute
+LINKLEN  DS    XL8                     Ptr/Len for length attribute
+ATOMLNKL EQU   *-ATOMLINK              Length of atom:link descriptor
+*
+*  The following section defines the properties of a CICS
+*  resource definition (cics:resource element).
+*  It includes the pointer to the *names* of special fields within the
+*  CICS resource, which are specified in the cics:fieldnames element.
+*  If those fields are present, their contents are used to populate
+*  some of the Atom metadata, as well as the content.
+*
+CICSRDEF DSECT ,
+CICSNAME DS    XL8                     Ptr/Len for cics:name
+CICSTYPE DS    XL8                     Ptr/Len for cics:type
+CICSKEYF DS    XL8                     Ptr/Len for cics:key fieldname
+CICSUPDT DS    XL8                     Ptr/Len for cics:updated fname
+CICSATID DS    XL8                     Ptr/Len for cics:id fieldname
+CICSTITL DS    XL8                     Ptr/Len for cics:title fname
+CICSSUBT DS    XL8                     Ptr/Len for cics:subtitle fname
+CICSSUMM DS    XL8                     Ptr/Len for cics:summary fname
+         DS    F                       Alignment
+XSELMNDX DS    F                       Current xs:element index
+XSELMENT DS    (MAXXSELM)XL(DFDLDEFL)
+CICSRDFL EQU   *-CICSRDEF
+*
+*  The following describes the xs:schema and DFDL attributes for the
+*  xs:element subelements of the cics:resource element.
+*
+DFDLDEFN DSECT ,
+DFDNAME  DS    XL8                     Ptr/Len for xs:name
+DFDTYPE  DS    XL8                     Ptr/Len for xs:type
+DFDFRACT DS    XL8                     Ptr/Len for xs:fractionDigits
+DFDREPRE DS    XL8                     Ptr/Len for dfdl:representation
+DFDLEN   DS    XL8                     Ptr/Len for dfdl:length
+DFDDEFOR DS    XL8                     Ptr/Len for dfdl:decimalFormat
+DFDDESIG DS    XL8                     Ptr/Len for dfdl:decimalSigned
+DFDLDEFL EQU   *-DFDLDEFN
+*
+*  The following storage area contains all the atom properties
+*  for the main feed.
+*
+ANASTORD DSECT
+ANASAVEA DS    18F                     Analyze savearea
+ENTRYPTR DS    A                       Base for atomentry chain
+CURRENTR DS    A                       Address of current entry
+CURRELPT DS    A                       Address of current element
+*                                      tokens
+APPWRKSP DS    A                       Address of APP workspaces
+RSRCINDX DS    F                       Current cics:resource index
+WINDOWSZ DS    F                       Window size: entries per feed
+         DS    0AD                     Align on doubleword
+WINDOW   DS    XL8                     Window size from cics:feed
+ATTRNAME DS    XL8                     Current attribute name tokens
+*----------------------------------------------------------------------
+*  The next four selectors are used for navigating
+*  through multiple feeds in an APP collection.
+LINKNEXT DS    XL8                     Selector for next feed
+LINKPREV DS    XL8                     Selector for previous feed
+LINKFRST DS    XL8                     Selector for first feed
+LINKLAST DS    XL8                     Selector for last feed
+*----------------------------------------------------------------------
+ELEMSTCK DS    (MAXDEPTH)XL(ELSTKLEN)  Stack of element tokens
+FEEDPROP DS    XL(ATOMPRPL)            Storage for feed properties
+FEEDUPDT DS    CL32                    Space for last update timestamp
+CICSRSRC DS    (MAXCICSR)XL(CICSRDFL)  Storage for cics:resources
+ANASTORL EQU   *-ANASTORD
+*
+*  The following storage area contains all the descriptors
+*  for an Atom Publishing Protocol workspace
+*
+APPWORKS DSECT ,                  Layout for an APP workspace
+APPWTITL DS    XL8                Pointer/length of title
+APPWCNDX DS    F                  Collection index
+APPWCOLL DS    (MAXCOLLN)XL(APPCOLLL)  Storage for collections
+APPWORKL EQU   *-APPWORKS
+         SPACE 3
+APPCOLLN DSECT ,                  Layout for an APP collection
+APCOANDX DS    F                  Index to accept element
+         DS    F                  Padding for alignment
+APCOLTIT DS    XL8                Pointer/length of collection title
+APCOLURL DS    XL8                Pointer/length of collection href
+APCATTXT DS    XL8                Pointer/length of categories (inline)
+APCATHRF DS    XL8                Pointer/length of categories href
+APCATFIX DS    XL8                Pointer/length of categories fixed
+APCATSCH DS    XL8                Pointer/length of categories scheme
+APCOLACC DS    (MAXACCPT)XL(APPACCPL)  Space for accept descriptors
+APPCOLLL EQU   *-APPCOLLN
+APPACCEP DSECT ,                  Accept element
+APPACCPT DS    XL8                Pointer/length of accept
+APPACCPL EQU   *-APPACCEP
+*:erefstep.w2samp_analyze_routine *************************************
+*:refstep.w2samp_stringid_service ************************* DFHW2SAM **
+*                                                                     *
+***********************************************************************
+***********************************************************************
+*
+*  String-id service
+*
+*  This routine can enhance the performance of string recognition
+*  by tokenizing character strings.
+*  This is especially useful for tokenizing namespace identifiers.
+*
+*  Parameters are:  service parameter  PTR  INPUT
+*                   string             CHAR INPUT
+*                   string_len         BIN  INPUT
+*                   string_id          BIN  OUTPUT
+*                   ccsid              BIN  INPUT
+*                   exit_diag_code     BIN  OUTPUT
+*                   return_code        BIN  OUTPUT
+*
+*  Note that this program has no automatic storage and does not
+*  establish a savearea as it does not call any other routines.
+*
+***********************************************************************
+SIDPLIST DSECT
+SIDSVCPM DS    A                       Address of service parameter
+SIDSTRP  DS    A                       Address of string to be
+*                                      tokenized
+SIDLENP  DS    A                       Address of string length
+SIDTOKNP DS    A                       Address for returned token
+SIDCCSP  DS    A                       Address of CCSID
+SIDDIAGP DS    A                       Address for diagnosis code
+SIDRETCP DS    A                       Address for return code
+*
+GXLSYM31 CSECT ,
+GXLSYM31 AMODE 31
+GXLSYM31 RMODE ANY
+         B_    SYMENTER-*(,R15)        Branch over entry identifier
+         DC    AL1(8),CL9'GXLSYM31'
+SYMENTER STM   R14,R12,12(13)          Save parser's registers
+         LR    R12,R15                 Set base register
+         USING GXLSYM31,R12            Establish addressability
+         LR    R11,R1                  Copy parmlist address
+         USING SIDPLIST,R11            Addressing for parmlist
+         LM    R8,R9,SIDSTRP           Get address of string and length
+         ICM   R1,15,0(R9)             Load and test string length
+         JZ    SYMNULL                 Null string cannot be tokenized
+         CHI   R1,NAMESTRL             Is this a short string?
+         JNH   INDXSRCH                Yes, do indexed lookup
+         LM    R5,R7,=A(SYMSTRA,SYMSTRLN,SYMSTRZ)  Address string table
+         USING SYMTAB,R5               Addressing for symbol table
+SYMSRCH  C     R1,SYMTABLL             Does string length match?
+         JNE   SYMNEXT                 No, try next string
+         LA    R15,255(,R1)            Yes, get length-1 in low byte
+         EX    R15,COMPSYMB            Compare strings
+         JE    SYMFOUND                Exit loop if found
+SYMNEXT  JXLE  R5,R6,SYMSRCH           Iterate through predefined symbs
+         J     NAMENOTF                Loop terminated, so not found
+SYMNULL  SR    R0,R0                   Null symbol found
+         J     SYMSAVE                 So save a zero token
+SYMFOUND L     R0,SYMTABID             Match found, load symbolic token
+GOTINDEX EQU   *
+SYMSAVE  L     R2,SIDTOKNP             Address for returned token
+         ST    R0,0(,R2)               Save returned token
+         SR    R15,R15                 Set success return code
+SYMEXIT  LM    R2,R3,SIDDIAGP          Address diag word and retcode
+         ST    R0,0(,R2)               Save diagnostic code
+         ST    R15,0(,R3)              Save return code
+         RETURN (14,12)                Return to caller
+INDXSRCH SR    R1,R1                   Clear for indexing
+         IC    R1,0(,R8)               Get first char of string
+         IC    R1,NAMEINDX(R1)         Get index of initial letter
+         MHI   R1,NAMEENTL             Multiply by name size
+         LA    R5,NAMELOWA(R1)         Start of names with this initial
+         LA    R6,NAMEENTL             Set search stride
+         LA    R7,NAMELEND             Set end of search
+NAMESRCH L     R1,0(,R9)               Pick up length of string
+         LA    R2,255(,R1)             Decrement low byte for EXECUTE
+         EX    R2,COMPNAME             Compare name
+         JH    NAMENOTF                Name high, so no match
+         JL    NAMENEXT                Name low, so search further
+         CLM   R1,1,0(R5)              Does length also match?
+         JE    NAMEFND                 Yes, successful match
+NAMENEXT JXLE  R5,R6,NAMESRCH          Name low, so search further
+*
+*  If the name is not found, it is not in our limited vocabulary,
+*  so is is presumably a field we can ignore. Just return -1.
+*
+NAMENOTF EQU   *
+         LHI   R0,-1                   Set index to minus one
+         J     GOTINDEX                Go and save it
+*
+*  If the name is found, add X'400' to distinguish it from a namespace
+*
+NAMEFND  EQU   *
+         LR    R0,R5                   Address of matching entry
+         LA    R1,NAMELOWA             Address start of table
+         SR    R0,R1                   Get table offset
+         SRDL  R0,32                   Shift to right-hand reg
+         D     R0,=A(NAMEENTL)         Divide by table width
+         LA    R0,1024(,R1)            Add X'400' for uniqueness
+         J     GOTINDEX                Go to save index
+         SPACE 3
+COMPNAME CLC   1(*-*,R5),0(R8)
+COMPSYMB CLC   SYMTABVL(*-*),0(R8)     Compare string value
+         DROP  R5,R11,R12
+         EJECT ,
+*:refstep.w2samp_vocabulary ******************************* DFHW2SAM **
+*                                                                     *
+* The expected names in a CICS Web2.0 pipeline configuration file     *
+* form a fairly limited vocabulary, so we can optimize the search for *
+* them by including them all in this table. To optimize the search,   *
+* the names should be in exact collating sequence (alphabetical       *
+* order), but the search algorithm does not check this.               *
+*                                                                     *
+***********************************************************************
+NAMEENTL EQU 24                        Length of entry in name table
+NAMESTRL EQU NAMEENTL-1                Length of strings in name table
+NAMES    DC  0D'0'                     Align table on double word
+NAMELOWA EQU *
+STR_accept         DC AL1(06),CL(NAMESTRL)'accept'
+STR_annotation     DC AL1(10),CL(NAMESTRL)'annotation'
+STR_app            DC AL1(03),CL(NAMESTRL)'app'
+STR_appinfo        DC AL1(07),CL(NAMESTRL)'appinfo'
+STR_atom           DC AL1(04),CL(NAMESTRL)'atom'
+STR_atomfeed       DC AL1(08),CL(NAMESTRL)'atomfeed'
+STR_attributeFormD DC AL1(16),CL(NAMESTRL)'attributeFormDef'
+STR_author         DC AL1(06),CL(NAMESTRL)'author'
+NAMELOWB EQU *
+NAMELOWC EQU *
+STR_categories     DC AL1(10),CL(NAMESTRL)'categories'
+STR_category       DC AL1(08),CL(NAMESTRL)'category'
+STR_cics           DC AL1(04),CL(NAMESTRL)'cics'
+STR_collection     DC AL1(10),CL(NAMESTRL)'collection'
+STR_complexType    DC AL1(11),CL(NAMESTRL)'complexType'
+STR_configuration  DC AL1(13),CL(NAMESTRL)'configuration'
+STR_content        DC AL1(07),CL(NAMESTRL)'content'
+STR_contributor    DC AL1(11),CL(NAMESTRL)'contributor'
+NAMELOWD EQU *
+STR_dataFormat     DC AL1(10),CL(NAMESTRL)'dataFormat'
+STR_dateTime       DC AL1(08),CL(NAMESTRL)'dateTime'
+STR_decimalFormat  DC AL1(13),CL(NAMESTRL)'decimalFormat'
+STR_decimalSigned  DC AL1(13),CL(NAMESTRL)'decimalSigned'
+STR_definitions    DC AL1(11),CL(NAMESTRL)'definitions'
+STR_dfdl           DC AL1(04),CL(NAMESTRL)'dfdl'
+STR_documentation  DC AL1(13),CL(NAMESTRL)'documentation'
+NAMELOWE EQU *
+STR_edited         DC AL1(06),CL(NAMESTRL)'edited'
+STR_element        DC AL1(07),CL(NAMESTRL)'element'
+STR_elementFormDef DC AL1(18),CL(NAMESTRL)'elementFormDefault'
+STR_email          DC AL1(05),CL(NAMESTRL)'email'
+STR_encoding       DC AL1(08),CL(NAMESTRL)'encoding'
+STR_entry          DC AL1(05),CL(NAMESTRL)'entry'
+NAMELOWF EQU *
+STR_feed           DC AL1(04),CL(NAMESTRL)'feed'
+STR_fieldnames     DC AL1(10),CL(NAMESTRL)'fieldnames'
+STR_file           DC AL1(04),CL(NAMESTRL)'file'
+STR_fixed          DC AL1(05),CL(NAMESTRL)'fixed'
+STR_fractionDigits DC AL1(14),CL(NAMESTRL)'fractionDigits'
+NAMELOWG EQU *
+NAMELOWH EQU *
+STR_handler_param  DC AL1(22),CL(NAMESTRL)'handler_parameter_list'
+STR_href           DC AL1(04),CL(NAMESTRL)'href'
+STR_hreflang       DC AL1(08),CL(NAMESTRL)'hreflang'
+NAMELOWI EQU *
+STR_icon           DC AL1(04),CL(NAMESTRL)'icon'
+STR_id             DC AL1(02),CL(NAMESTRL)'id'
+NAMELOWJ EQU *
+NAMELOWK EQU *
+STR_key            DC AL1(03),CL(NAMESTRL)'key'
+NAMELOWL EQU *
+STR_label          DC AL1(05),CL(NAMESTRL)'label'
+STR_layout         DC AL1(06),CL(NAMESTRL)'layout'
+STR_length         DC AL1(06),CL(NAMESTRL)'length'
+STR_link           DC AL1(04),CL(NAMESTRL)'link'
+STR_logo           DC AL1(04),CL(NAMESTRL)'logo'
+NAMELOWM EQU *
+STR_maxOccurs      DC AL1(09),CL(NAMESTRL)'maxOccurs'
+STR_minOccurs      DC AL1(09),CL(NAMESTRL)'minOccurs'
+NAMELOWN EQU *
+STR_name           DC AL1(04),CL(NAMESTRL)'name'
+NAMELOWO EQU *
+STR_occursDetBy    DC AL1(18),CL(NAMESTRL)'occursDeterminedBy'
+STR_occursPath     DC AL1(10),CL(NAMESTRL)'occursPath'
+NAMELOWP EQU *
+STR_published      DC AL1(09),CL(NAMESTRL)'published'
+NAMELOWQ EQU *
+STR_qualified      DC AL1(09),CL(NAMESTRL)'qualified'
+NAMELOWR EQU *
+STR_rel            DC AL1(03),CL(NAMESTRL)'rel'
+STR_representation DC AL1(14),CL(NAMESTRL)'representation'
+STR_resource       DC AL1(08),CL(NAMESTRL)'resource'
+STR_rights         DC AL1(06),CL(NAMESTRL)'rights'
+NAMELOWS EQU *
+STR_schema         DC AL1(06),CL(NAMESTRL)'schema'
+STR_scheme         DC AL1(06),CL(NAMESTRL)'scheme'
+STR_self           DC AL1(04),CL(NAMESTRL)'self'
+STR_sequence       DC AL1(08),CL(NAMESTRL)'sequence'
+STR_service        DC AL1(07),CL(NAMESTRL)'service'
+STR_source         DC AL1(06),CL(NAMESTRL)'source'
+STR_space          DC AL1(05),CL(NAMESTRL)'space'
+STR_subtitle       DC AL1(08),CL(NAMESTRL)'subtitle'
+STR_summary        DC AL1(07),CL(NAMESTRL)'summary'
+STR_string         DC AL1(06),CL(NAMESTRL)'string'
+NAMELOWT EQU *
+STR_tdqueue        DC AL1(07),CL(NAMESTRL)'tdqueue'
+STR_term           DC AL1(04),CL(NAMESTRL)'term'
+STR_text           DC AL1(04),CL(NAMESTRL)'text'
+STR_textTypes      DC AL1(09),CL(NAMESTRL)'textTypes'
+STR_timeFormat     DC AL1(10),CL(NAMESTRL)'timeFormat'
+STR_title          DC AL1(05),CL(NAMESTRL)'title'
+STR_tsqueue        DC AL1(07),CL(NAMESTRL)'tsqueue'
+STR_type           DC AL1(04),CL(NAMESTRL)'type'
+NAMELOWU EQU *
+STR_unbounded      DC AL1(09),CL(NAMESTRL)'unbounded'
+STR_unqualified    DC AL1(11),CL(NAMESTRL)'unqualified'
+STR_updated        DC AL1(07),CL(NAMESTRL)'updated'
+STR_uri            DC AL1(03),CL(NAMESTRL)'uri'
+STR_use            DC AL1(03),CL(NAMESTRL)'use'
+NAMELOWV EQU *
+NAMELOWW EQU *
+STR_window         DC AL1(06),CL(NAMESTRL)'window'
+STR_workspace      DC AL1(09),CL(NAMESTRL)'workspace'
+NAMELOWX EQU *
+STR_xml            DC AL1(03),CL(NAMESTRL)'xml'
+STR_xmlns          DC AL1(05),CL(NAMESTRL)'xmlns'
+STR_xs             DC AL1(02),CL(NAMESTRL)'xs'
+STR_xsd            DC AL1(03),CL(NAMESTRL)'xsd'
+STR_xsi            DC AL1(03),CL(NAMESTRL)'xsi'
+NAMELOWY EQU *
+NAMELOWZ EQU *
+NAMELEND DC  (NAMEENTL)X'FF'
+*
+*  The following table indexes the start of each section of the
+*  name table by its initial letter. If the number of words in the
+*  limited vocabulary ever exceeds 256, the table should be changed
+*  to a table of halfwords rather than bytes.
+*
+NAMEINDX DC    0D'0'
+         DC    256AL1(0)
+         ORG   NAMEINDX+C'a'
+         DC    AL1((NAMELOWA-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWB-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWC-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWD-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWE-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWF-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWG-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWH-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWI-NAMELOWA)/NAMEENTL)
+         ORG   NAMEINDX+C'j'
+         DC    AL1((NAMELOWJ-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWK-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWL-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWM-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWN-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWO-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWP-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWQ-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWR-NAMELOWA)/NAMEENTL)
+         ORG   NAMEINDX+C's'
+         DC    AL1((NAMELOWS-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWT-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWU-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWV-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWW-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWX-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWY-NAMELOWA)/NAMEENTL)
+         DC    AL1((NAMELOWZ-NAMELOWA)/NAMEENTL)
+         ORG   NAMEINDX+256
+         SPACE 3
+         LTORG ,
+*
+*  The following equates form unique stringids for the character
+*  strings in the PIPELINE configuration file's XML. Note that
+*  these values are local to these modules, and should not be
+*  referenced outside them. Since they are derived from the offsets
+*  to entries within the NAMES table above, the values will change
+*  as new entries are inserted in the table.
+*
+NUM_accept         EQU 1024+(STR_accept-NAMES)/NAMEENTL
+NUM_annotation     EQU 1024+(STR_annotation-NAMES)/NAMEENTL
+NUM_app            EQU 1024+(STR_app-NAMES)/NAMEENTL
+NUM_appinfo        EQU 1024+(STR_appinfo-NAMES)/NAMEENTL
+NUM_atom           EQU 1024+(STR_atom-NAMES)/NAMEENTL
+NUM_atomfeed       EQU 1024+(STR_atomfeed-NAMES)/NAMEENTL
+NUM_attributeFormD EQU 1024+(STR_attributeFormD-NAMES)/NAMEENTL
+NUM_author         EQU 1024+(STR_author-NAMES)/NAMEENTL
+NUM_categories     EQU 1024+(STR_categories-NAMES)/NAMEENTL
+NUM_category       EQU 1024+(STR_category-NAMES)/NAMEENTL
+NUM_cics           EQU 1024+(STR_cics-NAMES)/NAMEENTL
+NUM_collection     EQU 1024+(STR_collection-NAMES)/NAMEENTL
+NUM_complexType    EQU 1024+(STR_complexType-NAMES)/NAMEENTL
+NUM_configuration  EQU 1024+(STR_configuration-NAMES)/NAMEENTL
+NUM_content        EQU 1024+(STR_content-NAMES)/NAMEENTL
+NUM_contributor    EQU 1024+(STR_contributor-NAMES)/NAMEENTL
+NUM_dataFormat     EQU 1024+(STR_dataFormat-NAMES)/NAMEENTL
+NUM_dateTime       EQU 1024+(STR_dateTime-NAMES)/NAMEENTL
+NUM_decimalFormat  EQU 1024+(STR_decimalFormat-NAMES)/NAMEENTL
+NUM_decimalSigned  EQU 1024+(STR_decimalSigned-NAMES)/NAMEENTL
+NUM_definitions    EQU 1024+(STR_definitions-NAMES)/NAMEENTL
+NUM_dfdl           EQU 1024+(STR_dfdl-NAMES)/NAMEENTL
+NUM_documentation  EQU 1024+(STR_documentation-NAMES)/NAMEENTL
+NUM_edited         EQU 1024+(STR_edited-NAMES)/NAMEENTL
+NUM_element        EQU 1024+(STR_element-NAMES)/NAMEENTL
+NUM_elementFormDef EQU 1024+(STR_elementFormDef-NAMES)/NAMEENTL
+NUM_email          EQU 1024+(STR_email-NAMES)/NAMEENTL
+NUM_encoding       EQU 1024+(STR_encoding-NAMES)/NAMEENTL
+NUM_entry          EQU 1024+(STR_entry-NAMES)/NAMEENTL
+NUM_feed           EQU 1024+(STR_feed-NAMES)/NAMEENTL
+NUM_fieldnames     EQU 1024+(STR_fieldnames-NAMES)/NAMEENTL
+NUM_file           EQU 1024+(STR_file-NAMES)/NAMEENTL
+NUM_fixed          EQU 1024+(STR_fixed-NAMES)/NAMEENTL
+NUM_fractionDigits EQU 1024+(STR_fractionDigits-NAMES)/NAMEENTL
+NUM_handler_param  EQU 1024+(STR_handler_param-NAMES)/NAMEENTL
+NUM_href           EQU 1024+(STR_href-NAMES)/NAMEENTL
+NUM_hreflang       EQU 1024+(STR_hreflang-NAMES)/NAMEENTL
+NUM_icon           EQU 1024+(STR_icon-NAMES)/NAMEENTL
+NUM_id             EQU 1024+(STR_id-NAMES)/NAMEENTL
+NUM_key            EQU 1024+(STR_key-NAMES)/NAMEENTL
+NUM_label          EQU 1024+(STR_label-NAMES)/NAMEENTL
+NUM_layout         EQU 1024+(STR_layout-NAMES)/NAMEENTL
+NUM_length         EQU 1024+(STR_length-NAMES)/NAMEENTL
+NUM_link           EQU 1024+(STR_link-NAMES)/NAMEENTL
+NUM_logo           EQU 1024+(STR_logo-NAMES)/NAMEENTL
+NUM_maxOccurs      EQU 1024+(STR_maxOccurs-NAMES)/NAMEENTL
+NUM_minOccurs      EQU 1024+(STR_minOccurs-NAMES)/NAMEENTL
+NUM_name           EQU 1024+(STR_name-NAMES)/NAMEENTL
+NUM_occursDetBy    EQU 1024+(STR_occursDetBy-NAMES)/NAMEENTL
+NUM_occursPath     EQU 1024+(STR_occursPath-NAMES)/NAMEENTL
+NUM_published      EQU 1024+(STR_published-NAMES)/NAMEENTL
+NUM_qualified      EQU 1024+(STR_qualified-NAMES)/NAMEENTL
+NUM_rel            EQU 1024+(STR_rel-NAMES)/NAMEENTL
+NUM_representation EQU 1024+(STR_representation-NAMES)/NAMEENTL
+NUM_resource       EQU 1024+(STR_resource-NAMES)/NAMEENTL
+NUM_rights         EQU 1024+(STR_rights-NAMES)/NAMEENTL
+NUM_schema         EQU 1024+(STR_schema-NAMES)/NAMEENTL
+NUM_scheme         EQU 1024+(STR_scheme-NAMES)/NAMEENTL
+NUM_self           EQU 1024+(STR_self-NAMES)/NAMEENTL
+NUM_sequence       EQU 1024+(STR_sequence-NAMES)/NAMEENTL
+NUM_service        EQU 1024+(STR_service-NAMES)/NAMEENTL
+NUM_source         EQU 1024+(STR_source-NAMES)/NAMEENTL
+NUM_space          EQU 1024+(STR_space-NAMES)/NAMEENTL
+NUM_subtitle       EQU 1024+(STR_subtitle-NAMES)/NAMEENTL
+NUM_summary        EQU 1024+(STR_summary-NAMES)/NAMEENTL
+NUM_string         EQU 1024+(STR_string-NAMES)/NAMEENTL
+NUM_tdqueue        EQU 1024+(STR_tdqueue-NAMES)/NAMEENTL
+NUM_term           EQU 1024+(STR_term-NAMES)/NAMEENTL
+NUM_text           EQU 1024+(STR_text-NAMES)/NAMEENTL
+NUM_textTypes      EQU 1024+(STR_textTypes-NAMES)/NAMEENTL
+NUM_timeFormat     EQU 1024+(STR_timeFormat-NAMES)/NAMEENTL
+NUM_title          EQU 1024+(STR_title-NAMES)/NAMEENTL
+NUM_tsqueue        EQU 1024+(STR_tsqueue-NAMES)/NAMEENTL
+NUM_type           EQU 1024+(STR_type-NAMES)/NAMEENTL
+NUM_unbounded      EQU 1024+(STR_unbounded-NAMES)/NAMEENTL
+NUM_unqualified    EQU 1024+(STR_unqualified-NAMES)/NAMEENTL
+NUM_updated        EQU 1024+(STR_updated-NAMES)/NAMEENTL
+NUM_uri            EQU 1024+(STR_uri-NAMES)/NAMEENTL
+NUM_use            EQU 1024+(STR_use-NAMES)/NAMEENTL
+NUM_window         EQU 1024+(STR_window-NAMES)/NAMEENTL
+NUM_workspace      EQU 1024+(STR_workspace-NAMES)/NAMEENTL
+NUM_xml            EQU 1024+(STR_xml-NAMES)/NAMEENTL
+NUM_xmlns          EQU 1024+(STR_xmlns-NAMES)/NAMEENTL
+NUM_xs             EQU 1024+(STR_xs-NAMES)/NAMEENTL
+NUM_xsd            EQU 1024+(STR_xsd-NAMES)/NAMEENTL
+NUM_xsi            EQU 1024+(STR_xsi-NAMES)/NAMEENTL
+         SPACE 1
+*:refstep.w2samp_namespaces ******************************* DFHW2SAM **
+*                                                                     *
+***********************************************************************
+*
+*  Define numeric constants for all the expected namespaces
+*
+NSXML1ID EQU   X'101'             XML namespace namespace
+NSXML2ID EQU   X'102'             XML namespace namespace
+NSXSCHID EQU   X'103'             XML Schema namespace
+NSXSCIID EQU   X'104'             XML Schema instance namespace
+NSPIPEID EQU   X'105'             CICS PIPELINE namespace
+NSCICSID EQU   X'106'             ATOMPIPE namespace used by SupportPac
+NSATOMID EQU   X'107'             ATOM namespace from of RFC4287
+NSATMPID EQU   X'108'             ATOM publishing namespace of RFC5023
+NSDFDLID EQU   X'109'             DFDL Namespace
+SYMTABLN EQU   120                Symbol table length
+*
+         SPACE 3
+*
+*  Here is a table of namespace URIs that will be tokenized.
+*  They are the namespace identifiers that are expected in the
+*  CICS PIPELINE configuration file.
+*
+SYMSTRA  DS    0AD(0)                  Symbol table on dword boundary
+SYMXML1  DC    A(NSXML1ID,L'NSXML1),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSXML1   DC    C'http://www.w3.org/XML/1998/namespace'
+         ORG   ,
+SYMXML2  DC    A(NSXML2ID,L'NSXML2),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSXML2   DC    C'http://www.w3.org/2000/xmlns/'
+         ORG   ,
+SYMPIPE  DC    A(NSPIPEID,L'NSPIPE),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSPIPE   DC    C'http://www.ibm.com/software/htp/cics/pipeline'
+         ORG   ,                       Namespace for CICS PIPE
+SYMCICS  DC    A(NSCICSID,L'NSCICS),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSCICS   DC    C'http://www.ibm.com/software/htp/cics/atompipe'
+         ORG   ,                       Namespace for SupportPac
+SYMATOM  DC    A(NSATOMID,L'NSATOM),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSATOM   DC    C'http://www.w3.org/2005/Atom' Namespace id from RFC4287
+         ORG   ,
+SYMATMP  DC    A(NSATMPID,L'NSATMP),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSATMP   DC    C'http://www.w3.org/2007/app'  Namespace id from RFC5023
+         ORG   ,
+SYMXSCI  DC    A(NSXSCIID,L'NSXSCI),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSXSCI   DC    C'http://www.w3.org/2001/XMLSchema-instance'
+         ORG   ,
+SYMXSCH  DC    A(NSXSCHID,L'NSXSCH),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSXSCH   DC    C'http://www.w3.org/2001/XMLSchema' XML Schema Namespace
+         ORG   ,
+SYMDFDL  DC    A(NSDFDLID,L'NSDFDL),CL(SYMTABLN)' '
+         ORG   *-SYMTABLN
+NSDFDL   DC    C'http://dataformat.org/dfdl-1.0'
+         ORG   ,
+SYMSTRZ  EQU   *-SYMSTRLN              Address of last entry
+*
+SYMTAB   DSECT                    Symbol table entry
+SYMTABID DS    F                  Symbol table token id
+SYMTABLL DS    F                  Symbol table length
+SYMTABVL DS    CL(SYMTABLN)       Symbol table value
+SYMSTRLN EQU   *-SYMTAB
+*:erefstep.w2samp_namespaces ******************************************
+*:erefstep.w2samp_vocabulary ******************************************
+*:erefstep.w2samp_stringid_service ************************************
+         END   ,

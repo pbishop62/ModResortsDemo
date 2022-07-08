@@ -1,0 +1,348 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* MODULE NAME = DFH$WBPC                                           */
+ /*                                                                  */
+ /* DESCRIPTIVE NAME = CICS TS  (WB) Web Pipelining Sample           */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*      Licensed Materials - Property of IBM                        */
+ /*                                                                  */
+ /*      "Restricted Materials of IBM"                               */
+ /*                                                                  */
+ /*      5655-Y04                                                    */
+ /*                                                                  */
+ /*      (C) Copyright IBM Corp. 2006, 2007"                         */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* STATUS = 7.2.0                                                   */
+ /*                                                                  */
+ /* FUNCTION = CICS C Program that performs PIPELINING to a web      */
+ /*            server.                                               */
+ /*                                                                  */
+ /*    Versions of this program in other languages are also provided:*/
+ /*          ASM   - DFH$WBPA                                        */
+ /*          COBOL - DFH0WBPO                                        */
+ /*                                                                  */
+ /* NOTES :                                                          */
+ /*  DEPENDENCIES = S/390                                            */
+ /*  MODULE TYPE = Executable                                        */
+ /*  PROCESSOR = C/370                                               */
+ /*  ATTRIBUTES = Read only, Serially Reusable                       */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* DESCRIPTION                                                      */
+ /* This program is a sample version in C of a client web            */
+ /* application that is invoked by a CICS Transaction.  It           */
+ /* demonstrates how to construct a pipelining application that      */
+ /* uses a Client URIMAP.  The server application that is used by    */
+ /* the sample is DFH$WB1A(the supplied sample that is used for      */
+ /* Web Support IVP).                                                */
+ /*                                                                  */
+ /* The Client URIMAP DFH$URI2 needs to be setup before installing   */
+ /* and configuring the server attribute on the client URIMAP.       */
+ /*                                                                  */
+ /* Pipelining allows a client to make multiple requests without     */
+ /* waiting for each response, allowing a single TCP connection to   */
+ /* be used much more efficiently, with much lower elapsed time.     */
+ /*                                                                  */
+ /* For more information on Chunking see RFC2616                     */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* CHANGE ACTIVITY :                                                */
+ /*                                                                  */
+ /*      $MOD(DFH$WBPC),COMP(CICSWEB),PROD(CICS TS ):                */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXXIII : REMARKS                        */
+ /*  $L0= 873    650 060315 HDJBAC  : 3 - Pipelining Samples         */
+ /*  $L1= 873    650 060605 HDJBAC  : Web Samples of Chunking        */
+ /*  $P1= D18453 650 070405 HD4EPEA : Show status code & status text */
+ /*                                                                  */
+ /********************************************************************/
+#pragma XOPTS(CICS)
+/* HEADER */
+
+/*--------------------------------------------------------------------*/
+/* Standard includes for a C application                              */
+/*--------------------------------------------------------------------*/
+#include <ctype.h>
+#include <string.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+
+/*--------------------------------------------------------------------*/
+/* Global Variables                                                   */
+/*--------------------------------------------------------------------*/
+long int resp ;                   /* RESP value for CICS calls        */
+long int resp2 ;                  /* RESP2 value for CICS calls       */
+char Sesstoken[8] ;               /* Sesstoken for WEB CICS Command   */
+int  cursor ;
+short int Status ;                /* Status returned from Server      */
+char StatusData[50] ;             /* Status Text returned from Server */
+
+/*--------------------------------------------------------------------*/
+/* Declare Methods                                                    */
+/*--------------------------------------------------------------------*/
+void output(char* OutputData) ;
+void error(char* mask) ;
+void success1(char* mask) ;
+void success2(char* mask, char* StatusText) ;
+
+main()
+{
+/*--------------------------------------------------------------------*/
+/* Local Variables                                                    */
+/*--------------------------------------------------------------------*/
+   char CliUrimap[9] = "DFH$URI2" ;  /* Client URIMAP                 */
+   char Characterset[40] ;           /* Characterset of Data          */
+   char Mediatype[56] ;              /* Mediatype of Data             */
+   char Doctoken[16] ;               /* Holds the DocToken            */
+   int  Doclength ;                  /* Length of the Document Text   */
+   char Doctext[100] ;               /* Holds the Doctemplate text    */
+   char Applid[9] ;                  /* Holds APPLID of region        */
+   char Data[50] ;                   /* Holds Sending Data            */
+   char Recdata[200] ;               /* Holds Received Data           */
+   int  Reclen ;
+   int  Statuslen ;
+   char StatusData[50] ;
+   int  Maxlength ;
+
+/*--------------------------------------------------------------------*/
+/* Address the EIB
+/*--------------------------------------------------------------------*/
+   EXEC CICS ADDRESS EIB(dfheiptr) ;       /* Address the EIB         */
+
+/*--------------------------------------------------------------------*/
+/* Open a Session to the Remote Server using WEB Open and a client    */
+/* URIMAP.                                                            */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB OPEN
+                 URIMAP(CliUrimap)
+                 SESSTOKEN(Sesstoken)
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the Returned RESP Value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: WEB OPEN failed RESP=%d RESP2=%d");
+
+/*--------------------------------------------------------------------*/
+/* Create a Doctemplate                                               */
+/*--------------------------------------------------------------------*/
+   EXEC CICS DOCUMENT CREATE DOCTOKEN(Doctoken) ;
+
+/*--------------------------------------------------------------------*/
+/* Using EXEC CICS ASSIGN extract the CICS APPLID and set the APPLID  */
+/* Symbol in the Document Template                                    */
+/*--------------------------------------------------------------------*/
+   memset(Applid, 0x00, 9) ;
+   EXEC CICS ASSIGN APPLID(Applid) ;
+
+   EXEC CICS DOCUMENT SET DOCTOKEN(Doctoken) SYMBOL("APPLID")
+                      VALUE(Applid) LENGTH(strlen(Applid)) ;
+
+/*--------------------------------------------------------------------*/
+/* Construct a Doctemplate to use on the WEB SEND command             */
+/*--------------------------------------------------------------------*/
+   memset(Doctext, 0x00, 100) ;
+   strcpy(Doctext, "applid=&APPLID;") ;
+   Doclength = strlen(Doctext) ;
+
+   EXEC CICS DOCUMENT INSERT DOCTOKEN(Doctoken) FROM(Doctext)
+             LENGTH(Doclength) RESP(resp) RESP2(resp2) ;
+
+   output("DFH$WBPC - Send First Request") ;
+
+/*--------------------------------------------------------------------*/
+/* Send the Document Template using WEB SEND command.                 */
+/*--------------------------------------------------------------------*/
+   memset(Mediatype,0x00, 56) ;
+   strcat(Mediatype,"application/x-www-form-urlencoded") ;
+
+   EXEC CICS WEB SEND POST
+                 DOCTOKEN(Doctoken)
+                 SESSTOKEN(Sesstoken)
+                 MEDIATYPE(Mediatype)
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the Returned RESP Value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: First WEB SEND failed RESP=%d RESP2=%d") ;
+
+   output("DFH$WBPC - Send Second Request") ;
+
+/*--------------------------------------------------------------------*/
+/* Send the Data from a dataarea using WEB SEND COMMAND.              */
+/*--------------------------------------------------------------------*/
+   memset(Data, 0x00, 50);
+   sprintf(Data, "Someth=%s", Applid) ;
+
+   EXEC CICS WEB SEND POST
+                 FROM(Data)
+                 FROMLENGTH(strlen(Data))
+                 SESSTOKEN(Sesstoken)
+                 MEDIATYPE(Mediatype)
+                 RESP(resp) RESP2(resp2) ;
+/*--------------------------------------------------------------------*/
+/* Check the returned RESP value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: Second WEB SEND failed RESP=%d RESP2=%d") ;
+
+   output("DFH$WBPC - Send Third Request") ;
+
+/*--------------------------------------------------------------------*/
+/* Send the Data from a dataarea using WEB SEND COMMAND.              */
+/*--------------------------------------------------------------------*/
+   memset(Data, 0x00, 25) ;
+   sprintf(Data, "Applid=%s", Applid) ;
+
+   EXEC CICS WEB SEND POST
+                 FROM(Data)
+                 FROMLENGTH(strlen(Data))
+                 SESSTOKEN(Sesstoken)
+                 MEDIATYPE(Mediatype)
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the returned RESP value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: Third WEB SEND failed RESP=%d RESP2=%d") ;
+
+/*--------------------------------------------------------------------*/
+/* Setup Variables for Receiving Data                                 */
+/*--------------------------------------------------------------------*/
+   memset(Recdata, 0x00, 200) ;
+   Status = 0 ;
+   Statuslen = 40 ;
+   memset(StatusData, 0x00, 50) ;
+   Reclen = 200 ;
+   Maxlength = 200 ;
+   memset(Mediatype, 0x00, 56) ;
+
+   output("DFH$WBPC - Receive first Response") ;
+
+   EXEC CICS WEB RECEIVE
+                 STATUSCODE(Status)
+                 STATUSTEXT(StatusData)
+                 STATUSLEN(Statuslen)
+                 MEDIATYPE(Mediatype)
+                 INTO(Recdata) LENGTH(Reclen)
+                 SESSTOKEN(Sesstoken)
+                 MAXLENGTH(Maxlength)
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the returned RESP value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: First WEB RECEIVE failed RESP=%d RESP2=%d") ;
+
+   success1("DFH$WBPC - Completed with status code:%u") ;
+   success2("DFH$WBPC - Status text:%s", StatusData) ;
+
+   output("DFH$WBPC - Receive Second Response") ;
+   Statuslen = 40 ;
+   memset(StatusData, 0x00, 50) ;
+
+   EXEC CICS WEB RECEIVE
+                 STATUSCODE(Status)
+                 STATUSTEXT(StatusData)
+                 STATUSLEN(Statuslen)
+                 MEDIATYPE(Mediatype)
+                 INTO(Recdata) LENGTH(Reclen)
+                 SESSTOKEN(Sesstoken)
+                 MAXLENGTH(Maxlength)
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the returned RESP value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: Second WEB RECEIVE failed RESP=%d RESP2=%d") ;
+
+   success1("DFH$WBPC - Completed with status code:%u") ;
+   success2("DFH$WBPC - Status text:%s", StatusData) ;
+
+   output("DFH$WBPC - Receive Third Response") ;
+   Statuslen = 40 ;
+   memset(StatusData, 0x00, 50) ;
+
+   EXEC CICS WEB RECEIVE
+                 STATUSCODE(Status)
+                 STATUSTEXT(StatusData)
+                 STATUSLEN(Statuslen)
+                 MEDIATYPE(Mediatype)
+                 INTO(Recdata) LENGTH(Reclen)
+                 SESSTOKEN(Sesstoken)
+                 MAXLENGTH(Maxlength)
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the returned RESP value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: Third WEB RECEIVE failed RESP=%d RESP2=%d") ;
+
+/*--------------------------------------------------------------------*/
+/* Output Successful Message                                          */
+/*--------------------------------------------------------------------*/
+   success1("DFH$WBPC - Completed with status code:%u") ;
+   success2("DFH$WBPC - Status text:%s", StatusData) ;
+
+/*--------------------------------------------------------------------*/
+/* Close the Session to Remote Server                                 */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB CLOSE SESSTOKEN(Sesstoken) ;
+
+   EXEC CICS RETURN ;
+}
+
+void output(char* OutputData)
+{
+   cursor = cursor + 80;
+
+   EXEC CICS SEND CONTROL CURSOR(cursor) ;
+
+   EXEC CICS SEND FROM(OutputData)
+                  LENGTH(strlen(OutputData)) ;
+}
+
+void success1(char* mask)
+{
+   char OutputData[50] ;
+
+   sprintf(OutputData, mask, Status) ;
+
+   output(OutputData) ;
+}
+
+void success2(char* mask, char* StatusText)
+{
+   char OutputData[100] ;
+
+   sprintf(OutputData, mask, StatusText) ;
+
+   output(OutputData) ;
+}
+
+void error(char* mask)
+{
+   char OutputData[50] ;
+
+   sprintf(OutputData, mask, resp, resp2) ;
+
+   output(OutputData) ;
+
+   EXEC CICS RETURN ;
+}

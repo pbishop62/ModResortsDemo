@@ -1,0 +1,638 @@
+*ASM XOPTS(FEPI)
+         TITLE 'DFH0AZPA - FEPI Sample: SLU P, pseudoconversational'
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*     Licensed Materials - Property of IBM                            *
+*                                                                     *
+*     "Restricted Materials of IBM"                                   *
+*                                                                     *
+*     5655-Y04                                                        *
+*                                                                     *
+*     (C) Copyright IBM Corp. 1994"                                   *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*   STATUS = 7.2.0                                                    *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*   $MOD(DFH0AZPA),COMP(FEPI),PROD(CICS TS ):                         *
+*                                                                     *
+*  PN= REASON REL YYMMDD HDXXIII : REMARKS                            *
+* $L0= Base   410 94     HD5VDLA : Base                               *
+*                                                                     *
+***********************************************************************
+*                                                                     *
+* MODULE NAME = DFH0AZPA                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample program:                *
+*                    SLU P pseudoconversational.                      *
+*                    Assembler version                                *
+*                                                                     *
+*                                                                     *
+* FUNCTION = This sample program demonstrates using FEPI to           *
+*            obtain data from an IMS back-end transaction.            *
+*            It is in pseudoconversational style, using the           *
+*            FEPI START command to schedule itself when the           *
+*            results arrive.                                          *
+*                                                                     *
+* TRANSACTION NAME = CZPA                                             *
+*                                                                     *
+* MAP NAME = DFH0MZ9                                                  *
+*                                                                     *
+*                                                                     *
+* OVERVIEW                                                            *
+*                                                                     *
+*       On the first invocation of the program, a map is sent to the  *
+*       front-end terminal.                                           *
+*                                                                     *
+*       When there is input from the front-end terminal, CICS         *
+*       reinvokes the program.  After establishing a conversation,    *
+*       an inquiry is sent to the back-end system.  FEPI START is     *
+*       issued to start this program again when the results arrive.   *
+*       Meanwhile it returns to CICS to await them, so releasing      *
+*       CICS resources.                                               *
+*                                                                     *
+*       When the results arrive, FEPI starts the program again.       *
+*       The results are obtained using FEPI RECEIVE, and sent on to   *
+*       the front-end terminal.  The conversation is freed and the    *
+*       program returns to CICS to await more input.  If the back-end *
+*       system sends an IMS message, it is sent on to the front-end   *
+*       terminal and the transaction ends.                            *
+*                                                                     *
+*       When PF3 or CLEAR is received from the front-end terminal,    *
+*       the trasnaction ends.  If there is an error, the front-end    *
+*       map is reset.  These situations are detected using HANDLE     *
+*       CONDITION.                                                    *
+*                                                                     *
+*       For clarity, error checking is minimal except for the FEPI    *
+*       commands.                                                     *
+*                                                                     *
+*                                                                     *
+* PROGRAM LOGIC                                                       *
+*                                                                     *
+*       MAIN procedure:                                               *
+*                                                                     *
+*         If started from terminal                                    *
+*                                                                     *
+*             Test COMMAREA                                           *
+*             If transaction not previously invoked                   *
+*                 Call SEND_NEW_MAP                                   *
+*                                                                     *
+*             Set up exceptional condition handling:                  *
+*                 Map error - SEND_NEW_MAP                            *
+*                 CLEAR/PF3 - END_PROG                                *
+*                                                                     *
+*             RECEIVE map from front-end terminal                     *
+*                                                                     *
+*             FEPI ALLOCATE conversation with back-end system         *
+*             Build SLU P data stream to request time                 *
+*             FEPI SEND data stream to back-end system                *
+*             FEPI START transaction                                  *
+*                                                                     *
+*             RETURN                                                  *
+*                                                                     *
+*         If started by FEPI                                          *
+*                                                                     *
+*             RETRIEVE start data                                     *
+*             Reaccess conversation using FEPI ALLOCATE PASSCONVID    *
+*                                                                     *
+*             If EVENTTYPE = data received                            *
+*                 FEPI RECEIVE data stream from back-end system       *
+*                 FEPI FREE conversation                              *
+*                 If IMS message received                             *
+*                     SEND message to front-end terminal              *
+*                     RETURN                                          *
+*                 Build data for front-end terminal map               *
+*                 SEND map to front-end terminal                      *
+*                 RETURN TRANSID(CZPA) with COMMAREA                  *
+*                                                                     *
+*             Otherwise (time out or session loss)                    *
+*                 SEND map with message to front-end terminal         *
+*                 RETURN (freeing conversation implicitly)            *
+*                                                                     *
+*       SEND_NEW_MAP routine:                                         *
+*                                                                     *
+*         SEND new map                                                *
+*         RETURN TRANSID(CZPA) with COMMAREA                          *
+*                                                                     *
+*       END_PROG routine:                                             *
+*                                                                     *
+*         Clear front-end terminal                                    *
+*         RETURN                                                      *
+*                                                                     *
+***********************************************************************
+*
+*
+*=====================================================================*
+*=       Working storage                                             =*
+*=====================================================================*
+*
+DFHEISTG               DSECT ,
+*
+* Subroutine return address save areas.
+*
+RET_B_TERM_INPUT       DS    A
+RET_D_FEPI_START       DS    A
+RET_B_BUILD_DATASTREAM DS    A
+*
+* Values used in CICS commands.
+*
+W02_STARTCODE          DS    CL2
+W02_RESP               DS    F
+W02_RESP2              DS    F
+W02_TIME               DS    CL8
+W02_DATE               DS    CL8
+W02_FTIME              DS    CL8
+W02_FDATE              DS    CL8
+W02_UTIME              DS    PL8
+W02_DATA_CONVID        DS    CL8
+W02_DFHSZ_DATA_LEN     DS    F
+W02_IN_FLEN            DS    F
+*
+* DFH0BZ9A defines the layout of the front-end terminal map.
+*
+         COPY  DFH0BZ9A
+*
+* W03 holds the data streams for the IMS system.
+*
+W03                    DS    0H
+W03_IO_AREA            DS   0CL40
+W03_DATA_LEN           DS    H
+W03_RESERVED           DS    H
+W03_O_TRAN             DS    CL8
+W03_O_DATE             DS   0CL6
+W03_DD                 DS    CL2
+W03_MM                 DS    CL2
+W03_YY                 DS    CL2
+W03_O_TIME             DS   0CL6
+W03_HH                 DS    CL2
+W03_MN                 DS    CL2
+W03_SS                 DS    CL2
+W03_O_STATE            DS    CL8
+W03_FILLER             DS    CL8
+*
+                       ORG   W03
+W03_IO_DATA            DS    CL2048
+                       ORG   ,
+*
+* DFHSZAPA defines the FEPI RESP2 values
+* and the FEPI start data layout.
+*
+         COPY  DFHSZAPA
+*
+* The COMMAREA is used to pass the transaction ID between
+* invocations of the transaction from the front-end terminal.
+*
+COMMAREA               DSECT ,
+COMMAREA_TRANSID       DS    CL4
+                       USING COMMAREA,R3
+*
+*
+*=====================================================================*
+*=       Registers                                                   =*
+*=====================================================================*
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+*
+*=====================================================================*
+*=       Initialization                                              =*
+*=====================================================================*
+*
+DFH0AZPA DFHEIENT CODEREG=(R9),                                        +
+               DATAREG=(R10),                                          +
+               EIBREG=(R11)
+*
+DFH0AZPA AMODE 31
+DFH0AZPA RMODE ANY
+*
+         B     A_MAIN
+PROGID   DC    CL8'DFH0AZPS'
+*
+*
+*=====================================================================*
+*=       Main procedure                                              =*
+*=====================================================================*
+*
+* This section controls processing.  It determines how the
+* transaction was started.
+*
+A_MAIN   DS   0H
+*
+* Obtain the start code to determine how the transaction was
+* started.
+*
+         EXEC  CICS ASSIGN STARTCODE(W02_STARTCODE)
+*
+* Started by terminal:  process and exit.
+*
+         CLC   W02_STARTCODE,C05_STARTED_BY_TERM
+         BNE   A_020
+         BAL   R14,B_TERM_INPUT
+         EXEC  CICS RETURN
+         B     A_EXIT
+A_020    DS    0H
+*
+* Started by FEPI:  process and wait for more input.
+*
+         CLC   W02_STARTCODE,C05_STARTED_BY_FEPI
+         BNE   A_030
+         BAL   R14,D_FEPI_START
+         EXEC  CICS RETURN                                             +
+               COMMAREA(DFH0BZCA_FULL_LUP_TRANSID)                     +
+               TRANSID(DFH0BZCA_FULL_LUP_TRANSID)
+         B     A_EXIT
+A_030    DS    0H
+*
+A_EXIT   DS    0H
+*
+*
+*=====================================================================*
+*=       Terminal input routine                                      =*
+*=====================================================================*
+*
+* This section handles processing when started by terminal input.
+* Depending on information
+* in the COMMAREA, it sends a new map to the front-end terminal
+* to get input, or it processes that input, building data stream
+* to send to the back-end.
+*
+* It sets up exceptional condition handling for common errors.
+*
+B_TERM_INPUT           DS    0H
+         ST    R14,RET_B_TERM_INPUT
+*
+* If this transaction has not previously been invoked
+* (no COMMAREA, implying no transaction in progress),
+* send a new map to the front-end terminal and exit.
+*
+         CLC   EIBCALEN,=H'0'           No COMMAREA exists?
+         BE    Z_SEND_NEW_MAP
+         L     R3,DFHEICAP              COMMAREA = transaction name?
+         CLC   COMMAREA_TRANSID,EIBTRNID
+         BNE   Z_SEND_NEW_MAP
+*
+* Set up exceptional condition handling for maps.
+*
+         EXEC  CICS HANDLE AID                                         +
+               PF3(C_END_PROG)                                         +
+               CLEAR(C_END_PROG)
+*
+         EXEC  CICS HANDLE CONDITION                                   +
+               MAPFAIL(Z_SEND_NEW_MAP)
+*
+* RECEIVE map from front-end terminal.
+*
+         EXEC  CICS RECEIVE MAP(C01_MAPNAME) INTO(DFH0MZ9I)
+*
+* Start the conversation with the back-end system using
+* FEPI ALLOCATE.  The POOL and TARGET options specify which
+* back-end system is to be accessed.
+*
+         EXEC  CICS FEPI ALLOCATE                                      +
+               TIMEOUT(DFH0BZCA_TIMEOUT)                               +
+               POOL(DFH0BZCA_LUP_POOL)                                 +
+               TARGET(DFH0BZCA_TARGET_IMS)                             +
+               CONVID(W02_DATA_CONVID)                                 +
+               RESP(W02_RESP)                                          +
+               RESP2(W02_RESP2)
+*
+* Check the response - exit with message if error.
+*
+         CLC   W02_RESP,DFHRESP(NORMAL)
+         BE    B_020
+         MVC   MMSGO(DFH0BZMA_MSGLEN),DFH0BZMA_MSG4
+         B     Z_SEND_ERROR_MAP
+B_020    DS    0H
+*
+* Send inquiry to the back-end system.
+* In a more typical case, data from the map would be used in the
+* inquiry.  However, in this illustration, no data is required.
+*
+         BAL   R14,B_BUILD_DATASTREAM
+*
+* Request that this transaction to be started to handle the
+* returned data, or if no data arrives in 20 seconds.
+*
+         EXEC  CICS FEPI START                                         +
+               CONVID(W02_DATA_CONVID)                                 +
+               TIMEOUT(DFH0BZCA_TIMEOUT)                               +
+               TRANSID(DFH0BZCA_FULL_LUP_TRANSID)                      +
+               TERMID(EIBTRMID)                                        +
+               RESP(W02_RESP)                                          +
+               RESP2(W02_RESP2)
+*
+* Check the response - exit with message if error.
+*
+         CLC   W02_RESP,DFHRESP(NORMAL)
+         BE    B_040
+         MVC   MMSGO(DFH0BZMA_MSGLEN),DFH0BZMA_MSG7
+         B     Z_SEND_ERROR_MAP
+B_040    DS    0H
+*
+* Exit from routine.
+*
+         L     R14,RET_B_TERM_INPUT
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Build data stream and SEND routine                          =*
+*=====================================================================*
+*
+* This section builds the data stream which asks the time from
+* the back-end IMS transaction, and then sends it.
+*
+B_BUILD_DATASTREAM     DS    0H
+         ST    R14,RET_B_BUILD_DATASTREAM
+*
+* Get front-end date and time.
+*
+         EXEC  CICS ASKTIME ABSTIME(W02_UTIME)
+         EXEC  CICS FORMATTIME ABSTIME(W02_UTIME)                      +
+               TIME(W02_TIME)                                          +
+               DDMMYY(W02_DATE)
+*
+* Complete the data stream with the front-end time and the
+* back-end transaction name.
+*
+         MVC   W03_IO_AREA(1),C03_HEX00
+         MVC   W03_IO_AREA+1(L'W03_IO_AREA-1),W03_IO_AREA
+         MVC   W03_DATA_LEN,C03_OUT_FLEN
+         MVC   W03_O_TRAN,DFH0BZCA_IMS_TRANSID
+         MVC   W03_O_TIME(6),W02_TIME
+         MVC   W03_O_DATE(6),W02_DATE
+         MVC                   W03_O_STATE(L'DFH0BZMA_STARTED_LITERAL),+
+               DFH0BZMA_STARTED_LITERAL
+*
+* Send the data stream to the back-end system.
+*
+         EXEC  CICS FEPI SEND DATASTREAM                               +
+               INVITE                                                  +
+               CONVID(W02_DATA_CONVID)                                 +
+               FROM(W03_IO_AREA)                                       +
+               RESP(W02_RESP)                                          +
+               RESP2(W02_RESP2)
+*
+* Check the response - exit with message if error.
+*
+         CLC   W02_RESP,DFHRESP(NORMAL)
+         BE    B_130
+         MVC   MMSGO(DFH0BZMA_MSGLEN),DFH0BZMA_MSG6
+         B     Z_SEND_ERROR_MAP
+B_130    DS    0H
+*
+* Exit from routine.
+*
+         L     R14,RET_B_BUILD_DATASTREAM
+         BR    R14
+*
+*
+*=====================================================================*
+*=       FEPI-started routine                                        =*
+*=====================================================================*
+*
+* This section handles processing when started by FEPI.
+* It receives the data from the back-end system and sends
+* it on to the front-end terminal.
+*
+D_FEPI_START           DS    0H
+         ST    R14,RET_D_FEPI_START
+*
+* Retrieve the CICS start data.
+*
+         EXEC  CICS RETRIEVE SET(R4)                                   +
+               LENGTH(W02_DFHSZ_DATA_LEN)                              +
+               RESP(W02_RESP)
+         USING DFHSZ_DATA,R4
+*
+* Check the response - exit with message if error.
+*
+         CLC   W02_RESP,DFHRESP(NORMAL)
+         BE    D_110
+         MVC   MMSGO(DFH0BZMA_MSGLEN),DFH0BZMA_MSG8
+         B     Z_SEND_ERROR_MAP
+D_110    DS    0H
+*
+* Obtain control of the conversation
+* using FEPI ALLOCATE with PASSCONVID.
+* The CONVID is obtained from the start data.
+*
+         EXEC  CICS FEPI ALLOCATE                                      +
+               PASSCONVID(DFHSZ_DATA_CONVID)                           +
+               RESP(W02_RESP)                                          +
+               RESP2(W02_RESP2)
+*
+* Check the response - exit with message if error.
+*
+         CLC   W02_RESP,DFHRESP(NORMAL)
+         BE    D_120
+         MVC   MMSGO(DFH0BZMA_MSGLEN),DFH0BZMA_MSG4
+         B     Z_SEND_ERROR_MAP
+D_120    DS    0H
+*
+* If data has arrived from the back-end system process it.
+* Otherwise - there has been a time out or a session loss.
+* Exit with a message.
+*
+         L     R15,DFHVALUE(DATA)
+         C     R15,DFHSZ_DATA_EVENTTYPE
+         BE    D_130
+         MVC   MMSGO(DFH0BZMA_MSGLEN),DFH0BZMA_MSGA
+         B     Z_SEND_ERROR_MAP
+D_130    DS    0H
+*
+* Get the returned data stream.
+*
+         EXEC  CICS FEPI RECEIVE DATASTREAM                            +
+               UNTILCDEB                                               +
+               CONVID(DFHSZ_DATA_CONVID)                               +
+               INTO(W03_IO_DATA)                                       +
+               MAXFLENGTH(L'W03_IO_DATA)                               +
+               RESP(W02_RESP)                                          +
+               RESP2(W02_RESP2)
+*
+* Check the response - exit with message if error.
+*
+         CLC   W02_RESP,DFHRESP(NORMAL)
+         BE    D_140
+         MVC   MMSGO(DFH0BZMA_MSGLEN),DFH0BZMA_MSG3
+         B     Z_SEND_ERROR_MAP
+D_140    DS    0H
+*
+* End the conversation.
+*
+         EXEC  CICS FEPI FREE                                          +
+               CONVID(DFHSZ_DATA_CONVID)                               +
+               RESP(W02_RESP)                                          +
+               RESP2(W02_RESP2)
+*
+* Check the response - exit with message if error.
+*
+         CLC   W02_RESP,DFHRESP(NORMAL)
+         BE    D_150
+         MVC   MMSGO(DFH0BZMA_MSGLEN),DFH0BZMA_MSG5
+         B     Z_SEND_ERROR_MAP
+D_150    DS    0H
+*
+* Check for normal response by testing byte 3 of the output.
+* If non-zero, the FMH is 6 bytes long and the data is an IMS
+* system message - display it and exit.
+*
+         CLI   W03_IO_DATA+2,X'00'
+         BE    D_160
+         MVC   MMSGO(DFH0BZMA_MSGLEN),W03_IO_DATA+6
+         B     Z_SEND_ERROR_MAP
+D_160    DS    0H
+*
+* There is necessarily an FMH present, so the returned data
+* starts 5 bytes into the area instead of 4.
+*
+         MVC   W03_IO_DATA(L'W03_IO_AREA),W03_IO_DATA+1
+*
+* Extract results from the returned data stream.
+*
+         MVC   DFH0MZ9O(1),C03_HEX00
+         MVC   DFH0MZ9O+1(L'DFH0MZ9O-1),DFH0MZ9O
+         MVC   LUPTRANO,EIBTRNID
+         MVC   LUPTIMEO,=C'  :  :  '
+         MVC   LUPTIMEO(2),W03_HH
+         MVC   LUPTIMEO+3(2),W03_MN
+         MVC   LUPTIMEO+6(2),W03_SS
+         MVC   LUPDATEO,=C'  /  /  '
+         MVC   LUPDATEO(2),W03_DD
+         MVC   LUPDATEO+3(2),W03_MM
+         MVC   LUPDATEO+6(2),W03_YY
+         MVC   LUPSTATEO(L'W03_O_STATE),W03_O_STATE
+*
+* Send map with results to the front-end terminal.
+*
+         EXEC  CICS SEND MAP(C01_MAPNAME) FROM(DFH0MZ9O) ERASE FREEKB
+*
+* Exit from routine.
+*
+         L     R14,RET_D_FEPI_START
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Send new map routine                                        =*
+*=====================================================================*
+*
+* This section gets control if the MAPFAIL condition is raised
+* or if the transaction has not previously been invoked.
+*
+* It sends a new map to the front-end terminal and returns to CICS
+* to await the user input.
+*
+Z_SEND_NEW_MAP         DS    0H
+*
+* Get data and time.
+*
+         EXEC  CICS ASKTIME ABSTIME(W02_UTIME)
+*
+         EXEC  CICS FORMATTIME ABSTIME(W02_UTIME)                      +
+               TIME(W02_FTIME) TIMESEP                                 +
+               DDMMYY(W02_FDATE) DATESEP
+*
+* Build map data and send map.
+*
+         MVC   LUPTRANO,EIBTRNID
+         MVI   LUPTRANA,C'/'
+         MVC   LUPTIMEO,W02_FTIME
+         MVC   LUPDATEO,W02_FDATE
+         MVC                  LUPSTATEO(L'DFH0BZMA_NOTSTARTED_LITERAL),+
+               DFH0BZMA_NOTSTARTED_LITERAL
+*
+         EXEC  CICS SEND MAP(C01_MAPNAME) FROM(DFH0MZ9O) ERASE FREEKB
+*
+* Exit - with own transaction ID to continue the transaction
+* when the user responds.
+*
+         EXEC  CICS RETURN                                             +
+               COMMAREA(DFH0BZCA_FULL_LUP_TRANSID)                     +
+               TRANSID(DFH0BZCA_FULL_LUP_TRANSID)
+*
+*
+*=====================================================================*
+*=       Send error map routine                                      =*
+*=====================================================================*
+*
+Z_SEND_ERROR_MAP        DS   0H
+*
+* Send the map with an error message and return to CICS.
+*
+         MVC   LUPTRANO,EIBTRNID
+         EXEC  CICS SEND MAP(C01_MAPNAME) FROM(DFH0MZ9O) ERASE FREEKB
+*
+         EXEC   CICS RETURN
+*
+*
+*=====================================================================*
+*=       End program routine                                         =*
+*=====================================================================*
+*
+* This section gets control if PF3 or CLEAR is input at the
+* front-end terminal.
+*
+* The program exits after clearing the screen.
+*
+C_END_PROG             DS    0H
+*
+         EXEC CICS SEND FROM(C03_HEX00) LENGTH(0) ERASE
+*
+         EXEC CICS RETURN
+*
+*
+*=====================================================================*
+*=                 Constants                                         =*
+*=====================================================================*
+*
+* DFH0BZCA defines the customizable constants used by the
+* FEPI sample programs.
+*
+         COPY  DFH0BZCA
+*
+* DFH0BZMA defines the messages and other text used by the
+* FEPI sample programs.
+*
+         COPY  DFH0BZMA
+*
+* DFHAID defines the standard attention identifiers (AIDs).
+*
+         COPY  DFHAID
+*
+* Constants used in this program.
+*
+C01_MAPNAME            DC    CL7'DFH0MZ9'
+C03_HEX00              DC    X'00'
+C03_OUT_FLEN           DC    A(L'W03_IO_AREA)
+C05_STARTED_BY_TERM    DC    CL2'TD'
+C05_STARTED_BY_FEPI    DC    CL2'SZ'
+                       LTORG ,
+*
+*
+***********************************************************************
+*        End of program DFH0AZPA                                      *
+***********************************************************************
+*
+         END   DFH0AZPA

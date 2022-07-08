@@ -1,0 +1,961 @@
+      CBL CICS('COBOL3,SP')
+      *****************************************************************
+      *                                                               *
+      * MODULE NAME = DFH0BAT1                                        *
+      *                                                               *
+      * DESCRIPTIVE NAME = Batch Enabling Sample BAT1                 *
+      *                    Disable Transactions Coordinator           *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *     Licensed Materials - Property of IBM                      *
+      *                                                               *
+      *     "Restricted Materials of IBM"                             *
+      *                                                               *
+      *     5655-Y04                                                  *
+      *                                                               *
+      *     (C) Copyright IBM Corp. 1994, 2001"                       *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      *                                                               *
+      * STATUS = 7.2.0                                                *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * OVERVIEW                                                      *
+      *                                                               *
+      *   To aid the customer in the preparation for running non-RLS  *
+      *   VSAM batch jobs against a group of data sets, CICS          *
+      *   provides a suite of sample COBOL2 programs called DFH0BATx. *
+      *                                                               *
+      *   The scenario is that a customer is updating data sets using *
+      *   CICS. The data sets are recoverable and are being updated   *
+      *   in RLS mode (ie, using VSAM RLS). If it is required to      *
+      *   update these same data sets from a batch job, then the      *
+      *   customer is forced to switch to non-RLS mode before the     *
+      *   batch job can be run. Before this switch can be made, VSAM  *
+      *   requires that:                                              *
+      *                                                               *
+      *   - There are no retained locks held for the data sets        *
+      *   - There are no files open against the data sets in RLS mode *
+      *                                                               *
+      *   The DFH0BATx suite helps the customer to deal with the      *
+      *   first of these, the existence of retained locks. RLS        *
+      *   retained locks are NOT recognised by non-RLS VSAM, so a     *
+      *   non-RLS batch job could cause a loss of data integrity by   *
+      *   updating or deleting an RLS-locked record. So there should  *
+      *   be no retained locks around when switching to non-RLS mode. *
+      *                                                               *
+      *   (Note: the second of these, the closing of open files, may  *
+      *   be achieved using EXEC CICS SET DSNAME() QUIESCED or CEMT   *
+      *   equivalent. This must be done after retained locks          *
+      *   have been dealt with).                                      *
+      *                                                               *
+      *   There are three recommended stages to resolving retained    *
+      *   locks, each of which must take place on every CICS region   *
+      *   in the sysplex that uses the data sets. These are given     *
+      *   below, but the customer may wish to customise these         *
+      *   according to the needs of his location.                     *
+      *                                                               *
+      *   - Disable all transactions that use the data sets, so       *
+      *     preventing the creation of new retained locks             *
+      *   - Identify existing retained locks and attempt to resolve   *
+      *     them without losing data integrity                        *
+      *   - Forcibly release these locks, with possible loss of data  *
+      *     integrity, if it is not possible to resolve these locks   *
+      *     cleanly in a timely manner                                *
+      *                                                               *
+      *   Each stage is implemented as a transaction. The transaction *
+      *   is started on one CICS region in the sysplex                *
+      *   (which would normally be the TOR) and uses CICS             *
+      *   Distributed Program Link (DPL) to run programs on all the   *
+      *   other CICS regions to do the work. It then coordinates and  *
+      *   displays the results using BMS maps.                        *
+      *                                                               *
+      *   All errors which are likely to occur are displayed          *
+      *   as messages.                                                *
+      *   Errors which should not occur i.e.                          *
+      *   programming errors or errors in definitions,                *
+      *   will result in the transaction being abended.               *
+      *                                                               *
+      *   Stage       Tran      Program     Mapset    DPL Program     *
+      *   -----       ----      -------     ------    -----------     *
+      *   Disable     BAT1      DFH0BAT1    DFH0BM1   DFH0BAT4        *
+      *   Identify    BAT2      DFH0BAT2    DFH0BM2   DFH0BAT5/7      *
+      *   Force       BAT3      DFH0BAT3    DFH0BM3   DFH0BAT6/8      *
+      *                                                               *
+      *   This distributed method is used so that the customer does   *
+      *   not have to manually run transactions on every CICS region  *
+      *   involved. It does require that MRO links exist between      *
+      *   the coordinating CICS region and all the other CICS         *
+      *   regions.                                                    *
+      *                                                               *
+      *   The suite requires that three extra-partition TD queues be  *
+      *   defined to the coordinating CICS region.                    *
+      *   These are listed below.                                     *
+      *   They are all INPUT only with FIXBLK and record size 80.     *
+      *   There is no need to define them to any other CICS regions.  *
+      *   The queue names are hard-coded in the programs, but this    *
+      *   can be changed by the customer if more flexibility is       *
+      *   required.                                                   *
+      *                                                               *
+      *   - BATA      Applids of the CICS regions involved            *
+      *   - BATX      The transids that are to be disabled            *
+      *   - BATD      The datasets concerned                          *
+      *                                                               *
+      *   Default definitions for the resources required by           *
+      *   the batch enabling sample suite namely,                     *
+      *   the transactions, programs, mapsets and TD queues           *
+      *   are provided in a CSD group called DFH$BAT, however,        *
+      *   it is assumed that the underlying datasets for the          *
+      *   above TD queues have been defined and populated with        *
+      *   applids, dataset names AND transaction ids respectively,    *
+      *   prior to the TD queues being accessed by programs           *
+      *   in this collection.                                         *
+      *                                                               *
+      *   If a decision is made to make use of the                    *
+      *   supplied definitions for the TD queues,                     *
+      *   it will be necessary to allocate the required datasets      *
+      *   using DD statements in the CICS start-up JCL.               *
+      *                                                               *
+      *   An alternative approach might be to copy the                *
+      *   default TD queue definitions into a group                   *
+      *   defined by the user,                                        *
+      *   and then modify those copied definitions by supplying       *
+      *   a DSNAME for each of the TD queues.                         *
+      *   This means that when the TD queues are opened, their        *
+      *   underlying datasets are dynamically allocated               *
+      *   and when the TD queues are closed, the datasets             *
+      *   are de-allocated.                                           *
+      *   This allows for the possibility of using an editor          *
+      *   under, say, TSO, to modify any dataset associated with      *
+      *   a TD queue provided that queue is closed beforehand.        *
+      *                                                               *
+      *                                                               *
+      *   The BMS logic is deliberately kept simple. The customer     *
+      *   can enhance the display functions of the DFH0BATx suite     *
+      *   as desired.                                                 *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * DESCRIPTION                                                   *
+      *                                                               *
+      *   This program is part of a suite of programs DFH0BATx which  *
+      *   is intended to aid the user in the identification and       *
+      *   resolution of VSAM RLS retained locks. It may be modified   *
+      *   as required by the customer.                                *
+      *                                                               *
+      *   This program coordinates the disabling of a set of named    *
+      *   transactions on a group of named CICS regions. It is the    *
+      *   top-level program for transaction BAT1. It should           *
+      *   be run on one CICS region in the sysplex, and uses DPL      *
+      *   to run program DFH0BAT4 on the other CICS regions, which    *
+      *   actually disables the transaction on that region. It        *
+      *   receives any errors arising from each DFH0BAT4 invocation   *
+      *   via a temporary storage queue DFH0BQ1 and displays them     *
+      *   using a BMS mapset DFH0BM1.                                 *
+      *                                                               *
+      *   The specific applids of the CICS regions upon which the     *
+      *   transactions will be disabled are obtained by reading       *
+      *   extra-partition TD queue 'BATA'.                            *
+      *   The names of the transactions to be disabled are held in    *
+      *   an extra-partition TD queue 'BATX', which is read remotely  *
+      *   by each DFH0BAT4 invocation.                                *
+      *                                                               *
+      *   MRO links are assumed to exist from the coordinating CICS   *
+      *   region, ie, that running DFH0BAT1, and all the other CICS   *
+      *   regions, ie, those running DFH0BAT4.                        *
+      *    these samples assume that there is only one connection     *
+      *    associated with a given netname.                           *
+      *    if there is a desire to say, have a LU6.2,                 *
+      *    as well as a MRO, connection associated with a             *
+      *    given netname then it will be necessary to modify          *
+      *    THIS CODE.                                                 *
+      *    One might, for instance, following an INQUIRE CONNECTION   *
+      * with a response which is not 'normal', decide to brows the    *
+      *    connections associated with the co-ordinating region,      *
+      *    until one is found which has the required netname,         *
+      *    is of type MRO and is available for use.                   *
+      *                                                               *
+      *   NOTE: Disabling a transaction only prevents new tasks with  *
+      *   transid from starting. It has no effect on existing tasks.  *
+      *   This program incorporates a delay during which time it is   *
+      *   hoped that such existing tasks will complete.               *
+      *                                                               *
+      *---------------------------------------------------------------*
+      *                                                               *
+      * CHANGE ACTIVITY :                                             *
+      *                                                               *
+      *  $MOD(DFH0BAT1),COMP(SAMPLES),PROD(CICS TS ):                 *
+      *                                                               *
+      *  PN= REASON REL YYMMDD HDXXIII : REMARKS                      *
+      * $L0= 654    510 941010 HDMMFM  : Created                      *
+      * $L1= 654    510 941202 HD9ZSMH : Use new INQ NETNAME for MRO  *
+      * $L2= 654    510 950209 HDMMFM  : Code Review work             *
+      * $P1= M95451 510 950925 HDAVCMM : Correct some comments        *
+      * $P2= M95973 510 951211 HDMMFM  : PTM 95973                    *
+      * $P3= M96436 510 960201 HD6ACPA : SMALL FIX TO SAMPLES.        *
+      * $P4= M95974 510 960209 HDMMFM  : PTM 95974                    *
+      * $P5= M95972 510 960221 HDMMFM  : PTM 95972                    *
+      * $D1= I07206 620 010430 HD7OPJW : Remove support for old compi *
+      * $P6= M96562 510 960307 HDMMFM  : PTM 96562                    *
+      *                                                               *
+      *****************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DFH0BAT1.
+
+       ENVIRONMENT DIVISION.
+           EJECT.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      *****************************************************************
+      * Names for the extra-partition TD queues.
+      * Two TD queues are used. One contains the transids of the
+      * transactions that are to be disabled. The other contains the
+      * applids of the CICS regions which can run the transactions.
+      *****************************************************************
+       77  TDQ-APPL-NAME             PIC X(4) VALUE 'BATA'.
+       77  TDQ-TRAN-NAME             PIC X(4) VALUE 'BATX'.
+      *****************************************************************
+      * Record for applids TD queue
+      *****************************************************************
+       01  TDQ-APPL-RECORD.
+         03  TDQ-APPLID    PIC X(8).
+         03  FILLER        PIC X(72).
+      *****************************************************************
+      * Copy book for record for TS queue DFH0BQ1. A record is
+      * written to this queue when an error is encountered
+      * disabling a transaction.
+      *****************************************************************
+       COPY DFH0BC11.
+      *****************************************************************
+      * Various variables used throughout the program.
+      *****************************************************************
+       77  APPL-REMAINING            PIC X.
+       77  BMS-REMAINING             PIC X.
+       77  ANY-BMS-OUTPUT            PIC X.
+       77  CONNECTION-GOOD           PIC X.
+       77  VALID-INPUT               PIC X.
+
+       77  REMOTE-APPLID             PIC X(8).
+       77  REMOTE-SYSID              PIC X(4).
+       77  COORD-SYSID               PIC X(4).
+       77  COORD-APPLID              PIC X(8).
+       77  NEXT-SYSID                PIC X(4).
+       77  NEXT-APPLID               PIC X(8).
+       77  CONN-STAT                 PIC S9(8) COMP.
+       77  SERV-STAT                 PIC S9(8) COMP.
+
+       77  TDQ-NAME                  PIC X(4).
+       77  LINK-RESP                 PIC S9(8) COMP.
+       77  LINK-RESP2                PIC S9(8) COMP.
+       77  INQ-RESP                  PIC S9(8) COMP.
+       77  INQ-RESP2                 PIC S9(8) COMP.
+       77  READQ-RESP                PIC S9(8) COMP.
+       77  READQ-RESP2               PIC S9(8) COMP.
+
+       77  MAPSET-NAME               PIC X(8).
+       77  MAP-NAME                  PIC X(8).
+       77  BMS-ELEMENTS              PIC 99 COMP.
+       77  APPLID-SCRN-COUNT         PIC S9(4) COMP.
+       77  CURR-APPLID               PIC X(8).
+       77  MAP-TRANSID               PIC X(12).
+       77  MAP-TRAN-COLOR            PIC X.
+       77  MAP-RESP                  PIC X(12).
+       77  MAP-RESP2                 PIC X(8).
+       77  MAP-ERR-MSG               PIC X(12).
+      *****************************************************************
+      * Error indicator constants
+      *****************************************************************
+       77  BATA-FAILURE              PIC X(12)
+               VALUE 'BATA failure'.
+       77  DPL-FAILURE               PIC X(12)
+               VALUE 'DPL failure '.
+       77  BAD-NETNAME               PIC X(12)
+               VALUE 'Bad netname '.
+       77  CONNECT-OUT               PIC X(12)
+               VALUE 'Connect out '.
+      *****************************************************************
+      * Screen output messages
+      *****************************************************************
+       77  ENDED-MESSAGE             PIC X(33)
+               VALUE 'Disable transactions sample ended'.
+       77  NO-ERRORS-MESSAGE         PIC X(38)
+               VALUE 'All transactions successfully disabled'.
+       77  PROCESSING-MESSAGE        PIC X(24)
+               VALUE 'Processing...please wait'.
+       77  INVALID-MESSAGE           PIC X(19)
+               VALUE 'Invalid key pressed'.
+      *****************************************************************
+      * Copy book for BMS mapset DFH0BM1. Map BAM11 displays error
+      * messages that were written to TS queue DFH0BQ1.
+      *****************************************************************
+       COPY DFH0BM1O.
+       COPY DFH0BM1O REPLACING ==BAM11I== BY ==TMP11I==
+                               ==BAM11O== BY ==TMP11O==.
+       COPY DFHAID.
+       COPY DFHBMSCA.
+      *****************************************************************
+      * Copy book for commarea to be passed to DFH0BAT4.
+      *****************************************************************
+       COPY DFH0BC12.
+
+       LINKAGE SECTION.
+           EJECT.
+
+      *****************************************************************
+      ***                 Batch Enabling Sample 1                   ***
+      ***             Disable Transactions Coordinator              ***
+      *****************************************************************
+       PROCEDURE DIVISION USING DFHEIBLK.
+
+      *---------------------------------------------------------------*
+      * Main processing starts here.
+      *---------------------------------------------------------------*
+
+       MAIN-PROCESSING SECTION.
+
+      *****************************************************************
+      * Carry out any initialization.
+      *****************************************************************
+           PERFORM INITIALIZATION.
+      *****************************************************************
+      * Disable the transactions on every CICS region, and display
+      * the results on the map.
+      *****************************************************************
+           PERFORM DISABLE-TRANSACTIONS.
+      *****************************************************************
+      * End the program and return to CICS.
+      *****************************************************************
+           EXEC CICS RETURN
+           END-EXEC.
+
+       MAIN-PROCESSING-EXIT.
+           GOBACK.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedures start here.
+      *---------------------------------------------------------------*
+
+      *---------------------------------------------------------------*
+      * Procedure to carry out any initialization.
+      *---------------------------------------------------------------*
+       INITIALIZATION SECTION.
+      *****************************************************************
+      * Initialise the commarea to be passed to DFH0BAT4
+      * Put the name of the transactions TD queue in the commarea.
+      * This TD queue is read remotely by DFH0BAT4.
+      *****************************************************************
+           MOVE SPACES TO COMMAREA-1.
+           MOVE TDQ-TRAN-NAME TO CA-TDQ-TRAN.
+      *****************************************************************
+      * Get the applid and sysid of our own CICS region.
+      *****************************************************************
+           EXEC CICS ASSIGN
+                APPLID(COORD-APPLID)
+                SYSID(COORD-SYSID)
+           END-EXEC.
+      *****************************************************************
+      * Reset the applids TD queue to the beginning. This TD queue
+      * is only read locally by this program.
+      *****************************************************************
+           MOVE TDQ-APPL-NAME TO TDQ-NAME.
+           PERFORM RESET-TD-QUEUE.
+
+       INITIALIZATION-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to disable the transactions on each CICS region.
+      *---------------------------------------------------------------*
+       DISABLE-TRANSACTIONS SECTION.
+      *****************************************************************
+      * Output that we are starting processing.
+      *****************************************************************
+           EXEC CICS SEND TEXT
+                FROM(PROCESSING-MESSAGE)
+                WAIT
+                ERASE
+           END-EXEC.
+      *****************************************************************
+      * Delete the TS queue if it already exists.
+      *****************************************************************
+           PERFORM DELETE-TSQ.
+      *****************************************************************
+      * Read all the applid records in the TD queue.
+      * For each applid found perform a DPL link to DFH0BAT4 to
+      * disable the transactions on that CICS region.
+      * Any messages will be written to the TS queue.
+      *****************************************************************
+           MOVE 'Y' TO APPL-REMAINING.
+           PERFORM PROCESS-APPLIDS
+             UNTIL APPL-REMAINING = 'N'.
+      *****************************************************************
+      * Disabling a transaction does not affect tasks with that
+      * transid that are already running. So delay for a short while
+      * to let such tasks complete. The customer can change this
+      * time if desired.
+      *****************************************************************
+           EXEC CICS DELAY
+                FOR SECONDS(10)
+           END-EXEC.
+      *****************************************************************
+      * If there are any messages on the TS queue, display
+      * them via mapset DFH0BM1 (map BAM11).
+      *****************************************************************
+           MOVE 'Y' TO BMS-REMAINING.
+           MOVE 'N' TO ANY-BMS-OUTPUT.
+           MOVE 0 TO BMS-ELEMENTS.
+           MOVE 0 TO APPLID-SCRN-COUNT.
+           MOVE SPACES TO CURR-APPLID.
+           MOVE LOW-VALUES TO BAM11O.
+           PERFORM PROCESS-BMS
+             UNTIL BMS-REMAINING = 'N'.
+      *****************************************************************
+      * Delete the TS queue as it is no longer required
+      *****************************************************************
+           PERFORM DELETE-TSQ.
+      *****************************************************************
+      * Output termination message
+      *****************************************************************
+           IF ANY-BMS-OUTPUT = 'N'
+             EXEC CICS SEND TEXT
+                  FROM(NO-ERRORS-MESSAGE)
+                  ERASE
+             END-EXEC
+           ELSE
+             EXEC CICS SEND TEXT
+                  FROM(ENDED-MESSAGE)
+                  ERASE
+             END-EXEC
+           END-IF.
+
+       DISABLE-TRANSACTIONS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to read the applid TD queue. For each applid,
+      * we DPL to DFH0BAT4 on the remote CICS region corresponding to
+      * the applid.
+      *---------------------------------------------------------------*
+       PROCESS-APPLIDS SECTION.
+      *****************************************************************
+      * Read the next applid off the TD queue.
+      *****************************************************************
+           MOVE SPACES TO TDQ-APPL-RECORD.
+           EXEC CICS READQ TD
+                QUEUE(TDQ-APPL-NAME)
+                INTO(TDQ-APPL-RECORD)
+                LENGTH(LENGTH OF TDQ-APPL-RECORD)
+                RESP(READQ-RESP)
+                RESP2(READQ-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If the read was successful, then get ready to call DFH0BAT4
+      * on the remote system. Otherwise assume that we have reached
+      * the end of the applids TD queue. A serious error causes a
+      * message to be written to the TS queue.
+      *****************************************************************
+           EVALUATE READQ-RESP
+             WHEN DFHRESP(NORMAL)
+               PERFORM DPL-LINK
+             WHEN DFHRESP(LENGERR)
+               PERFORM DPL-LINK
+             WHEN DFHRESP(QZERO)
+               MOVE 'N' TO APPL-REMAINING
+             WHEN OTHER
+               MOVE TDQ-APPLID TO TSQ-APPLID
+               MOVE BATA-FAILURE TO TSQ-ERR-MSG
+               MOVE READQ-RESP TO TSQ-RESP
+               MOVE READQ-RESP2 TO TSQ-RESP2
+               PERFORM WRITE-TSQ-RECORD
+               MOVE 'N' TO APPL-REMAINING
+           END-EVALUATE.
+
+       PROCESS-APPLIDS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to perform a DPL to DFH0BAT4 on the remote
+      * CICS region. (If our own applid, this boils down to a local
+      * LINK).
+      *---------------------------------------------------------------*
+       DPL-LINK SECTION.
+      *****************************************************************
+      * Before we call DFH0BAT4, convert the applid to a sysid. We
+      * must do this because DPL requires a sysid, and it also lets us
+      * check that the connection to the remote system exists and is
+      * working. (No need to do this if applid is our own).
+      *****************************************************************
+           MOVE TDQ-APPLID TO REMOTE-APPLID.
+           IF REMOTE-APPLID NOT = COORD-APPLID
+             PERFORM CHECK-CONNECTION
+           ELSE
+             MOVE 'Y' TO CONNECTION-GOOD
+             MOVE COORD-SYSID TO REMOTE-SYSID
+           END-IF.
+      *****************************************************************
+      * If connection is ok then reset the transactions TD queue
+      * to the beginning and DPL to DFH0BAT4. The TD queue will be
+      * read remotely by DFH0BAT4.
+      *****************************************************************
+           IF CONNECTION-GOOD = 'Y'
+             MOVE TDQ-TRAN-NAME TO TDQ-NAME
+             PERFORM RESET-TD-QUEUE
+      *****************************************************************
+      * DPL to DFH0BAT4. The commarea contains the name of
+      * the transactions TD queue and our own applid, so DFH0BAT4
+      * is in a position to read the TD queue ok.
+      *****************************************************************
+             EXEC CICS LINK
+                  PROGRAM('DFH0BAT4')
+                  COMMAREA(COMMAREA-1)
+                  LENGTH(LENGTH OF COMMAREA-1)
+                  SYSID(REMOTE-SYSID)
+                  RESP(LINK-RESP)
+                  RESP2(LINK-RESP2)
+             END-EXEC
+      *****************************************************************
+      * If the DPL failed, write this to the TS queue, so it will be
+      * displayed later on in the map.
+      *****************************************************************
+             IF LINK-RESP NOT = DFHRESP(NORMAL)
+               MOVE DPL-FAILURE TO TSQ-ERR-MSG
+               MOVE REMOTE-APPLID TO TSQ-APPLID
+               MOVE LINK-RESP TO TSQ-RESP
+               MOVE LINK-RESP2 TO TSQ-RESP2
+               PERFORM WRITE-TSQ-RECORD
+             END-IF
+           END-IF.
+
+       DPL-LINK-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to check if a connection to a remote CICS region
+      * exists and is both in service and acquired.
+      *---------------------------------------------------------------*
+       CHECK-CONNECTION SECTION.
+      *****************************************************************
+      * Assume connection is not ok.
+      *****************************************************************
+           MOVE 'N' TO CONNECTION-GOOD.
+           MOVE BAD-NETNAME TO TSQ-ERR-MSG.
+      *****************************************************************
+      * Use the applid to obtain the sysid. If no sysid can be found
+      * then no connection exists to the remote region.
+      *****************************************************************
+           EXEC CICS INQUIRE NETNAME(REMOTE-APPLID)
+                REMOTESYSTEM(REMOTE-SYSID)
+                RESP(INQ-RESP)
+                RESP2(INQ-RESP2)
+           END-EXEC.
+      *****************************************************************
+      * If a connection exists to the remote region, use the sysid
+      * to see if the connection is in service and acquired.
+      *****************************************************************
+           IF INQ-RESP = DFHRESP(NORMAL)
+             MOVE CONNECT-OUT TO TSQ-ERR-MSG
+             EXEC CICS INQUIRE CONNECTION(REMOTE-SYSID)
+                  CONNSTATUS(CONN-STAT)
+                  SERVSTATUS(SERV-STAT)
+                  RESP(INQ-RESP)
+                  RESP2(INQ-RESP2)
+             END-EXEC
+      *****************************************************************
+      * If the connection is ok, set the connection ok flag.
+      *****************************************************************
+             IF INQ-RESP = DFHRESP(NORMAL)
+               IF CONN-STAT = DFHVALUE(ACQUIRED) AND
+                  SERV-STAT = DFHVALUE(INSERVICE)
+                 MOVE 'Y' TO CONNECTION-GOOD
+               END-IF
+             END-IF
+           END-IF.
+      *****************************************************************
+      * If the connection ok flag is not set, the connection is not
+      * available. Write this to the TS queue, so it will be
+      * displayed later on in the map. (The message text is already
+      * set up in TSQ-ERR-MSG - see above).
+      *****************************************************************
+           IF CONNECTION-GOOD = 'N'
+             MOVE REMOTE-APPLID TO TSQ-APPLID
+             MOVE INQ-RESP TO TSQ-RESP
+             MOVE INQ-RESP2 TO TSQ-RESP2
+             PERFORM WRITE-TSQ-RECORD
+           END-IF.
+
+       CHECK-CONNECTION-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to reset a TD queue back to the beginning.
+      * This is achieved by setting it closed and open.
+      *---------------------------------------------------------------*
+       RESET-TD-QUEUE SECTION.
+           EXEC CICS SET TDQUEUE(TDQ-NAME)
+                ENABLED
+                CLOSED
+                NOHANDLE
+           END-EXEC.
+           EXEC CICS SET TDQUEUE(TDQ-NAME)
+                ENABLED
+                OPEN
+                NOHANDLE
+           END-EXEC.
+
+       RESET-TD-QUEUE-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to read a record from the TS queue containing error
+      * messages resulting from unsuccessful transaction disables by
+      * DFH0BAT4, and display the results on a map. The map is
+      * sent either when it is full, when there are no more
+      * error messages, or when the remote system to which the
+      * message applies changes.
+      *---------------------------------------------------------------*
+       PROCESS-BMS SECTION.
+      *****************************************************************
+      * Read the next record from the TS queue
+      *****************************************************************
+           EXEC CICS READQ TS
+                QUEUE(TSQ-DISABLE-NAME)
+                INTO(TSQ-DISABLE-RECORD)
+                RESP(READQ-RESP)
+           END-EXEC.
+      *****************************************************************
+      * If the read was successful then build the map. Otherwise
+      * assume that we have reached the end of the queue.
+      *****************************************************************
+           IF READQ-RESP = DFHRESP(NORMAL)
+             MOVE 'Y' TO ANY-BMS-OUTPUT
+      *****************************************************************
+      * Add the message to the map. But if this is the first message
+      * for a particular CICS region, send the map as it currently
+      * stands if not empty, then reset the applid, before adding
+      * the message we just read.
+      *****************************************************************
+             IF CURR-APPLID = TSQ-APPLID
+               PERFORM BUILD-BMS
+             ELSE
+               IF BMS-ELEMENTS > 0 OR
+                 ERRLINO OF BAM11O NOT EQUAL LOW-VALUES
+                 PERFORM SEND-BMS
+               END-IF
+               IF BMS-REMAINING = 'Y'
+                 MOVE 0 TO APPLID-SCRN-COUNT
+                 MOVE TSQ-APPLID TO CURR-APPLID
+                 PERFORM BUILD-BMS
+               END-IF
+             END-IF
+           ELSE
+      *****************************************************************
+      * We have reached the end of the TS queue. Send the map as it
+      * currently stands if it is not empty.
+      *****************************************************************
+             IF BMS-ELEMENTS > 0 OR
+               ERRLINO OF BAM11O NOT EQUAL LOW-VALUES
+               PERFORM SEND-BMS
+             END-IF
+             MOVE 'N' TO BMS-REMAINING
+           END-IF.
+
+       PROCESS-BMS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to add a message to the map. The map is displayed
+      * if it has filled up.
+      *---------------------------------------------------------------*
+       BUILD-BMS SECTION.
+           IF BMS-ELEMENTS = 10
+             PERFORM SEND-BMS
+           END-IF.
+           PERFORM BUILD-MAP-ENTRY.
+           PERFORM BUILD-MAP.
+
+       BUILD-BMS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to send map BAM11 and receive it back again until
+      * valid input has been received.
+      *---------------------------------------------------------------*
+       SEND-BMS SECTION.
+      *****************************************************************
+      * Fill in the remaining map fields.
+      * When complete save the map in case we need to redisplay.
+      *****************************************************************
+           MOVE 0 TO BMS-ELEMENTS.
+           ADD 1 TO APPLID-SCRN-COUNT.
+           MOVE APPLID-SCRN-COUNT TO APPLCNTO OF BAM11O.
+           MOVE CURR-APPLID TO APPLIDO OF BAM11O.
+           MOVE COORD-APPLID TO MYAPPLO OF BAM11O.
+           MOVE 'DFH0BM1' TO MAPSET-NAME.
+           MOVE 'BAM11' TO MAP-NAME.
+           MOVE BAM11O TO TMP11O.
+      *****************************************************************
+      * Send the map.
+      *****************************************************************
+           EXEC CICS SEND
+                MAP(MAP-NAME)
+                MAPSET(MAPSET-NAME)
+                FROM(BAM11O)
+                ERASE
+                FREEKB
+           END-EXEC.
+      *****************************************************************
+      * Receive the map until valid input has been entered.
+      *****************************************************************
+           MOVE 'N' TO VALID-INPUT.
+           PERFORM WITH TEST AFTER
+             UNTIL VALID-INPUT = 'Y'
+             EXEC CICS RECEIVE
+                  MAP(MAP-NAME)
+                  MAPSET(MAPSET-NAME)
+                  INTO(BAM11I)
+                  NOHANDLE
+             END-EXEC
+      *****************************************************************
+      * If F3 or F12 has been pressed, flag the end of all processing.
+      * If F8 has been pressed, continue.
+      * Anything else is invalid - resend the map.
+      *****************************************************************
+             EVALUATE EIBAID
+               WHEN DFHPF3
+                 MOVE 'N' TO BMS-REMAINING
+                 MOVE 'Y' TO VALID-INPUT
+               WHEN DFHPF12
+                 MOVE 'N' TO BMS-REMAINING
+                 MOVE 'Y' TO VALID-INPUT
+               WHEN DFHPF8
+                 MOVE 'Y' TO VALID-INPUT
+               WHEN OTHER
+                 MOVE TMP11O TO BAM11O
+                 MOVE DFHYELLO TO MSGLINC OF BAM11O
+                 MOVE INVALID-MESSAGE TO MSGLINO OF BAM11O
+                 EXEC CICS SEND
+                      MAP(MAP-NAME)
+                      MAPSET(MAPSET-NAME)
+                      FROM(BAM11O)
+                      ALARM
+                      ERASE
+                      FREEKB
+                 END-EXEC
+             END-EVALUATE
+           END-PERFORM.
+      *****************************************************************
+      * Clear the current contents of map BAM11.
+      *****************************************************************
+           MOVE LOW-VALUES TO BAM11O.
+
+       SEND-BMS-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to build a map entry from a TS queue message.
+      *---------------------------------------------------------------*
+       BUILD-MAP-ENTRY SECTION.
+      *****************************************************************
+      * The TS queue record will ordinarily contain the transid and
+      * why it could not be disabled, described by EIBRESP and EIBRESP2
+      * values. However, if the TS queue record is for some other
+      * error, the TSQ-ERR-MSG field will be non-blank.
+      *****************************************************************
+           IF TSQ-ERR-MSG = SPACES
+             MOVE TSQ-TRANSID TO MAP-TRANSID
+             MOVE DFHNEUTR TO MAP-TRAN-COLOR
+             MOVE SPACES TO MAP-ERR-MSG
+           ELSE
+             MOVE TSQ-ERR-MSG TO MAP-ERR-MSG
+             MOVE SPACES TO MAP-TRANSID
+           END-IF.
+           MOVE TSQ-RESP2 TO MAP-RESP2.
+           EVALUATE TSQ-RESP
+             WHEN DFHRESP(NORMAL)
+               MOVE SPACES TO MAP-RESP
+               MOVE SPACES TO MAP-RESP2
+             WHEN DFHRESP(INVREQ)
+               MOVE 'INVREQ' TO MAP-RESP
+             WHEN DFHRESP(NOTAUTH)
+               MOVE 'NOTAUTH' TO MAP-RESP
+             WHEN DFHRESP(TRANSIDERR)
+               MOVE 'TRANSIDERR' TO MAP-RESP
+             WHEN DFHRESP(LENGERR)
+               MOVE 'LENGERR' TO MAP-RESP
+             WHEN DFHRESP(PGMIDERR)
+               MOVE 'PGMIDERR' TO MAP-RESP
+             WHEN DFHRESP(SYSIDERR)
+               MOVE 'SYSIDERR' TO MAP-RESP
+             WHEN DFHRESP(TERMERR)
+               MOVE 'TERMERR' TO MAP-RESP
+             WHEN DFHRESP(TERMIDERR)
+               MOVE 'TERMIDERR' TO MAP-RESP
+             WHEN DFHRESP(DISABLED)
+               MOVE 'DISABLED' TO MAP-RESP
+             WHEN DFHRESP(IOERR)
+               MOVE 'IOERR' TO MAP-RESP
+             WHEN DFHRESP(QIDERR)
+               MOVE 'QIDERR' TO MAP-RESP
+             WHEN DFHRESP(NOTOPEN)
+               MOVE 'NOTOPEN' TO MAP-RESP
+             WHEN DFHRESP(ISCINVREQ)
+               MOVE 'ISCINVREQ' TO MAP-RESP
+             WHEN DFHRESP(END)
+               MOVE SPACES TO MAP-RESP
+               MOVE SPACES TO MAP-RESP2
+             WHEN OTHER
+               MOVE '??????' TO MAP-RESP
+           END-EVALUATE.
+
+       BUILD-MAP-ENTRY-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to add a map entry to the map.
+      *---------------------------------------------------------------*
+       BUILD-MAP SECTION.
+           IF MAP-ERR-MSG = SPACES
+             PERFORM BUILD-MAP-FROM-MAP-ENTRY
+           ELSE
+             PERFORM BUILD-ERR-FROM-MAP-ENTRY
+           END-IF.
+
+       BUILD-MAP-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to add a map entry to the map.
+      *---------------------------------------------------------------*
+       BUILD-MAP-FROM-MAP-ENTRY SECTION.
+           ADD 1 TO BMS-ELEMENTS.
+           EVALUATE BMS-ELEMENTS
+             WHEN 1
+               MOVE MAP-TRANSID TO TRANID1O OF BAM11O
+               MOVE MAP-TRAN-COLOR TO TRANID1C OF BAM11O
+               MOVE MAP-RESP TO RESP1O OF BAM11O
+               MOVE MAP-RESP2 TO RESP21O OF BAM11O
+             WHEN 2
+               MOVE MAP-TRANSID TO TRANID2O OF BAM11O
+               MOVE MAP-TRAN-COLOR TO TRANID2C OF BAM11O
+               MOVE MAP-RESP TO RESP2O OF BAM11O
+               MOVE MAP-RESP2 TO RESP22O OF BAM11O
+             WHEN 3
+               MOVE MAP-TRANSID TO TRANID3O OF BAM11O
+               MOVE MAP-TRAN-COLOR TO TRANID3C OF BAM11O
+               MOVE MAP-RESP TO RESP3O OF BAM11O
+               MOVE MAP-RESP2 TO RESP23O OF BAM11O
+             WHEN 4
+               MOVE MAP-TRANSID TO TRANID4O OF BAM11O
+               MOVE MAP-TRAN-COLOR TO TRANID4C OF BAM11O
+               MOVE MAP-RESP TO RESP4O OF BAM11O
+               MOVE MAP-RESP2 TO RESP24O OF BAM11O
+             WHEN 5
+               MOVE MAP-TRANSID TO TRANID5O OF BAM11O
+               MOVE MAP-TRAN-COLOR TO TRANID5C OF BAM11O
+               MOVE MAP-RESP TO RESP5O OF BAM11O
+               MOVE MAP-RESP2 TO RESP25O OF BAM11O
+             WHEN 6
+               MOVE MAP-TRANSID TO TRANID6O OF BAM11O
+               MOVE MAP-TRAN-COLOR TO TRANID6C OF BAM11O
+               MOVE MAP-RESP TO RESP6O OF BAM11O
+               MOVE MAP-RESP2 TO RESP26O OF BAM11O
+             WHEN 7
+               MOVE MAP-TRANSID TO TRANID7O OF BAM11O
+               MOVE MAP-TRAN-COLOR TO TRANID7C OF BAM11O
+               MOVE MAP-RESP TO RESP7O OF BAM11O
+               MOVE MAP-RESP2 TO RESP27O OF BAM11O
+             WHEN 8
+               MOVE MAP-TRANSID TO TRANID8O OF BAM11O
+               MOVE MAP-TRAN-COLOR TO TRANID8C OF BAM11O
+               MOVE MAP-RESP TO RESP8O OF BAM11O
+               MOVE MAP-RESP2 TO RESP28O OF BAM11O
+             WHEN 9
+               MOVE MAP-TRANSID TO TRANID9O OF BAM11O
+               MOVE MAP-TRAN-COLOR TO TRANID9C OF BAM11O
+               MOVE MAP-RESP TO RESP9O OF BAM11O
+               MOVE MAP-RESP2 TO RESP29O OF BAM11O
+             WHEN 10
+               MOVE MAP-TRANSID TO TRANID0O OF BAM11O
+               MOVE MAP-TRAN-COLOR TO TRANID0C OF BAM11O
+               MOVE MAP-RESP TO RESP0O OF BAM11O
+               MOVE MAP-RESP2 TO RESP20O OF BAM11O
+             WHEN OTHER
+               CONTINUE
+           END-EVALUATE.
+
+       BUILD-MAP-FROM-MAP-ENTRY-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to add a map entry to the map.
+      *---------------------------------------------------------------*
+       BUILD-ERR-FROM-MAP-ENTRY SECTION.
+           MOVE DFHYELLO TO ERRLINC OF BAM11O
+           EVALUATE MAP-ERR-MSG
+             WHEN BATA-FAILURE
+                 STRING
+                     MAP-RESP
+                     ' for TDQ '
+                     TDQ-APPL-NAME
+                     ' - review TDQ definitions'
+                     DELIMITED BY SIZE INTO ERRLINO OF BAM11O
+             WHEN BATX-FAILURE
+                 STRING
+                     MAP-RESP
+                     ' for TDQ '
+                     TDQ-TRAN-NAME
+                     ' - review TDQ definitions'
+                     DELIMITED BY SIZE INTO ERRLINO OF BAM11O
+             WHEN DPL-FAILURE
+                 STRING
+                     MAP-RESP
+                     ' for distributed link '
+                     ' - review connections'
+                     DELIMITED BY SIZE INTO ERRLINO OF BAM11O
+             WHEN BAD-NETNAME
+                 STRING
+                     MAP-RESP
+                     ' for INQUIRE NETNAME '
+                     ' - review connection definitions'
+                     DELIMITED BY SIZE INTO ERRLINO OF BAM11O
+             WHEN CONNECT-OUT
+                 STRING
+                     MAP-RESP
+                     ' for INQUIRE CONNECTION '
+                     ' - review connection definitions'
+                     DELIMITED BY SIZE INTO ERRLINO OF BAM11O
+             WHEN OTHER
+               CONTINUE
+           END-EVALUATE.
+
+       BUILD-ERR-FROM-MAP-ENTRY-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to write a TS record to DFH0BQ1.
+      *---------------------------------------------------------------*
+       WRITE-TSQ-RECORD SECTION.
+           EXEC CICS WRITEQ TS
+                QUEUE(TSQ-DISABLE-NAME)
+                FROM(TSQ-DISABLE-RECORD)
+                LENGTH(LENGTH OF TSQ-DISABLE-RECORD)
+           END-EXEC.
+
+       WRITE-TSQ-RECORD-EXIT.
+           EXIT.
+           EJECT
+      *---------------------------------------------------------------*
+      * Procedure to delete TS queue DFH0BQ1.
+      *---------------------------------------------------------------*
+       DELETE-TSQ SECTION.
+           EXEC CICS DELETEQ TS
+                QUEUE(TSQ-DISABLE-NAME)
+                NOHANDLE
+           END-EXEC.
+
+       DELETE-TSQ-EXIT.
+           EXIT.

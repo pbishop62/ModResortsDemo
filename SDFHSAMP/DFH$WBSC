@@ -1,0 +1,553 @@
+*ASM XOPTS(SP NOPROLOG NOEPILOG)
+         TITLE 'DFH$WBSC - Web Interface - Sample Security Converter'
+***********************************************************************
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1996, 2008"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* MODULE NAME = DFH$WBSC                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  Web Interface                           *
+*                    Sample Security Converter Program                *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION = Sample program to provide conversion of the ASCII        *
+*            HTTP request to an EBCDIC commarea with signon security. *
+*                                                                     *
+*        This program is a sample version of a CICS Web Interface     *
+*        Converter program for converting the application commarea    *
+*        for use with a limited form of signon capability.            *
+*                                                                     *
+* NOTES :                                                             *
+*                                                                     *
+*    THIS IS A PRODUCT SENSITIVE SAMPLE.                              *
+*    REFER TO PRODUCT DOCUMENTATION.                                  *
+*                                                                     *
+*    DEPENDENCIES = S/390                                             *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$WBSC                                              *
+*                                                                     *
+*     PURPOSE = Commarea conversion with signon capability            *
+*                                                                     *
+*     LINKAGE =                                                       *
+*                                                                     *
+*     INPUT =                                                         *
+*                                                                     *
+*     OUTPUT =                                                        *
+*                                                                     *
+*     EXIT-NORMAL = Exit is via the DFHEIRET macro.                   *
+*                                                                     *
+*     EXIT-ERROR =                                                    *
+*                                                                     *
+*-------------------------------------------------------------------- *
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+*         None.                                                       *
+*                                                                     *
+*     ROUTINES =                                                      *
+*         EXEC CICS RETURN - return to the calling program.           *
+*                                                                     *
+*     CONTROL BLOCKS =                                                *
+*         The WBI Converter parameter list is defined in DFHWBCDD,    *
+*         along with a description of the parameters.                 *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFH$WBSC),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $02= A11377 530 971223 HDBGNRB : Migrate PQ11377 from SPA R520   *
+*    $04= A28884 610 990730 HDBGNRB : Migrate PQ28884 from SPA R530   *
+*    $05= A42705 610 001215 HDBGNRB : Migrate PQ42705 from SPA R530   *
+*    $06= A15921 650 051213 HDBGNRB : Migrate PK15921 from SPA R640   *
+*    $L0= 723    510 960624 HD2JPEH : Sample WEB signon program       *
+*    $L3= 830    660 080923 HDISGPL : Add IPV6 to Parameters          *
+*    $P1= M97078 510 960915 HD2JPEH : Improved signon design          *
+*    $P2= M27415 530 980209 HD2WPGK : Put DFHWBUCD amongst constants  *
+*    $P3= M27322 530 990128 HD2JPEH : Converter commarea changes      *
+*                                                                     *
+*    Dummy change for APAR PQ28884                                 @04A
+***********************************************************************
+         EJECT ,
+*---------------------------------------------------------------------*
+*    Standard WBI definitions required                                *
+*---------------------------------------------------------------------*
+         COPY DFHWBCDD                Converter parameter list
+         DFHREGS ,
+PARMSIZE EQU  256                     Length within commarea for parms
+CRLF     EQU  X'0D25'                 Carriage-return/linefeed
+*
+*---------------------------------------------------------------------*
+*    Working storage definitions                                      *
+*---------------------------------------------------------------------*
+         DFHEISTG ,
+WORKAREA DS    D                  Workarea
+*----------------------------------------------------------------------
+* Start of parameter list for DFH$WBST, the State Manager.            *
+STATPARM DS    0F
+EYECATCH DS    CL4
+FUNCTION DS    XL1
+CREATE   EQU   C'C'               * Create a new handle and state stg
+RETRIEVE EQU   C'R'               * Retrieve state info for a handle
+STORE    EQU   C'S'               * Store state info for a handle
+DESTROY  EQU   C'D'               * Destroy handle and state stg
+RETCODE  DS    XL1
+GOODRC   EQU   X'0'
+BADCOMRC EQU   X'1'
+INVFUNRC EQU   X'2'
+NOSTGRC  EQU   X'3'
+NOMATRC  EQU   X'4'
+TSWERRC  EQU   X'5'
+LENGERR  EQU   X'6'
+NOSTMPRC EQU   X'7'
+BADQNMRC EQU   X'8'
+TIMEFRC  EQU   X'9'
+TSWER2RC EQU   X'A'
+         DS    XL2                * Reserved
+HANDLE   DS    F                  * Unique conversation id
+USERDATA DS    XL256              * User state information
+         ORG   USERDATA
+SNUSERID DS    CL8                * Userid
+SNTOKEN  DS    CL8                * Token passed to DFH$WBSN
+LEN_URL  DS    H                  * Length of absolute URL         @P1C
+ABS_URL  DS    CL94               * Value of absolute URL          @P1C
+         ORG   USERDATA+L'USERDATA
+STATLEN  EQU   *-STATPARM         * Length of state mgr parameter
+* End of parameter list for DFH$WBST, the State Manager.              *
+*----------------------------------------------------------------------
+         DS    0D                 Align to double word             @P1A
+ENVVARS  DS    CL1024             Space for environment variables  @P1A
+         DFHEIEND ,
+*---------------------------------------------------------------------*
+*    Start of program code                                            *
+*---------------------------------------------------------------------*
+DFH$WBSC CSECT
+DFH$WBSC AMODE 31
+DFH$WBSC RMODE ANY
+         DFHEIENT DATAREG=R13,CODEREG=R12,EIBREG=R11
+*
+*  If there is no commarea, just return.
+*  (There is nowhere to set return codes).
+*
+         SR    R15,R15            Zero insert register
+         ICM   R15,3,EIBCALEN     Insert commarea length
+         BZ    RETURN             Return if zero
+*
+*  Address the parameter list
+*
+         L     R10,DFHEICAP       Address the commarea
+         USING COMM_PARMLIST,R10  Establish commarea addressing
+         LH    R0,CONVERTER_FUNCTION  Load the function            @P3C
+         CH    R0,=Y(URP_ENCODE)  Is it ENCODE?                    @P3C
+         BE    ENCODE             Yes
+         CH    R0,=Y(URP_DECODE)  Is it DECODE?                    @P3C
+         BE    DECODE             Yes
+*---------------------------------------------------------------------*
+*    Return Invalid                                                   *
+*---------------------------------------------------------------------*
+RET_INV  DS    0H
+         MVC   CONVERTER_RESPONSE,=A(URP_INVALID)
+         B     RETURN
+*---------------------------------------------------------------------*
+*    Return Disaster                                                  *
+*---------------------------------------------------------------------*
+RET_DIS  DS    0H
+         MVC   CONVERTER_RESPONSE,=A(URP_DISASTER)
+         B     RETURN
+*---------------------------------------------------------------------*
+*    Return OK                                                        *
+*---------------------------------------------------------------------*
+RET_OK   DS    0H
+         MVC   CONVERTER_RESPONSE,=A(URP_OK)
+RETURN   DS    0H
+         DFHEIRET ,
+         EJECT ,
+***********************************************************************
+*
+*  DECODE routine
+*
+***********************************************************************
+DECODE   DS    0H
+         CLC   DECODE_EYECATCHER,=CL8'>decode'
+         BNE   RET_INV            Return response=invalid
+*---------------------------------------------------------------------*
+*    Processing different versions of input:                          *
+*    decode_version_CTS410 level introduce support for IPV6 addresses *
+*---------------------------------------------------------------------*
+*
+         CLI   decode_version,decode_version_CTS410 IPV6 supported?@L3A
+         BNL   GOT_IPV6                Y: process ipv6 fields      @L3A
+*
+*  This is where users would execute older IP address manipulation
+*  using fields decode_client_address and decode_client_address_string
+*
+         LA    R6,DECODE_CLIENT_ADDRESS     Example                @L3A
+         LA    R7,DECODE_CLIENT_ADDRESS_STRING Example             @L3A
+         B     END_IP                  B: finished with IP address
+*                                      processing
+GOT_IPV6 DS    0H                      Process IPV6 fields         @L3A
+*
+*  This is where users would execute newer IP address manipulation
+*  using fields decode_client_ipv6_address and
+*  decode_client_ipv6_address_string.
+*
+         LA    R6,DECODE_CLIENT_IPV6_ADDRESS Example               @L3A
+         LA    R7,DECODE_CLIENT_IPV6_ADDRESS_STRING  Example       @L3A
+*
+END_IP   DS    0H                      End IP address processing   @L3A
+*
+*  Obtain 256 bytes of parameter space by shifting the input
+*  data down by 256 bytes.
+*
+*  This parameter area is used to communicate with the
+*  sample signon application DFH$WBSN.
+*
+         L     R9,DECODE_DATA_PTR Address input data
+         LA    R0,255             Get rounding value
+         A     R0,DECODE_INPUT_DATA_LEN  Get rounded length of data
+         L     R1,#32K      Set max length                         @06A
+         CR    R0,R1        Current length > max?                  @06A
+         BNH   LEN_OK       No, continue                           @06A
+         LR    R0,R1        Yes, set to max                        @06A
+LEN_OK   DS    0H                                                  @06A
+         SRL   R0,8               Divide length by 256
+         LR    R1,R0              Copy number of 256-byte segments
+         SLL   R1,8               Restore rounded length
+         AR    R1,R9              Address end of data
+         LA    R3,PARMSIZE        Get length by which to shift
+COPYDATA DS    0H                 Copy data 256 bytes at a time
+         SR    R1,R3              Decrement address of data to be moved
+         MVC   PARMSIZE(PARMSIZE,R1),0(R1)  Shift 256 bytes to right
+         BCT   R0,COPYDATA        Copy more data
+         XC    0(PARMSIZE,R9),0(R9) Clear the first 256 bytes
+         LM    R14,R2,DECODE_METHOD_PTR  Load all DECODE pointers
+         ALR   R14,R3             Relocate DECODE_METHOD_PTR
+         ALR   R15,R3             Relocate DECODE_HTTP_VERSION_PTR
+         ALR   R0,R3              Relocate DECODE_RESOURCE_PTR
+         ALR   R1,R3              Relocate DECODE_REQUEST_HEADER_PTR
+         ALR   R2,R3              Relocate DECODE_USER_DATA_PTR
+         STM   R14,R2,DECODE_METHOD_PTR  Save relocated pointers
+*
+*  Check whether the client supplied a token in the URI.
+*
+         OC    DECODE_USER_TOKEN,DECODE_USER_TOKEN Is token present?
+         BNZ   GETSTATE           Yes, obtain state
+*
+*  No token was present in the incoming URI.
+*  Obtain a new token from the state manager routine.
+*  State manager returns a 32-bit binary number as its "handle".
+*  We convert this here to an 8-byte alphabetic character-string.
+*
+GETTOKEN MVI   FUNCTION,CREATE    Request state creation
+         MVC   EYECATCH,=C'>sta'  Set plist eyecatcher
+         EXEC  CICS LINK PROGRAM('DFH$WBST')                           *
+               COMMAREA(STATPARM) LENGTH(STATSIZE)
+         CLI   RETCODE,GOODRC     Successful?
+*  Convert the binary handle to a base-26 alphabetic integer
+         BNE   STATMERR           No, State Manager error
+         L     R15,HANDLE         Get returned binary handle
+         LA    R1,L'SNTOKEN       Length of user token
+MAKETOKN SR    R14,R14            Clear high order word of quotient
+         D     R14,=A(L'ALPHABET) Divide R15 by 26. Remainder in R14
+         LA    R14,ALPHABET(R14)  Point to character in alphabet
+         LA    R2,SNTOKEN-1(R1)   Address slot in token
+         MVC   0(1,R2),0(R14)     Copy character into token
+         BCT   R1,MAKETOKN        Loop through token
+*
+*  Save the original URL, with the new user token attached to it,
+*  as part of the state data.
+*  If the original URL had an associated query string, it cannot be
+*  a valid token if we reached this point, so it has to be removed.
+*  The URL which is built and used in the Location header of       @05A
+*  redirection is a relative URL. The HTTP 1.0 standard            @05A
+*  requires that only absolute URLs should be used in              @05A
+*  redirection headers. A relative URL is used here as this is     @05A
+*  a method by which redirections can work with a firewall. If     @05A
+*  it is desirable to adhere to the HTTP 1.0 standard then         @05A
+*  please change the code below to build an absolute URL.          @05A
+*
+         MVI   ABS_URL,C' '       Initialize with blanks           @P1A
+         MVC   ABS_URL+1(L'ABS_URL-1),ABS_URL  Propagate blanks    @P1A
+         LA    R6,ABS_URL         Address start server name        @05C
+         LA    R8,L'ABS_URL       Set length left in URL           @05C
+         L     R0,DECODE_RESOURCE_PTR  Point to current URI        @P1A
+         LH    R1,DECODE_RESOURCE_LENGTH  Length of current URI    @P1A
+         LR    R7,R1              Copy length to copy              @P1A
+         SR    R8,R7              Calculate length left            @P1A
+         BNP   RET_INV            No space left - invalid          @P1A
+         MVCL  R6,R0              Save the current URI             @P1A
+         LR    R1,R6              Point to end of URL              @P1A
+         LA    R0,1               Set increment register for scan
+         SR    R1,R0              Point to last character of URL   @P1A
+         LA    R14,ABS_URL        Start at beginning of URL        @P1A
+SRCHQRY  CLI   0(R14),C'?'        Found start of query string?
+         BE    ADDQUERY           Yes, overwrite it
+         BXLE  R14,R0,SRCHQRY     No, search further
+ADDQUERY DS    0H                 Add new query string to URI
+         LA    R8,ABS_URL+L'ABS_URL Address end of URL             @P1A
+         SR    R8,R14             Length left for query string     @P1A
+         SH    R8,=Y(L'SNTOKEN+1) Subtract length of query string  @P1A
+         BNP   RET_INV            No space left - invalid          @P1A
+         MVI   0(R14),C'?'                Append a query
+         MVC   1(L'SNTOKEN,R14),SNTOKEN   Append the token
+         LA    R0,L'SNTOKEN+1(,R14)       Address end of token
+         LA    R14,ABS_URL        Address start of absolute URL    @P1A
+         SR    R0,R14             Calculate length of new URL      @P1A
+         STH   R0,LEN_URL         Save length in state manager     @P1A
+         MVI   FUNCTION,STORE     Request storage of state
+         MVC   EYECATCH,=C'>sta'  Set plist eyecatcher
+         EXEC  CICS LINK PROGRAM('DFH$WBST')                           *
+               COMMAREA(STATPARM) LENGTH(STATSIZE)
+         CLI   RETCODE,NOMATRC    Is token unknown?                @P1A
+         BE    GETTOKEN           Yes, get a new one               @P1A
+         CLI   RETCODE,GOODRC     Successful?
+         BNE   STATMERR           No, State Manager error
+         XC    DECODE_SERVER_PROGRAM,DECODE_SERVER_PROGRAM         @P1A
+         MVC   DECODE_USER_TOKEN,SNTOKEN Return new token value    @P1A
+         MVC   0(PARMSIZE,R9),USERDATA Pass state data to signon   @P1A
+         MVC   0(8,R9),=8C'?'     Return userid as questions       @P1A
+         B     RET_OK             Return normal response           @P1A
+*
+*  Install name of server program as 'DFHWBSN' which must be       @02C
+*  an alias of DFH$WBSN.  The name DFH$WBSN itself is not used
+*  because the program name will be used later to generate
+*  new URLs, and the '$' character is not valid therein.
+*
+GOSIGNON DS    0H
+         MVC   DECODE_SERVER_PROGRAM,=CL8'DFHWBSN' Set signon      @02C
+         MVC   DECODE_USER_TOKEN,SNTOKEN Return new token value
+         MVC   0(PARMSIZE,R9),USERDATA Pass state data to signon
+         B     RET_OK             Return normal response
+         SPACE 2
+STATMERR DS    0H                 State mgr error - return disaster
+         MVC   CONVERTER_REASON(1),FUNCTION
+         MVC   CONVERTER_REASON+1(1),RETCODE
+         B     RET_DIS            State mgr error - return disaster
+         EJECT ,
+*
+*  There is already a token in the input URI.
+*  See if it is valid and represents a non-null userid.
+*
+GETSTATE XC    STATPARM(STATLEN-L'USERDATA),STATPARM  Clear state plist
+         XC    USERDATA,USERDATA  Clear state manager userdata
+         MVC   SNTOKEN,DECODE_USER_TOKEN Copy the token
+         BAL   R4,CNVTOKEN        Convert the token to binary      @P1A
+         ST    R15,HANDLE         Save the accumulated handle
+         MVI   FUNCTION,RETRIEVE  Request state retrieval
+         MVC   EYECATCH,=C'>sta'  Set plist eyecatcher
+         EXEC  CICS LINK PROGRAM('DFH$WBST')                           *
+               COMMAREA(STATPARM) LENGTH(STATSIZE)
+         CLI   RETCODE,NOMATRC    Is token unknown?
+         BE    GETTOKEN           Yes, get a new one
+         CLI   RETCODE,GOODRC     Successful?
+         BNE   STATMERR           No, State Manager error
+         MVC   0(PARMSIZE,R9),USERDATA Copy user data from state mgr
+         MVC   WORKAREA,SNUSERID  Copy the userid
+         NC    WORKAREA,=8AL1(X'FF'-C' ')  Check for blanks or nulls
+         BZ    GOSIGNON           If no userid, force signon
+         B     RET_OK             Otherwise, continue normally
+         EJECT ,
+***********************************************************************
+*
+*  ENCODE routine
+*
+***********************************************************************
+ENCODE   DS    0H
+         CLC   ENCODE_EYECATCHER,=CL8'>encode'
+         BNE   RET_INV            Return response=invalid
+         L     R9,ENCODE_DATA_PTR Address data from signon program
+         MVC   USERDATA,0(R9)     Copy data updated by signom
+         OC    SNUSERID,SNUSERID  Is userid available?             @P1A
+         BZ    SENDPAGE           No, just send signon page        @P1A
+         CLC   SNUSERID,=8C'?'    Is userid question marks?        @P1A
+         BNE   REDIRECT           No, go reset in state manager    @P1A
+         XC    SNUSERID,SNUSERID  Yes, clear out temporary userid  @P1A
+         B     REDIRECT           Yes, redirect to new URL         @P1A
+SENDPAGE DS    0H                 Send page prepared by SIGNON     @P1A
+         L     R1,PARMSIZE(,R9)   Get length to send
+         LA    R0,PARMSIZE(,R9)   Get address to send
+         LR    R14,R9             Copy target address
+         LR    R15,R1             Target length = source length
+         MVCL  R14,R0             Copy user data
+         B     RET_OK             All done
+*
+*   If userid is OK, restore original URI and issue redirection.
+*   (The "original" URI now has the token appended, so we will
+*    not revisit the signon processing again unless the token
+*    becomes invalidated.)
+*
+REDIRECT DS    0H
+         LH    R2,LEN_URL         Get length of absolute URL       @P1C
+         BCTR  R2,0               Decrement for EXECUTE
+         LR    R14,R9             Get address for output
+         MVC   4(REDIR1_L,R14),REDIR1  Copy first segment
+         LA    R14,REDIR1_L+4(,R14) Point beyond it
+         EX    R2,COPYURL         Copy absolute URL                @P1C
+         LA    R14,1(R2,R14)      Point beyond it
+         LM    R15,R1,=A(REDIR2_L,REDIR2,REDIR2_L) Locate second segmnt
+         MVCL  R14,R0             Copy second segment
+         EX    R2,COPYURL         Copy absolute URL                @P1C
+         LA    R14,1(R2,R14)      Point beyond it
+         MVC   0(REDIR3_L,R14),REDIR3  Copy third segment
+         LA    R14,REDIR3_L(,R14) Point beyond it
+         SR    R14,R9             Get length of entire HTTP response
+         ST    R14,0(,R9)         Save as first word of data
+*  Convert the modulo-26 character token back to a binary handle
+         MVC   SNTOKEN,ENCODE_USER_TOKEN Copy the token
+         BAL   R4,CNVTOKEN        Convert the token to binary
+         ST    R15,HANDLE         Save the accumulated handle
+         MVI   FUNCTION,STORE     Request storage of state
+         MVC   EYECATCH,=C'>sta'  Set plist eyecatcher
+         EXEC  CICS LINK PROGRAM('DFH$WBST')                           *
+               COMMAREA(STATPARM) LENGTH(STATSIZE)
+         CLI   RETCODE,GOODRC     Successful?
+         BNE   STATMERR           No, State Manager error
+         B     RET_OK             All done
+         SPACE 1
+COPYURL  MVC   0(0,R14),ABS_URL   Copy absolute URL                @P1C
+         EJECT ,
+*
+*  Get the value associated with a specified environment variable.
+*
+*  Input:  R1 points to the name of the variable, delimited by '='
+*          R0 contains the length of the variable name, including '='
+*
+*  Output  R0 points to the value for the named variable
+*          R1 contains the length of the value
+*             (These registers are suitable for MVCL)
+*
+GETENVAR DS    0H                 Get a specified env-variable     @P1A
+         LA    R14,ENVVARS+4      Get start of evar string         @P1A
+         L     R3,ENVVARS         Get length of evar string        @P1A
+         LA    R3,0(R14,R3)       Address end of evar string       @P1A
+         LA    R2,1               Increment for searches           @P1A
+         LR    R15,R0             Copy length of variable sought   @P1A
+         BCTR  R15,0              Decrement for EXECUTE            @P1A
+GEVAR05  EX    R15,GEVARCMP       Compare variable name            @P1A
+         BE    GEVAR15            If found, obtain value           @P1A
+GEVAR10  BXH   R14,R2,GEVAR90                                      @P1A
+         CLI   0(R14),C'&&'       Next environment variable        @P1A
+         BNE   GEVAR10                                             @P1A
+         ALR   R14,R2                                              @P1A
+         B     GEVAR05                                             @P1A
+GEVAR15  LA    R14,1(R15,R14)     Step over keyword found          @P1A
+         LR    R0,R14             Save addrees found               @P1A
+GEVAR20  BXH   R14,R2,GEVAR25                                      @P1A
+         CLI   0(R14),C'&&'       Found next variable?             @P1A
+         BNE   GEVAR20                                             @P1A
+GEVAR25  LR    R1,R14             Copy address reached             @P1A
+         SLR   R1,R0              Subtract start address           @P1A
+         BR    R4                                                  @P1A
+GEVAR90  SR    R0,R0              Not found - set zero address     @P1A
+         SR    R1,R1              Set zero length                  @P1A
+         BR    R4                 Return                           @P1A
+GEVARCMP CLC   0(0,R14),0(R1)                                      @P1A
+         EJECT ,
+*
+*  This subroutine converts an eight-character token into a binary
+*  handle by interpreting it as a modulo-26 digit.
+*
+CNVTOKEN DS    0H                 Convert character token to handle
+         SR    R15,R15            Zero accumulator
+         LA    R14,SNTOKEN-1      Address byte before token
+         LA    R3,L'SNTOKEN       Set length to convert
+TRANTOK2 LA    R14,1(,R14)        Step to next modulo-26 digit
+         SR    R2,R2              Clear TRT output register        @P1M
+         TRT   0(1,R14),TTOKEN    Convert character back to binary
+         MH    R15,=Y(L'ALPHABET) Multiply accumulator
+         AR    R15,R2             Add newly converted digit
+         BCT   R3,TRANTOK2        Loop through token
+         BR    R4                 Return to caller
+*
+*  These tables are used for converting between an eight-character
+*  token that forms part of the URI and a binary handle that is
+*  used as a parameter to the state management routine.
+*
+*  The eight-character token is treated as a base-26 integer
+*  whose digits are lowercase letters of the English alphabet
+*  with a=0, b=1, .... y=24, z=25.
+*
+ALPHABET DC    C'abcdefghijklmnopqrstuvwxyz'
+*
+*  When we backtranslate the token, we ignore the case.
+*
+TTOKEN   DC    256AL1(0)
+         ORG   TTOKEN+C'a'        Lower-case a-i
+         DC    AL1(0,1,2,3,4,5,6,7,8)
+         ORG   TTOKEN+C'j'        Lower-case j-r
+         DC    AL1(9,10,11,12,13,14,15,16,17)
+         ORG   TTOKEN+C's'        Lower-case s-z
+         DC    AL1(18,19,20,21,22,23,24,25)
+         ORG   TTOKEN+C'A'        Upper-case A-I
+         DC    AL1(0,1,2,3,4,5,6,7,8)
+         ORG   TTOKEN+C'J'        Upper-case J-R
+         DC    AL1(9,10,11,12,13,14,15,16,17)
+         ORG   TTOKEN+C'S'        Upper-case S-Z
+         DC    AL1(18,19,20,21,22,23,24,25)
+         ORG   ,
+         EJECT ,
+*
+*  Static storage areas
+*
+         COPY DFHWBUCD                CWI URP constants            @P2M
+         LTORG ,                  Literal pool
+STATSIZE DC    Y(STATLEN)         Size of state-mgr parameter list
+ENVVSIZE DC    Y(L'ENVVARS)       Size of environment variables    @P1A
+#32K     DC    F'32767'           Max length for move              @06A
+*
+*  Response to generate a redirection to the original URL.
+*  It is declared here in three sections.
+*  The variable-length target URI is inserted between the sections.
+*
+*  The 302 response will cause an automatic redirection in most
+*  browsers, but HTML text is included in the page to allow the
+*  end-user to do the redirection manually if the browser does
+*  not support redirection.
+*
+REDIR1   DC    CL9'HTTP/1.0'      Protocol level 1.0
+         DC    C'302 Redirection' Response code
+         DC    AL2(CRLF)
+         DC    C'Content-Type: text/html'
+         DC    AL2(CRLF)
+         DC    C'Location: '      Automatic redirection address
+REDIR1_L EQU   *-REDIR1
+REDIR2   DC    AL2(CRLF,CRLF)     End of header section
+         DC    C'<html><head><title>'
+         DC    C'CICS Web Interface redirection required'          @P1C
+         DC    C'</title></head>'
+         DC    AL2(CRLF),C'<body><h1>'
+         DC    C'CICS Web Interface redirection required'          @P1C
+         DC    C'</h1>',AL2(CRLF),C'<p>'
+         DC    C'Your use of the CICS Web Interface requires'      @P1C
+         DC    C' a different location to be specified.'           @P1C
+         DC    AL2(CRLF),C'<p>Please redirect your request'        @P1C
+         DC    C' <a href="'                                       @P1C
+REDIR2_L EQU   *-REDIR2
+REDIR3   DC    C'">here</a> to continue.'                          @P1C
+         DC    AL2(CRLF)
+         DC    C'<p>(You only see this message because your browser'
+         DC    C' does not support automatic redirection.)'
+         DC    AL2(CRLF)
+         DC    C'</body></html>'
+REDIR3_L EQU   *-REDIR3
+         END   DFH$WBSC

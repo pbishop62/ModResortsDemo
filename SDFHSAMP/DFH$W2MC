@@ -1,0 +1,179 @@
+         PUSH  PRINT,NOPRINT           Preserve current print status
+         PRINT OFF,NOPRINT             Don't print imbedded maros
+***********************************************************************
+*                                                                     *
+* DESCRIPTIVE NAME = Web 2.0 Samples - Common macros                  *
+*                                                                     *
+*    Licensed Materials - Property of IBM                             *
+*                                                                     *
+*    CICS SupportPac CA8K                                             *
+*                                                                     *
+*    (c) Copyright IBM Corporation 2008 All Rights Reserved           *
+*    US Government Users Restricted Rights - Use, duplication         *
+*    or disclosure restricted by GSA ADP Schedule Contract            *
+*    with IBM Corporation                                             *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION = Common macros for use by SupportPac CA8K sample programs *
+*                                                                     *
+***********************************************************************
+*
+*  Macro to output an XML element.
+*  If the element exists (non-zero length) then output
+*  its value between a start tag and an end tag.
+*
+         MACRO
+&LABEL   ADD_ELEM &ELEMENT,&START,&END,&MOVE=SHORT,&TYPE=
+         LCLC  &ST,&STLEN,&EN,&ENLEN,&G
+&G       SETC  'AEL&SYSNDX'
+         AIF   (N'&START GT 1).A
+&ST      SETC  '&START(1)'
+&STLEN   SETC  'L''&START(1)'
+         AGO   .B
+.A       ANOP
+&ST      SETC  '&START(1)'
+&STLEN   SETC  '&START(2)'
+         AGO   .C
+.B       AIF   (N'&END GT 1).C
+&EN      SETC  '&END(1)'
+&ENLEN   SETC  '&L''&END(1)'
+         AGO   .D
+.C       ANOP
+&EN      SETC  '&END(1)'
+&ENLEN   SETC  '&END(2)'
+.D       ANOP
+&LABEL   LM    R14,R15,&ELEMENT        Load content pointer and length
+         AIF   ('&MOVE' EQ 'LONG').F   If long move required
+         AHI   R15,-1                  Decrement length for execute
+         JM    &G.N                    Skip element if length is null
+         MVC   0(&STLEN,R2),&ST        Copy element start
+         AHI   R2,&STLEN               Bump output pointer
+         AIF   ('&TYPE' EQ '').E       Skip type if omitted
+         LM    R14,R15,&TYPE           Load type attribute pointers
+         AHI   R15,-1                  Decrement length of type
+         JM    &G.R                    Skip type attribute if none
+         BCTR  R2,0                    Decrement back over final >
+         ADD_TEXT ' type="'            Output the type= keyword
+         ADD_TEXT *                    Output the type value
+         ADD_TEXT '">'                 Close the tag
+&G.R     LM    R14,R15,&ELEMENT        Restore content ptr and length
+         BCTR  R15,0                   Decrement length again
+.E       ANOP  ,
+         ADD_TEXT *                    Copy element content
+         MVC   0(&ENLEN,R2),&EN        Copy element end
+         AHI   R2,&ENLEN               Bump output pointer
+&G.N     EQU   *                       Skip to here if null
+         MEXIT
+.F       LTR   R3,R15                  Copy and test for null content
+         JNP   &G.N                    Skip if null content
+         MVC   0(&STLEN,R2),&ST        Copy element start
+         AHI   R2,&STLEN               Bump output pointer
+         AIF   ('&TYPE' EQ '').G       Skip type if omitted
+         LM    R14,R15,&TYPE           Load type attribute pointers
+         AHI   R15,-1                  Decrement length of type
+         JM    &G.R                    Skip type attribute if none
+         BCTR  R2,0                    Decrement back over final >
+         ADD_TEXT ' type="'            Output the type= keyword
+         ADD_TEXT *                    Output the type value
+         ADD_TEXT '">'                 Close the tag
+&G.R     LM    R14,R15,&ELEMENT        Restore content ptr and length
+.G       MVCL  R2,R14                  Copy the data
+         MVC   0(&ENLEN,R2),&EN        Copy element end
+         AHI   R2,&ENLEN               Bump output pointer
+&G.N     EQU   *                       Skip to here if null
+         MEND
+*
+*  Macro to output an attribute (keyword plus value).
+*  If the attribute value exists (non-zero length) then output
+*  its value, enclosed in double quotes, following a space and
+*  the attribute's name with an equals sign.
+*
+         MACRO
+&LABEL   ADD_ATTR &NAME,&VALUE
+         LCLA  &K
+         LCLC  &N,&G
+&G       SETC  'AAT&SYSNDX'
+&K       SETA  K'&NAME                 Get length of attribute name
+         AIF   ('&NAME'(1,1) EQ '''').A  Is attribute quoted?
+&N       SETC  '&NAME'                 No, just copy name as is
+         AGO   .B
+.A       ANOP
+&K       SETA  &K-2                    Yes, allow for two quotes
+&N       SETC  '&NAME'(2,&K)           Extract unquoted attribute name
+.B       ANOP
+&K       SETA  &K+3                    Adjust length for ' ="'
+&LABEL   LM    R14,R15,&VALUE          Load value pointer and length
+         AHI   R15,-1                  Decrement length for execute
+         JM    &G.N                    Skip element if length is null
+         MVC   0(&K,R2),=C' &N.="'     Output the attribute keyword
+         AHI   R2,&K                   Bump output pointer
+         ADD_TEXT *                    Copy attribute value
+         MVI   0(R2),C'"'              Append closing quote
+         AHI   R2,1                    Bump output pointer
+&G.N     EQU   *                       Skip to here if null
+         MEND
+*
+*  Macro to output a string of data.
+*  The string can be a quoted string or the name of a string variable.
+*  The second parameter is the length. If omitted the length
+*  of the supplied string or the length attribute of the variable
+*  is used.
+*
+*  The notation "ADD_TEXT *" is used to output the string pointed
+*  to by R14 whose machine length (actual length -1) is in R15.
+*
+         MACRO
+&LABEL   ADD_TEXT &TEXT,&LENGTH
+         LCLA  &K
+         LCLC  &L,&T,&G
+&G       SETC  'ATX&SYSNDX'
+&K       SETA  K'&TEXT                 Get length of output text
+         AIF   ('&TEXT' EQ '*').F      '*' means use preset R14/R15
+         AIF   ('&TEXT'(1,1) EQ '''').A  Is text quoted?
+&T       SETC  '&TEXT'                 No, just copy variable name
+&L       SETC  'L''&T'                 Set length attribute
+         AGO   .C
+.A       ANOP  ,
+&K       SETA  &K-2                    Yes, allow for two quotes
+         AIF   (&K GT 1).B
+&LABEL   MVI   0(R2),C&TEXT            Copy text to output
+&L       SETC  '1'                     Set length to 1
+         AGO   .E
+.B       ANOP  ,
+&T       SETC  '=C&TEXT'               Generate literal
+&L       SETC  '&K'                    Use numeric length
+.C       AIF   ('&LENGTH' EQ '').D     Skip if length omitted
+&L       SETC  '&LENGTH'               Use LENGTH if provided
+.D       ANOP  ,
+&LABEL   MVC   0(&L,R2),&T             Copy text to output
+.E       AHI   R2,&L                   Bump output pointer
+         MEXIT ,
+.F       ANOP  ,
+&LABEL   EX    R15,COPYTEXT            Copy text to output
+         LA    R2,1(R15,R2)            Bump over copied text
+         MEND
+*
+*  This macro outputs a URL that is addressed by a pointer/length pair
+*  It checks whether the URL is relative (i.e. just a pathname,
+*  beginning with a slash) and if so, prefixes it with the scheme
+*  and host of the current invoking URL.
+*
+         MACRO
+&LABEL   ADD_URL &URLP
+         LCLC  &G
+&G       SETC  'AUR&SYSNDX'
+&LABEL   LM    R14,R15,&URLP           Load URL pointer and length
+         CLI   0(R14),C'/'             Is URL relative (path only)?
+         JNE   &G.A                    No, output absolute URL as is
+         LA    R14,SELFURL             Address my invoking URL
+         LH    R15,URLTLEN             Get length of scheme+host
+         LR    R3,R15                  Copy length
+         MVCL  R2,R14                  Output the URL prefix
+         LM    R14,R15,&URLP           Reload relative URL pointers
+&G.A     AHI   R15,-1                  Decrement length for execute
+         JM    &G.N                    Skip output if length is null
+         ADD_TEXT *                    Append rest of URL
+&G.N     EQU   *
+         MEND
+         POP   PRINT,NOPRINT           Restore previous print status

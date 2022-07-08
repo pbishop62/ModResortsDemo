@@ -1,0 +1,315 @@
+#pragma XOPTS(CICS)
+ /********************************************************************/
+ /*                                                                  */
+ /* MODULE NAME = DFH$WBCC                                           */
+ /*                                                                  */
+ /* DESCRIPTIVE NAME = CICS TS  (WB) Web Chunking Client Sample      */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*      Licensed Materials - Property of IBM                        */
+ /*                                                                  */
+ /*      "Restricted Materials of IBM"                               */
+ /*                                                                  */
+ /*      5655-Y04                                                    */
+ /*                                                                  */
+ /*      (C) Copyright IBM Corp. 2006, 2007"                         */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* STATUS = 7.2.0                                                   */
+ /*                                                                  */
+ /* FUNCTION = CICS C Program that performs HTTP Chunking to a web   */
+ /*            server.                                               */
+ /*                                                                  */
+ /*    Versions of this program in other languages are also provided:*/
+ /*          ASM   - DFH$WBCA                                        */
+ /*          COBOL - DFH0WBCO                                        */
+ /*                                                                  */
+ /* NOTES :                                                          */
+ /*  DEPENDENCIES = S/390                                            */
+ /*  MODULE TYPE = Executable                                        */
+ /*  PROCESSOR = C/370                                               */
+ /*  ATTRIBUTES = Read only, Serially Reusable                       */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* DESCRIPTION                                                      */
+ /* This is a C Sample program demonstrating how to construct a      */
+ /* chunking application that uses a client URIMAP.  The server      */
+ /* application that is used by this sample is DFH$WBHA (mapped by   */
+ /* URIMAP DFH$URI4).                                                */
+ /*                                                                  */
+ /* The Client URIMAP DFH$URI3 needs the server attribute configured */
+ /* and installed before this sample will function correctly.        */
+ /*                                                                  */
+ /* Chunking allows a client to send a large body in segments (chunks*/
+ /* (chunks) rather than trying to send the body of the message in   */
+ /* one send.                                                        */
+ /*                                                                  */
+ /* For more information on Chunking see RFC2616                     */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* CHANGE ACTIVITY :                                                */
+ /*                                                                  */
+ /*      $MOD(DFH$WBCC),COMP(CICSWEB),PROD(CICS TS ):                */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXXIII : REMARKS                        */
+ /*  $L0= 873    650 060613 HDJBAC  : Web Samples of Chunking        */
+ /*  $P1= D18453 650 070403 HD4EPEA : Show status code & status text */
+ /********************************************************************/
+/*--------------------------------------------------------------------*/
+/* Standard includes for a C application                              */
+/*--------------------------------------------------------------------*/
+#include <ctype.h>
+#include <string.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+
+/*--------------------------------------------------------------------*/
+/* Global Variables                                                   */
+/*--------------------------------------------------------------------*/
+long int resp ;                   /* RESP value for CICS calls        */
+long int resp2 ;                  /* RESP2 value for CICS calls       */
+char Sesstoken[8] ;               /* Sesstoken for WEB CICS Command   */
+int  cursor ;                     /* Current cursor location          */
+short int Status ;                /* Status returned from Server      */
+char StatusData[50] ;             /* Status Text returned from Server */
+
+/*--------------------------------------------------------------------*/
+/* Declare Methods                                                    */
+/*--------------------------------------------------------------------*/
+void output(char* OutputData);
+void error(char* mask);
+void success1(char* mask);
+void success2(char* mask);
+
+main()
+{
+/*--------------------------------------------------------------------*/
+/* Local Variables                                                    */
+/*--------------------------------------------------------------------*/
+   char CliUrimap[9] = "DFH$URI3" ;/* Client URIMAP                   */
+   char Characterset[40] ;         /* Characterset of Data            */
+   char Mediatype[56] ;            /* Mediatype of Data               */
+   char Applid[9] ;                /* Holds APPLID of region          */
+   char Data[50] ;                 /* Holds Sending Data              */
+   char Recdata[200] ;             /* Holds Received Data             */
+   int  Reclen ;                   /* Received Data                   */
+   int  Statuslen ;                /* Status Text length              */
+   int  Maxlength ;                /* Max receive data length         */
+
+/*--------------------------------------------------------------------*/
+/* Address the EIB                                                    */
+/*--------------------------------------------------------------------*/
+   EXEC CICS ADDRESS EIB(dfheiptr) ;       /* Address the EIB         */
+
+/*--------------------------------------------------------------------*/
+/* Open a Session to the Remote Server using WEB Open and a client    */
+/* URIMAP.                                                            */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB OPEN
+                 URIMAP(CliUrimap)
+                 SESSTOKEN(Sesstoken)
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the Returned RESP Value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: WEB OPEN failed RESP=%d RESP2=%d");
+
+/*--------------------------------------------------------------------*/
+/* Using EXEC CICS ASSIGN extract the CICS APPLID                     */
+/*--------------------------------------------------------------------*/
+   memset(Applid, 0x00, 9) ;
+   EXEC CICS ASSIGN APPLID(Applid) ;
+
+/*--------------------------------------------------------------------*/
+/* Create the Trailer Header                                          */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB WRITE HTTPHEADER("Trailer")
+                 VALUE("APPLID") SESSTOKEN(Sesstoken) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the Returned RESP Value to ensure the WEB WRITE HTTPHEADER   */
+/* was successful                                                     */
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: Write Trailer Header failed RESP=%d RESP2=%d") ;
+
+   output("DFH$WBCC - Send First Chunk") ;
+
+/*--------------------------------------------------------------------*/
+/* Send the first Chunk using the WEB SEND CHUNKYES command           */
+/*--------------------------------------------------------------------*/
+   memset(Mediatype,0x00, 56) ;
+   strcat(Mediatype,"application/x-www-form-urlencoded") ;
+
+   EXEC CICS WEB SEND POST CHUNKYES
+                 FROM("APPLID=") FROMLENGTH(7)
+                 SESSTOKEN(Sesstoken)
+                 MEDIATYPE(Mediatype)
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the Returned RESP Value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: First WEB SEND failed RESP=%d RESP2=%d") ;
+
+/*--------------------------------------------------------------------*/
+/* Send Trailer Header                                                */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB WRITE HTTPHEADER("Applid")
+                 VALUE(Applid)
+                 VALUELENGTH(strlen(Applid))
+                 SESSTOKEN(Sesstoken)
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the Returned RESP Value to ensure the WEB WRITE HTTPHEADER   */
+/* was successful                                                     */
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: Write Trailer Header Applid failed RESP=%d"
+            " RESP2=%d") ;
+
+   output("DFH$WBCC - Send Second Chunk") ;
+
+/*--------------------------------------------------------------------*/
+/* Send the Second chunk                                              */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB SEND
+                 FROM(Applid)
+                 FROMLENGTH(strlen(Applid))
+                 SESSTOKEN(Sesstoken)
+                 CHUNKYES
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the returned RESP value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: Second WEB SEND failed RESP=%d RESP2=%d") ;
+
+   output("DFH$WBCC - Send Third Chunk") ;
+
+/*--------------------------------------------------------------------*/
+/* Send the Third Chunk                                               */
+/*--------------------------------------------------------------------*/
+   memset(Data, 0x00, 25) ;
+   memcpy(Data, "&CHECK=1234", 11) ;
+
+   EXEC CICS WEB SEND
+                 FROM(Data)
+                 FROMLENGTH(strlen(Data))
+                 SESSTOKEN(Sesstoken)
+                 CHUNKYES
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the returned RESP value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: Third WEB SEND failed RESP=%d RESP2=%d") ;
+
+/*--------------------------------------------------------------------*/
+/* Send the End Chunk                                                 */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB SEND
+                 CHUNKEND
+                 SESSTOKEN(Sesstoken)
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the returned RESP value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: Third WEB SEND failed RESP=%d RESP2=%d") ;
+
+/*--------------------------------------------------------------------*/
+/* Setup Variables for Receiving Data                                 */
+/*--------------------------------------------------------------------*/
+   memset(Recdata, 0x00, 200) ;
+   Status = 0 ;
+   Statuslen = 50 ;
+   memset(StatusData, 0x00, 50) ;
+   Reclen = 200 ;
+   Maxlength = 200 ;
+   memset(Mediatype, 0x00, 56) ;
+
+   output("DFH$WBCC - Receive Response") ;
+
+   EXEC CICS WEB RECEIVE
+                 STATUSCODE(Status)
+                 STATUSTEXT(StatusData)
+                 STATUSLEN(Statuslen)
+                 MEDIATYPE(Mediatype)
+                 INTO(Recdata) LENGTH(Reclen)
+                 SESSTOKEN(Sesstoken)
+                 MAXLENGTH(Maxlength)
+                 RESP(resp) RESP2(resp2) ;
+
+/*--------------------------------------------------------------------*/
+/* Check the returned RESP value to ensure the WEB SEND was successful*/
+/*--------------------------------------------------------------------*/
+   if(resp != 0)
+      error("ERROR: Third WEB RECEIVE failed RESP=%d RESP2=%d");
+
+/*--------------------------------------------------------------------*/
+/* Output Successful Message                                          */
+/*--------------------------------------------------------------------*/
+   success1("DFH$WBCC - Completed with status code:%u");
+   success2("DFH$WBCC - Status text:%s");
+
+/*--------------------------------------------------------------------*/
+/* Close the Session to Remote Server                                 */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB CLOSE SESSTOKEN(Sesstoken) ;
+
+   EXEC CICS RETURN ;
+}
+
+void output(char* OutputData)
+{
+   cursor = cursor + 80;
+
+   EXEC CICS SEND CONTROL CURSOR(cursor) ;
+
+   EXEC CICS SEND FROM(OutputData)
+                  LENGTH(strlen(OutputData)) ;
+}
+
+void success1(char* mask)
+{
+   char OutputData[50] ;
+
+   sprintf(OutputData, mask, Status) ;
+
+   output(OutputData) ;
+}
+
+void success2(char* mask)
+{
+   char OutputData[100] ;
+
+   sprintf(OutputData, mask, StatusData) ;
+
+   output(OutputData) ;
+}
+
+void error(char* mask)
+{
+   char OutputData[50] ;
+
+   sprintf(OutputData, mask, resp, resp2) ;
+
+   output(OutputData) ;
+
+   EXEC CICS RETURN ;
+}

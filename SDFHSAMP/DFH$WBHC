@@ -1,0 +1,244 @@
+#pragma XOPTS(CICS)
+ /********************************************************************/
+ /*                                                                  */
+ /* MODULE NAME = DFH$WBHC                                           */
+ /*                                                                  */
+ /* DESCRIPTIVE NAME = CICS TS  (WB) Web Server Chunking Sample      */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*      Licensed Materials - Property of IBM                        */
+ /*                                                                  */
+ /*      "Restricted Materials of IBM"                               */
+ /*                                                                  */
+ /*      5655-Y04                                                    */
+ /*                                                                  */
+ /*      (C) Copyright IBM Corp. 2006"                               */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* STATUS = 7.2.0                                                   */
+ /*                                                                  */
+ /* FUNCTION = CICS C Program that performs Chunking to a web client.*/
+ /*                                                                  */
+ /*    Versions of this program in other languages are also provided:*/
+ /*          ASM   - DFH$WBHA                                        */
+ /*          COBOL - DFH0WBHO                                        */
+ /*                                                                  */
+ /* NOTES :                                                          */
+ /*  DEPENDENCIES = S/390                                            */
+ /*  MODULE TYPE = Executable                                        */
+ /*  PROCESSOR = C/370                                               */
+ /*  ATTRIBUTES = Read only, Serially Reusable                       */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* DESCRIPTION                                                      */
+ /*                                                                  */
+ /* This program is a sample version in C of a program that          */
+ /* is invoked by a web client and performs chunking back to that    */
+ /* client.  It ignores the incoming data and returns a message      */
+ /* containing the APPLID of the region and adds trailer headers.    */
+ /* The sample if run from a browser may return the above or an error*/
+ /* messageing that the browser does not support trailer headers.    */
+ /*                                                                  */
+ /* To use this application in conjunction with the client samples   */
+ /* DFH$URI4 will have to be installed.                              */
+ /*                                                                  */
+ /* For more information on Chunking see RFC2616                     */
+ /*                                                                  */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* CHANGE ACTIVITY :                                                */
+ /**                                                                 */
+ /*      $MOD(DFH$WBHC),COMP(CICSWEB),PROD(CICS TS ):                */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXXIII : REMARKS                        */
+ /*  $L0= 873    650 060605 HDJBAC  : Web Samples of Chunking        */
+ /*                                                                  */
+ /********************************************************************/
+
+/*--------------------------------------------------------------------*/
+/* Standard includes for a C/370 application                          */
+/*--------------------------------------------------------------------*/
+#include <ctype.h>
+#include <string.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+
+/*--------------------------------------------------------------------*/
+/* Local variables                                                    */
+/*--------------------------------------------------------------------*/
+int rcode ;                       /* RESP value for CICS calls        */
+int rcode2;                       /* RESP2 value for CICS calls       */
+char applid[9] ;                  /* APPLID of the CICS system        */
+char statustext[10] ;             /* Status Text for the Http Response*/
+int statuslength ;                /* Length of Status Text            */
+int statuscode ;                  /* Status Code of the Http Response */
+char mediatype[56] ;              /* Mediatype of the Http Response   */
+char fromdata[56];                /* Data area to hold From data      */
+char RecData[200];                /* Receive Data Area                */
+int Reclen;                       /* Receive Data Length              */
+int Maxlen;                       /* Max Data to receive              */
+int Valuelen;                     /* Header size to receive           */
+
+/*--------------------------------------------------------------------*/
+/* Function Declarations                                              */
+/*--------------------------------------------------------------------*/
+void setStatusData();
+void trailerError();
+
+/*--------------------------------------------------------------------*/
+/* Main code for DFH$WB1C.                                            */
+/*                                                                    */
+/* Address the EIB.                                                   */
+/*                                                                    */
+/* Use the Web Send Chunk commands to chunk the separate chunks back  */
+/* to the client                                                      */
+/*--------------------------------------------------------------------*/
+main()
+{
+   EXEC CICS ADDRESS EIB(dfheiptr) ;       /* Address the EIB         */
+
+/*--------------------------------------------------------------------*/
+/* Receive any data that has been sent                                */
+/*--------------------------------------------------------------------*/
+   Reclen = 200;
+   Maxlen = 200;
+   EXEC CICS WEB RECEIVE INTO(RecData)
+                 LENGTH(Reclen)
+                 MAXLENGTH(Maxlen)
+                 CHARACTERSET("ISO-8859-1");
+
+/*--------------------------------------------------------------------*/
+/* Receive the trailer Header Applid                                  */
+/*--------------------------------------------------------------------*/
+   Valuelen = 8;
+   memset(applid,0x00,9);
+   EXEC CICS WEB READ HTTPHEADER("Applid")
+                 VALUE(applid)
+                 VALUELENGTH(Valuelen);
+
+/*--------------------------------------------------------------------*/
+/* Setup the Trailer Header                                           */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB WRITE HTTPHEADER("Trailer")
+                       NAMELENGTH(strlen("Trailer"))
+                       VALUE("Check,Applid")
+                       VALUELENGTH(strlen("Check,Applid"))
+                       RESP(rcode) RESP2(rcode2) ;
+
+   if(rcode != 0 && rcode2 != 0) trailerError();
+
+/*--------------------------------------------------------------------*/
+/* Using EXEC CICS ASSIGN extract the CICS APPLID.                    */
+/*--------------------------------------------------------------------*/
+   EXEC CICS ASSIGN APPLID(applid) ;
+
+/*--------------------------------------------------------------------*/
+/* Set the Status Text and Status code for this reply                 */
+/*--------------------------------------------------------------------*/
+   setStatusData();
+
+/*--------------------------------------------------------------------*/
+/* Use the WEB SEND CHUNK command to chunk the separate chunks back   */
+/* to the client.                                                     */
+/*--------------------------------------------------------------------*/
+   memset(mediatype,0x00, 56) ;
+   strcat(mediatype,"text/html") ;
+
+   strcpy(fromdata, "<TITLE>DFH$WBHC</TITLE><H1>DFH$WBHC on system ");
+
+   EXEC CICS WEB SEND FROM(fromdata)
+                 FROMLENGTH(strlen(fromdata))
+                 STATUSTEXT(statustext)
+                 MEDIATYPE(mediatype)
+                 LENGTH(statuslength)
+                 STATUSCODE(statuscode)
+                 CHARACTERSET("ISO-8859-1")
+                 CHUNKYES
+                 RESP(rcode) RESP2(rcode2) ;
+
+/*--------------------------------------------------------------------*/
+/* Send the Applid                                                    */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB WRITE HTTPHEADER("Applid") VALUE(applid)
+                 VALUELENGTH(strlen(applid));
+
+/*--------------------------------------------------------------------*/
+/* Send the Second chunk containing the Applid.                       */
+/*--------------------------------------------------------------------*/
+   memset(fromdata, 0x00, 56);
+   strcpy(fromdata, applid);
+
+   EXEC CICS WEB SEND FROM(fromdata)
+                 FROMLENGTH(strlen(fromdata))
+                 CHUNKYES
+                 RESP(rcode) RESP2(rcode2) ;
+
+/*--------------------------------------------------------------------*/
+/* Send the Third chunk containing the remaining Text                 */
+/*--------------------------------------------------------------------*/
+   strcpy(fromdata, " successfully invoked through CICS"
+                    " Web support using Chunking.</H1>") ;
+
+   EXEC CICS WEB SEND FROM(fromdata)
+                 FROMLENGTH(strlen(fromdata))
+                 CHUNKYES
+                 RESP(rcode) RESP2(rcode2) ;
+
+/*--------------------------------------------------------------------*/
+/* Specify Second trailer header                                      */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB WRITE HTTPHEADER("Check") VALUE("12345");
+
+/*--------------------------------------------------------------------*/
+/* Finally send the CHUNKEND response.                                */
+/*--------------------------------------------------------------------*/
+   EXEC CICS WEB SEND
+                 CHUNKEND
+                 RESP(rcode) RESP2(rcode2) ;
+
+   EXEC CICS RETURN ;
+
+ }                                        /* End main                 */
+
+/*--------------------------------------------------------------------*/
+/* Set Status code data for the HTTP Response                         */
+/*--------------------------------------------------------------------*/
+void setStatusData()
+{
+   memset(statustext, 0x00, 10) ;
+   strcpy(statustext, "OK") ;
+   statuslength = strlen(statustext) ;
+   statuscode   = 200 ;
+}
+
+/*--------------------------------------------------------------------*/
+/* Return an Error response showing that Trailers are not supported   */
+/*--------------------------------------------------------------------*/
+void trailerError()
+{
+   setStatusData();
+
+   memset(mediatype,0x00, 56) ;
+   strcat(mediatype,"text/html") ;
+
+   strcpy(fromdata, "<TITLE>Error</TITLE><H1>Error</H1> Trailer Headers"
+                    " are not supported by this client");
+
+   EXEC CICS WEB SEND FROM(fromdata)
+                 FROMLENGTH(strlen(fromdata))
+                 STATUSTEXT(statustext)
+                 MEDIATYPE(mediatype)
+                 LENGTH(statuslength)
+                 STATUSCODE(statuscode)
+                 CHARACTERSET("ISO-8859-1")
+                 RESP(rcode) RESP2(rcode2) ;
+
+   EXEC CICS RETURN;
+}

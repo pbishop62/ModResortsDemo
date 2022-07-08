@@ -1,0 +1,739 @@
+         TITLE 'DFH$XNQE - Sample XNQEREQ Global User Exit Program'
+***********************************************************************
+*                                                                     *
+*   MODULE NAME = DFH$XNQE                                            *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  Exec ENQ/DEQ Sample XNQEREQ Exit        *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1998, 2001"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+* STATUS = 7.2.0                                                      *
+*                                                                     *
+* FUNCTION =                                                          *
+*   Sample Global User Exit Program to run at the XNQEREQ and         *
+*   XNQEREQC Exits                                                    *
+*                                                                     *
+* DESCRIPTION =                                                       *
+*   The program gives examples of:                                    *
+*     1) Coding Exec Interface Global User Exits                      *
+*                                                                     *
+*     2) Issuing a mixture of XPI and EXEC CICS API calls within      *
+*        Global User Exits                                            *
+*                                                                     *
+*     3) Three methods of adding a SCOPE value to exec ENQ and DEQ    *
+*        requests, so that they apply to multiple regions             *
+*        within the Sysplex.  Methods A and B force a match to        *
+*        an installed ENQMODEL resource definition.  Method C         *
+*        bypasses the use of ENQMODEL resource definitions even       *
+*        if there would have been a match.                            *
+*                                                                     *
+*        The Methods are:                                             *
+*                                                                     *
+*      A. Prefix the Resource name with a 1- to 255-character         *
+*         value (this sample uses a 4-character value) for the        *
+*         ENQNAME on the ENQMODEL resource definition to which        *
+*         you wish to force a match.                                  *
+*         The exit terminates and processing continues as though      *
+*         the chosen ENQMODEL had been matched normally.  The         *
+*         scope is then supplied by the matched ENQMODEL definition.  *
+*                                                                     *
+*         This method applies only to resource names shorter than     *
+*         255-n (where n is the length of you chosen prefix).         *
+*                                                                     *
+*      B. Similar to A but replace the first 1- to 8-characters of    *
+*         the resource name with your chosen string instead of        *
+*         prefixing it.                                               *
+*         This method:                                                *
+*             o  applies only to resource names of length equal to    *
+*                or greater than that of your replacement string.     *
+*             o  is an alternative to method (A) when a resource      *
+*                name too long to allow the use of method (A)         *
+*                                                                     *
+*      C. Place a 4-character Scope value in UEPSCOPE, and return     *
+*         UERCSCPE in R15. This will bypass the installed ENQMODEL    *
+*         resource definition, forcing a Sysplex Scope ENQ/DEQ        *
+*         request.                                                    *
+*                                                                     *
+*         This method is not recommended, as it overrides the         *
+*         generic nesting and quiesce protocol provided by the        *
+*         ENQMODEL table.  This is designed to preserve data          *
+*         integrity by preventing the possibility of a region scope   *
+*         enqueue and a sysplex scope enqueue (or two sysplex scope   *
+*         enqueues with different scopes) existing for the same       *
+*         resource.  (Because sysplex and region scope enqueues use   *
+*         separate namespaces, a region scope enqueue will never      *
+*         wait on a sysplex enqueue, nor will a sysplex scope         *
+*         enqueue wait on a region enqueue.)                          *
+*                                                                     *
+* ------------------------------------------------------------------- *
+*   NOTE that this program is only intended to DEMONSTRATE the use    *
+*   of the NQ request user exit XNQEREQ, and to show the sort of      *
+*   information which can be obtained from the exit parameter list.   *
+* IT SHOULD BE TAILORED BEFORE BEING USED IN A PRODUCTION ENVIRONMENT *
+* ------------------------------------------------------------------- *
+*                                                                     *
+* NOTES =                                                             *
+*   The important notes to remember when coding similar Global User   *
+*   Exits are as follows:                                             *
+*                                                                     *
+*   1) When adding or removing a field in the command parameter list, *
+*      you must remember:                                             *
+*        a) To set/clear the field's existence bit in the EID         *
+*        b) To set/clear the appropriate address in the Addr_List     *
+*        c) To set the hi-order bit in the LAST address in the        *
+*           Addr_List.                                                *
+*                                                                     *
+*   2) If you are planning to use the CICS API in the exit, you       *
+*      must:                                                          *
+*        a) Use the DFHEIENT macro to control module entry            *
+*        b) Use the DFHEIRET macro to return control to CICS, however *
+*           the exit return code MUST be set in Register 15           *
+*        c) Issue an ADDRESS EIB command before issuing any EXEC CICS *
+*           commands.                                                 *
+*                                                                     *
+*   3) If you are planning to use the API and XPI in the same         *
+*      global user exit program, take care to ensure that Register    *
+*      13 points to the kernel stack entry (UEPSTACK) for XPI calls,  *
+*      and is restored for API calls if necessary.                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*        $MOD(DFH$XNQE),COMP(ENQUEUE),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $P0= M28205 530 980626 HDEEBD  : New sample                      *
+*    $P2= D01777 620 010717 HD2WPGK : Correct nq_addr2 setting        *
+*                                                                     *
+***********************************************************************
+         EJECT ,
+*---------------------------------------------------------------------*
+*                                                                     *
+* Copybook and DSECTS required by the exit program                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+         DFHUEXIT TYPE=EP,ID=(XNQEREQ,XNQEREQC)
+         DFHUEXIT TYPE=XPIENV       Exit programming interface (XPI)
+         COPY  DFHTRPTY             Trace XPI definitions
+         COPY  DFHNQUED             Command Level Plist definitions
+*
+*---------------------------------------------------------------------*
+* The ENQ Scope Table is made up of a set of entries. Each entry      *
+* can be mapped by the TABLE_ENTRY DSECT                              *
+*---------------------------------------------------------------------*
+TABLE_ENTRY  DSECT
+ENTRY_NAME   DS CL56
+ENTRY_SCOPE  DS CL4
+NAME_LENGTH  DS H
+ACTION       DS XL1
+FILLER       DS CL1
+*
+*---------------------------------------------------------------------*
+* The following definitions are for program working storage.          *
+*---------------------------------------------------------------------*
+DFHEISTG     DSECT
+RETCODE      DS XL4                    Program Return Code
+TR_ERROR_N   DS X                      Error Number for Trace Entry
+RESP         DS X                      API Response
+         EJECT ,
+***********************************************************************
+*  PROGRAM REGISTER USAGE :                                           *
+*  R0 - Work Register                                                 *
+*  R1 - Points to DFHUEPAR plist on entry                             *
+*       Work Register                                                 *
+*  R2 - DFHUEPAR parameter List                                       *
+*  R3 - Code Base Register                                            *
+*  R4 -  <unused>                                                     *
+*  R5 -  <unused>                                                     *
+*  R6 - Subroutine Linkage Register                                   *
+*  R7 - Address of RESOURCE Name from Command Plist                   *
+*  R8 - Command Parameter list UEPCLPS                                *
+*  R9 - Address of Table_Entry in ENQ_Scope_Table                     *
+*  R10- Work Register                                                 *
+*  R11- EIB Register                                                  *
+*  R12- Work Register                                                 *
+*  R13- DFHEISTG for API calls                                        *
+*       Kernel Stack for XPI calls                                    *
+*  R14- Work Register                                                 *
+*  R15- Work Register                                                 *
+***********************************************************************
+         EJECT ,
+***********************************************************************
+*  DFH$XNQE - Main Routine                                            *
+*    This is the entry point for the exit program. Control is passed  *
+*    to the NQ_REQUEST or NQ_REQUEST_COMPLETE routines depending      *
+*    on whether the exit was invoked at the XNQEREQ or XNQEREQC exit  *
+*    points                                                           *
+*                                                                     *
+*  Registers:                                                         *
+*    R1 = UEPAR plist (set on entry)                                  *
+*       = Work register                                               *
+*    R2 = UEPAR plist                                                 *
+*    R3 = Program base register (set by DFHEIENT)                     *
+*    R6 = Linkage register                                            *
+*    R11= EIB register                                                *
+*    R13= EISTG register (set by DFHEIENT)                            *
+*    R15= Work register                                               *
+*         User Exit Return Code                                       *
+*                                                                     *
+*  Logic:                                                             *
+*    DFH$XNQE:                                                        *
+*      Exec Interface Entry                                           *
+*      Address DFHUEPAR plist                                         *
+*      Set OK Return Code                                             *
+*      Address the EIB                                                *
+*      Trace entry                                                    *
+*      Select Exitid                                                  *
+*        When(XNQEREQ) then call NQ_Request                           *
+*        When(XNQEREQC) then call NQ_Request_Complete                 *
+*        Otherwise call Error(Invalid_Exit)                           *
+*      End Select                                                     *
+*      Trace exit                                                     *
+*      Set Exit return code                                           *
+*    Return                                                           *
+***********************************************************************
+DFH$XNQE DFHEIENT
+DFH$XNQE AMODE 31
+DFH$XNQE RMODE ANY
+         LR    R2,R1               DFHUEPAR plist provided by caller
+         USING DFHUEPAR,R2         Use R2 to address UEPAR PLIST
+*
+         LA    R15,UERCNORM        Set OK Response
+         ST    R15,RETCODE           in working storage
+*
+         EXEC CICS ADDRESS EIB(R11)
+         USING DFHEIBLK,R11
+*
+         BAL   R6,TRACE_ENTRY      Trace program entry
+*
+         L     R1,UEPEXN           Address of the 1 byte Exit Id
+         CLI   0(R1),XNQEREQ       Is this XNQEREQ exit?
+         BE    NQ_REQUEST          ..Yes Branch to routine
+         CLI   0(R1),XNQEREQC      Is this XNQEREQC exit?
+         BE    NQ_REQUEST_COMPLETE .. Yes Branch to routine
+         B     ERROR1              Otherwise Branch to error routine
+*
+RETURN   DS    0H                  Return point
+         BAL   R6,TRACE_EXIT       Trace program exit
+*
+         L     R15,RETCODE         Fetch return code
+         DFHEIRET RCREG=15         Return to CICS
+         EJECT ,
+*
+*=====================================================================*
+*  NQ_REQUEST - Invoked at XNQEREQ exit point                         *
+*    Determine the RESOURCE Name and scan the ENQ_Scope_Table for     *
+*    a match. If an entry exists in the table, then check the action  *
+*    field and call the GLOBAL, PREFIX or MODIFY REQUEST routines.    *
+*                                                                     *
+*    The ENQ_Scope_Table is made up of entries with the following     *
+*    structure:                                                       *
+*                                                                     *
+*   TABLE_ENTRY:                                                      *
+*    ----------------------------------------------------------       *
+*   | Entry_Name | Entry_scope | Name_Length | Action | *filler* |    *
+*   | Char 56    | Char 4      | Bin 15      | Bin 8  | Char 1   |    *
+*    ----------------------------------------------------------       *
+*    Last Entry is indicated by special RESOURCE Name                 *
+*                                                                     *
+*  Registers:                                                         *
+*    R1 = Work register                                               *
+*    R7 = Set to the RESOURCE Name                                    *
+*    R8 = Command Parameter List (CLPS)                               *
+*    R9 = Points to the next entry in the ENQ_Scope_Table             *
+*    R10= Work register                                               *
+*    R15= Work register                                               *
+*                                                                     *
+*  Logic:                                                             *
+*    NQ_Request:                                                      *
+*       If called recursively then                                    *
+*         call Error(Recursive_Call1)                                 *
+*       Else                                                          *
+*         If the Command GROUP code is not a NQ request then          *
+*           call Error(Invalid_Group_Code1)                           *
+*         Else                                                        *
+*           Clear the UEPNQTOK                                        *
+*           Address the Command Plist UEPCLPS                         *
+*           Fetch RESOURCE                                            *
+*           Fetch start of ENQ_Scope_Table                            *
+*    Check_Next_Entry:                                                *
+*           Get the next table entry                                  *
+*           Select (entry_name)                                       *
+*             When (last_entry) take no action                        *
+*             When (resource)                                         *
+*               Select (action)                                       *
+*                 When (Global) call Global_Request                   *
+*                 When (PREFIX)  call Prefix_Request                  *
+*                 When (MODIFY)  call Modify_Request                  *
+*                 Otherwise call Error(Invalid_Table_Action)          *
+*               End Select                                            *
+*             Otherwise                                               *
+*               Goto Check_Next_Entry                                 *
+*           End Select                                                *
+*         End If                                                      *
+*       End If                                                        *
+*    Return                                                           *
+*=====================================================================*
+NQ_REQUEST DS  0H
+*        Check for possible recursion
+         L     R1,UEPRECUR         Address of recursive count
+         LH    R1,0(R1)            Fetch count
+         LTR   R1,R1               Has exit been invoked recursively?
+         BNZ   ERROR2              ..Yes Branch to error routine
+*
+*        Clear the NQ Request token
+         L     R1,UEPNQTOK         Fetch address of token
+         XC    0(4,R1),0(R1)       Clear Token for XNQEREQC
+*
+*        Extract pointer to the EID and RESOURCE name from CLPS
+         L     R8,UEPCLPS          Fetch address of Command Plist
+         USING NQ_ADDR_LIST,R8     Use R8 to address CLPS
+         L     R1,NQ_ADDR0         Address the EID..
+         L     R7,NQ_ADDR1         Fetch address of RESOURCE
+         L     R10,NQ_ADDR2        Fetch address of length
+         LH    R10,0(R10)          Fetch resource length
+         DROP  R8                  Drop addressability to CLPS
+*
+*        Check that the Command GROUP code corresponds to a NQ request
+         USING NQ_EID,R1           ..with Register 1
+         CLI   NQ_GROUP,NQ_ENQDEQ_GROUP   Is this a NQ request?
+         BNE   ERROR3              ..No  Branch to error routine
+*        Check for LENGTH parameter. We don't handle ADDRESS ENQ/DEQ.
+         TM    NQ_BITS1,NQ_LENGTH_V  Is Length exist set?
+         BZ    RETURN              ..No  so do nothing!
+         DROP  R1                  Drop addressability to EID
+*
+*---------------------------------------------------------------------*
+* Start scan of ENQ_Scope Table                                       *
+*---------------------------------------------------------------------*
+         LA    R9,ENQ_SCOPE_TABLE  Fetch address of enq scope table
+         USING TABLE_ENTRY,R9      Address entries from R9
+*
+CHECK_NEXT_ENTRY DS 0H
+         CLC   ENTRY_NAME(1),ENTRY_NAME_LAST Is this the last entry?
+         BE    RETURN              ..Yes Take no action
+         CH    R10,NAME_LENGTH     Is resource shorter than entry?
+         BL    TRY_NEXT_ENTRY      ..Yes So skip this entry
+         LH    R1,NAME_LENGTH      Length of name which must match
+         BCTR  R1,0                Length can't be 0!
+         EX    R1,NAME_COMP        Is this the wanted RESOURCE name?
+         BE    ENTRY_FOUND         ..Yes Check for the action required
+TRY_NEXT_ENTRY   DS 0H
+         LA    R9,64(R9)           Point to next entry
+         B     CHECK_NEXT_ENTRY    Start search again
+*
+ENTRY_FOUND DS 0H
+         CLI   ACTION,GLOBAL       Is the action to add ENQSCOPE?
+         BE    GLOBAL_REQUEST      ..Yes Branch to GLOBAL routine
+         CLI   ACTION,PREFIX       Is the action to prefix resource?
+         BE    PREFIX_REQUEST      ..Yes Branch to Prefix routine
+         CLI   ACTION,MODIFY       Is the action to modify resource?
+         BE    MODIFY_REQUEST      ..Yes Branch to Modify routine
+         B     ERROR4              Otherwise Branch to error routine
+         DROP  R9                  Drop addressability to Entry
+         EJECT ,
+*
+*=====================================================================*
+*  NQ_REQUEST_COMPLETE - Invoked at XNQEREQC exit point               *
+*    Free any shared storage that was acquired during previous        *
+*    invocation at XNQEREQ                                            *
+*                                                                     *
+*  Registers:                                                         *
+*    R1 = Work register                                               *
+*    R6 = Linkage register                                            *
+*    R8 = Command Parameter List (CLPS)                               *
+*                                                                     *
+*  Logic:                                                             *
+*    NQ_Request_Complete:                                             *
+*      If called recursively then                                     *
+*        call Error(Recursive_Call2)                                  *
+*      Else                                                           *
+*        If the Command GROUP code is not a NQ request then           *
+*          call Error(Invalid_Group_Code2)                            *
+*        Else                                                         *
+*          If UEPNQTOK->token ^= 0 then Call Freemain_Shared_Plist    *
+*        End If                                                       *
+*      End If                                                         *
+*    Return                                                           *
+*=====================================================================*
+NQ_REQUEST_COMPLETE DS  0H
+*        Check for possible recursion
+         L     R1,UEPRECUR         Address of recursive count
+         LH    R1,0(R1)            Fetch count
+         LTR   R1,R1               Has exit been invoked recursively?
+         BNZ   ERROR5              ..Yes Branch to error routine
+*
+*        Check that the Command GROUP code corresponds to a NQ request
+         L     R8,UEPCLPS          Fetch address of Command Plist
+         USING NQ_ADDR_LIST,R8     Use R8 to address CLPS
+         L     R1,NQ_ADDR0         Address the EID..
+         USING NQ_EID,R1           ..with Register 1
+         CLI   NQ_GROUP,NQ_ENQDEQ_GROUP  Is this a NQ request?
+         BNE   ERROR6              ..No  Branch to error routine
+         DROP  R1                  Drop addressability to EID
+         DROP  R8                  Drop addressability to CLPS
+*
+         L     R1,UEPNQTOK         Fetch address of Token
+         L     R1,0(R1)            Fetch actual token
+         LTR   R1,R1               Did XNQEREQ Getmain any storage?
+         BZ    RETURN              ..No  Return to caller
+         BAL   R6,FREEMAIN_SHARED  ..Yes Issue Freemain
+         B     RETURN              Return to caller
+         EJECT ,
+*
+*=====================================================================*
+* MODIFY REQUEST: Process Modify resource                             *
+*   An entry has been found in the ENQ_Scope Table for this resource. *
+*   Modify the Resource name by replacing the first four characters   *
+*   with the value in ENTRY_SCOPE.                                    *
+*                                                                     *
+*  Registers:                                                         *
+*    R1 = Work register                                               *
+*    R6 = Link Register                                               *
+*    R7 = Address of current RESOURCE name       (Set on entry)       *
+*    R8 = Command Parameter List (CLPS)                               *
+*    R9 = Address of table entry              (Set on entry)          *
+*    R12= Work register (Shared_storage)                              *
+*                                                                     *
+*  Logic:                                                             *
+*    Modify_Request:                                                  *
+*      If entry_scope ^= blank_scope then                             *
+*        Call Getmain_Shared                                          *
+*        Copy resource into shared storage                            *
+*        Replace first 4 chars of copy with entry_scope               *
+*        Address the command plist                                    *
+*        Update ADDR1 to point to address of the new Resource name    *
+*      End If                                                         *
+*    Return                                                           *
+*=====================================================================*
+MODIFY_REQUEST DS 0H
+         USING TABLE_ENTRY,R9      R9 points to the table entry
+         CLC   ENTRY_SCOPE,BLANK_SCOPE Is scope field blank?
+         BE    RETURN              ..Yes Return
+*
+*        Obtain Shared storage to hold the new resource name
+         BAL   R6,GETMAIN_SHARED   Getmain SHARED storage
+         L     R12,UEPNQTOK        Fetch address of token
+         L     R12,0(R12)          Fetch shared storage pointer
+         MVC   0(L'ENTRY_SCOPE,R12),ENTRY_SCOPE Copy SCOPE
+         BCTR  R10,0               Length can't be 0!
+         EX    R10,MODIFY_MVC      Copy RESOURCE into shared storage
+*        Overwrite first 4 chars of copy with entry_scope.
+         MVC   0(L'ENTRY_SCOPE,R12),ENTRY_SCOPE Copy SCOPE
+*
+*        Update the Resource address in CLPS
+         L     R8,UEPCLPS          Address the CLPS.
+         USING NQ_ADDR_LIST,R8     ..with Register 8
+         ST    R12,NQ_ADDR1        Store new resource address
+*
+         B     RETURN              Return
+         DROP  R8                  Drop TS_ADDR_LIST
+         DROP  R9                  Drop addressability to Entry
+         EJECT ,
+*
+*=====================================================================*
+* PREFIX REQUEST: Process Prefix resource                             *
+*   An entry has been found in the ENQ_Scope Table for this resource. *
+*   Modify the Resource name by prefixing it with the four characters *
+*   specified in ENTRY_SCOPE.                                         *
+*   To do so, we getmain storage, which is freed in the XNQEREQC exit.*
+*                                                                     *
+*  Registers:                                                         *
+*    R1 = Work register                                               *
+*    R6 = Link Register                                               *
+*    R7 = Address of current RESOURCE name       (Set on entry)       *
+*    R8 = Command Parameter List (CLPS)                               *
+*    R9 = Address of table entry              (Set on entry)          *
+*    R12= Work register (Shared_storage)                              *
+*                                                                     *
+*  Logic:                                                             *
+*    Prefix_Request:                                                  *
+*      If entry_scope ^= blank_scope then                           * 3
+*        Call Getmain_Shared                                          *
+*        Copy entry_scope, resource and length into shared storage@P2C*
+*        Address the command plist                                    *
+*        Update ADDR1 to hold the address of the new Resource name    *
+*        Update ADDR2 to hold the address of the new length       @P2A*
+*      End If                                                         *
+*    Return                                                           *
+*=====================================================================*
+PREFIX_REQUEST  DS 0H
+         USING TABLE_ENTRY,R9      R9 points to the table entry
+         CLC   ENTRY_SCOPE,BLANK_SCOPE Is Entry_scope blank?
+         BE    RETURN              ..Yes Return
+         CH    R10,PREFIX_MAX      Is entry name too long to prefix?
+         BH    MODIFY_REQUEST      ..Yes So modify this entry
+*
+*        Obtain Shared storage to hold the new resource name
+*        entry_scope and new resource name length.                 @P2A
+         BAL   R6,GETMAIN_SHARED   Getmain SHARED storage
+         L     R12,UEPNQTOK        Fetch address of token
+         L     R12,0(R12)          Fetch shared storage pointer
+         MVC   0(L'ENTRY_SCOPE,R12),ENTRY_SCOPE Copy SCOPE
+         BCTR  R10,0               Length can't be 0!
+         EX    R10,PREFIX_MVC      Copy RESOURCE into shared storage
+*
+*        Update the Resource address and Length in CLPS
+         L     R8,UEPCLPS          Address the CLPS.
+         USING NQ_ADDR_LIST,R8     ..with Register 8
+         ST    R12,NQ_ADDR1        Store new resource address
+         LA    R1,L'ENTRY_SCOPE+1  Load Scope length
+         AR    R10,R1              Add Scope length
+         AR    R12,R10             Addr new stg beyond scope&name  @P2A
+         STH   R10,0(R12)          Store new length after name     @P2C
+         ST    R12,NQ_ADDR2        Save new address of length      @P2A
+         B     RETURN              Return
+         DROP  R8                  Drop TS_ADDR_LIST
+         DROP  R9                  Drop addressability to Entry
+         EJECT ,
+*
+*=====================================================================*
+* GLOBAL_REQUEST: Force Global Scope in UEPSCOPE                      *
+*   An entry has been found in the ENQ_Scope Table for this           *
+*   RESOURCE. The request is modified by moving Entry_scope           *
+*   into UEPSCOPE, and returning with R15 set to UERCSCPE.            *
+*                                                                     *
+*  Registers:                                                         *
+*    R1 = Work register                                               *
+*    R6 = Link Register                                               *
+*    R7 = Address of current Resource name       (Set on entry)       *
+*    R8 = Command Parameter List (CLPS)                               *
+*    R9 = Address of table entry              (Set on entry)          *
+*                                                                     *
+*  Logic:                                                             *
+*    Global_Request:                                                  *
+*      Copy enqscope into uepscope                                    *
+*      Set the UERCSCPE return code in R15 and retcode                *
+*    Return                                                           *
+*=====================================================================*
+GLOBAL_REQUEST DS 0H
+         USING TABLE_ENTRY,R9      R9 points to the table entry
+*
+*        Copy ENTRY_SCOPE into UEPSCOPE
+         L     R1,UEPSCOPE         Fetch address of scope
+         MVC   0(4,R1),ENTRY_SCOPE   Copy ENTRY_SCOPE into UEPSCOPE
+*        Set a return code to indicate Global scope
+         LA    R15,UERCSCPE        Set GLOBAL response
+         ST    R15,RETCODE           in working storage
+         B     RETURN              Return
+         DROP  R9                  Drop addressability to Entry
+         EJECT ,
+*
+*=====================================================================*
+*  GETMAIN_SHARED - Obtain Shared storage                             *
+*    We cannot use transaction storage to pass information in the     *
+*    Command Parameter List since this is volatile and will be        *
+*    released when the exit program returns to CICS.                  *
+*    We must obtain SHARED storage here, and freemain it at the       *
+*    NQ request complete exit XNQEREQC                                *
+*                                                                     *
+*  Registers:                                                         *
+*    R0 = Used by EXEC CICS call                                      *
+*    R1 = Used by EXEC CICS call                                      *
+*         Work Register                                               *
+*    R6 = Link Register - Return Address                              *
+*    R11= EIB register   (set on entry)                               *
+*    R12= Work register                                               *
+*    R14= Used by EXEC CICS call                                      *
+*    R15= Used by EXEC CICS call                                      *
+*                                                                     *
+*  Logic:                                                             *
+*    Getmain_Shared:                                                  *
+*      EXEC CICS GETMAIN LENGTH(256) SET(UEPNQTOK) SHARED RESP(resp)  *
+*      If resp ^= OK then                                             *
+*        Call Error(Getmain_Failed)                                   *
+*      End If                                                         *
+*    Return                                                           *
+*=====================================================================*
+GETMAIN_SHARED DS 0H
+         L     R12,UEPNQTOK            Fetch address of token
+         L     R12,0(R12)              Fetch shared storage anchor
+         LTR   R12,R12                 Is the storage already present?
+         BNZR  R6                      ..Yes Return
+         EXEC CICS GETMAIN LENGTH(256) SET(R12) SHARED                 X
+                   INITIMG(X'00') RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)    Getmain worked OK?
+         BNE   ERROR7                  ..No Goto Error routine
+         L     R1,UEPNQTOK             Fetch address of token
+         ST    R12,0(R1)               Save address of storage
+         BR    R6                      Return to caller
+         EJECT ,
+*
+*=====================================================================*
+*  FREEMAIN_SHARED - Free shared storage                              *
+*    Free the shared storage associated with this command.            *
+*                                                                     *
+*  Registers:                                                         *
+*    R0 = Used by EXEC CICS call                                      *
+*    R1 = Used by EXEC CICS call                                      *
+*    R6 = Link Register - Return Address                              *
+*    R11= EIB register   (set on entry)                               *
+*    R12= Work register                                               *
+*    R14= Used by EXEC CICS call                                      *
+*    R15= Used by EXEC CICS call                                      *
+*                                                                     *
+*  Logic:                                                             *
+*    Freemain_Shared:                                                 *
+*      EXEC CICS FREEMAIN DATAPOINTER(UEPNQTOK) RESP(resp)            *
+*      If resp ^= OK then                                             *
+*        Call Error(Freemain_Failed)                                  *
+*        End If                                                       *
+*    Return                                                           *
+*=====================================================================*
+FREEMAIN_SHARED DS 0H
+         L     R12,UEPNQTOK            Fetch token address
+         L     R12,0(R12)              Address shared storage address
+         EXEC CICS FREEMAIN DATAPOINTER(R12) RESP(RESP)
+         CLC   RESP,DFHRESP(NORMAL)    Freemain worked OK?
+         BNE   ERROR9                  ..No Goto Error routine
+         L     R12,UEPNQTOK            Fetch token address
+         XC    0(4,R12),0(R12)         Clear token address
+         BR    R6                      Return to caller
+         EJECT ,
+*
+*=====================================================================*
+*  Trace Routines                                                     *
+*    Issue a Trace XPI call                                           *
+*                                                                     *
+*  Registers:                                                         *
+*    R0 = Used by XPI call                                            *
+*    R1 = DFHTRPT plist                                               *
+*    R6 = Link Register - Return Address                              *
+*    R12= Work register                                               *
+*    R13= EISTG register (set by DFHEIENT)                            *
+*         Kernel Stack entry                                          *
+*    R14= Used by XPI call                                            *
+*    R15= Used by XPI call                                            *
+*=====================================================================*
+         USING DFHTRPT_ARG,R1
+TRACE_ENTRY DS 0H
+         L     R1,UEPXSTOR         Prepare for XPI call
+         DFHTRPTX CLEAR,                                               X
+               POINT_ID(TR_ENTRY)
+         B     ISSUE_TRACE
+TRACE_EXIT DS  0H
+         L     R1,UEPXSTOR         Prepare for XPI call
+         DFHTRPTX CLEAR,                                               X
+               POINT_ID(TR_EXIT)
+         B     ISSUE_TRACE
+TRACE_ERROR DS 0H
+         L     R1,UEPXSTOR         Prepare for XPI call
+         DFHTRPTX CLEAR,                                               X
+               POINT_ID(TR_ERROR),                                     X
+               DATA1(TR_ERROR_N,1)
+         BAL   R6,ISSUE_TRACE
+         B     RETURN
+*
+*---------------------------------------------------------------------*
+* Issue the Trace XPI call                                            *
+*---------------------------------------------------------------------*
+ISSUE_TRACE DS 0H
+         L     R8,UEPTRACE         Address of trace flag
+         TM    0(R8),UEPTRON       Is trace on?
+         BZ    NO_TRACE            No - do not issue trace then
+         LR    R12,R13             Save R13 round XPI call
+         L     R13,UEPSTACK
+         DFHTRPTX CALL,                                                X
+               IN,                                                     X
+               FUNCTION(TRACE_PUT),                                    X
+               POINT_ID(*),                                            X
+               OUT,                                                    X
+               RESPONSE(*),                                            X
+               REASON(*)
+         LR    R13,R12             Restore R13 (DFHEISTG)
+NO_TRACE DS    0H
+         BR    R6                  Return to caller
+         DROP  R1
+*
+*=====================================================================*
+*  ERRORn                                                             *
+*    Error has occurred during processing                             *
+*    Issue a trace point and return to the CICS                       *
+*=====================================================================*
+ERROR1   DS    0H
+         MVI   TR_ERROR_N,1
+         B     TRACE_ERROR
+ERROR2   DS    0H
+         MVI   TR_ERROR_N,2
+         B     TRACE_ERROR
+ERROR3   DS    0H
+         MVI   TR_ERROR_N,3
+         B     TRACE_ERROR
+ERROR4   DS    0H
+         MVI   TR_ERROR_N,4
+         B     TRACE_ERROR
+ERROR5   DS    0H
+         MVI   TR_ERROR_N,5
+         B     TRACE_ERROR
+ERROR6   DS    0H
+         MVI   TR_ERROR_N,6
+         B     TRACE_ERROR
+ERROR7   DS    0H
+         MVI   TR_ERROR_N,7
+         B     TRACE_ERROR
+ERROR8   DS    0H
+         MVI   TR_ERROR_N,7
+         B     TRACE_ERROR
+ERROR9   DS    0H
+         MVI   TR_ERROR_N,7
+         B     TRACE_ERROR
+         EJECT ,
+         DROP  R2                      Drop DFHUEPAR
+         DROP  R11                     Drop EIB
+         LTORG ,
+***********************************************************************
+* CONSTANTS                                                           *
+***********************************************************************
+                 DS 0D
+NAME_COMP  CLC 0(0,R9),0(R7)       ex'd instr to compare resource name
+MODIFY_MVC MVC 0(0,R12),0(R7)      ex'd instr to copy resource name
+PREFIX_MVC MVC 4(0,R12),0(R7)      ex'd instr to copy resource name
+BLANK_SCOPE      DC CL4'    '
+PREFIX_MAX       DC H'250'
+MODIFY           EQU X'01'
+PREFIX           EQU X'02'
+GLOBAL           EQU X'03'
+*
+* Trace point ids
+TR_ENTRY         DC XL2'120'
+TR_EXIT          DC XL2'121'
+TR_ERROR         DC XL2'122'
+*
+*---------------------------------------------------------------------*
+*   TABLE_ENTRY:                                                      *
+*    ----------------------------------------------------------       *
+*   | Entry_Name | Entry_scope | Name_Length | Action | *filler* |    *
+*   | Char 56    | Char 4      | Bin 15      | Bin 8  | Char 1   |    *
+*    ----------------------------------------------------------       *
+*    Last Entry is indicated by special RESOURCE Name                 *
+*---------------------------------------------------------------------*
+ENQ_SCOPE_TABLE DS 0D
+ENTRY_NAME_1     DC CL56'BBBBBBBB' Modify names starting BBBBBBBB
+ENTRY_SCOPE_1    DC CL4'AAAA'      To names starting AAAABBBB
+NAME_LENGTH_1    DC H'8'           Chars in name which must match
+ACTION_1         DC XL1'01'        Modify name request
+FILLER_1         DC CL1' '
+ENTRY_NAME_2     DC CL56'CCCC    ' Prefix names starting CCCC
+ENTRY_SCOPE_2    DC CL4'AAAA'      To names starting AAAACCCC
+NAME_LENGTH_2    DC H'4'           Chars in name which must match
+ACTION_2         DC XL1'02'        Prefix name request
+FILLER_2         DC CL1' '
+ENTRY_NAME_3     DC CL56'DDDDDD  ' Global names starting DDDDDD
+ENTRY_SCOPE_3    DC CL4'AAAA'      Copy AAAA to UEPSCOPE
+NAME_LENGTH_3    DC H'6'           Chars in name which must match
+ACTION_3         DC XL1'03'        Set Global UERCSCPE responce
+FILLER_3         DC CL1' '
+ENTRY_NAME_LAST  DC XL2'FFFF'
+         END   DFH$XNQE

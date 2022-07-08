@@ -1,0 +1,499 @@
+ /********************************************************************/
+ /*                                                                  */
+ /* MODULE NAME = DFH$W2S1                                           */
+ /*                                                                  */
+ /* DESCRIPTIVE NAME = CICS TS  (W2) Sample service routine          */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*      Licensed Materials - Property of IBM                        */
+ /*                                                                  */
+ /*      "Restricted Materials of IBM"                               */
+ /*                                                                  */
+ /*      5655-Y04                                                    */
+ /*                                                                  */
+ /*      (C) Copyright IBM Corp. 2009"                               */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /*                                                                  */
+ /* STATUS = 7.2.0                                                   */
+ /*                                                                  */
+ /* TRANSACTION NAME = CW2A                                          */
+ /*                                                                  */
+ /* FUNCTION =                                                       */
+ /*      Sample service routine for Atom support                     */
+ /*      This version is for the CICS/TS 4.1 Beta release            */
+ /*                                                                  */
+ /*      This is a skeleton program to demonstrate how to use the    */
+ /*      ATOMSERVICE service routine interface.                      */
+ /*                                                                  */
+ /* NOTES :                                                          */
+ /*  DEPENDENCIES = z/Arch                                           */
+ /*  RESTRICTIONS =                                                  */
+ /*  REGISTER CONVENTIONS =                                          */
+ /*  PATCH LABEL = N/A                                               */
+ /*  MODULE TYPE = Executable                                        */
+ /*  PROCESSOR = C compiler                                          */
+ /*  ATTRIBUTES = Read only, Serially Reusable                       */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* ENTRY POINT = DFH$W2S1                                           */
+ /*                                                                  */
+ /*   PURPOSE = Service routine for ATOMSERVICE                      */
+ /*                                                                  */
+ /*   LINKAGE = By LINK from CICS Atom Support                       */
+ /*                                                                  */
+ /*   INPUT = DFHATOMPARMS container                                 */
+ /*                                                                  */
+ /*   OUTPUT = DFHATOMCONTENT container                              */
+ /*                                                                  */
+ /*   EXIT-NORMAL =                                                  */
+ /*                                                                  */
+ /*   EXIT-ERROR =                                                   */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* DESCRIPTION                                                      */
+ /*                                                                  */
+ /*   Sample program to demonstrate how to provide customized        */
+ /*   Atom support.                                                  */
+ /*                                                                  */
+ /*------------------------------------------------------------------*/
+ /*                                                                  */
+ /* CHANGE ACTIVITY :                                                */
+ /*      $MOD(DFH$W2S1),COMP(WEB20),PROD(CICS TS ):                  */
+ /*                                                                  */
+ /*   PN= REASON REL YYMMDD HDXXIII : REMARKS                        */
+ /*  $L0= 923    660 090221 HDKNAPP : Sample service routine         */
+ /*                                                                  */
+ /********************************************************************/
+#pragma XOPTS(CICS)
+
+/* include the C header file for the atmp_parameter_list copybook */
+#include "dfhw2aph.h"
+#include "dfhw2cnh.h"
+
+DFHEIBLK  *dfheiptr;
+
+/***********************************************************************
+ * As we have to return pointers to data in the atmp_parameter_list    *
+ * here is a structure that contains data which we can point to        *
+ * NOTE: this return data must be in the TWA or CICS ATOM processing   *
+ * will not be able to access it.                                      *
+ **********************************************************************/
+typedef struct
+{
+    char atomid??(50??);
+    char published??(30??);
+    char updated??(30??);
+    char edited??(30??);
+    char etagval??(30??);
+    char nextsel??(20??);
+    char prevsel??(20??);
+    char firstsel??(20??);
+    char lastsel??(20??);
+    char selector??(20??);
+} outdata;
+
+/***********************************************************************
+ * To illustrate how to read in the atmp_parameter_list here is a      *
+ * structure to read it into.                                          *
+ * NOTE: This is not needed and is only provided here to show how to   *
+ * extract values from the atmp_parameter_list                         *
+ **********************************************************************/
+typedef struct
+{
+    char* resname;
+    char* restype;
+    char* atomtype;
+    char* atomid;
+    char* tag_authority;
+    char* tag_date;
+    char* xmltransform;
+    char* rootelement;
+    char* selector;
+    char* httpmeth;
+    char* mtypein;
+    char* mtypeout;
+    char* etagval;
+    char* winsize;
+    char* idfld;
+    char* publishedfld;
+    char* updatedfld;
+    char* editedfld;
+    char* keyfld;
+    char* titlefld;
+    char* summaryfld;
+    char* contentfld;
+    char* categoryfld;
+    char* authorfld;
+    char* authorurifld;
+    char* emailfld;
+} indata;
+
+/***********************************************************************
+ * Helper method to get a parameter value from a atmp_parameter        *
+ * structure.                                                          *
+ **********************************************************************/
+char* getParameter(atmp_parameter* ParamPtr)
+{
+    char* DataPtr;
+    int DataLen;
+    DataLen  = ParamPtr->atmp_parameter_len;
+
+    EXEC CICS GETMAIN SET(DataPtr) FLENGTH(DataLen+1)
+                      INITIMG(0x00);
+    if (DataLen != 0) {
+        memcpy(DataPtr, ParamPtr->atmp_parameter_ptr, DataLen);
+    }
+
+    return DataPtr;
+}
+
+
+/***********************************************************************
+ * Helper method to update a given atmp_parameter with the pointer and *
+ * length of a give data value.                                        *
+ **********************************************************************/
+void updatedAtomParam(char *value, atmp_parameter *ParamPtr)
+{
+    ParamPtr->atmp_parameter_ptr = (unsigned long*)value;
+    ParamPtr->atmp_parameter_len = strlen(value);
+}
+
+
+/***********************************************************************
+ * Helper method to update a DFHATOM.. CONTAINER and set its option bit*
+ **********************************************************************/
+void updateAtomContainer(char *cName, char *cChannel, char *value,
+                         atmp_options_bits *optPtr)
+{
+    int len = strlen(value);
+
+    EXEC CICS PUT CONTAINER(cName)
+                  CHANNEL(cChannel)
+                  FROM(value)
+                  FLENGTH(len)
+                  FROMCODEPAGE("IBM037");
+
+    /* work out which option to set */
+    if (strcmp(cName, "DFHATOMTITLE    ") == 0) {
+        (*optPtr).atmp_options_outbit.atmp_outopt_byte1.opttitle = 1;
+    }
+    else if (strcmp(cName, "DFHATOMSUMMARY  ") == 0) {
+        (*optPtr).atmp_options_outbit.atmp_outopt_byte1.optsumma = 1;
+    }
+    else if (strcmp(cName, "DFHATOMCATEGORY  ") == 0) {
+        (*optPtr).atmp_options_outbit.atmp_outopt_byte1.optcateg = 1;
+    }
+    else if (strcmp(cName, "DFHATOMAUTHOR    ") == 0) {
+        (*optPtr).atmp_options_outbit.atmp_outopt_byte1.optauthor = 1;
+    }
+    else if (strcmp(cName, "DFHATOMAUTHORURI ") == 0) {
+        (*optPtr).atmp_options_outbit.atmp_outopt_byte1.optautheml = 1;
+    }
+    else if (strcmp(cName, "DFHATOMEMAIL     ") == 0) {
+        (*optPtr).atmp_options_outbit.atmp_outopt_byte1.optauthuri = 1;
+    }
+
+}
+
+/***********************************************************************
+ * Main program: reads and actions the atmp_parameter_list and         *
+ * generates return data and reponses.                                 *
+ **********************************************************************/
+main()
+{
+
+    atmp_parameter_list *ParamList;
+    char *ParamListData;
+
+    atmp_parameter *ParamPtr;
+    atmp_responses *ResponsePtr;
+    atmp_options_bits *optPtr;
+    char *RequestBody;
+
+    char cChannel??(16??);
+    int DataLen;
+
+    char *AtomContent;
+    char *AtomTitle;
+    char *AtomSummary;
+    char *AtomCategory;
+    char *AtomAuthor;
+    char *AtomAuthorUri;
+    char *AtomEmail;
+
+    outdata *outData;
+    indata inData;
+
+    long Resp;
+    long Resp2;
+
+    EXEC CICS ADDRESS EIB(dfheiptr);
+
+    /* set up our storage in the TWA and default fields */
+    EXEC CICS ADDRESS TWA(outData);
+
+    strcpy(outData->atomid,
+           "cics-atomservice-sample:2009-02-02T00:00:00Z");
+    strcpy(outData->published, "2009-02-02T00:00:00Z");
+    strcpy(outData->updated,  "2009-02-20T14:54:34Z");
+    strcpy(outData->edited,   "2009-02-20T14:54:34Z");
+    strcpy(outData->etagval,  "");
+    strcpy(outData->nextsel,  "0");
+    strcpy(outData->prevsel,  "");
+    strcpy(outData->firstsel, "");
+    strcpy(outData->lastsel,  "");
+    strcpy(outData->selector, "");
+
+    EXEC CICS GETMAIN SET(AtomContent)   FLENGTH(512) INITIMG(0x00);
+    EXEC CICS GETMAIN SET(AtomTitle)     FLENGTH(50) INITIMG(0x00);
+    EXEC CICS GETMAIN SET(AtomSummary)   FLENGTH(100) INITIMG(0x00);
+    EXEC CICS GETMAIN SET(AtomCategory)  FLENGTH(30) INITIMG(0x00);
+    EXEC CICS GETMAIN SET(AtomAuthor)    FLENGTH(40) INITIMG(0x00);
+    EXEC CICS GETMAIN SET(AtomAuthorUri) FLENGTH(256) INITIMG(0x00);
+    EXEC CICS GETMAIN SET(AtomEmail)     FLENGTH(256) INITIMG(0x00);
+
+    strcpy(AtomContent,
+           "<content type='text/xml'>Hello world</content>");
+    strcpy(AtomTitle,     "Sample Service Routine Entry");
+    strcpy(AtomSummary,
+           "This is an entry from the sample service routine");
+    strcpy(AtomCategory,  "sample-entry");
+    strcpy(AtomAuthor,    "CICS Sample service routine");
+    strcpy(AtomAuthorUri, "");
+    strcpy(AtomEmail,     "");
+
+    /* get the current channel */
+    EXEC CICS ASSIGN CHANNEL(cChannel);
+
+    /******************************************************************/
+    /******************************************************************/
+    /* CHECK FOR DFHREQUEST                                           */
+    /******************************************************************/
+    /******************************************************************/
+    EXEC CICS GET CONTAINER("DFHREQUEST      ")
+                  CHANNEL(cChannel)
+                  NODATA
+                  FLENGTH(DataLen)
+                  RESP(Resp) RESP2(Resp2);
+
+    if(Resp != 0 || Resp2 != 0)
+    {
+        DataLen = -1;
+    }
+
+    /* If we have a request body then get it */
+    if(DataLen != -1)
+    {
+        DataLen++;
+        EXEC CICS GETMAIN SET(RequestBody) FLENGTH(DataLen)
+                          INITIMG(0x00);
+
+        EXEC CICS GET CONTAINER("DFHREQUEST      ")
+                          INTO(RequestBody)
+                          FLENGTH(DataLen);
+    }
+
+    /******************************************************************/
+    /******************************************************************/
+    /* READ STRUCTURE OF ATMP_PARAMETER_LIST                          */
+    /******************************************************************/
+    /******************************************************************/
+    EXEC CICS GET CONTAINER("DFHATOMPARMS    ")
+                  SET(ParamListData)
+                  FLENGTH(DataLen);
+
+    ParamList = (atmp_parameter_list*)ParamListData;
+
+    /******************************************************************/
+    /******************************************************************/
+    /* READ ATMP_PARAMETER_LIST INTO inData                           */
+    /******************************************************************/
+    /******************************************************************/
+
+    optPtr = (atmp_options_bits*)ParamList->atmp_options;
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_resname;
+    inData.resname = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_restype;
+    inData.restype = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_atomtype;
+    inData.atomtype = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_atomid;
+    inData.atomid = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_tag_authority;
+    inData.tag_authority = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_tag_date;
+    inData.tag_date = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_xmltransform;
+    inData.xmltransform = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_root_element;
+    inData.rootelement = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_selector;
+    inData.selector = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_httpmeth;
+    inData.httpmeth = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_mtypein;
+    inData.mtypein = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_mtypeout;
+    inData.mtypeout = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_etagval;
+    inData.etagval = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_winsize;
+    inData.winsize = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_id_fld;
+    inData.idfld = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_published_fld;
+    inData.publishedfld = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_updated_fld;
+    inData.updatedfld = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_edited_fld;
+    inData.editedfld = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_key_fld;
+    inData.keyfld = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_title_fld;
+    inData.titlefld = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_summary_fld;
+    inData.summaryfld = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_content_fld;
+    inData.contentfld = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_category_fld;
+    inData.categoryfld = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_author_fld;
+    inData.authorfld = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_authoruri_fld;
+    inData.authorurifld = getParameter(ParamPtr);
+
+    ParamPtr = (atmp_parameter*)ParamList->atmp_email_fld;
+    inData.emailfld = getParameter(ParamPtr);
+
+    /******************************************************************/
+    /******************************************************************/
+    /* USE THE inData TO GET A RECORD FROM YOUR RESOURCE AND POPULATE */
+    /* outData WITH THE CORRENT VALUES                                */
+    /******************************************************************/
+    /******************************************************************/
+    /*
+     *  Use inData and RequestBody here to work out what to do
+     *
+     *
+     *
+     *  USER CODE HERE
+     *
+     *
+     *  strcpy(outData->atomid,    ".....");
+     *  strcpy(outData->published, ".....");
+     *  strcpy(outData->updated,   ".....");
+     *  strcpy(outData->edited,    ".....");
+     *  strcpy(outData->etagval,   ".....");
+     *  strcpy(outData->nextsel,   ".....");
+     *  strcpy(outData->prevsel,   ".....");
+     *  strcpy(outData->firstsel,  ".....");
+     *  strcpy(outData->lastsel,   ".....");
+     *
+     *  if (strlen(inData->selector) == 0) {
+     *      strcpy(outData->selector, ".....");
+     *  }
+     *
+     *  strcpy(AtomContent,   "....");
+     *  strcpy(AtomTitle,     "....");
+     *  strcpy(AtomSummary,   "....");
+     *  strcpy(AtomCategory,  "....");
+     *  strcpy(AtomAuthor,    "....");
+     *  strcpy(AtomAuthorUri, "....");
+     *  strcpy(AtomEmail,     "....");
+     *
+     *
+     */
+
+
+
+    /******************************************************************/
+    /******************************************************************/
+    /* SET UP RETURN STRUCTURE IN TWA AND UPDATE ATMP_PARAMETER_LIST  */
+    /******************************************************************/
+    /******************************************************************/
+
+    updatedAtomParam(outData->atomid,
+                     (atmp_parameter*)ParamList->atmp_atomid);
+    updatedAtomParam(outData->published,
+                     (atmp_parameter*)ParamList->atmp_published);
+    updatedAtomParam(outData->updated,
+                     (atmp_parameter*)ParamList->atmp_updated);
+    updatedAtomParam(outData->edited,
+                     (atmp_parameter*)ParamList->atmp_edited);
+    updatedAtomParam(outData->etagval,
+                     (atmp_parameter*)ParamList->atmp_etagval);
+    updatedAtomParam(outData->nextsel,
+                     (atmp_parameter*)ParamList->atmp_nextsel);
+    updatedAtomParam(outData->prevsel,
+                     (atmp_parameter*)ParamList->atmp_prevsel);
+    updatedAtomParam(outData->firstsel,
+                     (atmp_parameter*)ParamList->atmp_firstsel);
+    updatedAtomParam(outData->lastsel,
+                     (atmp_parameter*)ParamList->atmp_lastsel);
+
+    if (strlen(outData->selector) != 0) {
+        updatedAtomParam(outData->selector,
+                         (atmp_parameter*)ParamList->atmp_selector);
+    }
+
+    /******************************************************************/
+    /******************************************************************/
+    /* SET UP RETURN CONTAINERS LIST AND OPTIONS                      */
+    /******************************************************************/
+    /******************************************************************/
+
+  updateAtomContainer("DFHATOMTITLE    ",cChannel,AtomTitle,optPtr);
+  updateAtomContainer("DFHATOMSUMMARY  ",cChannel,AtomSummary,optPtr);
+  updateAtomContainer("DFHATOMCATEGORY ",cChannel,AtomCategory,optPtr);
+  updateAtomContainer("DFHATOMAUTHOR   ",cChannel,AtomAuthor,optPtr);
+  updateAtomContainer("DFHATOMAUTHORURI",cChannel,AtomAuthorUri,optPtr);
+  updateAtomContainer("DFHATOMEMAIL    ",cChannel,AtomEmail,optPtr);
+  updateAtomContainer("DFHATOMCONTENT  ",cChannel,AtomContent,optPtr);
+
+
+    /******************************************************************/
+    /******************************************************************/
+    /* FINALLY SET THE DESIRED RESPONSE AND REASON CODES              */
+    /******************************************************************/
+    /******************************************************************/
+    ResponsePtr = (atmp_responses*)ParamList->atmp_response;
+    ResponsePtr->atmp_response_code = ATMP_RESP_NORMAL;
+    /*
+     * ResponsePtr->atmp_response_code = ATMP_RESP_NOT_FOUND;
+     * ResponsePtr->atmp_response_code = ATMP_RESP_NOT_AUTH;
+     * ResponsePtr->atmp_response_code = ATMP_RESP_DISABLED;
+     * ResponsePtr->atmp_response_code = ATMP_RESP_ALREADY_EXISTS;
+     * ResponsePtr->atmp_response_code = ATMP_RESP_ACCESS_ERROR;
+     */
+    ResponsePtr->atmp_reason_code = 0;
+}

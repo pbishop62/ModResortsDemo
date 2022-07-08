@@ -1,0 +1,718 @@
+*ASM XOPTS(NOPROLOG NOEPILOG)
+*=====================================================================*
+*                                                                     *
+* MODULE NAME = DFH$WBSB                                              *
+*                                                                     *
+* DESCRIPTIVE NAME = CICS TS  CICS Web Support Analyzer program       *
+*                             for HTTP Basic Authentication           *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1997, 2008"                          *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*  STATUS = 7.2.0                                                     *
+*                                                                     *
+* FUNCTION = Analyzes the incoming HTTP request to extract the        *
+*            required CICS information.                               *
+*                                                                     *
+* NOTES :                                                             *
+*                                                                     *
+*    THIS IS A PRODUCT SENSITIVE SAMPLE.                              *
+*    REFER TO PRODUCT DOCUMENTATION.                                  *
+*                                                                     *
+*    DEPENDENCIES = S/390                                             *
+*    MODULE TYPE = Executable                                         *
+*    PROCESSOR = Assembler                                            *
+*    ATTRIBUTES = Read only, Serially Reusable                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* ENTRY POINT = DFH$WBSB                                              *
+*                                                                     *
+*     PURPOSE = All functions                                         *
+*                                                                     *
+*     LINKAGE =                                                       *
+*         This entry point is called by the CWS Web Send/Receive      *
+*         program DFHWBSR via EXEC CICS LINK.                         *
+*                                                                     *
+*     INPUT =                                                         *
+*         The parameters are passed to the exit program via the       *
+*         commarea. The mapping for this parameter list is in         *
+*         DFHWBTDD.                                                   *
+*                                                                     *
+*     OUTPUT =                                                        *
+*                                                                     *
+*     EXIT-NORMAL = Exit is via an EXEC CICS RETURN command.          *
+*         The following return codes may be returned via the          *
+*         commarea:                                                   *
+*            URP_OK = 0                                               *
+*                                                                     *
+*     EXIT-ERROR = Exit is via an EXEC CICS RETURN command.           *
+*         The following return codes may be returned via the          *
+*         commarea:                                                   *
+*            URP_EXCEPTION = 4                                        *
+*            URP_INVALID   = 8                                        *
+*            URP_DISASTER  = 12                                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+*                                                                     *
+* EXTERNAL REFERENCES =                                               *
+*         None.                                                       *
+*                                                                     *
+*     ROUTINES =                                                      *
+*         EXEC CICS RETURN - return to the calling program.           *
+*                                                                     *
+*     CONTROL BLOCKS =                                                *
+*         The CWS Analyzer parameter list is defined in DFHWBTDD,     *
+*         along with a description of the parameters.                 *
+*                                                                     *
+*-------------------------------------------------------------------- *
+*                                                                     *
+* DESCRIPTION                                                         *
+*                                                                     *
+*        This program is a sample version in assembler of the CWS     *
+*        Analyzer exit. The program is invoked when an HTTP request   *
+*        is received and CWS Analyzer exit name is set to the value   *
+*        DFH$WBSB. This name can be changed by use of the             *
+*        SET TCPIPSERVICE URM command in CEMT or CECI.                *
+*                                                                     *
+*        This version of the Analyzer program implements the HTTP     *
+*        security protocol known as the "Basic Authentication Scheme".*
+*        See http://www.ietf.org/rfc/rfc1945.txt                      *
+*                                                                     *
+*        A parameter list as defined in the DFHWBTDD copybook is      *
+*        provided as input to this program.                           *
+*        The parameter list is addressed by the program using the     *
+*        normal conventions for a commarea.                           *
+*                                                                     *
+*        Please refer to INFO APAR II10905 for guidance on            *
+*        customizing the CWS Analyzer to deal with clients/           *
+*        browsers which do not conform to the HTTP 1.0                *
+*        standard.                                                    *
+*                                                                     *
+*-------------------------------------------------------------------- *
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*        $MOD(DFH$WBSB),COMP(CICSWEB),PROD(CICS TS ):                 *
+*                                                                     *
+*     PN= REASON REL YYMMDD HDXXIII : REMARKS                         *
+*    $L0= 728    520 970527 HD2JPEH : HTTP Basic Authentication       *
+*    $L2= 830    660 080816 HDISGPL : Add IPV6 to Parameters          *
+*    $P1= M27415 530 980209 HD2WPGK : Use DFHWBUCD contants           *
+*    $P2= M27551 530 980211 HD2WPGK : Allow WEB user token > 8 chars  *
+*    $P3= M30840 530 990203 HDALSLW : PAss maximum of 32K to DFHWBUN  *
+*    $P4= M14434 610 990910 HD4PALS : Check for Userid missing        *
+*    $P5= D01120 620 010622 HDFVGMB : Correct Web samples             *
+*    $P6= D01262 620 010906 HD2JPEH : Make CWS Analyzers consistent   *
+*    $P7= D10481 640 050113 HDIKTG  : Analyzer program rejects resourc*
+*    $01= A28711 610 990730 HDBGNRB : Migrate PQ28711 from SPA R530   *
+*                                                                     *
+*=====================================================================*
+*---------------------------------------------------------------------*
+*    Standard CWS definitions required                                *
+*---------------------------------------------------------------------*
+         COPY DFHWBTDD                Analyzer parameter list
+         COPY DFHWBUND                DFHWBUN parameter list       @P6A
+*
+*---------------------------------------------------------------------*
+*    Working storage definitions                                      *
+*---------------------------------------------------------------------*
+         DFHEISTG ,                                                @P6A
+*
+*  Constants for input validation
+*
+WBADX_MIN_RESOURCE_LENGTH  EQU  6         Min resource is '/A/B/C'
+WBADX_MAX_CONV_NAME_LENGTH EQU  8
+WBADX_MAX_TRAN_NAME_LENGTH EQU  4
+WBADX_MAX_SERV_NAME_LENGTH EQU  8
+WBADX_MAX_UTOK_NAME_LENGTH EQU  8
+*
+*  Working storage
+*
+WORKAREA DS    D                  Workarea
+HDRNAME  DS    CL16               Workarea for HTTP header name
+STATPARM DS    0D                 Parameter list for DFH$WBST
+EYECATCH DS    CL4                * Eyecatcher
+FUNCTION DS    CL1                * Function code
+CREATE   EQU   C'C'               * Create a new handle and state stg
+RETRIEVE EQU   C'R'               * Retrieve state info for a handle
+STORE    EQU   C'S'               * Store state info for a handle
+DESTROY  EQU   C'D'               * Destroy handle and state stg
+RETCODE  DS    XL1                * Return code
+GOODRC   EQU   X'0'
+         DS    XL2                * Reserved for alignment
+HANDLE   DS    F                  * Unique conversation id
+USERDATA DS    XL256              * User state information
+STATLEN  EQU   *-STATPARM         * Length of state mgr parameter
+         ORG   USERDATA
+SNUSERID DS    CL8                * Userid
+         ORG   ,
+AUTHID   DS    CL256              Space for authentication id
+CRLF     EQU   X'0D25'            Carriage-return/linefeed
+SEGMENT  DS    D                   URL segment workarea            @P6A
+* Commarea for Unescaping module DFHWBUN
+WBUN_ARG DS    XL(WBUN_COMMAREA__LEN)                              @P6A
+*
+*    Insert your own storage definitions here
+*
+         DFHEIEND ,                                                @P6A
+*---------------------------------------------------------------------*
+*    Start of program code                                            *
+*---------------------------------------------------------------------*
+DFH$WBSB CSECT
+DFH$WBSB AMODE 31
+DFH$WBSB RMODE ANY
+         DFHREGS ,
+         DFHEIENT CODEREG=R10,EIBREG=R11                           @P6A
+*
+*  If there is no commarea, just return. (There is nowhere to
+*  set return codes).
+*
+         ICM   R0,3,EIBCALEN                                       @P6A
+         BZ    RETURN
+*
+*  Address the parameter list
+*
+         L     R3,DFHEICAP                                         @P6C
+         USING WBRA_PARMS,R3                                       @P6C
+*
+*  Validate the eyecatcher
+*
+         CLC   WBRA_EYECATCHER,ANALYZE_EYECATCHER_INIT             @P1C
+         BNE   RETURNIN             Return response=invalid
+*=====================================================================*
+*    User specific code below                                         *
+*=====================================================================*
+*
+*---------------------------------------------------------------------*
+*    Processing different versions of input:                          *
+*    WBRA_VERSION_CTS410 level introduce support for IPV6 addresses   *
+*---------------------------------------------------------------------*
+*
+         CLI   WBRA_VERSION,WBRA_VERSION_CTS410  IPV6 supported?   @L2A
+         BNL   GOT_IPV6                Y: process ipv6 addresses   @L2A
+*
+*    This is where users would execute older IP address manipulation
+*    using fields WBRA_CLIENT_IP_ADDRESS and WBRA_SERVER_IP_ADDRESS
+*
+         LA    R6,WBRA_CLIENT_IP_ADDRESS    Example                @L2A
+         LA    R7,WBRA_SERVER_IP_ADDRESS    Example                @L2A
+         B     END_IP                  B: finished with IP address
+*                                      processing
+GOT_IPV6 DS    0H                      Process IPV6 fields         @L2A
+*
+*    This is where users would execute newer IP address manipulation
+*    using fields WBRA_CLIENT_IPV6_ADDRESS and WBRA_SERVER_IPV6_ADDRESS
+*
+         LA    R6,WBRA_CLIENT_IPV6_ADDRESS  Example                @L2A
+         LA    R7,WBRA_SERVER_IPV6_ADDRESS  Example                @L2A
+*
+END_IP   DS    0H                      End IP address processing   @L2A
+*
+*---------------------------------------------------------------------*
+*  Set the name to be used for codepage translation of the user data  *
+*  to 'DFHWBUD'.                                                      *
+*---------------------------------------------------------------------*
+         MVC   WBRA_DFHCNV_KEY,CNV_USER_DATA_KEY                   @P1C
+*---------------------------------------------------------------------*
+* If a URIMAP was matched (WBRA_URIMAP not spaces), assume no analysis*
+* is necessary, otherwise proceed as below.                           *
+* This default analyzer extracts the required CICS information by     *
+* assuming the following structure for the resource section           *
+* of the HTTP request:-                                               *
+*                                                                     *
+*             /CONVNAME/TRANID/PROGNAME</FILENAME><?TOKEN>            *
+*                                                                     *
+*  where                                                              *
+*    CONVNAME = The name of the converter program. The use of the     *
+*               string 'CICS' here will be taken as signifying that   *
+*               no converter is required.                             *
+*    TRANID   = The transaction id to be used for the alias.          *
+*               'CWBA' must be specified to get the supplied          *
+*               transaction.                                          *
+*    PROGNAME = The name of the user program to be linked by the      *
+*               alias.                                                *
+*    FILENAME = An optional filename (or other information)           *
+*               when PROGNAME is regarded as a directory.             *
+*    TOKEN    = An optional 8-character field to be passed in the     *
+*               user_token field to the decode function of the        *
+*               converter program.                                    *
+*                                                                     *
+*  According to the HTTP 1.0 specification in RFC1945,                *
+*  (http://www.ietf.org/rfc/rfc1945.txt) any of the characters in     *
+*  the text fields between the slashes (the RFC calls these "path     *
+*  segments") can be escaped as %xx characters (where xx is the       *
+*  hexadecimal of the ASCII representation of the character).         *
+*  (The slashes themselves cannot be escaped if they have semantic    *
+*  meaning, as they do in the syntax described above.)                *
+*  We unescape any escaped characters that we find in the URL, and    *
+*  unescaping is *not* controlled by the WBRA_UNESCAPE_NOT_REQUIRED   *
+*  flag, which only applies to the document body.                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+         CLI   WBRA_URIMAP,C' '              Was a URIMAP found?   @P7A
+         BNE   RETURNOK                      Yes - return          @P7A
+         L     R5,WBRA_RESOURCE_PTR
+         LH    R4,WBRA_RESOURCE_LENGTH
+*
+* Validate resource length
+         C     R4,=A(WBADX_MIN_RESOURCE_LENGTH)
+         BL    RESOURCE_TOO_SHORT
+*
+* Ensure valid first character
+         CLI   0(R5),C'/'
+         BNE   FIRST_SLASH_MISSING
+         LA    R5,1(,R5)             Move to first character..
+         BCTR  R4,0                  ..after first '/'
+*--------------------------*
+* Scan for converter name  *
+*--------------------------*
+         BAS   R14,UNESCSEG          Extract/unescape next segment @P6A
+         LTR   R0,R0                 Is converter name present?    @P6A
+         BNP   CONV_NAME_INVALID     ..no, error                   @P6A
+         C     R0,=A(WBADX_MAX_CONV_NAME_LENGTH) Name too long?    @P6A
+         BH    CONV_NAME_INVALID                                   @P6A
+         MVC   WBRA_CONVERTER_PROGRAM,SEGMENT Copy segment         @P6A
+         CLC   WBRA_CONVERTER_PROGRAM,=CL8'CICS    ' Null cnvtr?   @P6A
+         BNE   GET_TRANID            ..no, finished, look for tran @P6A
+         XC    WBRA_CONVERTER_PROGRAM,WBRA_CONVERTER_PROGRAM  Null @P6A
+*--------------------------*
+* Scan for alias tranid    *
+*--------------------------*
+GET_TRANID DS  0H
+         CLI   0(R5),C'/'            Is next segment present?      @P6A
+         BNE   TRAN_NAME_INVALID     No, TRANID absent             @P6A
+         LA    R5,1(,R5)             Step over delimiter           @P6A
+         BCTR  R4,0                  Decrement remaining length    @P6A
+         BAS   R14,UNESCSEG          Extract/unescape next segment @P6A
+         C     R6,=A(WBADX_MAX_TRAN_NAME_LENGTH)
+         BH    TRAN_NAME_INVALID
+         LTR   R6,R6                 Is tranid present ?
+         BNP   TRAN_NAME_INVALID     ..no, error                   @P6C
+         MVC   WBRA_ALIAS_TRANID,SEGMENT                           @P6A
+*------------------------------*
+* Scan for server program name *
+*------------------------------*
+GET_SERVER DS  0H
+         CLI   0(R5),C'/'            Is next segment present?      @P6A
+         BNE   SERVER_NAME_MISSING   No, server program omitted    @P6A
+         LA    R5,1(,R5)             Step over delimiter           @P6A
+         BCTR  R4,0                  Decrement remaining length    @P6A
+         BAS   R14,UNESCSEG          Extract/unescape next segment @P6A
+         C     R6,=A(WBADX_MAX_SERV_NAME_LENGTH)
+         BH    SERV_NAME_INVALID
+         LTR   R6,R6                 Is server name present ?
+         BZ    SERVER_NAME_MISSING   ..no, error
+         BM    SERV_NAME_INVALID     ..yes, but too long           @P6A
+         MVC   WBRA_SERVER_PROGRAM,SEGMENT Copy segment            @P6A
+*------------------------------*
+* Copy user token if present   *
+*------------------------------*
+GET_UTOK DS  0H
+         LTR   R4,R4                 Any resource left ?
+         BZ    BASIC_AU              ..no, continue with authentication
+         CLI   0(R5),C'?'            Reached a query-string/token?
+         BE    GOT_UTOK              Yes, obtain its length
+         LA    R5,1(,R5)             No, step over
+         BCTR  R4,0                  Reduce amount left
+         B     GET_UTOK              Try again
+GOT_UTOK DS    0H                    Token is present
+         LA    R5,1(,R5)             First char after '?'
+         BCTR  R4,0                  Decrement length remaining
+         LR    R7,R5                 Start of user token
+         LR    R6,R4                 All the rest must be user token
+         C     R6,=A(WBADX_MAX_UTOK_NAME_LENGTH)
+         BNH   UTOK_NOT_LONG                                       @P2C
+         LA    R6,WBADX_MAX_UTOK_NAME_LENGTH Cap it at 8.          @P2C
+UTOK_NOT_LONG DS 0H                                                @P2A
+         LTR   R6,R6                 Is user token present ?
+         BZ    BASIC_AU              ..no, continue with authentication
+         MVC   WBRA_USER_TOKEN,=CL8' '  Ensure trailing blanks
+         BCTR  R6,0                  Subtract one for EX
+         EX    R6,COPY_UTOK          Move user token to output
+         B     BASIC_AU              Now do Basic Authentication
+COPY_UTOK MVC  WBRA_USER_TOKEN(0),0(R7)
+         EJECT ,
+*---------------------------------------------------------------------*
+*    Search the HTTP headers for an AUTHORIZATION: header             *
+*---------------------------------------------------------------------*
+BASIC_AU DS  0H                        Perform Basic Authentication
+         L     R14,WBRA_REQUEST_HEADER_PTR  Point to first header
+CHKNEXT  DS    0H
+         MVC   HDRNAME,0(R14)          Copy header-name to wkarea
+         TR    HDRNAME,UCTAB           Uppercase header name
+         CLC   HDRNAME(15),=CL15'AUTHORIZATION:' Authorization?
+         BE    AUTHHDR                 Yes, process it
+CHKCRLF  DS    0H                      No, scan remaining hdrs
+         CLC   0(2,R14),=AL2(CRLF)     End of current header?
+         BE    CHKEOF                  Yes, check for EOF
+         LA    R14,1(,R14)             No, step over character
+         B     CHKCRLF                 Scan thru current header
+CHKEOF   DS    0H
+         LA    R14,2(,R14)             Step over CRLF at end
+         CLC   0(2,R14),=AL2(CRLF)     Reached end of file?
+         BNE   CHKNEXT                 No, examine next header
+         B     NOT_AUTHORIZED          Yes, say not authorized
+AUTHHDR  DS    0H
+         LA    R14,15(,R14)            Step over header name
+         MVC   WORKAREA(6),0(R14)      Copy first 6 chars of hdr
+         TR    WORKAREA(6),UCTAB       Translate to uppercase
+         CLC   WORKAREA(6),=CL6'BASIC' Is this a basic header?
+         BNE   NOT_AUTHORIZED          No, go to Converter
+*
+*  We have now located a Basic Authentication header.
+*  For a fuller description of how this is handled, see the comments
+*  in DFH$WBAU.
+*
+         MVI   AUTHID,C'='             Initialize AUTHID ...
+         MVC   AUTHID+1(L'AUTHID-1),AUTHID  to all pad characters
+         LA    R1,AUTHID               Point to authid result
+         LA    R14,6(,R14)             Step over 'BASIC' string
+AUTHCOPY DS    0H                      Copy base-64 one at a time
+         CLC   0(2,R14),=AL2(CRLF)     Reached end of header?
+         BE    AUTHDCOD                Yes, start decode
+         MVC   0(1,R1),0(R14)          No, copy one byte
+         LA    R1,1(,R1)               Step output pointer
+         LA    R14,1(,R14)             Step input pointer
+         B     AUTHCOPY                Try next character
+         EJECT ,
+*
+*  Translate each character to its corresponding 6-bit binary value.
+*  Every four bytes contain four binary numbers less than 64 that
+*  represent a 24-bit binary string (in this case, 3 ASCII characters).
+*
+AUTHDCOD DS    0H
+         TR    AUTHID,BASE64           Translate base-64 to binary
+         LA    R14,AUTHID              Point to translated string
+         LA    R15,AUTHID              Point to translated string
+*
+*  The following depends on the translated value of the padding byte
+*  being equal to B'01000001'. Executing BXLE R1,R1 causes R1 to be
+*  added to itself and the result compared with its initial value.
+*  When B'01000001' is in the high order byte, the addition causes
+*  BIT1 to be moved to BIT0, and the result is negative and therefore
+*  less than the initial value, and the branch is taken.
+*  Non-padding values always have zeroes in both BIT0 and BIT1,
+*  so the result is always a positive number equal to twice the
+*  original value, and the branch is not taken.
+*
+AUTHTRAN DS    0H
+         SR    R0,R0                   Zero result accumulator
+         ICM   R1,15,0(R14)            Insert four binary numbers
+         BXLE  R1,R1,AUTHDONE          Shift left & branch if neg
+         ALR   R1,R1                   Shift left another bit
+         SLDL  R0,6                    Shift 6-bit value
+         BXLE  R1,R1,AUTHSHF3          Shift left & branch if neg
+         ALR   R1,R1                   Shift left another bit
+         SLDL  R0,6                    Shift 6-bit value
+         BXLE  R1,R1,AUTHSHF2          Shift left & branch if neg
+         ALR   R1,R1                   Shift left another bit
+         SLDL  R0,6                    Shift 6-bit value
+         BXLE  R1,R1,AUTHSHF1          Shift left & branch if neg
+         ALR   R1,R1                   Shift left another bit
+         SLDL  R0,6                    Shift 6-bit value
+         B     AUTHSHF0                Go save 24-bit result
+AUTHSHF3 SLL   R0,6                    Shift 6-bit result
+AUTHSHF2 SLL   R0,6                    Shift 12-bit result
+AUTHSHF1 SLL   R0,6                    Shift 18-bit result
+AUTHSHF0 STCM  R0,7,0(R15)             Save 24-bit result
+         LA    R15,3(,R15)             Step over chars just stored
+         LA    R14,4(,R14)             Step over input chars
+         B     AUTHTRAN                Continue translation
+AUTHDONE DS    0H                      Base-64 to ASCII complete
+         TR    AUTHID,EBCDIC           Translate ASCII to EBCDIC
+         LA    R14,AUTHID-1            Address char before AUTHID
+         LA    R0,1                    Set scan increment
+         LA    R1,AUTHID+L'AUTHID-1    Address last char in AUTHID
+AUTHSCAN BXH   R14,R0,AUTHUSER         Bump scan pointer
+         CLI   0(R14),C':'             Find colon at end of userid
+         BNE   AUTHSCAN                Not found, continue loop
+AUTHUSER LA    R0,AUTHID               Start address of AUTHID
+         SR    R14,R0                  Calculate userid length
+         BNP   NOT_AUTHORIZED          Userid missing              @P4C
+         LA    R0,L'WBRA_USERID        Get maximum userid length
+         CR    R14,R0                  Is actual userid too long?
+         BNH   AUTHMOVE                No
+         LR    R14,R0                  Yes, truncate to maximum
+AUTHMOVE BCTR  R14,0                   Decrement to machine length
+         MVC   WBRA_USERID,=CL8' '     Blank the userid
+         EX    R14,COPYUSER            Copy userid into parm list
+*
+*  We can't validate the userid here, because the EXEC CICS VERIFY
+*  command performs very poorly, and its use would suspend the
+*  Listener task for too long.  Instead we go ahead and allow the
+*  alias transaction to be started with the (unauthenticated)
+*  userid we have decoded here, and when we have a new transaction
+*  to run under, and which is not so sensitive to being suspended,
+*  we will validate the userid:password combination there.
+*  This is done by specifying the sample authentication program,
+*  DFH$WBAU, as the Converter program.
+*
+NOT_AUTHORIZED DS 0H
+         XC    AUTHID,AUTHID           Clear password field
+         MVC   WBRA_CONVERTER_PROGRAM,=CL8'DFH$WBAU' Use authentication
+         B     UNESBODY                Return after optional unesc @P6A
+         SPACE 1                                                   @P6A
+COPYUSER OC    WBRA_USERID(0),AUTHID   Copy and uppercase userid   @P6A
+*---------------------------------------------------------------------*
+*  LINK TO DFHWBUN TO "UNESCAPE" ESCAPED DATA                         *
+*  for applications which want to manipulate incoming data in         *
+*  escaped form, set WBRA_UNESCAPE to                                 *
+*  WBRA_UNESCAPE_NOT_REQUIRED and do not invoke DFHWBUN.              *
+*  If user data length is greater than 32K just pass in the first     *
+*  32K (maximum size of the commarea we are working with).            *
+*  CICS sets WBRA_UNESCAPE to WBRA_UNESCAPE_NOT_REQUIRED before       *
+*  linking to us.                                                     *
+*                                                                     *
+*  WBRA_USER_DATA_PTR points to the start of the body of the HTTP     *
+*  request. Add WBRA_USER_DATA_LENGTH to WBRA_USER_DATA_PTR to get    *
+*  end of HTTP request. Subtract end address from start address       *
+*  to get length of data to be unescaped.                             *
+*---------------------------------------------------------------------*
+UNESBODY DS    0H                                                  @P6A
+         CLI  WBRA_UNESCAPE,WBRA_UNESCAPE_NOT_REQUIRED             @P6A
+         BE   RETURNOK               Exit if unescape not required @P6A
+         LA   R6,WBUN_ARG            Get address of WBUN commarea  @P6A
+         USING WBUN_COMMAREA,R6                                    @P6A
+         XC   WBUN_COMMAREA,WBUN_COMMAREA                          @P6A
+         MVC  WBUN_EYECATCHER,DFHWBUN_EYECATCHER_INIT              @P6A
+         LA   R4,WBUN_COMMAREA__LEN                                @P6A
+         STH  R4,WBUN_LENGTH                                       @P6A
+         LA   R4,DFHWBUN_CURRENT_VERSION                           @P6A
+         STH  R4,WBUN_VERSION                                      @P6A
+         L    R4,WBRA_USER_DATA_PTR   Get start of user data       @P6A
+         ST   R4,WBUN_UNESCAPE_ADDR   Pass address in Commarea     @P6A
+         LH   R5,WBRA_USER_DATA_LENGTH  Length of data to unescape @P6A
+         LH   R4,MAX_SERVER_DATA_LENGTH                            @P6A
+         CLR  R4,R5                                                @P6A
+         BH   NOMAXLEN                                             @P6A
+         LR   R5,R4                                                @P6A
+NOMAXLEN DS   0H                                                   @P6A
+         ST   R5,WBUN_UNESCAPE_LEN                                 @P6A
+         EXEC CICS LINK PROGRAM('DFHWBUN')                             *
+                        COMMAREA(WBUN_COMMAREA)                        *
+                        LENGTH(=AL2(WBUN_COMMAREA__LEN))
+         MVI  WBRA_UNESCAPE,WBRA_UNESCAPE_NOT_REQUIRED             @P6A
+         B    RETURNOK                                             @P6A
+         EJECT ,                                                   @P6A
+*---------------------------------------------------------------------*
+*                                                                     *
+*  Unescape a "segment" of data between two successive slashes.       *
+*  For CICS purposes, the length of a segment can never exceed        *
+*  eight bytes. The end of the "path" portion of the "Request-URI"    *
+*  is delimited by a semi-colon, query, octothorp, or space.          *
+*                                                                     *
+*---------------------------------------------------------------------*
+UNESCSEG DS    0H                                                  @P6A
+         MVC   SEGMENT,=CL8' '    Initialize SEGMENT to blanks     @P6A
+         LA    R0,1               Initialize increment to one      @P6A
+         SR    R6,R6              Initialize unescaped segment len @P6A
+         LA    R8,UNESDONE        Point to loop escape address     @P6A
+         LA    R15,SEGMENT-1      Point to byte before SEGMENT     @P6A
+         SPACE 1                                                   @P6A
+UNESCAN  CLI   0(R5),C'/'         End of segment?                  @P6A
+         BER   R8                                                  @P6A
+         CLI   0(R5),C' '         End of "Request-URI"?            @P6A
+         BER   R8                                                  @P6A
+         CLI   0(R5),C';'         Start of "params"?               @P6A
+         BER   R8                                                  @P6A
+         CLI   0(R5),C'?'         Start of "querystring"?          @P6A
+         BER   R8                                                  @P6A
+         CLI   0(R5),C'#'         Start of "fragment"?             @P6A
+         BER   R8                                                  @P6A
+         LA    R1,SEGMENT+7       Set limit to end of segment      @P6A
+         BXLE  R15,R0,UNESTART    Bump ptr and check for room left @P6A
+         LNR   R6,R0              Set length negative if truncated @P6A
+         BR    R8                 And exit routine                 @P6A
+UNESTART CLI   0(R5),C'%'         Start of escape sequence?        @P6A
+         BE    UNESCSEQ                                            @P6A
+         CLI   0(R5),C'+'         Blank substitute?                @P6A
+         BE    UNESNEXT           Yes, just skip, blank already    @P6A
+         SPACE 1                                                   @P6A
+UNESCNO  MVC   0(1,R15),0(R5)     Copy normal character            @P6A
+UNESNEXT AR    R6,R0              Count the output character       @P6A
+         AR    R5,R0              Bump to next input character     @P6A
+         SR    R4,R0              Decrement length left            @P6A
+         BP    UNESCAN            Loop back if any left            @P6A
+UNESDONE DS    0H                                                  @P6A
+         TR    SEGMENT,UCTAB      Convert to EBCDIC upper case     @P6A
+         LTR   R0,R6              Save and test output length      @P6A
+         BR    R14                                                 @P6A
+*
+* Here we unescape just one %xx sequence.
+* If either of the xx is not a valid hex character,
+* the escape sequence is treated as normal characters.
+*
+UNESCSEQ SLR   R1,R1              Clear R1 for first nibble        @P6A
+         SLR   R2,R2              Clear R2 for second nibble       @P6A
+         IC    R1,1(,R5)          Pick up first nibble             @P6A
+         IC    R2,2(,R5)          Pick up second nibble            @P6A
+         IC    R1,HEXBIN(R1)      Convert nibble1 to binary        @P6A
+         IC    R2,HEXBIN(R2)      Convert nibble2 to binary        @P6A
+         CH    R1,=Y(15)          Is nibble1 valid?                @P6A
+         BH    UNESCNO            No, not an escape sequence       @P6A
+         CH    R2,=Y(15)          Is nibble2 valid?                @P6A
+         BH    UNESCNO            No, not an escape sequence       @P6A
+         SLL   R1,4               Multiply nibble1 by 16           @P6A
+         OR    R1,R2              Merge nibble1 and nibble2        @P6A
+         IC    R2,EBCDIC(R1)      Convert ASCII to EBCDIC          @P6A
+         STC   R2,0(,R15)         Save EBCDIC character            @P6A
+         LA    R5,2(,R5)          Bump over escape                 @P6A
+         BCTR  R4,0               Decrement length left            @P6A
+         BCTR  R4,0               Decrement length left            @P6A
+         B     UNESNEXT           Rejoin loop                      @P6A
+         EJECT ,                                                   @P6A
+*---------------------------------------------------------------------*
+*    Translate table for upper case conversion                        *
+*---------------------------------------------------------------------*
+         DC    0D'0'               Align to a doubleword           @P6A
+UCTAB    DC    256AL1(*-UCTAB)     ASIS by default
+         ORG   UCTAB+C'a'
+         DC    C'ABCDEFGHI'
+         ORG   UCTAB+C'j'
+         DC    C'JKLMNOPQR'
+         ORG   UCTAB+C's'
+         DC    C'STUVWXYZ'
+         ORG   ,
+*---------------------------------------------------------------------*
+*    Translate table for hexadecimal to binary conversion             *
+*---------------------------------------------------------------------*
+HEXBIN   DC    256X'FF'                                            @P6A
+         ORG   HEXBIN+C'a'             Lower-case a-f              @P6A
+         DC    X'0A0B0C0D0E0F'                                     @P6A
+         ORG   HEXBIN+C'A'             Upper-case A-F              @P6A
+         DC    X'0A0B0C0D0E0F'                                     @P6A
+         ORG   HEXBIN+C'0'             Numerics                    @P6A
+         DC    X'00010203040506070809'                             @P6A
+         ORG   ,                                                   @P6A
+*---------------------------------------------------------------------*
+*    Translate table for ASCII (ISO-8859-1) to EBCDIC (IBM-037)       *
+*---------------------------------------------------------------------*
+EBCDIC   DC    X'00010203372D2E2F1605250B0C0D0E0F'                 @P6A
+         DC    X'101112133C3D322618193F271C1D1E1F'                 @P6A
+         DC    X'405A7F7B5B6C507D4D5D5C4E6B604B61'                 @P6A
+         DC    X'F0F1F2F3F4F5F6F7F8F97A5E4C7E6E6F'                 @P6A
+         DC    X'7CC1C2C3C4C5C6C7C8C9D1D2D3D4D5D6'                 @P6A
+         DC    X'D7D8D9E2E3E4E5E6E7E8E9BAE0BBB06D'                 @P6A
+         DC    X'79818283848586878889919293949596'                 @P6A
+         DC    X'979899A2A3A4A5A6A7A8A9C04FD0A107'                 @P6A
+         DC    X'202122232415061728292A2B2C090A1B'                 @P6A
+         DC    X'30311A333435360838393A3B04143EFF'                 @P6A
+         DC    X'41AA4AB19FB26AB5BDB49A8A5FCAAFBC'                 @P6A
+         DC    X'908FEAFABEA0B6B39DDA9B8BB7B8B9AB'                 @P6A
+         DC    X'6465626663679E687471727378757677'                 @P6A
+         DC    X'AC69EDEEEBEFECBF80FDFEFBFCADAE59'                 @P6A
+         DC    X'4445424643479C485451525358555657'                 @P6A
+         DC    X'8C49CDCECBCFCCE170DDDEDBDC8D8EDF'                 @P6A
+         SPACE 3                                                   @P6A
+*---------------------------------------------------------------------*
+*    Translate table for interpretation of base-64 encoded data.
+*
+*    For a description of base-64 encoding see RFC2045 at
+*    http://www.ietf.org/rfc/rfc2045.txt
+*---------------------------------------------------------------------*
+BASE64   DC    256X'FF'
+         ORG   BASE64+C'A'                         A-I
+         DC    AL1(0,1,2,3,4,5,6,7,8)
+         ORG   BASE64+C'J'                         J-R
+         DC    AL1(9,10,11,12,13,14,15,16,17)
+         ORG   BASE64+C'S'                         S-Z
+         DC    AL1(18,19,20,21,22,23,24,25)
+         ORG   BASE64+C'a'                         a-i
+         DC    AL1(26,27,28,29,30,31,32,33,34)
+         ORG   BASE64+C'j'                         j-r
+         DC    AL1(35,36,37,38,39,40,41,42,43)
+         ORG   BASE64+C's'                         s-z
+         DC    AL1(44,45,46,47,48,49,50,51)
+         ORG   BASE64+C'0'                         0-9
+         DC    AL1(52,53,54,55,56,57,58,59,60,61)
+         ORG   BASE64+C'+'                         +
+         DC    AL1(62)
+         ORG   BASE64+C'/'                         /
+         DC    AL1(63)
+         ORG   BASE64+C'='                         padding char
+         DC    B'01000001'
+         ORG   ,
+*---------------------------------------------------------------------*
+*    CWS URP constants                                            @P2A*
+*---------------------------------------------------------------------*
+         COPY DFHWBUCD                CWS URP constants            @P2M
+*---------------------------------------------------------------------*
+*    Maximum length of commarea passed to DFHWBUN                     *
+*---------------------------------------------------------------------*
+MAX_SERVER_DATA_LENGTH DC H'32767'                                 @P6A
+*---------------------------------------------------------------------*
+*    Size of status area                                              *
+*---------------------------------------------------------------------*
+STATSIZE DC    Y(STATLEN)
+*---------------------------------------------------------------------*
+*    Set REASON for exception returns                                 *
+*---------------------------------------------------------------------*
+RESOURCE_TOO_SHORT DS 0H
+         MVC   WBRA_REASON,=A(URP_RESOURCE_TOO_SHORT)
+         B     RETURNEX
+FIRST_SLASH_MISSING DS 0H
+         MVC   WBRA_REASON,=A(URP_FIRST_SLASH_MISSING)
+         B     RETURNEX
+SERVER_NAME_MISSING DS 0H
+         MVC   WBRA_REASON,=A(URP_SERVER_NAME_MISSING)
+         B     RETURNEX
+CONV_NAME_INVALID DS 0H
+         MVC   WBRA_REASON,=A(URP_CONV_NAME_INVALID)
+         B     RETURNEX
+TRAN_NAME_INVALID DS 0H
+         MVC   WBRA_REASON,=A(URP_TRAN_NAME_INVALID)
+         B     RETURNEX
+SERV_NAME_INVALID DS 0H
+         MVC   WBRA_REASON,=A(URP_SERV_NAME_INVALID)
+         B     RETURNEX
+USER_TOKEN_INVALID DS 0H
+         MVC   WBRA_REASON,=A(URP_USER_TOKEN_INVALID)
+         B     RETURNEX
+*=====================================================================*
+*    User specific code above                                         *
+*=====================================================================*
+*---------------------------------------------------------------------*
+*    Return OK                                                        *
+*---------------------------------------------------------------------*
+RETURNOK DS    0H
+         MVC   WBRA_RESPONSE,=A(URP_OK)
+         B     RETURN
+*---------------------------------------------------------------------*
+*    Return Exception                                                 *
+*---------------------------------------------------------------------*
+RETURNEX DS    0H
+         MVC   WBRA_RESPONSE,=A(URP_EXCEPTION)
+         B     RETURN
+*---------------------------------------------------------------------*
+*    Return Invalid                                                   *
+*---------------------------------------------------------------------*
+RETURNIN DS    0H
+         MVC   WBRA_RESPONSE,=A(URP_INVALID)
+         B     RETURN
+*---------------------------------------------------------------------*
+*    Return Disaster                                                  *
+*---------------------------------------------------------------------*
+RETURNDI DS    0H
+         MVC   WBRA_RESPONSE,=A(URP_DISASTER)
+         B     RETURN
+*
+*---------------------------------------------------------------------*
+*    Return point                                                     *
+*---------------------------------------------------------------------*
+RETURN   DS    0H
+         EXEC CICS RETURN  ,
+*---------------------------------------------------------------------*
+*    Literal pool                                                     *
+*---------------------------------------------------------------------*
+         LTORG ,                                                   @P6A
+         END   DFH$WBSB

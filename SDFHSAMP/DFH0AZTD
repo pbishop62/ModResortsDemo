@@ -1,0 +1,763 @@
+*ASM XOPTS(FEPI)
+         TITLE 'DFH0AZTD - FEPI Sample: 3270 data stream pass through'
+***********************************************************************
+*                                                                     *
+*  MODULE NAME = DFH0AZTD                                             *
+*                                                                     *
+*  DESCRIPTIVE NAME = CICS TS  (FEPI) - Sample Program:               *
+*                     3270 data stream pass through.                  *
+*                     Assembler version                               *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*        Licensed Materials - Property of IBM                         *
+*                                                                     *
+*        "Restricted Materials of IBM"                                *
+*                                                                     *
+*        5655-Y04                                                     *
+*                                                                     *
+*        (C) Copyright IBM Corp. 1993"                                *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*                                                                     *
+*   FUNCTION = This sample program demonstrates using FEPI to         *
+*              pass through 3270 data stream between a back-end       *
+*              application and a front-end terminal.                  *
+*                                                                     *
+*  TRANSACTION NAME = CZTD                                            *
+*                                                                     *
+***********************************************************************
+*                                                                     *
+*  OVERVIEW                                                           *
+*                                                                     *
+*       On the first invocation of the transaction, a request is      *
+*       sent to the back-end system to start a transaction there.     *
+*       The response is sent on to the front-end terminal.            *
+*                                                                     *
+*       When there is input from the front-end terminal, CICS         *
+*       reinvokes the transaction.  Using the FEPI CONVERSE           *
+*       command, the input is sent on to the back-end system, and the *
+*       resulting response is returned to the front-end terminal.     *
+*                                                                     *
+*       If there is an error, or the back-end system sends a CICS     *
+*       message, or PF3 is received from the front-end terminal, the  *
+*       transaction ends.                                             *
+*                                                                     *
+***********************************************************************
+*                                                                     *
+*  PROGRAM LOGIC                                                      *
+*                                                                     *
+*       Test COMMAREA                                                 *
+*       If transaction not previously invoked                         *
+*           Build data stream request to start back-end transaction   *
+*           FEPI ALLOCATE conversation with back-end system           *
+*           FEPI CONVERSE data stream to and from back-end system     *
+*           SEND returned data stream to the front-end terminal       *
+*       Else                                                          *
+*           RECEIVE data stream from the front-end terminal           *
+*           Prepare data stream to send on to back-end system         *
+*           Reaccess conversation with FEPI ALLOCATE PASSCONVID       *
+*           FEPI CONVERSE data stream to and from back-end system     *
+*           SEND data stream to the front-end terminal                *
+*                                                                     *
+*       If error during processing                                    *
+*           SEND explanatory message                                  *
+*                                                                     *
+*       If continuing                                                 *
+*           Release conversation using FEPI FREE PASS                 *
+*           RETURN TRANSID(CZTD) with COMMAREA                        *
+*       Else (error, CICS message, or PF3)                            *
+*           FEPI FREE conversation                                    *
+*           RETURN                                                    *
+*                                                                     *
+***********************************************************************
+*                                                                     *
+* CHANGE ACTIVITY :                                                   *
+*                                                                     *
+*     $MOD(DFH0AZTD),COMP(FEPI),PROD(CICS TS ):                       *
+*                                                                     *
+*   PN= REASON REL YYMMDD HDXIII : REMARKS                            *
+*   P0= MARY   SP  910911 HDBYAMW: MODULE CREATION                    *
+*  $P1= M81655 410 930217 HDDFJLW: timeout logic changed              *
+*                                                                     *
+***********************************************************************
+*
+*
+*=====================================================================*
+*=       Working storage                                             =*
+*=====================================================================*
+*
+DFHEISTG DSECT ,
+*
+* W02 determines how to exit the transaction.
+*
+W02_EXIT_STATE         DS    CL1
+W02_EXIT_WITH_COMM     EQU   C'1'
+W02_EXIT_NO_TRANS      EQU   C'2'
+*
+* W03 determines whether the transaction has obtained control
+* of the conversation.
+*
+W03_ALLOCATE_FLAG      DS    CL1
+W03_NOT_ALLOCATED      EQU   C'0'
+W03_ALLOCATED          EQU   C'1'
+*
+* W04 determines if there has been a problem.
+*
+W04_PROBLEM_FLAG       DS    CL1
+W04_NO_PROBLEM         EQU   C'0'
+W04_PROBLEM            EQU   C'1'
+*
+* W05 is the data stream storage area.
+*
+* 3270 data streams from the front-end terminal are read into
+* W05_DATA_BODY, leaving room for the AID and cursor address to be
+* added before performing the FEPI CONVERSE.
+* The raw data stream is placed into W05_DATA, then sent to the
+* front-end terminal.
+*
+* The area is 1024 bytes long.  This is larger than the anticipated
+* data streams to allow the transaction to receive error messages.
+*
+W05_DATA               DS    0CL1024
+                       DS    CL3
+W05_DATA_BODY          DS    CL1021
+                       ORG   W05_DATA
+W05_R2_AID             DS    CL1
+W05_R2_BIT12ADDR       DS    XL2
+W05_R2_TRANSID         DS    CL4
+W05_R2_LENGTH          EQU   *-W05_DATA
+                       ORG   W05_DATA
+                       DS    CL7
+W05_R3_DFH             DS    CL3
+                       ORG   W05_DATA
+W05_R4_COMMAND         DS    XL1
+W05_R4_WCC             DS    XL1
+W05_R4_FROMAREA        DS    XL1022
+                       ORG   ,
+*
+* W06 holds the values for CICS commands.
+*
+W06_RESP1              DS    F
+W06_RESP2              DS    F
+W06_LENGTHRETD         DS    F
+W06_MLENGTHRETD        DS    F
+W06_LENGTHSENT         DS    F
+W06_LENGTH3270         DS    H
+*
+* W08 is used to create a commarea
+*
+W08_COMMAREA           DS    0CL12
+W08_TRANSID            DS    CL4
+W08_CONVID             DS    CL8
+*
+* Subroutine return address save areas.
+*
+RET_B_INITIATE_CONV    DS    A
+RET_B_CONTINUE_CONV    DS    A
+RET_B_REPORT_PROBLEM   DS    A
+RET_D_REFORMAT_AA      DS    A
+RET_D_CONVERSE         DS    A
+*
+* DFHSZAPA defines the FEPI RESP2 values.
+*
+         COPY  DFHSZAPA
+*
+* The COMMAREA is used to pass the transaction ID between
+* invocations of the transaction from the front-end terminal.
+*
+COMMAREA               DSECT ,
+COMMAREA_TRANSID       DS    CL4
+COMMAREA_CONVID        DS    CL8
+                       USING COMMAREA,R3
+*
+*
+*=====================================================================*
+*=       Registers                                                   =*
+*=====================================================================*
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+*
+*=====================================================================*
+*=       Initialization                                              =*
+*=====================================================================*
+*
+DFH0AZTD DFHEIENT CODEREG=(R9),                                        +
+               DATAREG=(R10),                                          +
+               EIBREG=(R11)
+*
+DFH0AZTD AMODE 31
+DFH0AZTD RMODE ANY
+*
+         B     A_MAIN
+W01_PROGID             DC    CL8'DFH0AZTD'
+*
+*
+*=====================================================================*
+*=       Main procedure                                              =*
+*=====================================================================*
+*
+* This section performs the initiate conversation or continue
+* conversation routine, depending on information in the COMMAREA.
+*
+* If an error is notified from one of these routines, an error
+* reporting routine is performed before returning to CICS.
+*
+*
+A_MAIN   DS    0H
+*
+* Set flags to show no problems, conversation not yet allocated,
+* and exit with COMMAREA.
+*
+         MVI   W04_PROBLEM_FLAG,W04_NO_PROBLEM
+         MVI   W03_ALLOCATE_FLAG,W03_NOT_ALLOCATED
+         MVI   W02_EXIT_STATE,W02_EXIT_WITH_COMM
+*
+* If this transaction has not previously been invoked
+* (no COMMAREA, implying no conversation in progress),
+* perform the initiate conversation routine,
+* otherwise perform the continue routine.
+*
+         CLC   EIBCALEN,=H'0'           No COMMAREA exists?
+         BE    A_100
+         L     R3,DFHEICAP              COMMAREA = transaction name?
+         CLC   EIBTRNID,COMMAREA_TRANSID
+         BE    A_110
+*
+A_100    DS    0H
+         BAL   R14,B_INITIATE_CONV
+         B     A_190
+*
+A_110    DS    0H
+         BAL   R14,B_CONTINUE_CONV
+*
+A_190    DS    0H
+*
+* Check for problems detected in the conversation.
+*
+         CLI   W04_PROBLEM_FLAG,W04_PROBLEM
+         BNE   A_290
+         BAL   R14,B_REPORT_PROBLEM
+A_290    DS    0H
+*
+* If the conversation is continuing:
+* Release the conversation using FEPI FREE PASS, so that the
+* next invocation of this transaction can continue using it.
+* Exit, specifying own transaction ID to be invoked next,
+* and passing the COMMAREA with the conversation ID.
+*
+         CLI   W02_EXIT_STATE,W02_EXIT_WITH_COMM
+         BNE   A_910
+*
+         EXEC CICS FEPI FREE                                           +
+             PASS                                                      +
+             CONVID(W08_CONVID)
+*
+         MVC   W08_TRANSID,EIBTRNID
+         EXEC  CICS RETURN                                             +
+               TRANSID(EIBTRNID)                                       +
+               COMMAREA(W08_COMMAREA)
+*
+A_910    DS    0H
+*
+* If the conversation has logically finished, successfully
+* or otherwise (W02_EXIT_STATE = W02_EXIT_NO_TRANS):
+* Free the conversation and exit.
+*
+*
+* Check for a successful allocate.
+*
+         CLI   W03_ALLOCATE_FLAG,W03_ALLOCATED
+         BNE   A_950
+         EXEC CICS FEPI FREE                                           +
+             HOLD                                                      +
+             CONVID(W08_CONVID)
+*
+A_950    DS    0H
+         EXEC  CICS RETURN
+*
+A_EXIT   DS    0H
+*
+*
+*=====================================================================*
+*=       Initiate conversation routine.                              =*
+*=====================================================================*
+*
+* This section performs the initiate conversation phase.
+*
+B_INITIATE_CONV        DS    0H
+         ST    R14,RET_B_INITIATE_CONV
+*
+* Format request to invoke the back-end transaction.
+*
+* This assumes a 4-character transaction ID
+* with the cursor at position four on the screen and 12-bit
+* addressing.  The following instructions create the
+* following hex data;
+* 7D (enter AID) 40C4 (12-bit cursor position) + TRANSID
+*
+         MVI   W05_R2_AID,DFHENTER
+         MVC   W05_R2_BIT12ADDR,C_CURSOR_40C4
+         MVC   W05_R2_TRANSID,DFH0BZCA_BACKEND_TRANSID
+         LA    R0,W05_R2_LENGTH
+         ST    R0,W06_LENGTHSENT
+*
+* Start the conversation with the back-end system using
+* FEPI ALLOCATE.  Save the conversation ID in the COMMAREA.
+*
+         EXEC CICS FEPI ALLOCATE                                       +
+             POOL(DFH0BZCA_DATASTREAM_POOL)                            +
+             TARGET(DFH0BZCA_TARGET_CICS)                              +
+             CONVID(W08_CONVID)                                        +
+             TIMEOUT(DFH0BZCA_TIMEOUT)                                 +
+             RESP(W06_RESP1)                                           +
+             RESP2(W06_RESP2)
+*
+* Check that a good response was obtained.
+*
+         LA    R15,DFHSZ_RESPX_OK
+         C     R15,W06_RESP2
+         BE    B_I_100
+*
+* Error - set up appropriate message and exit transaction.
+*
+         MVI   W04_PROBLEM_FLAG,W04_PROBLEM
+         MVC   W05_DATA(DFH0BZMA_MSGLEN),DFH0BZMA_MSG4
+         B     B_I_900
+B_I_100  DS    0H
+*
+* Set flag to show we have control of the conversation.
+*
+         MVI   W03_ALLOCATE_FLAG,W03_ALLOCATED
+*
+* Issue FEPI CONVERSE command.
+* (This operation has been taken out of line to allow
+* explanation of the options without obscuring the
+* program logic.)
+*
+         BAL   R14,D_CONVERSE
+*
+* Check that a good response was obtained.
+*
+         LA    R15,DFHSZ_RESPX_OK
+         C     R15,W06_RESP2
+         BE    B_I_200
+*
+* Error - set up appropriate message and exit transaction.
+*
+         MVI   W04_PROBLEM_FLAG,W04_PROBLEM
+         LA    R15,DFHSZ_RESPA_TIMEOUT
+         C     R15,W06_RESP2
+         BNE   B_I_110
+*                                       Timed-out:
+         MVC   W05_DATA(DFH0BZMA_MSGLEN),DFH0BZMA_MSG1
+         B     B_I_900
+*                                       Other error:
+B_I_110  DS    0H
+         MVC   W05_DATA(DFH0BZMA_MSGLEN),DFH0BZMA_MSG2
+         B     B_I_900
+*
+* Successful FEPI CONVERSE.
+* SEND data to the front-end terminal.
+* Because it is data stream, the command and the WCC from
+* the front of the data stream have to be processed.
+* The command is necessarily WRITE or ERASE WRITE.
+*
+B_I_200  DS    0H
+         L     R0,W06_LENGTHRETD
+         S     R0,=F'2'
+         STH   R0,W06_LENGTH3270
+*
+         CLI   W05_R4_COMMAND,C_COMMAND_EW
+         BNE   B_I_210
+*                                       Command was ERASE WRITE:
+         EXEC  CICS SEND                                               +
+               FROM(W05_R4_FROMAREA)                                   +
+               LENGTH(W06_LENGTH3270)                                  +
+               CTLCHAR(W05_R4_WCC)                                     +
+               ERASE
+         B     B_I_290
+*
+B_I_210  DS    0H
+         CLI   W05_R4_COMMAND,C_COMMAND_W
+         BNE   B_I_290
+*                                       Command was WRITE:
+         EXEC  CICS SEND                                               +
+               FROM(W05_R4_FROMAREA)                                   +
+               LENGTH(W06_LENGTH3270)                                  +
+               CTLCHAR(W05_R4_WCC)
+*
+B_I_290  DS    0H
+*
+* Although it is successful in terms of FEPI, it may be
+* an error message from the back-end transaction.  So test
+* for a CICS message, and if one is present indicate
+* that the transaction is to end.
+*
+         CLC   W05_R3_DFH,C_CICS_ID
+         BNE   B_I_390
+         MVI   W02_EXIT_STATE,W02_EXIT_NO_TRANS
+B_I_390  DS    0H
+*
+* Otherwise, everything good, RETURN to CICS to await user
+* response.
+*
+B_I_900  DS    0H
+         L     R14,RET_B_INITIATE_CONV
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Continue conversation routine                               =*
+*=====================================================================*
+*
+* This section performs the continue conversation phase.
+*
+B_CONTINUE_CONV        DS    0H
+         ST    R14,RET_B_CONTINUE_CONV
+*
+*  RECEIVE from front-end terminal.
+*  Send message if error, exit if PF3.
+*
+         LA    R0,L'W05_DATA_BODY
+         STH   R0,W06_LENGTH3270
+         EXEC  CICS RECEIVE                                            +
+               INTO(W05_DATA_BODY)                                     +
+               LENGTH(W06_LENGTH3270)                                  +
+               RESP(W06_RESP1)
+*
+         CLC   W06_RESP1,DFHRESP(NORMAL)
+         BE    B_C_120
+         CLC   W06_RESP1,DFHRESP(EOC)
+         BE    B_C_120
+*                                       Error:
+         MVI   W04_PROBLEM_FLAG,W04_PROBLEM
+         MVC   W05_DATA(DFH0BZMA_MSGLEN),DFH0BZMA_MSG3
+         B     B_C_900
+*
+B_C_120  DS    0H
+         CLI   EIBAID,DFHPF3
+         BNE   B_C_150
+*                                       PF3:
+         MVI   W02_EXIT_STATE,W02_EXIT_NO_TRANS
+*
+B_C_150  DS    0H
+         CLI   EIBAID,DFHCLEAR
+         BNE   B_C_190
+*                                     CLEAR:
+         MVI   W02_EXIT_STATE,W02_EXIT_NO_TRANS
+*
+B_C_190  DS    0H
+*
+* Reformat cursor address and AID for FEPI data stream.
+* (This operation has been taken out of line for clarity.)
+*
+         BAL   R14,D_REFORMAT_AA
+*
+* Reaccess the conversation using FEPI ALLOCATE with PASSCONVID.
+* The conversation ID is in the COMMAREA.
+*
+         MVC   W08_CONVID,COMMAREA_CONVID
+         EXEC CICS FEPI ALLOCATE                                       +
+             PASSCONVID(W08_CONVID)                                    +
+             RESP(W06_RESP1)                                           +
+             RESP2(W06_RESP2)
+*
+* Check that a good response was obtained.
+*
+         LA    R15,DFHSZ_RESPX_OK
+         C     R15,W06_RESP2
+         BE    B_C_200
+*
+* Error - set up appropriate message and exit transaction.
+*
+         MVI   W04_PROBLEM_FLAG,W04_PROBLEM
+         MVC   W05_DATA(DFH0BZMA_MSGLEN),DFH0BZMA_MSG4
+         B     B_C_900
+B_C_200  DS    0H
+*
+* Set flag to show that we have control of the conversation.
+*
+         MVI   W03_ALLOCATE_FLAG,W03_ALLOCATED
+*
+* Issue FEPI CONVERSE command.
+* (This operation has been taken out of line to allow
+* explanation of the options without obscuring the
+* program logic.)
+*
+         LH    R0,W06_LENGTH3270
+         ST    R0,W06_LENGTHSENT
+         BAL   R14,D_CONVERSE
+*
+* Check that a good response was obtained.
+*
+         LA    R15,DFHSZ_RESPX_OK
+         C     R15,W06_RESP2
+         BE    B_C_300
+*
+* Error - set up appropriate message and exit transaction.
+*
+         MVI   W04_PROBLEM_FLAG,W04_PROBLEM
+         LA    R15,DFHSZ_RESPA_TIMEOUT
+         C     R15,W06_RESP2
+         BNE   B_C_210
+*                                        Timed-out:
+         MVC   W05_DATA(DFH0BZMA_MSGLEN),DFH0BZMA_MSG1
+         B     B_C_900
+*                                        Other error:
+B_C_210  DS    0H
+         MVC   W05_DATA(DFH0BZMA_MSGLEN),DFH0BZMA_MSG2
+         B     B_C_900
+*
+* Successful FEPI CONVERSE.
+* SEND data to the front-end terminal.
+* Because it is data stream, the command and the WCC from
+* the front of the data stream have to be processed.
+* The command is necessarily WRITE or ERASE WRITE.
+*
+B_C_300  DS    0H
+         L     R0,W06_LENGTHRETD
+         S     R0,=F'2'
+         STH   R0,W06_LENGTH3270
+         CLI   W05_R4_COMMAND,C_COMMAND_EW
+         BNE   B_C_310
+*                                       Command was ERASE WRITE:
+         EXEC  CICS SEND                                               +
+               FROM(W05_R4_FROMAREA)                                   +
+               LENGTH(W06_LENGTH3270)                                  +
+               CTLCHAR(W05_R4_WCC)                                     +
+               ERASE
+         B     B_C_390
+*
+B_C_310  DS    0H
+         CLI   W05_R4_COMMAND,C_COMMAND_W
+         BNE   B_C_390
+*                                       Command was WRITE:
+         EXEC  CICS SEND                                               +
+               FROM(W05_R4_FROMAREA)                                   +
+               LENGTH(W06_LENGTH3270)                                  +
+               CTLCHAR(W05_R4_WCC)
+*
+B_C_390  DS    0H
+*
+* Although it is successful in terms of FEPI, it may be
+* an error message from the back-end transaction.  So test
+* for a CICS message, and if one is present indicate
+* that the transaction is to end.
+*
+         CLC   W05_R3_DFH,C_CICS_ID
+         BNE   B_C_490
+         MVI   W02_EXIT_STATE,W02_EXIT_NO_TRANS
+B_C_490  DS    0H
+*
+* Otherwise, everything good, RETURN to CICS to await user
+* response.
+*
+B_C_900  DS    0H
+         L     R14,RET_B_CONTINUE_CONV
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Report problem routine                                      =*
+*=====================================================================*
+*
+* This section sends an error message to the front-end terminal.
+*
+B_REPORT_PROBLEM       DS    0H
+         ST    R14,RET_B_REPORT_PROBLEM
+*
+* Send data stream to front-end terminal.
+*
+         EXEC  CICS SEND                                               +
+               FROM(W05_DATA)                                          +
+               LENGTH(C_MSGLEN)                                        +
+               ERASE
+*
+* Indicate that the transaction is to end.
+*
+         MVI   W02_EXIT_STATE,W02_EXIT_NO_TRANS
+*
+B_R_900  DS    0H
+         L     R14,RET_B_REPORT_PROBLEM
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Reformat address routine                                    =*
+*=====================================================================*
+*
+* This section formats the data to be transmitted to FEPI.
+* This involves prefixing the data stream received from the
+* terminal with the AID from EIBAID and converting
+* EIBCPOSN to a 12-bit address format.  The 12-bit address
+* consists of two bytes - 01aa aaaa XXaa aaaa, where 01 is
+* a constant, a is an address bit, and XX is not defined.
+*
+* The use of a 12-bit address as opposed to a 14- or 16-bit
+* address is application-dependent.
+*
+D_REFORMAT_AA          DS    0H
+         ST    R14,RET_D_REFORMAT_AA
+*
+* Get the cursor position.
+*
+         LH    R2,EIBCPOSN
+*
+* Set the bit that will indicate a 12-bit cursor address.
+*
+         C     R2,C_CURSOR_12BIT
+         BNL   D_R_290
+         A     R2,C_CURSOR_12BIT
+D_R_290  DS    0H
+*
+* Shift left two positions, moving the high order bits of
+* the low order byte into the low order + 1 byte, and the
+* 12-bit address indicator into the correct position.
+* Replace the low order byte with the original contents,
+* remembering that bit positions 0-1 are not important.
+*
+         SLL   R2,2
+         IC    R2,EIBCPOSN+1
+         STCM  R2,B'0011',W05_R2_BIT12ADDR
+*
+* Move the AID to the data stream and increase the length
+* to allow for the AID and the address that have been added.
+*
+         MVC   W05_R2_AID,EIBAID
+         LH    R0,W06_LENGTH3270
+         A     R0,=F'3'
+         STH   R0,W06_LENGTH3270
+*
+D_R_900  DS    0H
+         L     R14,RET_D_REFORMAT_AA
+         BR    R14
+*
+*
+*=====================================================================*
+*=       FEPI CONVERSE routine                                       =*
+*=====================================================================*
+*
+* This section performs the FEPI CONVERSE.
+* It has been taken out of line for clarity,
+* to allow detailed explanation of the options.
+*
+D_CONVERSE             DS    0H
+         ST    R14,RET_D_CONVERSE
+*
+* The FEPI CONVERSE POOL command is used to communicate
+* with a back-end transaction.  The options used are individually
+* discussed in the order that they appear in the command.
+*
+* Basic command, specifying that data stream is used.
+*        EXEC  CICS FEPI CONVERSE DATASTREAM
+*
+* The RECEIVE part of the command will complete when the whole
+* of the data from the back-end transaction has been received
+* ('change direction' or 'end bracket') indicated.
+*              UNTILCDEB
+*
+* If TIMEOUT is zero, the command will not time out.
+* Because this could lead to queueing problems, a
+* suitable application- and system-dependent value should be set.
+* For this sample the value 20 seconds has been used.
+*              TIMEOUT(DFH0BZCA_TIMEOUT)
+*
+* The FROM area is where the SEND part of the command obtains its
+* data to transmit.  In this case it is an area reserved for both
+* inbound and outbound data, because this will be passed through
+* with little or no change.
+*              FROM(W05_DATA)
+*
+* The FROMFLENGTH option is the length of the data
+* to be transmitted.
+*              FROMFLENGTH(W06_LENGTHSENT)
+*
+* The MAXFLENGTH option is the maximum length of data
+* to be returned from the command.  In this case it is set to
+* the length of the data area into which it will be returned.
+*              MAXFLENGTH(W06_MLENGTHRETD)
+*
+* The INTO area is where the data returned by the command is
+* placed.
+*              INTO(W05_DATA)
+*
+* And TOFLENGTH is where its length is put.
+*              TOFLENGTH(W06_LENGTHRETD)
+*
+* The RESP option returns DFHRESP(NORMAL) or DFHRESP(INVREQ).
+* In the latter case, further
+* information can be obtained from the RESP2 option.
+*              RESP(W06_RESP1)
+*              RESP2(W06_RESP2)
+*
+         LA    R0,L'W05_DATA
+         ST    R0,W06_MLENGTHRETD
+         EXEC  CICS FEPI CONVERSE DATASTREAM                           +
+               UNTILCDEB                                               +
+               TIMEOUT(DFH0BZCA_TIMEOUT)                               +
+               CONVID(W08_CONVID)                                      +
+               FROM(W05_DATA)                                          +
+               FROMFLENGTH(W06_LENGTHSENT)                             +
+               MAXFLENGTH(W06_MLENGTHRETD)                             +
+               INTO(W05_DATA)                                          +
+               TOFLENGTH(W06_LENGTHRETD)                               +
+               RESP(W06_RESP1)                                         +
+               RESP2(W06_RESP2)
+*
+D_C_900  DS    0H
+         L     R14,RET_D_CONVERSE
+         BR    R14
+*
+*
+*=====================================================================*
+*=       Constants                                                   =*
+*=====================================================================*
+*
+* DFH0BZCA defines the customizable constants used by the
+* FEPI sample programs.
+*
+         COPY  DFH0BZCA
+*
+* DFH0BZMA defines the messages and other text used by the
+* FEPI sample programs.
+*
+         COPY  DFH0BZMA
+*
+* DFHAID defines the standard attention identifiers (AIDs).
+*
+         COPY  DFHAID
+*
+* Constants used in this program.
+*
+C_CURSOR_40C4          DC    X'40C4'
+C_CURSOR_12BIT         DC    F'4096'
+C_COMMAND_EW           EQU   C'5'       ERASE WRITE
+C_COMMAND_W            EQU   C'1'       WRITE
+C_CICS_ID              DC    CL3'DFH'
+C_MSGLEN               DC    AL2(DFH0BZMA_MSGLEN) length of message
+         LTORG ,
+*
+*
+***********************************************************************
+*        End of program DFH0AZTD                                      *
+***********************************************************************
+*
+         END   DFH0AZTD
